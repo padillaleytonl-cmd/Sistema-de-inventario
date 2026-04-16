@@ -10,7 +10,7 @@ app.secret_key = "clave_super_segura"
 USUARIO = "padillaleytonl@gmail.com"
 PASSWORD = "Pii.120715"
 
-WC_URL = "https://www.babymine.cl/wp-json/wc/v3/products"
+WC_URL = "https://www.babymine.cl/wp-json/custom/v1/productos"
 WC_KEY = "ck_0775bcdb4ee90873a05fd391da35d49b9f5f7706"
 WC_SECRET = "cs_df78d864adfeac5dc2c968a726bddb361df2e635"
 
@@ -45,52 +45,29 @@ movimientos = cargar_movimientos()
 # ---------------- WOOCOMMERCE ----------------
 
 def importar_productos_woocommerce():
-    page = 1
     nuevos = 0
 
-    while True:
-        headers = {
-            "User-Agent": "Mozilla/5.0"
-        }
+    response = requests.get(WC_URL)
 
-        response = requests.get(
-            WC_URL,
-            headers=headers,
-            params={
-                "consumer_key": WC_KEY,
-                "consumer_secret": WC_SECRET,
-                "per_page": 100,
-                "page": page
-            }
-        )
+    if response.status_code != 200:
+        return {"error": "No se pudo conectar"}
 
-        if response.status_code != 200:
-            return {
-                "error": f"Error Woo: {response.status_code}",
-                "detalle": response.text
-            }
+    data = response.json()
 
-        data = response.json()
+    for p in data:
+        sku = p.get("sku") or str(p.get("id"))
+        nombre = p.get("nombre")
+        stock = p.get("stock") or 0
 
-        if not data:
-            break
+        existe = any(prod["sku"] == sku for prod in productos)
 
-        for p in data:
-            sku = p.get("sku") or str(p.get("id"))
-            nombre = p.get("name")
-            stock = p.get("stock_quantity") or 0
-
-            existe = any(prod["sku"] == sku for prod in productos)
-
-            if not existe:
-                productos.append({
-                    "sku": sku,
-                    "nombre": nombre,
-                    "stock": stock
-                })
-                nuevos += 1
-
-        page += 1
+        if not existe:
+            productos.append({
+                "sku": sku,
+                "nombre": nombre,
+                "stock": stock
+            })
+            nuevos += 1
 
     guardar_productos(productos)
 
