@@ -1,21 +1,15 @@
 from flask import Flask, request, render_template_string, session, redirect
 import json
 import os
-from datetime import datetime
 import requests
 
 app = Flask(__name__)
 app.secret_key = "clave_super_segura"
 
-USUARIO = "padillaleytonl@gmail.com"
-PASSWORD = "Pii.120715"
-
-WC_URL = "https://www.babymine.cl/wp-json/custom/v1/productos"
-WC_KEY = "ck_0775bcdb4ee90873a05fd391da35d49b9f5f7706"
-WC_SECRET = "cs_df78d864adfeac5dc2c968a726bddb361df2e635"
+USUARIO = "admin"
+PASSWORD = "1234"
 
 ARCHIVO_PRODUCTOS = "productos.json"
-ARCHIVO_MOVIMIENTOS = "movimientos.json"
 
 # ---------------- ARCHIVOS ----------------
 
@@ -29,57 +23,48 @@ def guardar_productos(productos):
     with open(ARCHIVO_PRODUCTOS, "w") as f:
         json.dump(productos, f)
 
-def cargar_movimientos():
-    if os.path.exists(ARCHIVO_MOVIMIENTOS):
-        with open(ARCHIVO_MOVIMIENTOS, "r") as f:
-            return json.load(f)
-    return []
-
-def guardar_movimientos(movs):
-    with open(ARCHIVO_MOVIMIENTOS, "w") as f:
-        json.dump(movs, f)
-
 productos = cargar_productos()
-movimientos = cargar_movimientos()
 
-# ---------------- WOOCOMMERCE ----------------
+# ---------------- SYNC A WOOCOMMERCE ----------------
 
-@app.route("/sync_woo", methods=["POST"])
-def recibir_productos_woo():
-    data = request.json
+def actualizar_stock_woo(sku, stock):
+    url = "https://www.babymine.cl/wp-json/custom/v1/actualizar"
 
+    try:
+        requests.post(url, json={
+            "sku": sku,
+            "stock": stock
+        })
+    except:
+        pass
+
+# ---------------- IMPORTAR ----------------
+
+@app.route("/importar_woo")
+def importar():
+    url = "https://www.babymine.cl/wp-json/custom/v1/productos"
     nuevos = 0
+
+    response = requests.get(url)
+    data = response.json()
 
     for p in data:
         sku = p.get("sku")
-        nombre = p.get("nombre")
-        stock = p.get("stock") or 0
-
         if not sku:
             continue
 
-        existe = next((prod for prod in productos if prod["sku"] == sku), None)
+        existe = any(prod["sku"] == sku for prod in productos)
 
-        if existe:
-            existe["stock"] = stock
-        else:
+        if not existe:
             productos.append({
                 "sku": sku,
-                "nombre": nombre,
-                "stock": stock
+                "nombre": p.get("nombre"),
+                "stock": p.get("stock") or 0
             })
             nuevos += 1
 
     guardar_productos(productos)
-
-    return {"mensaje": f"{nuevos} productos sincronizados"}# ---------------- ESTADISTICAS ----------------
-
-def stats():
-    return {
-        "total": len(productos),
-        "stock_total": sum(p["stock"] for p in productos),
-        "bajo_stock": len([p for p in productos if p["stock"] < 5])
-    }
+    return {"mensaje": f"{nuevos} productos importados"}
 
 # ---------------- LOGIN ----------------
 
@@ -89,14 +74,13 @@ def login():
         if request.form["user"] == USUARIO and request.form["password"] == PASSWORD:
             session["logged"] = True
             return redirect("/panel")
-        return "Credenciales incorrectas"
+        return "Error login"
 
     return """
-    <h2>Login</h2>
     <form method="POST">
-        <input name="user"><br><br>
-        <input name="password" type="password"><br><br>
-        <button>Entrar</button>
+    <input name="user">
+    <input name="password" type="password">
+    <button>Entrar</button>
     </form>
     """
 
@@ -109,44 +93,47 @@ def ver_productos():
 @app.route("/agregar", methods=["POST"])
 def agregar():
     data = request.json
-    producto = {
+
+    productos.append({
         "sku": data["sku"],
         "nombre": data["nombre"],
         "stock": int(data["stock"])
-    }
-    productos.append(producto)
+    })
+
     guardar_productos(productos)
-    return {"mensaje": "ok"}
+    return {"ok": True}
 
 @app.route("/entrada", methods=["POST"])
 def entrada():
     data = request.json
+
     for p in productos:
         if p["sku"] == data["sku"]:
             p["stock"] += int(data["cantidad"])
+
+            actualizar_stock_woo(p["sku"], p["stock"])
+
             guardar_productos(productos)
-            return {"mensaje": "ok"}
+            return {"ok": True}
+
     return {"error": "no encontrado"}
 
 @app.route("/salida", methods=["POST"])
 def salida():
     data = request.json
+
     for p in productos:
         if p["sku"] == data["sku"]:
             p["stock"] -= int(data["cantidad"])
+
+            actualizar_stock_woo(p["sku"], p["stock"])
+
             guardar_productos(productos)
-            return {"mensaje": "ok"}
+            return {"ok": True}
+
     return {"error": "no encontrado"}
 
-@app.route("/importar_woo")
-def importar():
-    return importar_productos_woocommerce()
-
-@app.route("/stats")
-def estadisticas():
-    return stats()
-
-# ---------------- PANEL PRO ----------------
+# ---------------- PANEL ----------------
 
 @app.route("/panel")
 def panel():
@@ -157,111 +144,98 @@ def panel():
     <style>
     body { font-family: Arial; background:#f5f6ff; padding:20px; }
     h1 { color:#222163; }
-    button {
-        background:#222163;
-        color:white;
-        border:none;
-        padding:10px;
-        margin-top:5px;
-        cursor:pointer;
-        border-radius:5px;
-    }
+    button { background:#222163; color:white; padding:10px; border:none; border-radius:5px; }
     button:hover { background:#8576FF; }
-    input { padding:8px; margin:3px; }
+    input { padding:8px; margin:5px; }
     table { width:100%; margin-top:20px; border-collapse: collapse; }
     th { background:#8576FF; color:white; padding:10px; }
     td { padding:8px; border:1px solid #ddd; }
-    .card {
-        background:white;
-        padding:15px;
-        border-radius:10px;
-        margin-bottom:15px;
-    }
     </style>
 
     <h1>📦 Inventario BabyMine</h1>
 
-    <div class="card">
-        <button onclick="importar()">🔄 Importar WooCommerce</button>
-        <p id="mensaje"></p>
-    </div>
+    <input id="buscador" placeholder="Buscar producto..." onkeyup="buscar()">
 
-    <div class="card">
-        <h3>Crear producto</h3>
-        <input id="sku" placeholder="SKU">
-        <input id="nombre" placeholder="Nombre">
-        <input id="stock" type="number" value="0">
-        <button onclick="crear()">Crear</button>
-    </div>
+    <br><br>
 
-    <div class="card">
-        <h3>Entrada</h3>
-        <input id="skuE" placeholder="SKU">
-        <input id="cantE" type="number" value="1">
-        <button onclick="entrada()">Ingresar</button>
-    </div>
+    <button onclick="importar()">Importar Woo</button>
 
-    <div class="card">
-        <h3>Salida</h3>
-        <input id="skuS" placeholder="SKU">
-        <input id="cantS" type="number" value="1">
-        <button onclick="salida()">Salida</button>
-    </div>
+    <br><br>
 
-    <div class="card">
-        <h3>📊 Estadísticas</h3>
-        <div id="stats"></div>
-    </div>
+    <input id="sku" placeholder="SKU">
+    <input id="nombre" placeholder="Nombre">
+    <input id="stock" type="number">
+    <button onclick="crear()">Crear</button>
 
-    <div class="card">
-        <h3>📦 Stock</h3>
-        <table>
-            <thead>
-                <tr><th>SKU</th><th>Nombre</th><th>Stock</th></tr>
-            </thead>
-            <tbody id="tabla"></tbody>
-        </table>
-    </div>
+    <br><br>
+
+    <input id="skuE" placeholder="SKU">
+    <input id="cantE" type="number">
+    <button onclick="entrada()">Entrada</button>
+
+    <br><br>
+
+    <input id="skuS" placeholder="SKU">
+    <input id="cantS" type="number">
+    <button onclick="salida()">Salida</button>
+
+    <table>
+        <thead>
+            <tr><th>SKU</th><th>Nombre</th><th>Stock</th></tr>
+        </thead>
+        <tbody id="tabla"></tbody>
+    </table>
 
     <script>
-    function msg(t){ document.getElementById("mensaje").innerText=t }
+    let productosGlobal = [];
+
+    function importar(){
+        fetch("/importar_woo").then(r=>r.json()).then(d=>{
+            alert(JSON.stringify(d));
+            cargar();
+        });
+    }
 
     function crear(){
         fetch("/agregar",{method:"POST",headers:{'Content-Type':'application/json'},
         body:JSON.stringify({sku:sku.value,nombre:nombre.value,stock:stock.value})})
-        .then(()=>{msg("Producto creado"); cargar();})
+        .then(()=>cargar())
     }
 
     function entrada(){
         fetch("/entrada",{method:"POST",headers:{'Content-Type':'application/json'},
         body:JSON.stringify({sku:skuE.value,cantidad:cantE.value})})
-        .then(()=>{msg("Entrada OK"); cargar();})
+        .then(()=>cargar())
     }
 
     function salida(){
         fetch("/salida",{method:"POST",headers:{'Content-Type':'application/json'},
         body:JSON.stringify({sku:skuS.value,cantidad:cantS.value})})
-        .then(()=>{msg("Salida OK"); cargar();})
-    }
-
-    function importar(){
-        fetch("/importar_woo")
-        .then(r=>r.json())
-        .then(d=>{msg(JSON.stringify(d)); cargar();})
+        .then(()=>cargar())
     }
 
     function cargar(){
         fetch("/productos").then(r=>r.json()).then(d=>{
-            let html="";
-            d.productos.forEach(p=>{
-                html+=`<tr><td>${p.sku}</td><td>${p.nombre}</td><td>${p.stock}</td></tr>`
-            });
-            tabla.innerHTML=html;
+            productosGlobal = d.productos;
+            render(productosGlobal);
         });
+    }
 
-        fetch("/stats").then(r=>r.json()).then(d=>{
-            stats.innerText = "Total: "+d.total+" | Stock: "+d.stock_total+" | Bajo: "+d.bajo_stock;
+    function render(lista){
+        let html="";
+        lista.forEach(p=>{
+            html+=`<tr><td>${p.sku}</td><td>${p.nombre}</td><td>${p.stock}</td></tr>`
         });
+        tabla.innerHTML=html;
+    }
+
+    function buscar(){
+        let texto = buscador.value.toLowerCase();
+        let filtrados = productosGlobal.filter(p =>
+            p.nombre.toLowerCase().includes(texto) ||
+            p.sku.toLowerCase().includes(texto)
+        );
+        render(filtrados);
     }
 
     cargar();
