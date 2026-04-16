@@ -44,34 +44,48 @@ movimientos = cargar_movimientos()
 
 # ---------------- WOOCOMMERCE ----------------
 
+import requests
+
+@app.route("/importar_woo")
 def importar_productos_woocommerce():
+
+    url = "https://www.babymine.cl/wp-json/custom/v1/productos"
+
     nuevos = 0
 
-    response = requests.get(WC_URL)
+    try:
+        response = requests.get(url)
 
-    if response.status_code != 200:
-        return {"error": "No se pudo conectar"}
+        if response.status_code != 200:
+            return {"error": f"Error Woo: {response.status_code}", "detalle": response.text}
 
-    data = response.json()
+        data = response.json()
 
-    for p in data:
-        sku = p.get("sku") or str(p.get("id"))
-        nombre = p.get("nombre")
-        stock = p.get("stock") or 0
+        for p in data:
+            sku = p.get("sku")
 
-        existe = any(prod["sku"] == sku for prod in productos)
+            if not sku:
+                continue
 
-        if not existe:
-            productos.append({
-                "sku": sku,
-                "nombre": nombre,
-                "stock": stock
-            })
-            nuevos += 1
+            nombre = p.get("nombre")
+            stock = p.get("stock") or 0
 
-    guardar_productos(productos)
+            existe = any(prod["sku"] == sku for prod in productos)
 
-    return {"mensaje": f"{nuevos} productos importados"}
+            if not existe:
+                productos.append({
+                    "sku": sku,
+                    "nombre": nombre,
+                    "stock": stock
+                })
+                nuevos += 1
+
+        guardar_productos(productos)
+
+        return {"mensaje": f"{nuevos} productos importados"}
+
+    except Exception as e:
+        return {"error": str(e)}
 # ---------------- ESTADISTICAS ----------------
 
 def stats():
