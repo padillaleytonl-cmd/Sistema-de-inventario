@@ -26,6 +26,7 @@ def guardar_productos(productos):
         json.dump(productos, f)
 
 productos = cargar_productos()
+movimientos = cargar_movimientos()
 
 # ---------------- MOVIMIENTOS ----------------
 
@@ -71,7 +72,15 @@ def importar_productos_woocommerce():
             params={"per_page": 100, "page": page}
         )
 
-        data = response.json()
+        if response.status_code != 200:
+            print("ERROR Woo:", response.text)
+            break
+
+        try:
+            data = response.json()
+        except:
+            print("RESPUESTA NO ES JSON:", response.text)
+            break
 
         if not data:
             break
@@ -81,9 +90,12 @@ def importar_productos_woocommerce():
             nombre = p.get("name")
             stock = p.get("stock_quantity") or 0
 
+            if not sku:
+                continue
+
             existe = any(prod["sku"] == sku for prod in productos)
 
-            if not existe and sku:
+            if not existe:
                 productos.append({
                     "sku": sku,
                     "nombre": nombre,
@@ -96,7 +108,6 @@ def importar_productos_woocommerce():
     guardar_productos(productos)
 
     return nuevos
-
 @app.route("/")
 def inicio():
     return "Sistema PRO inventario"
