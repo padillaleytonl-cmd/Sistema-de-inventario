@@ -15,6 +15,8 @@ ARCHIVO_MOVIMIENTOS = "movimientos.json"
 
 # ---------------- PRODUCTOS ----------------
 
+# ---------------- PRODUCTOS ----------------
+
 def cargar_productos():
     if os.path.exists(ARCHIVO_PRODUCTOS):
         with open(ARCHIVO_PRODUCTOS, "r") as f:
@@ -25,6 +27,21 @@ def guardar_productos(productos):
     with open(ARCHIVO_PRODUCTOS, "w") as f:
         json.dump(productos, f)
 
+
+# ---------------- MOVIMIENTOS ----------------
+
+def cargar_movimientos():
+    if os.path.exists(ARCHIVO_MOVIMIENTOS):
+        with open(ARCHIVO_MOVIMIENTOS, "r") as f:
+            return json.load(f)
+    return []
+
+def guardar_movimientos(movs):
+    with open(ARCHIVO_MOVIMIENTOS, "w") as f:
+        json.dump(movs, f)
+
+
+# 👇 ESTO SIEMPRE VA DESPUÉS DE LAS FUNCIONES
 productos = cargar_productos()
 movimientos = cargar_movimientos()
 
