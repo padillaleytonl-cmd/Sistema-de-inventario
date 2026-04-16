@@ -103,8 +103,8 @@ def entrada_stock():
     for producto in productos:
         if producto["sku"] == sku:
             producto["stock"] += cantidad
-
-	    actualizar_stock_woocommerce(sku, producto["stock"])
+			
+			actualizar_stock_woocommerce(sku, producto["stock"])
 		
             movimientos.append({
                 "tipo": "entrada",
