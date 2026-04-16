@@ -60,6 +60,43 @@ def actualizar_stock_woocommerce(sku, stock):
 
 # ---------------- RUTAS ----------------
 
+def importar_productos_woocommerce():
+    page = 1
+    nuevos = 0
+
+    while True:
+        response = requests.get(
+            WC_URL,
+            auth=(WC_KEY, WC_SECRET),
+            params={"per_page": 100, "page": page}
+        )
+
+        data = response.json()
+
+        if not data:
+            break
+
+        for p in data:
+            sku = p.get("sku")
+            nombre = p.get("name")
+            stock = p.get("stock_quantity") or 0
+
+            existe = any(prod["sku"] == sku for prod in productos)
+
+            if not existe and sku:
+                productos.append({
+                    "sku": sku,
+                    "nombre": nombre,
+                    "stock": stock
+                })
+                nuevos += 1
+
+        page += 1
+
+    guardar_productos(productos)
+
+    return nuevos
+
 @app.route("/")
 def inicio():
     return "Sistema PRO inventario"
@@ -67,6 +104,11 @@ def inicio():
 @app.route("/productos")
 def ver_productos():
     return {"productos": productos}
+
+@app.route("/importar_woo")
+def importar_woo():
+    cantidad = importar_productos_woocommerce()
+    return {"mensaje": f"{cantidad} productos importados"}
 
 @app.route("/movimientos")
 def ver_movimientos():
