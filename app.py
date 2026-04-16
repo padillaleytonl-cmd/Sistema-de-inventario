@@ -2,6 +2,11 @@ from flask import Flask, request, render_template_string
 import json
 import os
 from datetime import datetime
+import requests
+
+WC_URL = "https://www.babymine.cl/wp-json/wc/v3/products"
+WC_KEY = "ck_e5f878ffebcc4af9d43d14248928e46fdbda4d24"
+WC_SECRET = "cs_9dabb67d802051d67d61d49913ceb04a6cdf331b"
 
 app = Flask(__name__)
 
@@ -34,7 +39,24 @@ def guardar_movimientos(movs):
     with open(ARCHIVO_MOVIMIENTOS, "w") as f:
         json.dump(movs, f)
 
-movimientos = cargar_movimientos()
+def actualizar_stock_woocommerce(sku, stock):
+    response = requests.get(
+        WC_URL,
+        auth=(WC_KEY, WC_SECRET),
+        params={"sku": sku}
+    )
+
+    productos = response.json()
+
+    if productos:
+        product_id = productos[0]["id"]
+
+        requests.put(
+            f"{WC_URL}/{product_id}",
+            auth=(WC_KEY, WC_SECRET),
+            json={"stock_quantity": stock}
+        )
+
 
 # ---------------- RUTAS ----------------
 
@@ -82,6 +104,8 @@ def entrada_stock():
         if producto["sku"] == sku:
             producto["stock"] += cantidad
 
+	    actualizar_stock_woocommerce(sku, producto["stock"])
+		
             movimientos.append({
                 "tipo": "entrada",
                 "producto": producto["nombre"],
@@ -109,6 +133,8 @@ def salida_stock():
         if producto["sku"] == sku:
             if producto["stock"] >= cantidad:
                 producto["stock"] -= cantidad
+
+                actualizar_stock_woocommerce(sku, producto["stock"])
 
                 movimientos.append({
                     "tipo": "salida",
@@ -356,5 +382,4 @@ def panel():
 # ---------------- RUN ----------------
 
 if __name__ == "__main__":
-    import os
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(debug=True)
