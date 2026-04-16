@@ -356,13 +356,22 @@ def panel():
         });
     }
 
-    function render(lista){
-        let html="";
-        lista.forEach(p=>{
-            html+=`<tr><td>${p.sku}</td><td>${p.nombre}</td><td>${p.stock}</td></tr>`
-        });
-        tabla.innerHTML=html;
-    }
+function render(lista){
+
+    // 🔥 ordenar productos: con stock arriba, sin stock abajo
+    lista.sort((a,b) => b.stock - a.stock)
+
+    let html="";
+    lista.forEach(p=>{
+        html+=`<tr>
+            <td>${p.sku}</td>
+            <td>${p.nombre}</td>
+            <td>${p.stock}</td>
+        </tr>`
+    });
+
+    tabla.innerHTML=html;
+}
 
     function buscar(){
         let texto = buscador.value.toLowerCase();
