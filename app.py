@@ -49,42 +49,43 @@ def importar_productos_woocommerce():
     nuevos = 0
 
     while True:
-        try:
-            response = requests.get(
-                WC_URL,
-                auth=(WC_KEY, WC_SECRET),
-                params={"per_page": 100, "page": page}
-            )
+        response = requests.get(
+            WC_URL,
+            params={
+                "consumer_key": WC_KEY,
+                "consumer_secret": WC_SECRET,
+                "per_page": 100,
+                "page": page
+            }
+        )
 
-            if response.status_code != 200:
-                return {"error": f"Error Woo: {response.status_code}"}
+        if response.status_code != 200:
+            return {"error": f"Error Woo: {response.status_code}", "detalle": response.text}
 
-            data = response.json()
+        data = response.json()
 
-            if not data:
-                break
+        if not data:
+            break
 
-            for p in data:
-                sku = p.get("sku") or str(p.get("id"))
-                nombre = p.get("name")
-                stock = p.get("stock_quantity") or 0
+        for p in data:
+            sku = p.get("sku") or str(p.get("id"))
+            nombre = p.get("name")
+            stock = p.get("stock_quantity") or 0
 
-                existe = any(prod["sku"] == sku for prod in productos)
+            existe = any(prod["sku"] == sku for prod in productos)
 
-                if not existe:
-                    productos.append({
-                        "sku": sku,
-                        "nombre": nombre,
-                        "stock": stock
-                    })
-                    nuevos += 1
+            if not existe:
+                productos.append({
+                    "sku": sku,
+                    "nombre": nombre,
+                    "stock": stock
+                })
+                nuevos += 1
 
-            page += 1
-
-        except Exception as e:
-            return {"error": str(e)}
+        page += 1
 
     guardar_productos(productos)
+
     return {"mensaje": f"{nuevos} productos importados"}
 
 # ---------------- ESTADISTICAS ----------------
