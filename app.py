@@ -33,52 +33,63 @@ ordenes_procesadas = set()
 # ---------------- ACTUALIZAR WOO ----------------
 
 def actualizar_stock_woo(sku, stock):
-
-    res = requests.get(
-        "https://www.babymine.cl/wp-json/wc/v3/products",
-        params={
-            "consumer_key": WC_KEY,
-            "consumer_secret": WC_SECRET,
-            "sku": sku
-        }
-    )
-
-    if res.status_code != 200:
-        return
-
-    data = res.json()
-    if not data:
-        return
-
-    producto = data[0]
-
-    if producto["type"] == "simple":
-        requests.put(
-            f"https://www.babymine.cl/wp-json/wc/v3/products/{producto['id']}",
+    try:
+        res = requests.get(
+            "https://www.babymine.cl/wp-json/wc/v3/products",
             params={
                 "consumer_key": WC_KEY,
-                "consumer_secret": WC_SECRET
-            },
-            json={"stock_quantity": stock}
+                "consumer_secret": WC_SECRET,
+                "sku": sku
+            }
         )
 
-    if producto["type"] == "variation":
-        parent_id = producto["parent_id"]
+        if res.status_code != 200:
+            return
 
-        requests.put(
-            f"https://www.babymine.cl/wp-json/wc/v3/products/{parent_id}/variations/{producto['id']}",
-            params={
-                "consumer_key": WC_KEY,
-                "consumer_secret": WC_SECRET
-            },
-            json={"stock_quantity": stock}
-        )
+        data = res.json()
+        if not data:
+            return
+
+        producto = data[0]
+
+        if producto["type"] == "simple":
+            requests.put(
+                f"https://www.babymine.cl/wp-json/wc/v3/products/{producto['id']}",
+                params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET},
+                json={"stock_quantity": stock}
+            )
+
+        if producto["type"] == "variation":
+            parent_id = producto["parent_id"]
+            requests.put(
+                f"https://www.babymine.cl/wp-json/wc/v3/products/{parent_id}/variations/{producto['id']}",
+                params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET},
+                json={"stock_quantity": stock}
+            )
+    except:
+        pass
+
+# ---------------- AGREGAR ----------------
+
+@app.route("/agregar", methods=["POST"])
+def agregar():
+    data = request.json
+
+    producto = {
+        "sku": data["sku"],
+        "nombre": data["nombre"],
+        "stock": int(data["stock"])
+    }
+
+    productos.append(producto)
+    guardar_productos(productos)
+
+    return {"ok": True}
 
 # ---------------- IMPORTAR WOO ----------------
 
 @app.route("/importar_woo")
 def importar():
-
     nuevos = 0
 
     res = requests.get(
@@ -109,7 +120,6 @@ def importar():
                 nuevos += 1
 
         if p["type"] == "variable":
-
             res_var = requests.get(
                 f"https://www.babymine.cl/wp-json/wc/v3/products/{p['id']}/variations",
                 params={
@@ -122,9 +132,7 @@ def importar():
             if res_var.status_code != 200:
                 continue
 
-            variaciones = res_var.json()
-
-            for v in variaciones:
+            for v in res_var.json():
                 sku = v.get("sku") or str(v.get("id"))
 
                 if not any(prod["sku"] == sku for prod in productos):
@@ -143,16 +151,14 @@ def importar():
 @app.route("/entrada", methods=["POST"])
 def entrada():
     data = request.json
-    motivo = data.get("motivo", "Ingreso")
 
     for p in productos:
         if p["sku"] == data["sku"]:
             p["stock"] += int(data["cantidad"])
 
-            movimientos.append(f"➕ {motivo} | {p['nombre']} (+{data['cantidad']})")
+            movimientos.append(f"➕ {data.get('motivo')} | {p['nombre']} (+{data['cantidad']})")
 
             actualizar_stock_woo(p["sku"], p["stock"])
-
             guardar_productos(productos)
             return {"ok": True}
 
@@ -163,16 +169,14 @@ def entrada():
 @app.route("/salida", methods=["POST"])
 def salida():
     data = request.json
-    motivo = data.get("motivo", "Salida")
 
     for p in productos:
         if p["sku"] == data["sku"]:
             p["stock"] -= int(data["cantidad"])
 
-            movimientos.append(f"➖ {motivo} | {p['nombre']} (-{data['cantidad']})")
+            movimientos.append(f"➖ {data.get('motivo')} | {p['nombre']} (-{data['cantidad']})")
 
             actualizar_stock_woo(p["sku"], p["stock"])
-
             guardar_productos(productos)
             return {"ok": True}
 
@@ -182,7 +186,6 @@ def salida():
 
 @app.route("/sync_ordenes")
 def sync_ordenes():
-
     res = requests.get(
         "https://www.babymine.cl/wp-json/wc/v3/orders",
         params={
@@ -195,11 +198,7 @@ def sync_ordenes():
     if res.status_code != 200:
         return {"error": "Woo error"}
 
-    ordenes = res.json()
-
-    nuevos = 0
-
-    for o in ordenes:
+    for o in res.json():
 
         if o["id"] in ordenes_procesadas:
             continue
@@ -211,17 +210,13 @@ def sync_ordenes():
             for p in productos:
                 if p["sku"] == sku:
                     p["stock"] -= cantidad
-
                     movimientos.append(f"🛒 Venta Web | {p['nombre']} (-{cantidad})")
-
                     actualizar_stock_woo(p["sku"], p["stock"])
 
         ordenes_procesadas.add(o["id"])
-        nuevos += 1
 
     guardar_productos(productos)
-
-    return {"mensaje": f"{nuevos} ordenes sincronizadas"}
+    return {"ok": True}
 
 # ---------------- API ----------------
 
@@ -259,151 +254,121 @@ def panel():
         return redirect("/login")
 
     return render_template_string("""
- <link rel="stylesheet" href="/static/styles.css">
+<link rel="stylesheet" href="/static/styles.css">
+
 <div style="display:flex; gap:20px">
 
-    <h1>📦 Inventario BabyMine</h1>
 <div style="flex:3">
-    <input id="buscador" placeholder="Buscar producto..." onkeyup="buscar()">
 
-    <br><br>
+<h1>📦 Inventario BabyMine</h1>
 
-    <button onclick="importar()">Importar Woo</button>
+<input id="buscador" placeholder="Buscar..." onkeyup="buscar()"><br><br>
 
-    <br><br>
+<button onclick="importar()">Importar Woo</button><br><br>
 
-    <input id="sku" placeholder="SKU">
-    <input id="nombre" placeholder="Nombre">
-    <input id="stock" type="number">
-    <button onclick="crear()">Crear</button>
+<input id="sku" placeholder="SKU">
+<input id="nombre" placeholder="Nombre">
+<input id="stock" type="number">
+<button onclick="crear()">Crear</button>
 
-    <br><br>
+<h3>Entrada</h3>
+<input id="skuE" placeholder="SKU">
+<input id="cantE" type="number">
+<select id="motivoEntrada">
+<option>Ingreso mercadería</option>
+<option>Devolución</option>
+<option>Otro</option>
+</select>
+<button onclick="entrada()">Entrada</button>
 
-    <h3>Entrada</h3>
-    <input id="skuE" placeholder="SKU">
-    <input id="cantE" type="number">
-    <select id="motivoEntrada">
-        <option>Ingreso mercadería</option>
-        <option>Devolución</option>
-        <option>Otro</option>
-    </select>
-    <button onclick="entrada()">Entrada</button>
+<h3>Salida</h3>
+<input id="skuS" placeholder="SKU">
+<input id="cantS" type="number">
+<select id="motivoSalida">
+<option>Venta tienda</option>
+<option>Merma</option>
+<option>Otro</option>
+</select>
+<button onclick="salida()">Salida</button>
 
-    <h3>Salida</h3>
-    <input id="skuS" placeholder="SKU">
-    <input id="cantS" type="number">
-    <select id="motivoSalida">
-        <option>Venta tienda</option>
-        <option>Merma</option>
-        <option>Otro</option>
-    </select>
-    <button onclick="salida()">Salida</button>
+<table border="1">
+<thead>
+<tr><th>SKU</th><th>Nombre</th><th>Stock</th></tr>
+</thead>
+<tbody id="tabla"></tbody>
+</table>
 
-           <thead>
-            <tr><th>SKU</th><th>Nombre</th><th>Stock</th></tr>
-        </thead>
-        <tbody id="tabla"></tbody>
-    </table></div>
-
-<div class="historial-box" style="flex:1;">
-    <h3>📊 Historial</h3>
-    <div id="historial"></div>
 </div>
+
+<div style="flex:1; max-height:500px; overflow:auto;">
+<h3>📊 Historial</h3>
+<div id="historial"></div>
 </div>
-    <script>
-    let productosGlobal = [];
+
+</div>
+
+<script>
+
+let productosGlobal=[];
 
 function importar(){
-    fetch("/importar_woo")
-    .then(r => r.json())
-    .then(d => {
-        console.log(d);
-
-        if(d.error){
-            alert("Error: " + JSON.stringify(d));
-        } else {
-            alert("✅ " + d.mensaje);
-        }
-
-        cargar();
-       })
-    .catch(e => {
-        alert("❌ Error conexión");
-        console.log(e);
-    });
+fetch("/importar_woo").then(r=>r.json()).then(d=>{
+alert(JSON.stringify(d));
+cargar();
+});
 }
 
-    function crear(){
-        fetch("/agregar",{method:"POST",headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({sku:sku.value,nombre:nombre.value,stock:stock.value})})
-        .then(()=>cargar())
-    }
+function crear(){
+fetch("/agregar",{method:"POST",headers:{'Content-Type':'application/json'},
+body:JSON.stringify({sku:sku.value,nombre:nombre.value,stock:stock.value})})
+.then(()=>cargar());
+}
 
-    function entrada(){
-        fetch("/entrada",{method:"POST",headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({sku:skuE.value,cantidad:cantE.value,motivo:motivoEntrada.value})})
-        .then(()=>cargar())
-    }
+function entrada(){
+fetch("/entrada",{method:"POST",headers:{'Content-Type':'application/json'},
+body:JSON.stringify({sku:skuE.value,cantidad:cantE.value,motivo:motivoEntrada.value})})
+.then(()=>cargar());
+}
 
-    function salida(){
-        fetch("/salida",{method:"POST",headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({sku:skuS.value,cantidad:cantS.value,motivo:motivoSalida.value})})
-        .then(()=>cargar())
-    }
+function salida(){
+fetch("/salida",{method:"POST",headers:{'Content-Type':'application/json'},
+body:JSON.stringify({sku:skuS.value,cantidad:cantS.value,motivo:motivoSalida.value})})
+.then(()=>cargar());
+}
 
-    function cargar(){
-        fetch("/productos").then(r=>r.json()).then(d=>{
-            productosGlobal = d.productos;
-            render(productosGlobal);
-        });
+function cargar(){
 
-        fetch("/movimientos").then(r=>r.json()).then(d=>{
-            historial.innerHTML = d.movimientos.map(m=>"<p>"+m+"</p>").join("");
-        });
-    }
+fetch("/productos").then(r=>r.json()).then(d=>{
+productosGlobal=d.productos||[];
+render(productosGlobal);
+});
+
+fetch("/movimientos").then(r=>r.json()).then(d=>{
+historial.innerHTML=d.movimientos.reverse().map(m=>"<p>"+m+"</p>").join("");
+});
+}
 
 function render(lista){
-
-    // 🔥 ordenar productos: con stock arriba, sin stock abajo
-    lista.sort((a,b) => b.stock - a.stock)
-
-    let html="";
-    lista.forEach(p=>{
-        html+=`<tr>
-            <td>${p.sku}</td>
-            <td>${p.nombre}</td>
-            <td>${p.stock}</td>
-        </tr>`
-    });
-
-    tabla.innerHTML=html;
+lista.sort((a,b)=>b.stock-a.stock);
+tabla.innerHTML=lista.map(p=>`
+<tr>
+<td>${p.sku}</td>
+<td>${p.nombre}</td>
+<td>${p.stock}</td>
+</tr>`).join("");
 }
 
+function buscar(){
+let t=buscador.value.toLowerCase();
+render(productosGlobal.filter(p=>p.nombre.toLowerCase().includes(t)||p.sku.toLowerCase().includes(t)));
+}
 
-    function buscar(){
-        let texto = buscador.value.toLowerCase();
-        let filtrados = productosGlobal.filter(p =>
-            p.nombre.toLowerCase().includes(texto) ||
-            p.sku.toLowerCase().includes(texto)
-        );
-        render(filtrados);
-    }
+setInterval(()=>fetch("/sync_ordenes"),10000);
 
-setInterval(()=>{
-    fetch("/sync_ordenes")
-},10000)
-
-// 🔥 cargar productos
 cargar();
 
-// 🔥 importar automático si está vacío
-setTimeout(()=>{
-    if(productosGlobal.length === 0){
-        importar();
-    }
-},1500);
-    </script>
-    """)
+</script>
+""")
 
 # ---------------- RUN ----------------
 
