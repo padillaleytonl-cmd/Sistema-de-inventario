@@ -90,25 +90,17 @@ def importar_productos_woocommerce():
         )
 
         if response.status_code != 200:
-            print("ERROR Woo:", response.text)
             break
 
-        try:
-            data = response.json()
-        except:
-            print("RESPUESTA NO ES JSON:", response.text)
-            break
+        data = response.json()
 
         if not data:
             break
 
         for p in data:
-            sku = p.get("sku")
+            sku = p.get("sku") or str(p.get("id"))  # 👈 usa ID si no hay SKU
             nombre = p.get("name")
             stock = p.get("stock_quantity") or 0
-
-            if not sku:
-                continue
 
             existe = any(prod["sku"] == sku for prod in productos)
 
