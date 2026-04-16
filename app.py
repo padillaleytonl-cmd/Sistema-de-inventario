@@ -145,10 +145,38 @@ def panel():
     return render_template_string("""
     <h1>📦 Inventario BabyMine</h1>
 
-    <h3>📊 Estadísticas</h3>
+    <div id="mensaje" style="color: green; font-weight: bold;"></div>
+
+    <hr>
+
+    <h2>🆕 Crear producto</h2>
+    <input id="sku" placeholder="SKU"><br><br>
+    <input id="nombre" placeholder="Nombre"><br><br>
+    <input id="stock" type="number" value="0"><br><br>
+    <button onclick="crearProducto()">Crear</button>
+
+    <hr>
+
+    <h2>➕ Entrada</h2>
+    <input id="skuEntrada" placeholder="SKU"><br><br>
+    <input id="cantidadEntrada" type="number" value="1"><br><br>
+    <button onclick="entrada()">Ingresar</button>
+
+    <hr>
+
+    <h2>➖ Salida</h2>
+    <input id="skuSalida" placeholder="SKU"><br><br>
+    <input id="cantidadSalida" type="number" value="1"><br><br>
+    <button onclick="salida()">Salida</button>
+
+    <hr>
+
+    <h2>📊 Estadísticas</h2>
     <div id="stats"></div>
 
-    <h3>Productos</h3>
+    <hr>
+
+    <h2>📦 Stock en vivo</h2>
     <table border="1" id="tabla">
         <thead>
             <tr>
@@ -161,23 +189,83 @@ def panel():
     </table>
 
     <script>
-    function cargar(){
-        fetch("/productos")
-        .then(r => r.json())
+    function mostrarMensaje(texto){
+        document.getElementById("mensaje").innerText = texto;
+        setTimeout(() => {
+            document.getElementById("mensaje").innerText = "";
+        }, 3000);
+    }
+
+    function crearProducto(){
+        fetch("/agregar", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                sku: document.getElementById("sku").value,
+                nombre: document.getElementById("nombre").value,
+                stock: document.getElementById("stock").value
+            })
+        })
+        .then(res => res.json())
         .then(data => {
-            let html = "";
-            data.productos.forEach(p=>{
-                html += `<tr>
+            mostrarMensaje("✅ Producto creado");
+            cargarTabla();
+        });
+    }
+
+    function entrada(){
+        fetch("/entrada", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                sku: document.getElementById("skuEntrada").value,
+                cantidad: document.getElementById("cantidadEntrada").value
+            })
+        })
+        .then(res => res.json())
+        .then(data => {
+            mostrarMensaje("📦 Stock actualizado (entrada)");
+            cargarTabla();
+        });
+    }
+
+    function salida(){
+        fetch("/salida", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                sku: document.getElementById("skuSalida").value,
+                cantidad: document.getElementById("cantidadSalida").value
+            })
+        })
+        .then(res => res.json())
+        .then(data => {
+            mostrarMensaje("📤 Stock actualizado (salida)");
+            cargarTabla();
+        });
+    }
+
+    function cargarTabla(){
+        fetch("/productos")
+        .then(res => res.json())
+        .then(data => {
+            let tbody = document.querySelector("#tabla tbody");
+            tbody.innerHTML = "";
+
+            data.productos.forEach(p => {
+                let fila = `<tr>
                     <td>${p.sku}</td>
                     <td>${p.nombre}</td>
                     <td>${p.stock}</td>
                 </tr>`;
+                tbody.innerHTML += fila;
             });
-            document.querySelector("#tabla tbody").innerHTML = html;
         });
+    }
 
+    function cargarStats(){
         fetch("/stats")
-        .then(r => r.json())
+        .then(res => res.json())
         .then(d => {
             document.getElementById("stats").innerHTML =
                 "Total: " + d.total +
@@ -186,7 +274,8 @@ def panel():
         });
     }
 
-    cargar();
+    cargarTabla();
+    cargarStats();
     </script>
     """)
 
