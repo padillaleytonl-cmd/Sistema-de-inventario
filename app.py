@@ -259,19 +259,11 @@ def panel():
         return redirect("/login")
 
     return render_template_string("""
-    <style>
-    body { font-family: Arial; background:#f5f6ff; padding:20px; }
-    h1 { color:#222163; }
-    button { background:#222163; color:white; padding:10px; border:none; border-radius:5px; }
-    button:hover { background:#8576FF; }
-    input, select { padding:8px; margin:5px; }
-    table { width:100%; margin-top:20px; border-collapse: collapse; }
-    th { background:#8576FF; color:white; padding:10px; }
-    td { padding:8px; border:1px solid #ddd; }
-    </style>
+ <link rel="stylesheet" href="/static/styles.css">
+<div style="display:flex; gap:20px">
 
     <h1>📦 Inventario BabyMine</h1>
-
+<div style="flex:3">
     <input id="buscador" placeholder="Buscar producto..." onkeyup="buscar()">
 
     <br><br>
@@ -307,25 +299,39 @@ def panel():
     </select>
     <button onclick="salida()">Salida</button>
 
-    <h3>Historial</h3>
-    <div id="historial"></div>
-
-    <table>
-        <thead>
+           <thead>
             <tr><th>SKU</th><th>Nombre</th><th>Stock</th></tr>
         </thead>
         <tbody id="tabla"></tbody>
-    </table>
+    </table></div>
 
+<div class="historial-box" style="flex:1;">
+    <h3>📊 Historial</h3>
+    <div id="historial"></div>
+</div>
+</div>
     <script>
     let productosGlobal = [];
 
-    function importar(){
-        fetch("/importar_woo").then(r=>r.json()).then(d=>{
-            alert(JSON.stringify(d));
-            cargar();
-        });
-    }
+function importar(){
+    fetch("/importar_woo")
+    .then(r => r.json())
+    .then(d => {
+        console.log(d);
+
+        if(d.error){
+            alert("Error: " + JSON.stringify(d));
+        } else {
+            alert("✅ " + d.mensaje);
+        }
+
+        cargar();
+       })
+    .catch(e => {
+        alert("❌ Error conexión");
+        console.log(e);
+    });
+}
 
     function crear(){
         fetch("/agregar",{method:"POST",headers:{'Content-Type':'application/json'},
@@ -373,6 +379,7 @@ function render(lista){
     tabla.innerHTML=html;
 }
 
+
     function buscar(){
         let texto = buscador.value.toLowerCase();
         let filtrados = productosGlobal.filter(p =>
@@ -382,11 +389,19 @@ function render(lista){
         render(filtrados);
     }
 
-    setInterval(()=>{
-        fetch("/sync_ordenes")
-    },10000)
+setInterval(()=>{
+    fetch("/sync_ordenes")
+},10000)
 
-    cargar();
+// 🔥 cargar productos
+cargar();
+
+// 🔥 importar automático si está vacío
+setTimeout(()=>{
+    if(productosGlobal.length === 0){
+        importar();
+    }
+},1500);
     </script>
     """)
 
