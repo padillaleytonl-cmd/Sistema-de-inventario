@@ -6,11 +6,11 @@ import requests
 app = Flask(__name__)
 app.secret_key = "clave_super_segura"
 
-USUARIO = "admin"
-PASSWORD = "1234"
+USUARIO = "padillaleytonl@gmail.com"
+PASSWORD = "Pii.120715"
 
-WC_KEY = "TU_KEY"
-WC_SECRET = "TU_SECRET"
+WC_KEY = "ck_e664fc41146f00841760e9f5f3da573926409950"
+WC_SECRET = "cs_00e75c96b658883032a63ca9cb287c480b0f2a4b"
 
 ARCHIVO_PRODUCTOS = "productos.json"
 
