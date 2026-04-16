@@ -48,21 +48,21 @@ def importar_productos_woocommerce():
     page = 1
     nuevos = 0
 
-    while True:
- headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-}
-
-response = requests.get(
-    WC_URL,
-    headers=headers,
-    params={
-        "consumer_key": WC_KEY,
-        "consumer_secret": WC_SECRET,
-        "per_page": 100,
-        "page": page
+while True:
+    headers = {
+        "User-Agent": "Mozilla/5.0"
     }
-)
+
+    response = requests.get(
+        WC_URL,
+        headers=headers,
+        params={
+            "consumer_key": WC_KEY,
+            "consumer_secret": WC_SECRET,
+            "per_page": 100,
+            "page": page
+        }
+    )
 
         if response.status_code != 200:
             return {"error": f"Error Woo: {response.status_code}", "detalle": response.text}
