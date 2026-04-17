@@ -1,0 +1,4 @@
+WC_KEY = "ck_e664fc41146f00841760e9f5f3da573926409950"
+WC_SECRET = "cs_00e75c96b658883032a63ca9cb287c480b0f2a4b"
+USUARIO = "padillaleytonl@gmail.com"
+PASSWORD = "Pii.120715"
