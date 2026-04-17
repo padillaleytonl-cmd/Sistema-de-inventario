@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Inventario BabyMine</title>
+
+    <!-- CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+
+<h1>Panel Inventario</h1>
+
+<div id="mensaje"></div>
+
+<h2>Crear producto</h2>
+<input id="sku" placeholder="SKU"><br><br>
+<input id="nombre" placeholder="Nombre"><br><br>
+<input id="stock" type="number" value="0"><br><br>
+<button onclick="crearProducto()">Crear</button>
+
+<hr>
+
+<h2>Stock en vivo</h2>
+<table border="1" id="tabla">
+    <thead>
+        <tr>
+            <th>SKU</th>
+            <th>Nombre</th>
+            <th>Stock</th>
+        </tr>
+    </thead>
+    <tbody></tbody>
+</table>
+
+<!-- JS -->
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+
+</body>
+</html>
