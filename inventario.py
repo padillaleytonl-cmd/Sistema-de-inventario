@@ -1,14 +1,14 @@
 import json
 import os
 
-ARCHIVO_PRODUCTOS = "productos.json"
-
 def cargar_productos():
     if os.path.exists(ARCHIVO_PRODUCTOS):
-        with open(ARCHIVO_PRODUCTOS, "r") as f:
-            return json.load(f)
+        try:
+            with open(ARCHIVO_PRODUCTOS, "r") as f:
+                contenido = f.read().strip()
+                if not contenido:
+                    return []
+                return json.loads(contenido)
+        except:
+            return []
     return []
-
-def guardar_productos(productos):
-    with open(ARCHIVO_PRODUCTOS, "w") as f:
-        json.dump(productos, f)
