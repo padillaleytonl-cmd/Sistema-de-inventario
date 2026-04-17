@@ -1,5 +1,6 @@
 from flask import Flask, request, render_template, session, redirect
 import requests
+import os
 
 from config import *
 from woo import actualizar_stock_woo
