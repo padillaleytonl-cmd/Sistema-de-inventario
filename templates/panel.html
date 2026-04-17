@@ -9,12 +9,14 @@
 <div style="display:flex; gap:20px">
 
 <div style="flex:3">
+
 <h1>Inventario BabyMine</h1>
 
 <input id="buscador" placeholder="Buscar..." onkeyup="buscar()"><br><br>
 
 <button onclick="importar()">Importar Woo</button><br><br>
 
+<h3>Crear producto</h3>
 <input id="sku" placeholder="SKU">
 <input id="nombre" placeholder="Nombre">
 <input id="stock" type="number">
@@ -42,10 +44,15 @@
 
 <table border="1">
 <thead>
-<tr><th>SKU</th><th>Nombre</th><th>Stock</th></tr>
+<tr>
+<th>SKU</th>
+<th>Nombre</th>
+<th>Stock</th>
+</tr>
 </thead>
 <tbody id="tabla"></tbody>
 </table>
+
 </div>
 
 <div style="flex:1; max-height:500px; overflow:auto;">

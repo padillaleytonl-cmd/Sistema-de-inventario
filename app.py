@@ -119,7 +119,10 @@ def salida():
 
     for p in productos:
         if p["sku"] == data["sku"]:
-            p["stock"] -= int(data["cantidad"])
+            if p["stock"] < int(data["cantidad"]):
+    return {"error": "Stock insuficiente"}
+
+p["stock"] -= int(data["cantidad"])
 
             movimientos.append(f"➖ {data.get('motivo')} | {p['nombre']} (-{data['cantidad']})")
 
