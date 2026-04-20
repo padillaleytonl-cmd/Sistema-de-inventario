@@ -1,4 +1,9 @@
-WC_KEY = "ck_e664fc41146f00841760e9f5f3da573926409950"
-WC_SECRET = "cs_00e75c96b658883032a63ca9cb287c480b0f2a4b"
-USUARIO = "padillaleytonl@gmail.com"
-PASSWORD = "Pii.120715"
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+WC_KEY = os.environ.get("WC_KEY")
+WC_SECRET = os.environ.get("WC_SECRET")
+USUARIO = os.environ.get("USUARIO")
+PASSWORD = os.environ.get("PASSWORD")
