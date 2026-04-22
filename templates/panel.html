@@ -774,7 +774,7 @@ tbody td {
 <div id="toast"></div>
 
 <!-- ═══════════════ LOGIN ═══════════════ -->
-<div id="loginScreen" class="screen active">
+<div id="loginScreen" class="screen {% if not logged %}active{% endif %}">
   <div style="min-height:100vh; display:flex; align-items:center; justify-content:center; background:var(--bg); padding:24px;">
     <div class="login-card">
       <div class="login-brand">
@@ -812,7 +812,7 @@ tbody td {
 </div>
 
 <!-- ═══════════════ DASHBOARD ═══════════════ -->
-<div id="dashScreen" class="screen">
+<div id="dashScreen" class="screen {% if logged %}active{% endif %}">
 
   <!-- Navbar -->
   <nav class="navbar">
@@ -1321,12 +1321,9 @@ function cargarMovimientosFull(){
   });
 }
 
-// ── DETECTAR QUÉ PANTALLA MOSTRAR
+// ── SI ESTAMOS EN EL PANEL, CARGAR DATOS
 (function(){
-  const path = window.location.pathname;
-  if(path === '/panel'){
-    document.getElementById('loginScreen').classList.remove('active');
-    document.getElementById('dashScreen').classList.add('active');
+  if(document.getElementById('dashScreen').classList.contains('active')){
     cargar();
     setInterval(() => fetch('/sync_ordenes').then(r=>r.json()).then(()=>cargar()), 15000);
   }
