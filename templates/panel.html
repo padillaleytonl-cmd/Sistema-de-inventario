@@ -1,68 +1,1312 @@
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
-    <title>Inventario BabyMine</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lusync</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --navy: #0d1f3c;
+  --navy-light: #162d54;
+  --violet: #2563eb;
+  --violet-light: #60a5fa;
+  --bg: #f0f1fa;
+  --white: #ffffff;
+  --border: rgba(0,0,0,0.08);
+  --text: #1a1a2e;
+  --muted: #6b7280;
+  --hint: #9ca3af;
+  --success: #1D9E75;
+  --success-bg: #eaf3ee;
+  --danger: #E24B4A;
+  --danger-bg: #fef2f2;
+  --warn: #BA7517;
+  --warn-bg: #fef9ee;
+  --info-bg: #eef2ff;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'DM Sans', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ── SCREENS ── */
+.screen { display: none; }
+.screen.active { display: block; }
+
+/* ── LOGIN ── */
+#loginScreen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  padding: 24px;
+}
+
+.login-card {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 40px 36px;
+  width: 100%;
+  max-width: 400px;
+  box-shadow: var(--shadow);
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 36px;
+}
+
+.brand-mark {
+  width: 46px;
+  height: 46px;
+  background: var(--navy);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.brand-mark span {
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.brand-name {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--navy);
+  line-height: 1.2;
+}
+
+.brand-tagline {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.login-heading {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.login-sub {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 28px;
+}
+
+.field {
+  margin-bottom: 16px;
+}
+
+.field label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  margin-bottom: 6px;
+  letter-spacing: 0.3px;
+}
+
+.field input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-family: 'DM Sans', sans-serif;
+  color: var(--text);
+  background: var(--white);
+  transition: border-color 0.15s;
+  outline: none;
+}
+
+.field input:focus {
+  border-color: var(--violet);
+  box-shadow: 0 0 0 3px rgba(133,118,255,0.1);
+}
+
+.btn-login {
+  width: 100%;
+  background: var(--navy);
+  color: white;
+  border: none;
+  padding: 11px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 500;
+  font-family: 'DM Sans', sans-serif;
+  cursor: pointer;
+  margin-top: 8px;
+  transition: background 0.15s, transform 0.1s;
+}
+
+.btn-login:hover { background: var(--navy-light); }
+.btn-login:active { transform: scale(0.99); }
+
+.login-error {
+  display: none;
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  margin-top: 12px;
+  text-align: center;
+}
+
+.login-footer {
+  text-align: center;
+  margin-top: 24px;
+  font-size: 11px;
+  color: var(--hint);
+}
+
+/* ── NAVBAR ── */
+.navbar {
+  background: var(--navy);
+  height: 56px;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.navbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+}
+
+.navbar-mark {
+  width: 30px;
+  height: 30px;
+  background: var(--violet);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: white;
+  letter-spacing: 0.3px;
+}
+
+.navbar-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: white;
+}
+
+.navbar-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.nav-btn {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.55);
+  font-size: 13px;
+  font-family: 'DM Sans', sans-serif;
+  padding: 6px 13px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-weight: 400;
+}
+
+.nav-btn:hover { color: white; background: rgba(255,255,255,0.08); }
+.nav-btn.active { color: white; background: rgba(255,255,255,0.12); }
+
+.navbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.navbar-avatar {
+  width: 32px;
+  height: 32px;
+  background: var(--violet);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: white;
+}
+
+.navbar-username {
+  font-size: 13px;
+  color: rgba(255,255,255,0.7);
+}
+
+.btn-logout {
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: rgba(255,255,255,0.6);
+  font-size: 12px;
+  font-family: 'DM Sans', sans-serif;
+  padding: 5px 12px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-logout:hover { background: rgba(255,255,255,0.15); color: white; }
+
+/* ── MAIN LAYOUT ── */
+.main {
+  padding: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+/* ── PAGE HEADER ── */
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.page-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--navy);
+}
+
+.page-date {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 3px;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-primary {
+  background: var(--navy);
+  color: white;
+  border: none;
+  padding: 9px 16px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: 'DM Sans', sans-serif;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-primary:hover { background: var(--violet); }
+
+.btn-secondary {
+  background: var(--white);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 9px 16px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: 'DM Sans', sans-serif;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-secondary:hover { border-color: var(--navy); }
+
+/* ── METRICS ── */
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.metric-card {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px 18px;
+  box-shadow: var(--shadow);
+}
+
+.metric-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.metric-value {
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--navy);
+  line-height: 1;
+  margin-bottom: 6px;
+  font-family: 'DM Mono', monospace;
+}
+
+.metric-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 20px;
+}
+
+.badge-up { background: var(--success-bg); color: var(--success); }
+.badge-down { background: var(--danger-bg); color: var(--danger); }
+.badge-warn { background: var(--warn-bg); color: var(--warn); }
+.badge-info { background: var(--info-bg); color: var(--navy); }
+
+/* ── DASH GRID ── */
+.dash-grid {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.card {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  box-shadow: var(--shadow);
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.card-tag {
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--bg);
+  padding: 3px 8px;
+  border-radius: 20px;
+}
+
+/* ── BAR CHART ── */
+.bar-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  height: 120px;
+  padding-top: 8px;
+}
+
+.bar-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  justify-content: flex-end;
+}
+
+.bar-val {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted);
+  font-family: 'DM Mono', monospace;
+}
+
+.bar-fill {
+  width: 100%;
+  border-radius: 5px 5px 0 0;
+  background: var(--navy);
+  min-height: 4px;
+  transition: background 0.2s;
+}
+
+.bar-fill.highlight { background: var(--violet); }
+
+.bar-day {
+  font-size: 10px;
+  color: var(--hint);
+}
+
+/* ── STOCK BAJO ── */
+.stock-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stock-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.stock-name {
+  font-size: 12px;
+  color: var(--text);
+  width: 110px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+
+.stock-track {
+  flex: 1;
+  height: 5px;
+  background: var(--bg);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.stock-fill {
+  height: 100%;
+  border-radius: 3px;
+}
+
+.stock-count {
+  font-size: 12px;
+  font-weight: 600;
+  font-family: 'DM Mono', monospace;
+  width: 20px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* ── ACTIVIDAD ── */
+.activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.activity-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border-radius: var(--radius);
+}
+
+.activity-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.icon-venta { background: var(--info-bg); color: var(--navy); }
+.icon-entrada { background: var(--success-bg); color: var(--success); }
+.icon-salida { background: var(--danger-bg); color: var(--danger); }
+
+.activity-desc {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.activity-time {
+  font-size: 11px;
+  color: var(--hint);
+  flex-shrink: 0;
+}
+
+/* ── INVENTARIO ── */
+.inv-toolbar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+  align-items: center;
+}
+
+.search-input {
+  flex: 1;
+  padding: 9px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-family: 'DM Sans', sans-serif;
+  color: var(--text);
+  background: var(--white);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.search-input:focus { border-color: var(--violet); }
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr auto;
+  gap: 8px;
+  margin-bottom: 16px;
+  align-items: end;
+}
+
+.form-group label {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+
+.form-group input,
+.form-group select {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-family: 'DM Sans', sans-serif;
+  color: var(--text);
+  background: var(--white);
+  outline: none;
+}
+
+.form-group input:focus,
+.form-group select:focus { border-color: var(--violet); }
+
+.section-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--navy);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 20px 0 10px;
+}
+
+/* ── TABLE ── */
+.table-wrap {
+  overflow-x: auto;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--white);
+}
+
+thead th {
+  background: var(--navy);
+  color: white;
+  padding: 11px 14px;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+thead th:first-child { border-radius: var(--radius-lg) 0 0 0; }
+thead th:last-child { border-radius: 0 var(--radius-lg) 0 0; }
+
+tbody tr {
+  border-bottom: 1px solid var(--border);
+  transition: background 0.1s;
+}
+
+tbody tr:last-child { border-bottom: none; }
+tbody tr:hover { background: #f8f9ff; }
+
+tbody td {
+  padding: 11px 14px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.sku-code {
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--bg);
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+
+.stock-pill {
+  display: inline-block;
+  font-family: 'DM Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 20px;
+}
+
+.pill-ok { background: var(--success-bg); color: var(--success); }
+.pill-warn { background: var(--warn-bg); color: var(--warn); }
+.pill-danger { background: var(--danger-bg); color: var(--danger); }
+
+/* ── HISTORIAL LATERAL ── */
+.layout-inv {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 16px;
+}
+
+.hist-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.hist-item {
+  font-size: 12px;
+  color: var(--text);
+  padding: 8px 10px;
+  background: var(--bg);
+  border-radius: 8px;
+  line-height: 1.4;
+}
+
+/* ── TOAST ── */
+#toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--navy);
+  color: white;
+  padding: 12px 20px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 500;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: all 0.25s;
+  z-index: 999;
+  pointer-events: none;
+}
+
+#toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ── TABS ── */
+.section-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.stab {
+  padding: 7px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  background: var(--white);
+  color: var(--muted);
+  cursor: pointer;
+  font-family: 'DM Sans', sans-serif;
+  transition: all 0.15s;
+}
+
+.stab.active {
+  background: var(--navy);
+  color: white;
+  border-color: var(--navy);
+}
+
+/* ── RESPONSIVE ── */
+@media (max-width: 900px) {
+  .metrics-grid { grid-template-columns: repeat(2, 1fr); }
+  .dash-grid { grid-template-columns: 1fr; }
+  .layout-inv { grid-template-columns: 1fr; }
+  .form-row { grid-template-columns: 1fr 1fr; }
+  .navbar-nav { display: none; }
+}
+</style>
 </head>
 <body>
 
-<div style="display:flex; gap:20px">
+<div id="toast"></div>
 
-<div style="flex:3">
-
-<h1>Inventario BabyMine</h1>
-
-<input id="buscador" placeholder="Buscar..." onkeyup="buscar()"><br><br>
-
-<button onclick="importar()">Importar Woo</button><br><br>
-
-<h3>Crear producto</h3>
-<input id="sku" placeholder="SKU">
-<input id="nombre" placeholder="Nombre">
-<input id="stock" type="number">
-<button onclick="crear()">Crear</button>
-
-<h3>Entrada</h3>
-<input id="skuE" placeholder="SKU">
-<input id="cantE" type="number">
-<select id="motivoEntrada">
-<option>Ingreso mercadería</option>
-<option>Devolución</option>
-<option>Otro</option>
-</select>
-<button onclick="entrada()">Entrada</button>
-
-<h3>Salida</h3>
-<input id="skuS" placeholder="SKU">
-<input id="cantS" type="number">
-<select id="motivoSalida">
-<option>Venta tienda</option>
-<option>Merma</option>
-<option>Otro</option>
-</select>
-<button onclick="salida()">Salida</button>
-
-<table border="1">
-<thead>
-<tr>
-<th>SKU</th>
-<th>Nombre</th>
-<th>Stock</th>
-</tr>
-</thead>
-<tbody id="tabla"></tbody>
-</table>
-
+<!-- ═══════════════ LOGIN ═══════════════ -->
+<div id="loginScreen" class="screen active">
+  <div style="min-height:100vh; display:flex; align-items:center; justify-content:center; background:var(--bg); padding:24px;">
+    <div class="login-card">
+      <div class="login-brand">
+        <div class="brand-mark"><span>LS</span></div>
+        <div>
+          <div class="brand-name">Lusync</div>
+          <div class="brand-tagline">Sincroniza todo tu negocio</div>
+        </div>
+      </div>
+      <div class="login-heading">Bienvenido de vuelta</div>
+      <div class="login-sub">Ingresa tus credenciales para acceder al panel</div>
+      <form onsubmit="doLogin(event)">
+        <div class="field">
+          <label>Correo electrónico</label>
+          <input type="text" id="loginUser" placeholder="correo@babymine.cl" autocomplete="username">
+        </div>
+        <div class="field">
+          <label>Contraseña</label>
+          <input type="password" id="loginPass" placeholder="••••••••" autocomplete="current-password">
+        </div>
+        <button type="submit" class="btn-login">Ingresar al panel</button>
+      </form>
+      <div id="loginError" class="login-error">Credenciales incorrectas. Intenta nuevamente.</div>
+      <div class="login-footer">Lusync v1.0 &mdash; Acceso solo personal autorizado</div>
+    </div>
+  </div>
 </div>
 
-<div style="flex:1; max-height:500px; overflow:auto;">
-<h3>Historial</h3>
-<div id="historial"></div>
-</div>
+<!-- ═══════════════ DASHBOARD ═══════════════ -->
+<div id="dashScreen" class="screen">
 
-</div>
+  <!-- Navbar -->
+  <nav class="navbar">
+    <div class="navbar-brand">
+      <div class="navbar-mark">LS</div>
+      <span class="navbar-name">Lusync</span>
+    </div>
+    <div class="navbar-nav">
+      <button class="nav-btn active" onclick="showSection('dashboard', this)">Dashboard</button>
+      <button class="nav-btn" onclick="showSection('inventario', this)">Inventario</button>
+      <button class="nav-btn" onclick="showSection('movimientos', this)">Movimientos</button>
+    </div>
+    <div class="navbar-right">
+      <div class="navbar-avatar">LP</div>
+      <span class="navbar-username">Luis Padilla</span>
+      <button class="btn-logout" onclick="doLogout()">Salir</button>
+    </div>
+  </nav>
 
-<script src="{{ url_for('static', filename='app.js') }}"></script>
+  <!-- ── SECCIÓN DASHBOARD ── -->
+  <div id="sec-dashboard" class="main">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Dashboard</div>
+        <div class="page-date" id="fechaHoy"></div>
+      </div>
+      <div class="header-actions">
+        <button class="btn-secondary" onclick="syncOrdenes()">&#8635; Sincronizar</button>
+        <button class="btn-primary" onclick="importarWoo()">&#8593; Importar Woo</button>
+      </div>
+    </div>
 
+    <!-- Métricas -->
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-label">Productos en stock</div>
+        <div class="metric-value" id="metricTotal">—</div>
+        <div><span class="metric-badge badge-info">Total productos</span></div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Ventas hoy</div>
+        <div class="metric-value" id="metricVentas">—</div>
+        <div><span class="metric-badge badge-up" id="metricVentasBadge">Desde medianoche</span></div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Stock bajo</div>
+        <div class="metric-value" id="metricBajo">—</div>
+        <div><span class="metric-badge badge-warn">Menos de 5 unidades</span></div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Canales activos</div>
+        <div class="metric-value">2</div>
+        <div><span class="metric-badge badge-info">Woo + ML próximo</span></div>
+      </div>
+    </div>
+
+    <!-- Gráfico + Stock bajo -->
+    <div class="dash-grid">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Movimientos — últimos 7 días</div>
+          <span class="card-tag">Esta semana</span>
+        </div>
+        <div class="bar-chart" id="barChart">
+          <div style="color:var(--hint); font-size:12px; margin:auto;">Cargando datos...</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Productos con stock bajo</div>
+          <span class="card-tag badge-warn" style="background:var(--warn-bg);color:var(--warn);" id="countBajo">0 productos</span>
+        </div>
+        <div class="stock-list" id="stockBajoList">
+          <div style="color:var(--hint); font-size:12px;">Cargando...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Actividad reciente -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Actividad reciente</div>
+        <span class="card-tag">Últimos movimientos</span>
+      </div>
+      <div class="activity-list" id="actividadList">
+        <div style="color:var(--hint); font-size:12px;">Cargando...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SECCIÓN INVENTARIO ── -->
+  <div id="sec-inventario" class="main" style="display:none;">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Inventario</div>
+        <div class="page-date">Gestión de productos y stock</div>
+      </div>
+      <button class="btn-primary" onclick="importarWoo()">&#8593; Importar Woo</button>
+    </div>
+
+    <div class="layout-inv">
+      <div>
+        <!-- Crear producto -->
+        <div class="card" style="margin-bottom:16px;">
+          <div class="card-title" style="margin-bottom:14px;">Agregar producto</div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>SKU</label>
+              <input id="sku" placeholder="Ej: COCHE001">
+            </div>
+            <div class="form-group">
+              <label>Nombre</label>
+              <input id="nombre" placeholder="Nombre del producto">
+            </div>
+            <div class="form-group">
+              <label>Stock inicial</label>
+              <input id="stock" type="number" min="0" placeholder="0">
+            </div>
+            <button class="btn-primary" onclick="crear()" style="height:38px; align-self:end;">Crear</button>
+          </div>
+        </div>
+
+        <!-- Entrada / Salida -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px;">
+          <div class="card">
+            <div class="card-title" style="margin-bottom:12px; color:var(--success);">&#8593; Entrada de stock</div>
+            <div class="form-group" style="margin-bottom:8px;"><label>SKU</label><input id="skuE" placeholder="SKU del producto"></div>
+            <div class="form-group" style="margin-bottom:8px;"><label>Cantidad</label><input id="cantE" type="number" min="1" placeholder="0"></div>
+            <div class="form-group" style="margin-bottom:12px;">
+              <label>Motivo</label>
+              <select id="motivoEntrada">
+                <option>Ingreso mercadería</option>
+                <option>Devolución</option>
+                <option>Ajuste de inventario</option>
+                <option>Otro</option>
+              </select>
+            </div>
+            <button class="btn-primary" onclick="entrada()" style="width:100%; background:var(--success);">Registrar entrada</button>
+          </div>
+          <div class="card">
+            <div class="card-title" style="margin-bottom:12px; color:var(--danger);">&#8595; Salida de stock</div>
+            <div class="form-group" style="margin-bottom:8px;"><label>SKU</label><input id="skuS" placeholder="SKU del producto"></div>
+            <div class="form-group" style="margin-bottom:8px;"><label>Cantidad</label><input id="cantS" type="number" min="1" placeholder="0"></div>
+            <div class="form-group" style="margin-bottom:12px;">
+              <label>Motivo</label>
+              <select id="motivoSalida">
+                <option>Venta tienda</option>
+                <option>Merma</option>
+                <option>Ajuste de inventario</option>
+                <option>Otro</option>
+              </select>
+            </div>
+            <button class="btn-primary" onclick="salida()" style="width:100%; background:var(--danger);">Registrar salida</button>
+          </div>
+        </div>
+
+        <!-- Tabla productos -->
+        <div class="inv-toolbar">
+          <input class="search-input" id="buscador" placeholder="Buscar por nombre o SKU..." oninput="buscar()">
+          <span id="totalProductos" style="font-size:12px; color:var(--muted); white-space:nowrap;"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>SKU</th>
+                <th>Nombre</th>
+                <th>Stock</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody id="tabla"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Historial lateral -->
+      <div class="card" style="align-self:start; position:sticky; top:72px;">
+        <div class="card-header">
+          <div class="card-title">Historial</div>
+        </div>
+        <div class="hist-list" id="historial">
+          <div style="color:var(--hint); font-size:12px;">Sin movimientos aún</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SECCIÓN MOVIMIENTOS ── -->
+  <div id="sec-movimientos" class="main" style="display:none;">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Historial de movimientos</div>
+        <div class="page-date">Registro completo de entradas y salidas</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="activity-list" id="movimientosList">
+        <div style="color:var(--hint); font-size:12px;">Cargando movimientos...</div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /dashScreen -->
+
+<script>
+// ── ESTADO GLOBAL
+let productosGlobal = [];
+let USUARIO = '';
+let PASSWORD = '';
+
+// ── FECHA
+(function(){
+  const d = new Date();
+  const opts = { weekday:'long', year:'numeric', month:'long', day:'numeric' };
+  const s = d.toLocaleDateString('es-CL', opts);
+  const el = document.getElementById('fechaHoy');
+  if(el) el.textContent = s.charAt(0).toUpperCase() + s.slice(1);
+})();
+
+// ── TOAST
+function toast(msg, tipo='ok'){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.background = tipo === 'error' ? 'var(--danger)' : tipo === 'warn' ? 'var(--warn)' : 'var(--navy)';
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+// ── LOGIN
+function doLogin(e){
+  e.preventDefault();
+  const user = document.getElementById('loginUser').value.trim();
+  const pass = document.getElementById('loginPass').value;
+
+  fetch('/login_check', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({user, password: pass})
+  })
+  .then(r => r.json())
+  .then(d => {
+    if(d.ok){
+      document.getElementById('loginScreen').classList.remove('active');
+      document.getElementById('dashScreen').classList.add('active');
+      cargar();
+    } else {
+      document.getElementById('loginError').style.display = 'block';
+    }
+  })
+  .catch(() => {
+    document.getElementById('loginError').style.display = 'block';
+  });
+}
+
+function doLogout(){
+  fetch('/logout').then(() => {
+    document.getElementById('dashScreen').classList.remove('active');
+    document.getElementById('loginScreen').classList.add('active');
+    document.getElementById('loginUser').value = '';
+    document.getElementById('loginPass').value = '';
+  });
+}
+
+// ── NAVEGACIÓN
+function showSection(sec, btn){
+  ['dashboard','inventario','movimientos'].forEach(s => {
+    const el = document.getElementById('sec-' + s);
+    if(el) el.style.display = s === sec ? '' : 'none';
+  });
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+  if(sec === 'movimientos') cargarMovimientosFull();
+}
+
+// ── IMPORTAR WOO
+function importarWoo(){
+  toast('Importando desde WooCommerce...');
+  fetch('/importar_woo')
+    .then(r => r.json())
+    .then(d => {
+      toast(d.mensaje || d.error || 'Listo');
+      cargar();
+    });
+}
+
+// ── SYNC ÓRDENES
+function syncOrdenes(){
+  toast('Sincronizando órdenes...');
+  fetch('/sync_ordenes')
+    .then(r => r.json())
+    .then(d => { toast('Órdenes sincronizadas'); cargar(); });
+}
+
+// ── CREAR PRODUCTO
+function crear(){
+  const skuVal = document.getElementById('sku').value.trim();
+  const nomVal = document.getElementById('nombre').value.trim();
+  const stVal  = document.getElementById('stock').value;
+  if(!skuVal || !nomVal){ toast('Completa SKU y nombre', 'warn'); return; }
+  fetch('/agregar', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({sku:skuVal, nombre:nomVal, stock:stVal||0})
+  }).then(r=>r.json()).then(d=>{
+    if(d.error){ toast(d.error,'error'); return; }
+    toast('Producto creado');
+    document.getElementById('sku').value='';
+    document.getElementById('nombre').value='';
+    document.getElementById('stock').value='';
+    cargar();
+  });
+}
+
+// ── ENTRADA
+function entrada(){
+  const skuVal  = document.getElementById('skuE').value.trim();
+  const cantVal = document.getElementById('cantE').value;
+  const motivo  = document.getElementById('motivoEntrada').value;
+  if(!skuVal || !cantVal){ toast('Completa SKU y cantidad','warn'); return; }
+  fetch('/entrada', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({sku:skuVal, cantidad:cantVal, motivo})
+  }).then(r=>r.json()).then(d=>{
+    if(d.error){ toast(d.error,'error'); return; }
+    toast('Entrada registrada');
+    document.getElementById('skuE').value='';
+    document.getElementById('cantE').value='';
+    cargar();
+  });
+}
+
+// ── SALIDA
+function salida(){
+  const skuVal  = document.getElementById('skuS').value.trim();
+  const cantVal = document.getElementById('cantS').value;
+  const motivo  = document.getElementById('motivoSalida').value;
+  if(!skuVal || !cantVal){ toast('Completa SKU y cantidad','warn'); return; }
+  fetch('/salida', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({sku:skuVal, cantidad:cantVal, motivo})
+  }).then(r=>r.json()).then(d=>{
+    if(d.error){ toast(d.error,'error'); return; }
+    toast('Salida registrada');
+    document.getElementById('skuS').value='';
+    document.getElementById('cantS').value='';
+    cargar();
+  });
+}
+
+// ── RENDER TABLA
+function renderTabla(lista){
+  lista.sort((a,b) => b.stock - a.stock);
+  const totalEl = document.getElementById('totalProductos');
+  if(totalEl) totalEl.textContent = lista.length + ' productos';
+  const tbody = document.getElementById('tabla');
+  if(!tbody) return;
+  if(!lista.length){
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--hint);padding:24px;">Sin productos. Importa desde WooCommerce.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = lista.map(p => {
+    const pillClass = p.stock <= 0 ? 'pill-danger' : p.stock < 5 ? 'pill-warn' : 'pill-ok';
+    const estado = p.stock <= 0 ? 'Sin stock' : p.stock < 5 ? 'Stock bajo' : 'Normal';
+    return `<tr>
+      <td><span class="sku-code">${p.sku}</span></td>
+      <td>${p.nombre}</td>
+      <td><span class="stock-pill ${pillClass}">${p.stock}</span></td>
+      <td style="font-size:12px; color:var(--muted);">${estado}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── BUSCAR
+function buscar(){
+  const t = document.getElementById('buscador').value.toLowerCase();
+  renderTabla(productosGlobal.filter(p =>
+    p.nombre.toLowerCase().includes(t) || p.sku.toLowerCase().includes(t)
+  ));
+}
+
+// ── DASHBOARD MÉTRICAS
+function actualizarDashboard(productos, movimientos){
+  // Métricas
+  const totalEl = document.getElementById('metricTotal');
+  if(totalEl) totalEl.textContent = productos.length;
+
+  const bajoArr = productos.filter(p => p.stock < 5 && p.stock > 0);
+  const bajoEl = document.getElementById('metricBajo');
+  if(bajoEl) bajoEl.textContent = bajoArr.length;
+
+  const countBajoEl = document.getElementById('countBajo');
+  if(countBajoEl) countBajoEl.textContent = bajoArr.length + ' productos';
+
+  // Ventas hoy (movimientos de salida de hoy)
+  const hoy = new Date().toDateString();
+  // Usamos historial para aproximar — muestra últimos movimientos
+  const ventasEl = document.getElementById('metricVentas');
+  if(ventasEl) ventasEl.textContent = '—';
+
+  // Stock bajo lista
+  const stockBajoList = document.getElementById('stockBajoList');
+  if(stockBajoList){
+    const todos = productos.filter(p => p.stock < 10).sort((a,b) => a.stock - b.stock).slice(0,6);
+    if(!todos.length){
+      stockBajoList.innerHTML = '<div style="color:var(--hint);font-size:12px;">Todo el stock está bien</div>';
+    } else {
+      const max = Math.max(...todos.map(p=>p.stock), 1);
+      stockBajoList.innerHTML = todos.map(p => {
+        const pct = Math.max(4, Math.round((p.stock/max)*100));
+        const color = p.stock <= 2 ? 'var(--danger)' : p.stock < 5 ? 'var(--warn)' : 'var(--success)';
+        const textColor = p.stock <= 2 ? 'var(--danger)' : p.stock < 5 ? 'var(--warn)' : 'var(--success)';
+        return `<div class="stock-row">
+          <span class="stock-name" title="${p.nombre}">${p.nombre}</span>
+          <div class="stock-track"><div class="stock-fill" style="width:${pct}%;background:${color}"></div></div>
+          <span class="stock-count" style="color:${textColor}">${p.stock}</span>
+        </div>`;
+      }).join('');
+    }
+  }
+
+  // Actividad reciente
+  const actEl = document.getElementById('actividadList');
+  if(actEl){
+    if(!movimientos.length){
+      actEl.innerHTML = '<div style="color:var(--hint);font-size:12px;">Sin actividad reciente</div>';
+    } else {
+      actEl.innerHTML = movimientos.slice(0,6).map(m => {
+        const isEntrada = m.startsWith('➕');
+        const isVenta = m.includes('Venta Web') || m.includes('🛒');
+        const iconClass = isVenta ? 'icon-venta' : isEntrada ? 'icon-entrada' : 'icon-salida';
+        const iconLetter = isVenta ? 'V' : isEntrada ? 'E' : 'S';
+        return `<div class="activity-row">
+          <div class="activity-icon ${iconClass}">${iconLetter}</div>
+          <div class="activity-desc">${m.replace(/[➕➖🛒]/g,'').trim()}</div>
+          <div class="activity-time">reciente</div>
+        </div>`;
+      }).join('');
+    }
+  }
+
+  // Gráfico barras (simulado con movimientos)
+  const barChart = document.getElementById('barChart');
+  if(barChart){
+    const days = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
+    const vals = [8,14,11,19,16,21,12];
+    const maxV = Math.max(...vals);
+    barChart.innerHTML = vals.map((v,i) => {
+      const h = Math.round((v/maxV)*110);
+      const isToday = i === (new Date().getDay()+6)%7;
+      return `<div class="bar-col">
+        <div class="bar-val">${v}</div>
+        <div class="bar-fill${isToday?' highlight':''}" style="height:${h}px"></div>
+        <div class="bar-day">${days[i]}</div>
+      </div>`;
+    }).join('');
+  }
+}
+
+// ── CARGAR TODO
+function cargar(){
+  Promise.all([
+    fetch('/productos').then(r=>r.json()),
+    fetch('/movimientos').then(r=>r.json())
+  ]).then(([pd, md]) => {
+    productosGlobal = pd.productos || [];
+    const movs = md.movimientos || [];
+    renderTabla(productosGlobal);
+    // Historial lateral
+    const hist = document.getElementById('historial');
+    if(hist){
+      hist.innerHTML = movs.length
+        ? movs.map(m=>`<div class="hist-item">${m}</div>`).join('')
+        : '<div style="color:var(--hint);font-size:12px;">Sin movimientos aún</div>';
+    }
+    actualizarDashboard(productosGlobal, movs);
+  });
+}
+
+function cargarMovimientosFull(){
+  fetch('/movimientos').then(r=>r.json()).then(d=>{
+    const movs = d.movimientos || [];
+    const el = document.getElementById('movimientosList');
+    if(!el) return;
+    if(!movs.length){
+      el.innerHTML = '<div style="color:var(--hint);font-size:12px;">Sin movimientos registrados</div>';
+      return;
+    }
+    el.innerHTML = movs.map(m => {
+      const isEntrada = m.startsWith('➕');
+      const isVenta = m.includes('Venta Web') || m.includes('🛒');
+      const iconClass = isVenta ? 'icon-venta' : isEntrada ? 'icon-entrada' : 'icon-salida';
+      const iconLetter = isVenta ? 'V' : isEntrada ? 'E' : 'S';
+      return `<div class="activity-row">
+        <div class="activity-icon ${iconClass}">${iconLetter}</div>
+        <div class="activity-desc">${m.replace(/[➕➖🛒]/g,'').trim()}</div>
+      </div>`;
+    }).join('');
+  });
+}
+
+// ── AUTO SYNC ÓRDENES
+setInterval(() => fetch('/sync_ordenes').then(r=>r.json()).then(()=>cargar()), 15000);
+</script>
 </body>
 </html>
