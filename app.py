@@ -117,25 +117,32 @@ def ver_productos():
 def ver_movimientos():
     return {"movimientos": cargar_movimientos()}
 
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        if request.form["user"] == USUARIO and request.form["password"] == PASSWORD:
-            session["logged"] = True
-            return redirect("/panel")
-        return "Error login"
-    return """
-    <form method="POST">
-    <input name="user">
-    <input name="password" type="password">
-    <button>Entrar</button>
-    </form>
-    """
+# ── LOGIN / PANEL ──
+
+@app.route("/")
+def home():
+    if session.get("logged"):
+        return redirect("/panel")
+    return render_template("panel.html")
+
+@app.route("/login_check", methods=["POST"])
+def login_check():
+    data = request.json
+    if data.get("user") == USUARIO and data.get("password") == PASSWORD:
+        session["logged"] = True
+        return {"ok": True}
+    return {"ok": False}
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return {"ok": True}
 
 @app.route("/panel")
 def panel():
     if not session.get("logged"):
-        return redirect("/login")
+        return redirect("/")
     return render_template("panel.html")
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
