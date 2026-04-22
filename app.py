@@ -137,6 +137,19 @@ def panel():
     if not session.get("logged"):
         return redirect("/login")
     return render_template("panel.html")
+@app.route("/debug")
+def debug():
+    from config import WC_KEY, WC_SECRET
+    res = requests.get(
+        "https://www.babymine.cl/wp-json/wc/v3/products",
+        params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET, "per_page": 5}
+    )
+    return {
+        "status": res.status_code,
+        "claves_ok": WC_KEY is not None,
+        "total_productos": len(res.json()) if res.status_code == 200 else 0,
+        "wc_key_primeros4": WC_KEY[:4] if WC_KEY else "NONE"
+    }
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
