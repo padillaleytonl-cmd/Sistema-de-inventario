@@ -123,7 +123,7 @@ def ver_movimientos():
 def home():
     if session.get("logged"):
         return redirect("/panel")
-    return render_template("panel.html", logged=False)
+    return render_template("login.html")
 
 @app.route("/login_check", methods=["POST"])
 def login_check():
@@ -136,13 +136,13 @@ def login_check():
 @app.route("/logout")
 def logout():
     session.clear()
-    return {"ok": True}
+    return redirect("/")
 
 @app.route("/panel")
 def panel():
     if not session.get("logged"):
         return redirect("/")
-    return render_template("panel.html", logged=True)
+    return render_template("panel.html")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
