@@ -86,13 +86,20 @@ def actualizar_precios(sku, precio_normal, precio_oferta):
     cur.close()
     conn.close()
 
-def registrar_movimiento(tipo, sku, nombre, cantidad, motivo=""):
+def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistema", canal="Sistema"):
     conn = get_conn()
     cur = conn.cursor()
+    # Agregar columnas usuario y canal si no existen
+    try:
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS usuario TEXT DEFAULT 'Sistema'")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS canal TEXT DEFAULT 'Sistema'")
+        conn.commit()
+    except:
+        conn.rollback()
     cur.execute("""
-        INSERT INTO movimientos (tipo, sku, nombre, cantidad, motivo)
-        VALUES (%s, %s, %s, %s, %s)
-    """, (tipo, sku, nombre, cantidad, motivo))
+        INSERT INTO movimientos (tipo, sku, nombre, cantidad, motivo, usuario, canal)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """, (tipo, sku, nombre, cantidad, motivo, usuario, canal))
     conn.commit()
     cur.close()
     conn.close()
@@ -101,7 +108,11 @@ def cargar_movimientos(limite=20):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        SELECT tipo, nombre, cantidad, motivo, fecha
+        SELECT tipo, sku, nombre, cantidad, motivo,
+               TO_CHAR(fecha, 'DD/MM/YYYY') as fecha_fmt,
+               TO_CHAR(fecha, 'HH24:MI') as hora,
+               COALESCE(usuario, 'Sistema') as usuario,
+               COALESCE(canal, 'Sistema') as canal
         FROM movimientos
         ORDER BY fecha DESC
         LIMIT %s
@@ -110,7 +121,17 @@ def cargar_movimientos(limite=20):
     cur.close()
     conn.close()
     return [
-        f"{'➕' if r[0]=='entrada' else '➖'} {r[3]} | {r[1]} ({'+' if r[0]=='entrada' else '-'}{r[2]})"
+        {
+            "tipo": r[0],
+            "sku": r[1],
+            "nombre": r[2],
+            "cantidad": r[3],
+            "motivo": r[4],
+            "fecha": r[5],
+            "hora": r[6],
+            "usuario": r[7],
+            "canal": r[8]
+        }
         for r in rows
     ]
 

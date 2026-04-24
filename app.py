@@ -42,12 +42,14 @@ def importar():
         if p["type"] == "simple":
             sku = p.get("sku") or str(p.get("id"))
             if sku not in skus_existentes:
+                pn = p.get("regular_price") or "0"
+                po = p.get("sale_price") or "0"
                 guardar_producto({
                     "sku": sku,
                     "nombre": p["name"],
                     "stock": p.get("stock_quantity") or 0,
-                    "precio_normal": float(p.get("regular_price") or 0),
-                    "precio_oferta": float(p.get("sale_price") or 0)
+                    "precio_normal": float(pn) if pn else 0,
+                    "precio_oferta": float(po) if po else 0
                 })
                 nuevos += 1
 
@@ -61,12 +63,14 @@ def importar():
             for v in res_var.json():
                 sku = v.get("sku") or str(v.get("id"))
                 if sku not in skus_existentes:
+                    vn = v.get("regular_price") or "0"
+                    vo = v.get("sale_price") or "0"
                     guardar_producto({
                         "sku": sku,
                         "nombre": f"{p['name']} - {sku}",
                         "stock": v.get("stock_quantity") or 0,
-                        "precio_normal": float(v.get("regular_price") or 0),
-                        "precio_oferta": float(v.get("sale_price") or 0)
+                        "precio_normal": float(vn) if vn else 0,
+                        "precio_oferta": float(vo) if vo else 0
                     })
                     nuevos += 1
 
@@ -119,7 +123,7 @@ def entrada():
         if p["sku"] == data["sku"]:
             p["stock"] += int(data["cantidad"])
             guardar_producto(p)
-            registrar_movimiento("entrada", p["sku"], p["nombre"], int(data["cantidad"]), data.get("motivo"))
+            registrar_movimiento("entrada", p["sku"], p["nombre"], int(data["cantidad"]), data.get("motivo"), usuario="Luis Padilla", canal="Manual")
             actualizar_stock_woo(p["sku"], p["stock"])
             return {"ok": True}
     return {"error": "no encontrado"}
@@ -134,7 +138,7 @@ def salida():
                 return {"error": "Stock insuficiente"}
             p["stock"] -= int(data["cantidad"])
             guardar_producto(p)
-            registrar_movimiento("salida", p["sku"], p["nombre"], int(data["cantidad"]), data.get("motivo"))
+            registrar_movimiento("salida", p["sku"], p["nombre"], int(data["cantidad"]), data.get("motivo"), usuario="Luis Padilla", canal="Manual")
             actualizar_stock_woo(p["sku"], p["stock"])
             return {"ok": True}
     return {"error": "no encontrado"}
@@ -161,7 +165,7 @@ def sync_ordenes():
                 if p["sku"] == sku:
                     p["stock"] -= cantidad
                     guardar_producto(p)
-                    registrar_movimiento("salida", p["sku"], p["nombre"], cantidad, "Venta Web")
+                    registrar_movimiento("salida", p["sku"], p["nombre"], cantidad, "Venta Web", usuario="Sistema", canal="WooCommerce")
                     actualizar_stock_woo(p["sku"], p["stock"])
         marcar_orden_procesada(o["id"])
         nuevas += 1
@@ -178,7 +182,8 @@ def ver_productos():
 
 @app.route("/movimientos")
 def ver_movimientos():
-    return {"movimientos": cargar_movimientos()}
+    limite = int(request.args.get("limite", 20))
+    return {"movimientos": cargar_movimientos(limite)}
 
 # ── LOGIN / PANEL ──
 

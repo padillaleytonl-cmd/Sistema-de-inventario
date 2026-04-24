@@ -1000,22 +1000,34 @@ tbody td {
       <div class="metric-card">
         <div class="metric-label">Productos en stock</div>
         <div class="metric-value" id="metricTotal">—</div>
-        <div><span class="metric-badge badge-info">Total productos</span></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
+          <span class="metric-badge badge-info">Total productos</span>
+          <button class="btn-ver-mas" onclick="abrirModal('productos')">Ver más</button>
+        </div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Ventas hoy</div>
         <div class="metric-value" id="metricVentas">—</div>
-        <div><span class="metric-badge badge-up" id="metricVentasBadge">Desde medianoche</span></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
+          <span class="metric-badge badge-up">Desde medianoche</span>
+          <button class="btn-ver-mas" onclick="abrirModal('ventas')">Ver más</button>
+        </div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Stock bajo</div>
         <div class="metric-value" id="metricBajo">—</div>
-        <div><span class="metric-badge badge-warn">Menos de 5 unidades</span></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
+          <span class="metric-badge badge-warn">Menos de 5 unidades</span>
+          <button class="btn-ver-mas" onclick="abrirModal('stockbajo')">Ver más</button>
+        </div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Canales activos</div>
         <div class="metric-value">2</div>
-        <div><span class="metric-badge badge-info">Woo + ML próximo</span></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
+          <span class="metric-badge badge-info">Woo + ML próximo</span>
+          <button class="btn-ver-mas" onclick="abrirModal('canales')">Ver más</button>
+        </div>
       </div>
     </div>
 
@@ -1491,30 +1503,78 @@ function cargar(){
     const hist = document.getElementById('historial');
     if(hist){
       hist.innerHTML = movs.length
-        ? movs.map(m=>`<div class="hist-item">${m}</div>`).join('')
+        ? movs.map(m => renderMovimientoItem(m)).join('')
         : '<div style="color:var(--hint);font-size:12px;">Sin movimientos aún</div>';
     }
     actualizarDashboard(productosGlobal, movs);
   });
 }
 
+function renderMovimientoItem(m){
+  const isEntrada = m.tipo === 'entrada';
+  const isVenta = m.canal === 'WooCommerce' || m.motivo === 'Venta Web';
+  const iconClass = isVenta ? 'icon-venta' : isEntrada ? 'icon-entrada' : 'icon-salida';
+  const iconLetter = isVenta ? 'V' : isEntrada ? 'E' : 'S';
+  const signo = isEntrada ? '+' : '-';
+  const color = isEntrada ? 'var(--success)' : 'var(--danger)';
+
+  // Línea principal
+  const descripcion = isVenta
+    ? `Venta Web · ${m.nombre}`
+    : `${m.motivo || (isEntrada ? 'Entrada' : 'Salida')} · ${m.nombre}`;
+
+  // Metadata
+  const meta = isVenta
+    ? `${m.canal} · ${m.fecha} ${m.hora}`
+    : `${m.usuario} · ${m.fecha} ${m.hora} · ${m.motivo || '—'}`;
+
+  return `<div class="hist-item">
+    <div style="display:flex;align-items:center;gap:8px;">
+      <div class="activity-icon ${iconClass}" style="width:24px;height:24px;font-size:10px;flex-shrink:0;">${iconLetter}</div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${descripcion}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:1px;">${meta}</div>
+      </div>
+      <div style="font-size:12px;font-weight:600;color:${color};flex-shrink:0;">${signo}${m.cantidad}</div>
+    </div>
+  </div>`;
+}
+
 function cargarMovimientosFull(){
-  fetch('/movimientos').then(r=>r.json()).then(d=>{
+  fetch('/movimientos?limite=100').then(r=>r.json()).then(d=>{
     const movs = d.movimientos || [];
     const el = document.getElementById('movimientosList');
     if(!el) return;
     if(!movs.length){
-      el.innerHTML = '<div style="color:var(--hint);font-size:12px;">Sin movimientos registrados</div>';
+      el.innerHTML = '<div style="color:var(--hint);font-size:12px;text-align:center;padding:40px;">Sin movimientos registrados</div>';
       return;
     }
     el.innerHTML = movs.map(m => {
-      const isEntrada = m.startsWith('➕');
-      const isVenta = m.includes('Venta Web') || m.includes('🛒');
+      const isEntrada = m.tipo === 'entrada';
+      const isVenta = m.canal === 'WooCommerce' || m.motivo === 'Venta Web';
       const iconClass = isVenta ? 'icon-venta' : isEntrada ? 'icon-entrada' : 'icon-salida';
       const iconLetter = isVenta ? 'V' : isEntrada ? 'E' : 'S';
-      return `<div class="activity-row">
-        <div class="activity-icon ${iconClass}">${iconLetter}</div>
-        <div class="activity-desc">${m.replace(/[➕➖🛒]/g,'').trim()}</div>
+      const signo = isEntrada ? '+' : '-';
+      const color = isEntrada ? 'var(--success)' : 'var(--danger)';
+      const canal = m.canal || 'Manual';
+      const usuario = m.usuario || 'Sistema';
+      const motivo = m.motivo || '—';
+
+      return `<div class="activity-row" style="flex-direction:column;align-items:flex-start;gap:6px;">
+        <div style="display:flex;align-items:center;gap:10px;width:100%;">
+          <div class="activity-icon ${iconClass}">${iconLetter}</div>
+          <div style="flex:1;">
+            <div style="font-size:13px;font-weight:500;color:var(--text);">${m.nombre}</div>
+            <div style="font-size:11px;color:var(--muted);">SKU: ${m.sku}</div>
+          </div>
+          <div style="font-size:16px;font-weight:600;color:${color};">${signo}${m.cantidad}</div>
+        </div>
+        <div style="display:flex;gap:12px;margin-left:42px;flex-wrap:wrap;">
+          <span style="font-size:11px;background:var(--bg);padding:2px 8px;border-radius:20px;color:var(--muted);">📅 ${m.fecha} ${m.hora}</span>
+          <span style="font-size:11px;background:var(--bg);padding:2px 8px;border-radius:20px;color:var(--muted);">📦 ${canal}</span>
+          <span style="font-size:11px;background:var(--bg);padding:2px 8px;border-radius:20px;color:var(--muted);">👤 ${usuario}</span>
+          <span style="font-size:11px;background:var(--bg);padding:2px 8px;border-radius:20px;color:var(--muted);">💬 ${motivo}</span>
+        </div>
       </div>`;
     }).join('');
   });
