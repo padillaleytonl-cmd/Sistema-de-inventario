@@ -76,6 +76,44 @@ def importar():
 
     return {"mensaje": f"{nuevos} productos importados"}
 
+@app.route("/sincronizar_precios_woo")
+def sincronizar_precios_woo():
+    actualizados = 0
+    res = requests.get(
+        "https://www.babymine.cl/wp-json/wc/v3/products",
+        params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET, "per_page": 100}
+    )
+    if res.status_code != 200:
+        return {"error": "Woo error"}
+
+    for p in res.json():
+        if p["type"] == "simple":
+            sku = p.get("sku") or str(p.get("id"))
+            pn = p.get("regular_price") or "0"
+            po = p.get("sale_price") or "0"
+            actualizar_precios(sku,
+                float(pn) if pn else 0,
+                float(po) if po else 0)
+            actualizados += 1
+
+        if p["type"] == "variable":
+            res_var = requests.get(
+                f"https://www.babymine.cl/wp-json/wc/v3/products/{p['id']}/variations",
+                params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET, "per_page": 100}
+            )
+            if res_var.status_code != 200:
+                continue
+            for v in res_var.json():
+                sku = v.get("sku") or str(v.get("id"))
+                vn = v.get("regular_price") or "0"
+                vo = v.get("sale_price") or "0"
+                actualizar_precios(sku,
+                    float(vn) if vn else 0,
+                    float(vo) if vo else 0)
+                actualizados += 1
+
+    return {"mensaje": f"{actualizados} precios sincronizados"}
+
 @app.route("/actualizar_precios", methods=["POST"])
 def actualizar_precios_route():
     data = request.json

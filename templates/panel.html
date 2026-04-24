@@ -1072,7 +1072,10 @@ tbody td {
         <div class="page-title">Inventario</div>
         <div class="page-date">Gestión de productos y stock</div>
       </div>
-      <button class="btn-primary" onclick="importarWoo()">&#8593; Importar Woo</button>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-secondary" onclick="sincronizarPrecios()">&#8635; Sincronizar precios</button>
+        <button class="btn-primary" onclick="importarWoo()">&#8593; Importar Woo</button>
+      </div>
     </div>
 
     <div class="layout-inv">
@@ -1295,6 +1298,17 @@ function showSection(sec, btn){
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   if(btn) btn.classList.add('active');
   if(sec === 'movimientos') cargarMovimientosFull();
+}
+
+// ── SINCRONIZAR PRECIOS
+function sincronizarPrecios(){
+  toast('Sincronizando precios desde WooCommerce...');
+  fetch('/sincronizar_precios_woo')
+    .then(r => r.json())
+    .then(d => {
+      toast(d.mensaje || d.error || 'Listo');
+      cargar();
+    });
 }
 
 // ── IMPORTAR WOO
