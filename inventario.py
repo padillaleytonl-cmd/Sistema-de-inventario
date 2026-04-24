@@ -107,6 +107,13 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
 def cargar_movimientos(limite=20):
     conn = get_conn()
     cur = conn.cursor()
+    # Asegurar que las columnas existen antes de leerlas
+    try:
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS usuario TEXT DEFAULT 'Sistema'")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS canal TEXT DEFAULT 'Sistema'")
+        conn.commit()
+    except:
+        conn.rollback()
     cur.execute("""
         SELECT tipo, sku, nombre, cantidad, motivo,
                TO_CHAR(fecha, 'DD/MM/YYYY') as fecha_fmt,
