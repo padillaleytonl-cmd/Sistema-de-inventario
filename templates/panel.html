@@ -759,6 +759,195 @@ tbody td {
   border-color: var(--navy);
 }
 
+.precio-cell {
+  font-size: 13px;
+  font-family: 'DM Mono', monospace;
+  color: var(--text);
+}
+
+/* ── MODAL EDITAR PRECIO ── */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  z-index: 200;
+  align-items: center;
+  justify-content: center;
+}
+.modal-overlay.open {
+  display: flex;
+}
+.modal-card {
+  background: var(--white);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  width: 100%;
+  max-width: 360px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+}
+.modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--navy);
+  margin-bottom: 4px;
+}
+.modal-sub {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 20px;
+}
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+/* ── BTN VER MÁS ── */
+.btn-ver-mas {
+  font-size: 11px;
+  font-weight: 500;
+  font-family: 'DM Sans', sans-serif;
+  color: var(--navy);
+  background: var(--info-bg);
+  border: none;
+  padding: 3px 10px;
+  border-radius: 20px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.btn-ver-mas:hover {
+  background: var(--navy);
+  color: white;
+}
+
+/* ── MODAL DETALLE ── */
+.modal-detalle-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  z-index: 300;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.modal-detalle-overlay.open { display: flex; }
+.modal-detalle-card {
+  background: var(--white);
+  border-radius: var(--radius-lg);
+  width: 100%;
+  max-width: 700px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.18);
+  overflow: hidden;
+}
+.modal-detalle-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.modal-detalle-titulo {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--navy);
+}
+.modal-detalle-sub {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.modal-close {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--white);
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+.modal-close:hover { background: var(--danger-bg); color: var(--danger); border-color: var(--danger); }
+.modal-detalle-body {
+  padding: 20px 24px;
+  overflow-y: auto;
+  flex: 1;
+}
+.modal-search {
+  width: 100%;
+  padding: 9px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-family: 'DM Sans', sans-serif;
+  margin-bottom: 16px;
+  outline: none;
+}
+.modal-search:focus { border-color: var(--violet); }
+.modal-table { width: 100%; border-collapse: collapse; }
+.modal-table th {
+  background: var(--navy);
+  color: white;
+  padding: 9px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.modal-table td {
+  padding: 10px 12px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-table tr:hover td { background: #f8f9ff; }
+.canal-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 10px;
+}
+.canal-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.canal-info { flex: 1; }
+.canal-nombre { font-size: 14px; font-weight: 600; color: var(--text); }
+.canal-estado { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.canal-badge { font-size: 11px; font-weight: 600; padding: 4px 12px; border-radius: 20px; }
+.restock-btn {
+  background: var(--success);
+  color: white;
+  border: none;
+  padding: 5px 12px;
+  border-radius: var(--radius);
+  font-size: 11px;
+  font-family: 'DM Sans', sans-serif;
+  cursor: pointer;
+  font-weight: 500;
+}
+
 /* ── RESPONSIVE ── */
 @media (max-width: 900px) {
   .metrics-grid { grid-template-columns: repeat(2, 1fr); }
@@ -942,7 +1131,10 @@ tbody td {
                 <th>SKU</th>
                 <th>Nombre</th>
                 <th>Stock</th>
+                <th>Precio Normal</th>
+                <th>Precio Oferta</th>
                 <th>Estado</th>
+                <th>Acción</th>
               </tr>
             </thead>
             <tbody id="tabla"></tbody>
@@ -978,6 +1170,42 @@ tbody td {
   </div>
 
 </div><!-- /dashScreen -->
+
+<!-- ── MODAL DETALLE MÉTRICAS ── -->
+<div class="modal-detalle-overlay" id="modalDetalle">
+  <div class="modal-detalle-card">
+    <div class="modal-detalle-header">
+      <div>
+        <div class="modal-detalle-titulo" id="modalDetalleTitulo">Detalle</div>
+        <div class="modal-detalle-sub" id="modalDetalleSub"></div>
+      </div>
+      <button class="modal-close" onclick="cerrarModalDetalle()">✕</button>
+    </div>
+    <div class="modal-detalle-body" id="modalDetalleBody">
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL EDITAR PRECIO ── -->
+<div class="modal-overlay" id="modalPrecios">
+  <div class="modal-card">
+    <div class="modal-title">Editar precios</div>
+    <div class="modal-sub" id="modalSkuLabel">SKU: —</div>
+    <input type="hidden" id="modalSku">
+    <div class="field" style="margin-bottom:14px;">
+      <label style="font-size:12px;font-weight:500;color:var(--muted);display:block;margin-bottom:6px;">Precio normal ($)</label>
+      <input type="number" id="modalPrecioNormal" placeholder="0" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:14px;font-family:'DM Sans',sans-serif;">
+    </div>
+    <div class="field">
+      <label style="font-size:12px;font-weight:500;color:var(--muted);display:block;margin-bottom:6px;">Precio oferta ($)</label>
+      <input type="number" id="modalPrecioOferta" placeholder="0" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:14px;font-family:'DM Sans',sans-serif;">
+    </div>
+    <div class="modal-actions">
+      <button onclick="cerrarModal()" style="flex:1;padding:10px;border:1px solid var(--border);background:var(--white);border-radius:var(--radius);font-family:'DM Sans',sans-serif;cursor:pointer;">Cancelar</button>
+      <button onclick="guardarPrecios()" style="flex:2;padding:10px;background:var(--navy);color:white;border:none;border-radius:var(--radius);font-family:'DM Sans',sans-serif;font-weight:500;cursor:pointer;">Guardar y sincronizar con Woo</button>
+    </div>
+  </div>
+</div>
 
 <script>
 // ── ESTADO GLOBAL
@@ -1139,17 +1367,27 @@ function renderTabla(lista){
   const tbody = document.getElementById('tabla');
   if(!tbody) return;
   if(!lista.length){
-    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--hint);padding:24px;">Sin productos. Importa desde WooCommerce.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--hint);padding:24px;">Sin productos. Importa desde WooCommerce.</td></tr>';
     return;
   }
   tbody.innerHTML = lista.map(p => {
     const pillClass = p.stock <= 0 ? 'pill-danger' : p.stock < 5 ? 'pill-warn' : 'pill-ok';
     const estado = p.stock <= 0 ? 'Sin stock' : p.stock < 5 ? 'Stock bajo' : 'Normal';
-    return `<tr>
+    const pNormal = p.precio_normal ? '$' + Number(p.precio_normal).toLocaleString('es-CL') : '—';
+    const pOferta = p.precio_oferta ? '$' + Number(p.precio_oferta).toLocaleString('es-CL') : '—';
+    return `<tr id="row-${p.sku}">
       <td><span class="sku-code">${p.sku}</span></td>
       <td>${p.nombre}</td>
       <td><span class="stock-pill ${pillClass}">${p.stock}</span></td>
+      <td class="precio-cell" id="pn-${p.sku}">${pNormal}</td>
+      <td class="precio-cell" id="po-${p.sku}">${pOferta}</td>
       <td style="font-size:12px; color:var(--muted);">${estado}</td>
+      <td>
+        <button onclick="editarPrecio('${p.sku}', ${p.precio_normal||0}, ${p.precio_oferta||0})"
+          style="background:var(--navy);color:white;border:none;padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;">
+          Editar
+        </button>
+      </td>
     </tr>`;
   }).join('');
 }
@@ -1281,6 +1519,208 @@ function cargarMovimientosFull(){
     }).join('');
   });
 }
+
+// ── MODALES DE MÉTRICAS
+function abrirModal(tipo){
+  const overlay = document.getElementById('modalDetalle');
+  const titulo = document.getElementById('modalDetalleTitulo');
+  const sub = document.getElementById('modalDetalleSub');
+  const body = document.getElementById('modalDetalleBody');
+
+  overlay.classList.add('open');
+
+  if(tipo === 'productos'){
+    titulo.textContent = 'Productos en stock';
+    sub.textContent = productosGlobal.length + ' productos en total';
+    body.innerHTML = `
+      <input class="modal-search" placeholder="Buscar por nombre o SKU..." oninput="filtrarModalProductos(this.value)">
+      <table class="modal-table" id="modalTablaProductos">
+        <thead><tr><th>SKU</th><th>Nombre</th><th>Stock</th><th>Precio Normal</th><th>Precio Oferta</th></tr></thead>
+        <tbody>
+          ${productosGlobal.sort((a,b)=>b.stock-a.stock).map(p => {
+            const pill = p.stock<=0?'pill-danger':p.stock<5?'pill-warn':'pill-ok';
+            const pn = p.precio_normal ? '$'+Number(p.precio_normal).toLocaleString('es-CL') : '—';
+            const po = p.precio_oferta ? '$'+Number(p.precio_oferta).toLocaleString('es-CL') : '—';
+            return `<tr>
+              <td><span class="sku-code">${p.sku}</span></td>
+              <td>${p.nombre}</td>
+              <td><span class="stock-pill ${pill}">${p.stock}</span></td>
+              <td>${pn}</td>
+              <td style="color:var(--success);font-weight:500;">${po}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>`;
+  }
+
+  else if(tipo === 'ventas'){
+    titulo.textContent = 'Ventas de hoy';
+    sub.textContent = 'Movimientos registrados hoy';
+    fetch('/movimientos_hoy')
+      .then(r => r.json())
+      .then(d => {
+        const ventas = d.ventas || [];
+        sub.textContent = ventas.length + ' ventas registradas hoy';
+        if(!ventas.length){
+          body.innerHTML = '<div style="text-align:center;color:var(--hint);padding:40px;">Sin ventas registradas hoy</div>';
+          return;
+        }
+        body.innerHTML = `
+          <table class="modal-table">
+            <thead><tr><th>Producto</th><th>SKU</th><th>Cantidad</th><th>Canal</th><th>Hora</th></tr></thead>
+            <tbody>
+              ${ventas.map(v => `<tr>
+                <td>${v.nombre}</td>
+                <td><span class="sku-code">${v.sku}</span></td>
+                <td><span class="stock-pill pill-danger">-${v.cantidad}</span></td>
+                <td>${v.motivo}</td>
+                <td style="color:var(--muted);font-size:12px;">${v.hora}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>`;
+      });
+    body.innerHTML = '<div style="text-align:center;color:var(--hint);padding:40px;">Cargando ventas...</div>';
+  }
+
+  else if(tipo === 'stockbajo'){
+    titulo.textContent = 'Productos con stock bajo';
+    const bajos = productosGlobal.filter(p => p.stock < 5).sort((a,b) => a.stock-b.stock);
+    sub.textContent = bajos.length + ' productos requieren restock';
+    if(!bajos.length){
+      body.innerHTML = '<div style="text-align:center;color:var(--success);padding:40px;">✓ Todo el stock está en buen nivel</div>';
+      return;
+    }
+    body.innerHTML = `
+      <table class="modal-table">
+        <thead><tr><th>SKU</th><th>Nombre</th><th>Stock actual</th><th>Acción</th></tr></thead>
+        <tbody>
+          ${bajos.map(p => {
+            const pill = p.stock<=0?'pill-danger':'pill-warn';
+            return `<tr>
+              <td><span class="sku-code">${p.sku}</span></td>
+              <td>${p.nombre}</td>
+              <td><span class="stock-pill ${pill}">${p.stock}</span></td>
+              <td>
+                <button class="restock-btn" onclick="restockRapido('${p.sku}','${p.nombre.replace(/'/g,'')}')">
+                  + Restock
+                </button>
+              </td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>`;
+  }
+
+  else if(tipo === 'canales'){
+    titulo.textContent = 'Canales activos';
+    sub.textContent = 'Estado de conexión de cada canal';
+    body.innerHTML = `
+      <div class="canal-card">
+        <div class="canal-icon" style="background:#f0f4ff;color:#1a1f5e;">WC</div>
+        <div class="canal-info">
+          <div class="canal-nombre">WooCommerce — babymine.cl</div>
+          <div class="canal-estado">Conectado · Sincronización automática activa</div>
+        </div>
+        <span class="canal-badge" style="background:var(--success-bg);color:var(--success);">● Activo</span>
+      </div>
+      <div class="canal-card">
+        <div class="canal-icon" style="background:#fff7e6;color:#f59e0b;">ML</div>
+        <div class="canal-info">
+          <div class="canal-nombre">MercadoLibre</div>
+          <div class="canal-estado">No conectado · Próximamente disponible</div>
+        </div>
+        <span class="canal-badge" style="background:var(--warn-bg);color:var(--warn);">⏳ Próximo</span>
+      </div>
+      <div class="canal-card">
+        <div class="canal-icon" style="background:#fff0f0;color:#e94560;">FA</div>
+        <div class="canal-info">
+          <div class="canal-nombre">Falabella</div>
+          <div class="canal-estado">No conectado · Próximamente disponible</div>
+        </div>
+        <span class="canal-badge" style="background:var(--warn-bg);color:var(--warn);">⏳ Próximo</span>
+      </div>
+      <div class="canal-card">
+        <div class="canal-icon" style="background:#f0fff4;color:#059669;">WM</div>
+        <div class="canal-info">
+          <div class="canal-nombre">Walmart</div>
+          <div class="canal-estado">No conectado · Próximamente disponible</div>
+        </div>
+        <span class="canal-badge" style="background:var(--warn-bg);color:var(--warn);">⏳ Próximo</span>
+      </div>`;
+  }
+}
+
+function cerrarModalDetalle(){
+  document.getElementById('modalDetalle').classList.remove('open');
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const overlay = document.getElementById('modalDetalle');
+  if(overlay) overlay.addEventListener('click', function(e){
+    if(e.target === this) cerrarModalDetalle();
+  });
+});
+
+function filtrarModalProductos(q){
+  const tbody = document.querySelector('#modalTablaProductos tbody');
+  if(!tbody) return;
+  const t = q.toLowerCase();
+  tbody.querySelectorAll('tr').forEach(tr => {
+    const txt = tr.textContent.toLowerCase();
+    tr.style.display = txt.includes(t) ? '' : 'none';
+  });
+}
+
+function restockRapido(sku, nombre){
+  cerrarModalDetalle();
+  setTimeout(() => {
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    showSection('inventario', document.querySelectorAll('.nav-btn')[1]);
+    document.getElementById('skuE').value = sku;
+    document.getElementById('cantE').focus();
+    toast('Completa la cantidad de restock para: ' + nombre);
+  }, 200);
+}
+
+// ── EDITAR PRECIOS
+function editarPrecio(sku, pNormal, pOferta){
+  document.getElementById('modalSku').value = sku;
+  document.getElementById('modalSkuLabel').textContent = 'SKU: ' + sku;
+  document.getElementById('modalPrecioNormal').value = pNormal || '';
+  document.getElementById('modalPrecioOferta').value = pOferta || '';
+  document.getElementById('modalPrecios').classList.add('open');
+}
+
+function cerrarModal(){
+  document.getElementById('modalPrecios').classList.remove('open');
+}
+
+function guardarPrecios(){
+  const sku = document.getElementById('modalSku').value;
+  const pNormal = parseFloat(document.getElementById('modalPrecioNormal').value) || 0;
+  const pOferta = parseFloat(document.getElementById('modalPrecioOferta').value) || 0;
+
+  fetch('/actualizar_precios', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({sku, precio_normal: pNormal, precio_oferta: pOferta})
+  })
+  .then(r => r.json())
+  .then(d => {
+    if(d.ok){
+      toast('Precios actualizados en Lusync y WooCommerce ✓');
+      cerrarModal();
+      cargar();
+    } else {
+      toast('Error al guardar', 'error');
+    }
+  });
+}
+
+// Cerrar modal al hacer click fuera
+document.getElementById('modalPrecios').addEventListener('click', function(e){
+  if(e.target === this) cerrarModal();
+});
 
 // ── CARGAR DATOS AL INICIAR
 cargar();

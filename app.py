@@ -4,19 +4,24 @@ import os
 from config import *
 from woo import actualizar_stock_woo
 from inventario import (cargar_productos, guardar_productos, guardar_producto,
-                        registrar_movimiento, cargar_movimientos, init_db)
+                        registrar_movimiento, cargar_movimientos, cargar_movimientos_hoy,
+                        init_db, orden_ya_procesada, marcar_orden_procesada, actualizar_precios)
 
 app = Flask(__name__)
 app.secret_key = "clave_super_segura"
 
 init_db()
 
-ordenes_procesadas = set()
-
 @app.route("/agregar", methods=["POST"])
 def agregar():
     data = request.json
-    p = {"sku": data["sku"], "nombre": data["nombre"], "stock": int(data["stock"])}
+    p = {
+        "sku": data["sku"],
+        "nombre": data["nombre"],
+        "stock": int(data["stock"]),
+        "precio_normal": float(data.get("precio_normal", 0)),
+        "precio_oferta": float(data.get("precio_oferta", 0))
+    }
     guardar_producto(p)
     return {"ok": True}
 
@@ -37,7 +42,13 @@ def importar():
         if p["type"] == "simple":
             sku = p.get("sku") or str(p.get("id"))
             if sku not in skus_existentes:
-                guardar_producto({"sku": sku, "nombre": p["name"], "stock": p.get("stock_quantity") or 0})
+                guardar_producto({
+                    "sku": sku,
+                    "nombre": p["name"],
+                    "stock": p.get("stock_quantity") or 0,
+                    "precio_normal": float(p.get("regular_price") or 0),
+                    "precio_oferta": float(p.get("sale_price") or 0)
+                })
                 nuevos += 1
 
         if p["type"] == "variable":
@@ -50,10 +61,55 @@ def importar():
             for v in res_var.json():
                 sku = v.get("sku") or str(v.get("id"))
                 if sku not in skus_existentes:
-                    guardar_producto({"sku": sku, "nombre": f"{p['name']} - {sku}", "stock": v.get("stock_quantity") or 0})
+                    guardar_producto({
+                        "sku": sku,
+                        "nombre": f"{p['name']} - {sku}",
+                        "stock": v.get("stock_quantity") or 0,
+                        "precio_normal": float(v.get("regular_price") or 0),
+                        "precio_oferta": float(v.get("sale_price") or 0)
+                    })
                     nuevos += 1
 
     return {"mensaje": f"{nuevos} productos importados"}
+
+@app.route("/actualizar_precios", methods=["POST"])
+def actualizar_precios_route():
+    data = request.json
+    sku = data.get("sku")
+    precio_normal = float(data.get("precio_normal", 0))
+    precio_oferta = float(data.get("precio_oferta", 0))
+
+    # Guardar en BD
+    actualizar_precios(sku, precio_normal, precio_oferta)
+
+    # Buscar el producto en WooCommerce por SKU
+    try:
+        res = requests.get(
+            "https://www.babymine.cl/wp-json/wc/v3/products",
+            params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET, "sku": sku}
+        )
+        if res.status_code == 200 and res.json():
+            producto = res.json()[0]
+            payload = {
+                "regular_price": str(precio_normal),
+                "sale_price": str(precio_oferta) if precio_oferta > 0 else ""
+            }
+            if producto["type"] == "simple":
+                requests.put(
+                    f"https://www.babymine.cl/wp-json/wc/v3/products/{producto['id']}",
+                    params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET},
+                    json=payload
+                )
+            elif producto["type"] == "variation":
+                requests.put(
+                    f"https://www.babymine.cl/wp-json/wc/v3/products/{producto['parent_id']}/variations/{producto['id']}",
+                    params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET},
+                    json=payload
+                )
+    except:
+        pass
+
+    return {"ok": True}
 
 @app.route("/entrada", methods=["POST"])
 def entrada():
@@ -93,8 +149,10 @@ def sync_ordenes():
         return {"error": "Woo error"}
 
     productos = cargar_productos()
+    nuevas = 0
+
     for o in res.json():
-        if o["id"] in ordenes_procesadas:
+        if orden_ya_procesada(o["id"]):
             continue
         for item in o["line_items"]:
             sku = item.get("sku")
@@ -105,9 +163,14 @@ def sync_ordenes():
                     guardar_producto(p)
                     registrar_movimiento("salida", p["sku"], p["nombre"], cantidad, "Venta Web")
                     actualizar_stock_woo(p["sku"], p["stock"])
-        ordenes_procesadas.add(o["id"])
+        marcar_orden_procesada(o["id"])
+        nuevas += 1
 
-    return {"ok": True}
+    return {"ok": True, "nuevas_ordenes": nuevas}
+
+@app.route("/movimientos_hoy")
+def movimientos_hoy():
+    return {"ventas": cargar_movimientos_hoy()}
 
 @app.route("/productos")
 def ver_productos():
