@@ -42,6 +42,36 @@ def init_db():
             fecha TIMESTAMP DEFAULT NOW()
         )
     """)
+
+    cur.execute("CREATE TABLE IF NOT EXISTS configuracion (clave TEXT PRIMARY KEY, valor TEXT)")
+    cur.execute("ALTER TABLE productos ADD COLUMN IF NOT EXISTS lead_time INTEGER DEFAULT 45")
+    cur.execute("ALTER TABLE productos ADD COLUMN IF NOT EXISTS ventas_dia NUMERIC(10,4) DEFAULT 0")
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def get_configuracion():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT clave, valor FROM configuracion")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return {r[0]: r[1] for r in rows}
+
+def set_configuracion(data):
+    conn = get_conn()
+    cur = conn.cursor()
+    for clave, valor in data.items():
+        cur.execute("INSERT INTO configuracion (clave, valor) VALUES (%s, %s) ON CONFLICT (clave) DO UPDATE SET valor = EXCLUDED.valor", (clave, str(valor)))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def set_lead_time(sku, dias):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE productos SET lead_time = %s WHERE sku = %s", (dias, sku))
     conn.commit()
     cur.close()
     conn.close()

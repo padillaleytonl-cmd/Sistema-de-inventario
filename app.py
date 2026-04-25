@@ -5,7 +5,8 @@ from config import *
 from woo import actualizar_stock_woo
 from inventario import (cargar_productos, guardar_productos, guardar_producto,
                         registrar_movimiento, cargar_movimientos, cargar_movimientos_hoy,
-                        init_db, orden_ya_procesada, marcar_orden_procesada, actualizar_precios)
+                        init_db, orden_ya_procesada, marcar_orden_procesada, actualizar_precios,
+                        get_configuracion, set_configuracion, set_lead_time)
 
 app = Flask(__name__)
 app.secret_key = "clave_super_segura"
@@ -222,6 +223,24 @@ def ver_productos():
 def ver_movimientos():
     limite = int(request.args.get("limite", 20))
     return {"movimientos": cargar_movimientos(limite)}
+
+@app.route("/configuracion", methods=["GET","POST"])
+def configuracion():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    if request.method == "POST":
+        data = request.json
+        set_configuracion(data)
+        return {"ok": True}
+    return {"config": get_configuracion()}
+
+@app.route("/lead_time", methods=["POST"])
+def lead_time():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    data = request.json
+    set_lead_time(data.get("sku"), data.get("lead_time", 45))
+    return {"ok": True}
 
 # ── LOGIN / PANEL ──
 
