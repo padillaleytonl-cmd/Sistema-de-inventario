@@ -1414,17 +1414,49 @@ tbody td {
               <button class="btn-secondary" style="padding:6px 12px;font-size:12px;">Gestionar</button>
             </div>
 
-            ${['MercadoLibre','Falabella','Walmart Chile','Ripley','Jumpseller','Shopify','Vtex'].map((c,i) => {
-              const icons = ['ML','FA','WM','RP','JS','SH','VT'];
-              const bgs = ['#fff7e6','#fff0f0','#f0fff4','#f5f0ff','#e8f4fd','#f0f9ff','#fdf4ff'];
-              const colors = ['#f59e0b','#e94560','#059669','#7c3aed','#0284c7','#0369a1','#9333ea'];
-              return `<div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);">
-                <div style="width:36px;height:36px;background:${bgs[i]};border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:${colors[i]};flex-shrink:0;">${icons[i]}</div>
-                <div style="flex:1;"><div style="font-size:13px;font-weight:500;">${c}</div><div style="font-size:11px;color:var(--muted);">No conectado · Próximamente disponible</div></div>
-                <span style="font-size:11px;background:var(--warn-bg);color:var(--warn);padding:3px 10px;border-radius:20px;font-weight:500;">⏳ Próximo</span>
-                <button class="btn-primary" style="padding:6px 12px;font-size:12px;" disabled>Conectar</button>
-              </div>`;
-            }).join('')}
+
+            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);">
+              <div style="width:36px;height:36px;background:#fff7e6;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#f59e0b;flex-shrink:0;">ML</div>
+              <div style="flex:1;"><div style="font-size:13px;font-weight:500;">MercadoLibre</div><div style="font-size:11px;color:var(--muted);">No conectado · Próximamente disponible</div></div>
+              <span style="font-size:11px;background:var(--warn-bg);color:var(--warn);padding:3px 10px;border-radius:20px;font-weight:500;">⏳ Próximo</span>
+              <button class="btn-primary" style="padding:6px 12px;font-size:12px;opacity:0.5;" disabled>Conectar</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);">
+              <div style="width:36px;height:36px;background:#fff0f0;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#e94560;flex-shrink:0;">FA</div>
+              <div style="flex:1;"><div style="font-size:13px;font-weight:500;">Falabella Seller</div><div style="font-size:11px;color:var(--muted);">No conectado · Próximamente disponible</div></div>
+              <span style="font-size:11px;background:var(--warn-bg);color:var(--warn);padding:3px 10px;border-radius:20px;font-weight:500;">⏳ Próximo</span>
+              <button class="btn-primary" style="padding:6px 12px;font-size:12px;opacity:0.5;" disabled>Conectar</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);">
+              <div style="width:36px;height:36px;background:#f0fff4;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#059669;flex-shrink:0;">WM</div>
+              <div style="flex:1;"><div style="font-size:13px;font-weight:500;">Walmart Chile</div><div style="font-size:11px;color:var(--muted);">No conectado · Próximamente disponible</div></div>
+              <span style="font-size:11px;background:var(--warn-bg);color:var(--warn);padding:3px 10px;border-radius:20px;font-weight:500;">⏳ Próximo</span>
+              <button class="btn-primary" style="padding:6px 12px;font-size:12px;opacity:0.5;" disabled>Conectar</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);">
+              <div style="width:36px;height:36px;background:#f5f0ff;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#7c3aed;flex-shrink:0;">RP</div>
+              <div style="flex:1;"><div style="font-size:13px;font-weight:500;">Ripley</div><div style="font-size:11px;color:var(--muted);">No conectado · Próximamente disponible</div></div>
+              <span style="font-size:11px;background:var(--warn-bg);color:var(--warn);padding:3px 10px;border-radius:20px;font-weight:500;">⏳ Próximo</span>
+              <button class="btn-primary" style="padding:6px 12px;font-size:12px;opacity:0.5;" disabled>Conectar</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);">
+              <div style="width:36px;height:36px;background:#e8f4fd;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#0284c7;flex-shrink:0;">JS</div>
+              <div style="flex:1;"><div style="font-size:13px;font-weight:500;">Jumpseller</div><div style="font-size:11px;color:var(--muted);">No conectado · Próximamente disponible</div></div>
+              <span style="font-size:11px;background:var(--warn-bg);color:var(--warn);padding:3px 10px;border-radius:20px;font-weight:500;">⏳ Próximo</span>
+              <button class="btn-primary" style="padding:6px 12px;font-size:12px;opacity:0.5;" disabled>Conectar</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);">
+              <div style="width:36px;height:36px;background:#f0f9ff;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#0369a1;flex-shrink:0;">SH</div>
+              <div style="flex:1;"><div style="font-size:13px;font-weight:500;">Shopify</div><div style="font-size:11px;color:var(--muted);">No conectado · Próximamente disponible</div></div>
+              <span style="font-size:11px;background:var(--warn-bg);color:var(--warn);padding:3px 10px;border-radius:20px;font-weight:500;">⏳ Próximo</span>
+              <button class="btn-primary" style="padding:6px 12px;font-size:12px;opacity:0.5;" disabled>Conectar</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;">
+              <div style="width:36px;height:36px;background:#fdf4ff;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#9333ea;flex-shrink:0;">VT</div>
+              <div style="flex:1;"><div style="font-size:13px;font-weight:500;">Vtex</div><div style="font-size:11px;color:var(--muted);">No conectado · Próximamente disponible</div></div>
+              <span style="font-size:11px;background:var(--warn-bg);color:var(--warn);padding:3px 10px;border-radius:20px;font-weight:500;">⏳ Próximo</span>
+              <button class="btn-primary" style="padding:6px 12px;font-size:12px;opacity:0.5;" disabled>Conectar</button>
+            </div>
           </div>
 
           <div class="card">
