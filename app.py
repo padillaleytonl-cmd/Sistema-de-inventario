@@ -233,8 +233,12 @@ def ver_movimientos():
 def walmart_test():
     if not session.get("logged"):
         return {"error": "no autorizado"}, 401
-    ok = verificar_conexion_walmart()
-    return {"conectado": ok}
+    try:
+        from walmart import get_token, WALMART_CLIENT_ID
+        token = get_token()
+        return {"conectado": True, "client_id": WALMART_CLIENT_ID[:8]+"..."}
+    except Exception as e:
+        return {"conectado": False, "error": str(e)}
 
 @app.route("/walmart/sync_stock", methods=["POST"])
 def walmart_sync_stock():

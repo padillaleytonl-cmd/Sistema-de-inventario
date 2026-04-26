@@ -14,16 +14,19 @@ def get_token():
     if _token_cache["token"] and now < _token_cache["expires_at"] - 60:
         return _token_cache["token"]
 
+    import base64
+    credentials = base64.b64encode(f"{WALMART_CLIENT_ID}:{WALMART_CLIENT_SECRET}".encode()).decode()
     res = requests.post(
         "https://marketplace.walmartapis.com/v3/token",
         headers={
+            "Authorization": f"Basic {credentials}",
             "WM_SVC.NAME": "Lusync",
             "WM_QOS.CORRELATION_ID": "lusync-auth",
+            "WM_MARKET": "cl",
             "Accept": "application/json",
             "Content-Type": "application/x-www-form-urlencoded"
         },
-        data={"grant_type": "client_credentials"},
-        auth=(WALMART_CLIENT_ID, WALMART_CLIENT_SECRET)
+        data={"grant_type": "client_credentials"}
     )
 
     if res.status_code != 200:
@@ -39,6 +42,7 @@ def walmart_headers():
         "WM_SVC.NAME": "Lusync",
         "WM_QOS.CORRELATION_ID": "lusync-sync",
         "WM_SEC.ACCESS_TOKEN": get_token(),
+        "WM_MARKET": "cl",
         "Accept": "application/json",
         "Content-Type": "application/json"
     }
