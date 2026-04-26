@@ -837,6 +837,24 @@ tbody td {
 .cfg-tab:hover { background: var(--bg); color: var(--text); }
 .cfg-tab.active { color: var(--navy); font-weight: 500; border-left-color: var(--navy); background: var(--bg); }
 
+.chart-period {
+  background: var(--white);
+  border: 0.5px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: 'DM Sans', sans-serif;
+  transition: all 0.15s;
+}
+.chart-period.active {
+  background: var(--navy);
+  color: white;
+  border-color: var(--navy);
+}
+
 /* ── BTN VER MÁS ── */
 .btn-ver-mas {
   font-size: 11px;
@@ -1045,7 +1063,8 @@ tbody td {
       <div class="metric-card">
         <div class="metric-label">Ventas hoy</div>
         <div class="metric-value" id="metricVentas">—</div>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
+        <div style="font-size:12px;font-weight:500;color:var(--success);margin-bottom:4px;" id="metricIngreso">$0</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:2px;">
           <span class="metric-badge badge-up">Desde medianoche</span>
           <button class="btn-ver-mas" onclick="abrirModal('ventas')">Ver más</button>
         </div>
@@ -1072,8 +1091,22 @@ tbody td {
     <div class="dash-grid">
       <div class="card">
         <div class="card-header">
-          <div class="card-title">Movimientos — últimos 7 días</div>
-          <span class="card-tag">Esta semana</span>
+          <div class="card-title">Ventas — ingresos</div>
+          <div style="display:flex;gap:4px;">
+            <button class="chart-period active" onclick="cambiarPlazo('semana',this)">Semana</button>
+            <button class="chart-period" onclick="cambiarPlazo('mes',this)">Mes</button>
+            <button class="chart-period" onclick="cambiarPlazo('anio',this)">Año</button>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
+          <div>
+            <div style="font-size:11px;color:var(--muted);">Total período</div>
+            <div style="font-size:18px;font-weight:600;color:var(--navy);" id="chartTotal">$0</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:11px;color:var(--muted);">Unidades vendidas</div>
+            <div style="font-size:18px;font-weight:600;color:var(--navy);" id="chartUnidades">0</div>
+          </div>
         </div>
         <div class="bar-chart" id="barChart">
           <div style="color:var(--hint); font-size:12px; margin:auto;">Cargando datos...</div>
@@ -1758,11 +1791,23 @@ function actualizarDashboard(productos, movimientos){
   const countBajoEl = document.getElementById('countBajo');
   if(countBajoEl) countBajoEl.textContent = bajoArr.length + ' productos';
 
-  // Ventas hoy — contar salidas de hoy
-  const fechaHoyStr = new Date().toLocaleDateString('es-CL', {day:'2-digit',month:'2-digit',year:'numeric'}).replace(/\//g,'/');
+  // Ventas hoy — formato DD/MM/YYYY igual que la BD
+  const hoyDate = new Date();
+  const dd = String(hoyDate.getDate()).padStart(2,'0');
+  const mm = String(hoyDate.getMonth()+1).padStart(2,'0');
+  const yyyy = hoyDate.getFullYear();
+  const fechaHoyStr = dd+'/'+mm+'/'+yyyy;
+
   const ventasHoy = movimientos.filter(m => m.tipo === 'salida' && m.fecha === fechaHoyStr);
+  const ingresoHoy = ventasHoy.reduce((acc, m) => {
+    const p = productosGlobal.find(p => p.sku === m.sku);
+    const precio = p ? (p.precio_oferta > 0 ? p.precio_oferta : p.precio_normal) : 0;
+    return acc + (precio * m.cantidad);
+  }, 0);
   const ventasEl = document.getElementById('metricVentas');
   if(ventasEl) ventasEl.textContent = ventasHoy.length || '0';
+  const ingEl = document.getElementById('metricIngreso');
+  if(ingEl) ingEl.textContent = ingresoHoy > 0 ? '$'+ingresoHoy.toLocaleString('es-CL') : '$0';
 
   // Stock bajo lista
   const stockBajoList = document.getElementById('stockBajoList');
@@ -1806,38 +1851,113 @@ function actualizarDashboard(productos, movimientos){
     }
   }
 
-  // Gráfico barras — datos reales de los últimos 7 días
+  // Gráfico con plazo actual
+  renderGrafico(plazoActual, movimientos, productosGlobal);
+}
+
+let plazoActual = 'semana';
+
+function calcularIngreso(movs, prods){
+  return movs.reduce((acc, m) => {
+    const p = prods.find(p => p.sku === m.sku);
+    const precio = p ? (p.precio_oferta > 0 ? p.precio_oferta : p.precio_normal) : 0;
+    return acc + (precio * m.cantidad);
+  }, 0);
+}
+
+function formatFecha(d){
+  return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear();
+}
+
+function cambiarPlazo(plazo, btn){
+  plazoActual = plazo;
+  document.querySelectorAll('.chart-period').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderGrafico(plazo, null, null);
+}
+
+function renderGrafico(plazo, movs, prods){
+  const movimientos = movs || window._movimientos || [];
+  const productos = prods || productosGlobal || [];
+  if(movs) window._movimientos = movs;
+
   const barChart = document.getElementById('barChart');
-  if(barChart){
-    const days = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
-    // Generar los últimos 7 días
-    const ultimos7 = [];
+  if(!barChart) return;
+
+  const days = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+  const meses = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  let periodos = [];
+
+  if(plazo === 'semana'){
     for(let i=6; i>=0; i--){
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const dd = String(d.getDate()).padStart(2,'0');
-      const mm = String(d.getMonth()+1).padStart(2,'0');
-      const yyyy = d.getFullYear();
-      ultimos7.push({
-        label: days[(d.getDay()+6)%7],
-        fecha: `${dd}/${mm}/${yyyy}`,
-        isToday: i === 0
+      const d = new Date(); d.setDate(d.getDate()-i);
+      periodos.push({ label: days[d.getDay()], fecha: formatFecha(d), isHoy: i===0 });
+    }
+  } else if(plazo === 'mes'){
+    for(let i=29; i>=0; i--){
+      const d = new Date(); d.setDate(d.getDate()-i);
+      const label = i%5===0 ? String(d.getDate()) : '';
+      periodos.push({ label, fecha: formatFecha(d), isHoy: i===0 });
+    }
+  } else {
+    for(let i=11; i>=0; i--){
+      const d = new Date(); d.setMonth(d.getMonth()-i);
+      const mesStr = String(d.getMonth()+1).padStart(2,'0');
+      const yyyyStr = d.getFullYear();
+      periodos.push({
+        label: meses[d.getMonth()],
+        mesNum: mesStr,
+        anioNum: yyyyStr,
+        isHoy: i===0
       });
     }
-    // Contar ventas por día
-    const vals = ultimos7.map(d =>
-      movimientos.filter(m => m.tipo === 'salida' && m.fecha === d.fecha).length
-    );
-    const maxV = Math.max(...vals, 1);
-    barChart.innerHTML = vals.map((v,i) => {
-      const h = Math.max(4, Math.round((v/maxV)*110));
-      return `<div class="bar-col">
-        <div class="bar-val">${v}</div>
-        <div class="bar-fill${ultimos7[i].isToday?' highlight':''}" style="height:${h}px"></div>
-        <div class="bar-day">${ultimos7[i].label}</div>
-      </div>`;
-    }).join('');
   }
+
+  // Calcular ingresos por período
+  const vals = periodos.map(p => {
+    let ventasPeriodo;
+    if(plazo === 'anio'){
+      ventasPeriodo = movimientos.filter(m => {
+        if(m.tipo !== 'salida') return false;
+        const parts = m.fecha.split('/');
+        return parts[1] === p.mesNum && parts[2] === String(p.anioNum);
+      });
+    } else {
+      ventasPeriodo = movimientos.filter(m => m.tipo === 'salida' && m.fecha === p.fecha);
+    }
+    return calcularIngreso(ventasPeriodo, productos);
+  });
+
+  const unidades = periodos.map(p => {
+    if(plazo === 'anio'){
+      return movimientos.filter(m => {
+        if(m.tipo !== 'salida') return false;
+        const parts = m.fecha.split('/');
+        return parts[1] === p.mesNum && parts[2] === String(p.anioNum);
+      }).reduce((acc,m) => acc + m.cantidad, 0);
+    }
+    return movimientos.filter(m => m.tipo === 'salida' && m.fecha === p.fecha).reduce((acc,m) => acc + m.cantidad, 0);
+  });
+
+  const totalIngreso = vals.reduce((a,b) => a+b, 0);
+  const totalUnidades = unidades.reduce((a,b) => a+b, 0);
+
+  const totalEl = document.getElementById('chartTotal');
+  if(totalEl) totalEl.textContent = '$'+totalIngreso.toLocaleString('es-CL');
+  const unidEl = document.getElementById('chartUnidades');
+  if(unidEl) unidEl.textContent = totalUnidades;
+
+  const maxV = Math.max(...vals, 1);
+  barChart.innerHTML = vals.map((v,i) => {
+    const h = Math.max(3, Math.round((v/maxV)*110));
+    const label = periodos[i].label;
+    const vLabel = v > 0 ? '$'+Math.round(v/1000)+'k' : '';
+    return `<div class="bar-col">
+      <div class="bar-val" style="font-size:9px;">${vLabel}</div>
+      <div class="bar-fill${periodos[i].isHoy?' highlight':''}" style="height:${h}px"></div>
+      <div class="bar-day" style="font-size:${plazo==='mes'?'9':'10'}px;">${label}</div>
+    </div>`;
+  }).join('');
 }
 
 // ── CARGAR TODO
