@@ -423,22 +423,33 @@ def walmart_sync_ordenes():
 def walmart_ver_ordenes():
     if not session.get("logged"):
         return {"error": "no autorizado"}, 401
-    from walmart import obtener_todas_ordenes_walmart
+    import requests as req
+    from walmart import walmart_headers, WALMART_BASE_URL
     resultado = {}
-    for estado in ["Created", "Acknowledged", "Shipped", "Delivered"]:
-        ordenes = obtener_ordenes_walmart(estado)
-        resultado[estado] = len(ordenes)
-        if ordenes:
-            o = ordenes[0]
-            resultado[estado + "_ejemplo"] = {
-                "purchaseOrderId": o.get("purchaseOrderId"),
-                "orderLines": str(o.get("orderLines", {}))[:300]
-            }
-    # También probar released orders
-    released = obtener_todas_ordenes_walmart()
-    resultado["released"] = len(released)
-    if released:
-        resultado["released_ejemplo"] = str(released[0])[:400]
+
+    # Probar sin filtro de estado
+    try:
+        h = walmart_headers()
+        res = req.get(f"{WALMART_BASE_URL}/v3/orders", headers=h, params={"limit": 5})
+        resultado["sin_filtro_status"] = res.status_code
+        resultado["sin_filtro_resp"] = res.text[:600]
+    except Exception as e:
+        resultado["sin_filtro_error"] = str(e)
+
+    # Probar con cada estado posible
+    for estado in ["Created", "Acknowledged", "Shipped", "Delivered", "ReadyForPickup"]:
+        try:
+            h2 = walmart_headers()
+            res2 = req.get(
+                f"{WALMART_BASE_URL}/v3/orders",
+                headers=h2,
+                params={"status": estado, "limit": 5}
+            )
+            resultado[estado+"_status"] = res2.status_code
+            resultado[estado+"_resp"] = res2.text[:200]
+        except Exception as e:
+            resultado[estado+"_error"] = str(e)
+
     return resultado
 
 @app.route("/eliminar_producto", methods=["POST"])
