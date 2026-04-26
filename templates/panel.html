@@ -1758,11 +1758,11 @@ function actualizarDashboard(productos, movimientos){
   const countBajoEl = document.getElementById('countBajo');
   if(countBajoEl) countBajoEl.textContent = bajoArr.length + ' productos';
 
-  // Ventas hoy (movimientos de salida de hoy)
-  const hoy = new Date().toDateString();
-  // Usamos historial para aproximar — muestra últimos movimientos
+  // Ventas hoy — contar salidas de hoy
+  const fechaHoyStr = new Date().toLocaleDateString('es-CL', {day:'2-digit',month:'2-digit',year:'numeric'}).replace(/\//g,'/');
+  const ventasHoy = movimientos.filter(m => m.tipo === 'salida' && m.fecha === fechaHoyStr);
   const ventasEl = document.getElementById('metricVentas');
-  if(ventasEl) ventasEl.textContent = '—';
+  if(ventasEl) ventasEl.textContent = ventasHoy.length || '0';
 
   // Stock bajo lista
   const stockBajoList = document.getElementById('stockBajoList');
@@ -1775,49 +1775,66 @@ function actualizarDashboard(productos, movimientos){
       stockBajoList.innerHTML = todos.map(p => {
         const pct = Math.max(4, Math.round((p.stock/max)*100));
         const color = p.stock <= 2 ? 'var(--danger)' : p.stock < 5 ? 'var(--warn)' : 'var(--success)';
-        const textColor = p.stock <= 2 ? 'var(--danger)' : p.stock < 5 ? 'var(--warn)' : 'var(--success)';
         return `<div class="stock-row">
           <span class="stock-name" title="${p.nombre}">${p.nombre}</span>
           <div class="stock-track"><div class="stock-fill" style="width:${pct}%;background:${color}"></div></div>
-          <span class="stock-count" style="color:${textColor}">${p.stock}</span>
+          <span class="stock-count" style="color:${color}">${p.stock}</span>
         </div>`;
       }).join('');
     }
   }
 
-  // Actividad reciente
+  // Actividad reciente — ahora movimientos son objetos JSON
   const actEl = document.getElementById('actividadList');
   if(actEl){
     if(!movimientos.length){
       actEl.innerHTML = '<div style="color:var(--hint);font-size:12px;">Sin actividad reciente</div>';
     } else {
       actEl.innerHTML = movimientos.slice(0,6).map(m => {
-        const isEntrada = m.startsWith('➕');
-        const isVenta = m.includes('Venta Web') || m.includes('🛒');
+        const isEntrada = m.tipo === 'entrada';
+        const isVenta = m.canal === 'WooCommerce' || m.motivo === 'Venta Web';
         const iconClass = isVenta ? 'icon-venta' : isEntrada ? 'icon-entrada' : 'icon-salida';
         const iconLetter = isVenta ? 'V' : isEntrada ? 'E' : 'S';
+        const signo = isEntrada ? '+' : '-';
+        const desc = isVenta ? `Venta Web · ${m.nombre}` : `${m.motivo} · ${m.nombre}`;
         return `<div class="activity-row">
           <div class="activity-icon ${iconClass}">${iconLetter}</div>
-          <div class="activity-desc">${m.replace(/[➕➖🛒]/g,'').trim()}</div>
-          <div class="activity-time">reciente</div>
+          <div class="activity-desc">${desc}</div>
+          <div class="activity-time">${m.hora || 'reciente'}</div>
         </div>`;
       }).join('');
     }
   }
 
-  // Gráfico barras (simulado con movimientos)
+  // Gráfico barras — datos reales de los últimos 7 días
   const barChart = document.getElementById('barChart');
   if(barChart){
     const days = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
-    const vals = [8,14,11,19,16,21,12];
-    const maxV = Math.max(...vals);
+    // Generar los últimos 7 días
+    const ultimos7 = [];
+    for(let i=6; i>=0; i--){
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dd = String(d.getDate()).padStart(2,'0');
+      const mm = String(d.getMonth()+1).padStart(2,'0');
+      const yyyy = d.getFullYear();
+      ultimos7.push({
+        label: days[(d.getDay()+6)%7],
+        fecha: `${dd}/${mm}/${yyyy}`,
+        isToday: i === 0
+      });
+    }
+    // Contar ventas por día
+    const vals = ultimos7.map(d =>
+      movimientos.filter(m => m.tipo === 'salida' && m.fecha === d.fecha).length
+    );
+    const maxV = Math.max(...vals, 1);
     barChart.innerHTML = vals.map((v,i) => {
-      const h = Math.round((v/maxV)*110);
-      const isToday = i === (new Date().getDay()+6)%7;
+      const h = Math.max(4, Math.round((v/maxV)*110));
       return `<div class="bar-col">
         <div class="bar-val">${v}</div>
-        <div class="bar-fill${isToday?' highlight':''}" style="height:${h}px"></div>
-        <div class="bar-day">${days[i]}</div>
+        <div class="bar-fill${ultimos7[i].isToday?' highlight':''}" style="height:${h}px"></div>
+        <div class="bar-day">${ultimos7[i].label}</div>
       </div>`;
     }).join('');
   }
