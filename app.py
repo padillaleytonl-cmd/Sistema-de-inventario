@@ -475,6 +475,70 @@ def walmart_ver_ordenes():
 
     return resultado
 
+@app.route("/walmart/sync_debug")
+def walmart_sync_debug():
+    """Ejecuta el sync completo y retorna resultado detallado"""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+
+    productos = cargar_productos()
+    log = []
+    nuevas = 0
+
+    for estado in ["Created", "Acknowledged"]:
+        ordenes = obtener_ordenes_walmart(estado)
+        log.append(f"Estado {estado}: {len(ordenes)} ordenes")
+
+        for o in ordenes:
+            order_id = o.get("purchaseOrderId")
+            if not order_id:
+                log.append("Sin order_id, saltando")
+                continue
+
+            order_hash = abs(hash(str(order_id))) % (10**15)
+            ya = orden_ya_procesada(order_hash)
+            log.append(f"Orden {order_id} hash:{order_hash} ya_procesada:{ya}")
+
+            if ya:
+                continue
+
+            lineas = o.get("orderLines", {}).get("orderLine", [])
+            if isinstance(lineas, dict):
+                lineas = [lineas]
+
+            log.append(f"  Lineas: {len(lineas)}")
+
+            for linea in lineas:
+                sku = linea.get("item", {}).get("sku")
+                cantidad = 1
+                qty = linea.get("orderLineQuantity", {})
+                if qty and qty.get("amount"):
+                    cantidad = int(float(qty["amount"]))
+
+                log.append(f"  SKU:{sku} Cantidad:{cantidad}")
+
+                encontrado = False
+                for p in productos:
+                    if p["sku"] == sku:
+                        encontrado = True
+                        stock_antes = p["stock"]
+                        p["stock"] = max(0, p["stock"] - cantidad)
+                        guardar_producto(p)
+                        registrar_movimiento("salida", p["sku"], p["nombre"],
+                                            cantidad, "Venta Walmart",
+                                            usuario="Sistema", canal="Walmart")
+                        actualizar_stock_woo(p["sku"], p["stock"])
+                        actualizar_stock_walmart(p["sku"], p["stock"])
+                        log.append(f"  ✅ {p['nombre']} stock:{stock_antes}→{p['stock']}")
+
+                if not encontrado:
+                    log.append(f"  ❌ SKU {sku} no encontrado en Lusync")
+
+            marcar_orden_procesada(order_hash)
+            nuevas += 1
+
+    return {"nuevas_ordenes": nuevas, "log": log}
+
 @app.route("/walmart/debug_ordenes")
 def walmart_debug_ordenes():
     if not session.get("logged"):
