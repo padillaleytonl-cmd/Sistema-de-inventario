@@ -306,12 +306,14 @@ def walmart_test_stock_one():
         from walmart import get_token, WALMART_BASE_URL, walmart_headers
         headers = walmart_headers()
         headers["Content-Type"] = "application/json"
-        payload = {"quantity": {"unit": "EACH", "amount": int(p["stock"])}}
+        payload = {
+            "sku": p["sku"],
+            "quantity": {"unit": "EACH", "amount": int(p["stock"])}
+        }
         res = req.put(
             f"{WALMART_BASE_URL}/v3/inventory",
             headers=headers,
-            json=payload,
-            params={"sku": p["sku"]}
+            json=payload
         )
         return {
             "sku": p["sku"],
