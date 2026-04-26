@@ -1237,6 +1237,7 @@ tbody td {
                 <th>Precio Oferta</th>
                 <th>Estado</th>
                 <th>Acción</th>
+                <th></th>
               </tr>
             </thead>
             <tbody id="tabla"></tbody>
@@ -1781,6 +1782,14 @@ function renderTabla(lista){
         <button onclick="editarPrecio('${p.sku}', ${p.precio_normal||0}, ${p.precio_oferta||0})"
           style="background:var(--navy);color:white;border:none;padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;">
           Editar
+        </button>
+      </td>
+      <td>
+        <button onclick="eliminarProducto('${p.sku}','${p.nombre.replace(/'/g,"\'").substring(0,30)}')"
+          style="background:none;color:var(--danger);border:1px solid var(--danger);padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;transition:all 0.15s;"
+          onmouseover="this.style.background='var(--danger)';this.style.color='white'"
+          onmouseout="this.style.background='none';this.style.color='var(--danger)'">
+          Eliminar
         </button>
       </td>
     </tr>`;
@@ -2448,6 +2457,29 @@ function restockRapido(sku, nombre){
     document.getElementById('cantE').focus();
     toast('Completa la cantidad de restock para: ' + nombre);
   }, 200);
+}
+
+// ── ELIMINAR PRODUCTO
+function eliminarProducto(sku, nombre){
+  if(!confirm('¿Eliminar "' + nombre + '" de Lusync?\n\nSolo se elimina del sistema — no afecta WooCommerce ni marketplaces.\nEsta acción no se puede deshacer.')) return;
+  fetch('/eliminar_producto', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({sku})
+  })
+  .then(r => r.json())
+  .then(d => {
+    if(d.ok){
+      toast('Producto eliminado');
+      // Eliminar fila visualmente sin recargar
+      const row = document.getElementById('row-'+sku);
+      if(row) row.remove();
+      productosGlobal = productosGlobal.filter(p => p.sku !== sku);
+      actualizarDashboard(productosGlobal, window._movimientos || []);
+    } else {
+      toast(d.error || 'Error al eliminar', 'error');
+    }
+  });
 }
 
 // ── EDITAR PRECIOS
