@@ -427,26 +427,33 @@ def walmart_ver_ordenes():
     from walmart import walmart_headers, WALMART_BASE_URL
     resultado = {}
 
-    # Probar sin filtro de estado
+    from datetime import datetime, timedelta
+    fecha_inicio = (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%dT00:00:00.000Z")
+
+    # Probar sin filtro de estado pero con fecha
     try:
         h = walmart_headers()
-        res = req.get(f"{WALMART_BASE_URL}/v3/orders", headers=h, params={"limit": 5})
+        res = req.get(
+            f"{WALMART_BASE_URL}/v3/orders",
+            headers=h,
+            params={"createdStartDate": fecha_inicio, "limit": 5}
+        )
         resultado["sin_filtro_status"] = res.status_code
         resultado["sin_filtro_resp"] = res.text[:600]
     except Exception as e:
         resultado["sin_filtro_error"] = str(e)
 
-    # Probar con cada estado posible
-    for estado in ["Created", "Acknowledged", "Shipped", "Delivered", "ReadyForPickup"]:
+    # Probar con cada estado
+    for estado in ["Created", "Acknowledged", "Shipped"]:
         try:
             h2 = walmart_headers()
             res2 = req.get(
                 f"{WALMART_BASE_URL}/v3/orders",
                 headers=h2,
-                params={"status": estado, "limit": 5}
+                params={"createdStartDate": fecha_inicio, "status": estado, "limit": 5}
             )
             resultado[estado+"_status"] = res2.status_code
-            resultado[estado+"_resp"] = res2.text[:200]
+            resultado[estado+"_resp"] = res2.text[:300]
         except Exception as e:
             resultado[estado+"_error"] = str(e)
 

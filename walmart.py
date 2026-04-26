@@ -113,16 +113,42 @@ def obtener_ordenes_walmart(estado="Created"):
                 "limit": 100
             }
         )
+        print(f"[Walmart Ordenes] Estado:{estado} HTTP:{res.status_code} Resp:{res.text[:200]}")
         if res.status_code != 200:
             return []
 
         data = res.json()
-        ordenes = data.get("list", {}).get("elements", {}).get("order", [])
+        # Walmart puede retornar la lista en diferentes estructuras
+        lista = data.get("list", {})
+        elementos = lista.get("elements", {})
+        ordenes = elementos.get("order", [])
         if isinstance(ordenes, dict):
             ordenes = [ordenes]
         return ordenes
     except Exception as e:
         print(f"[Walmart] Error obteniendo órdenes: {e}")
+        return []
+
+def obtener_todas_ordenes_walmart():
+    """Obtiene todas las órdenes sin filtro de estado"""
+    try:
+        res = requests.get(
+            f"{WALMART_BASE_URL}/v3/orders/released",
+            headers=walmart_headers(),
+            params={"limit": 100}
+        )
+        print(f"[Walmart Released] HTTP:{res.status_code} Resp:{res.text[:300]}")
+        if res.status_code != 200:
+            return []
+        data = res.json()
+        lista = data.get("list", {})
+        elementos = lista.get("elements", {})
+        ordenes = elementos.get("order", [])
+        if isinstance(ordenes, dict):
+            ordenes = [ordenes]
+        return ordenes
+    except Exception as e:
+        print(f"[Walmart] Error obteniendo released orders: {e}")
         return []
 
 def confirmar_orden_walmart(purchase_order_id):
