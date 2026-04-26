@@ -240,6 +240,62 @@ def walmart_test():
     except Exception as e:
         return {"conectado": False, "error": str(e)}
 
+@app.route("/walmart/diagnostico")
+def walmart_diagnostico():
+    """Diagnóstico completo de Walmart — items, SKUs y test de inventory"""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    import requests as req
+    from walmart import walmart_headers, WALMART_BASE_URL
+
+    resultado = {}
+
+    # 1. Traer items publicados en Walmart
+    try:
+        res = req.get(
+            f"{WALMART_BASE_URL}/v3/items",
+            headers=walmart_headers(),
+            params={"limit": 5}
+        )
+        resultado["items_status"] = res.status_code
+        resultado["items_respuesta"] = res.text[:800]
+    except Exception as e:
+        resultado["items_error"] = str(e)
+
+    # 2. Buscar el producto por SKU específico
+    try:
+        res2 = req.get(
+            f"{WALMART_BASE_URL}/v3/items/CBSNCPB001",
+            headers=walmart_headers(),
+            params={"productIdType": "SKU"}
+        )
+        resultado["busqueda_sku_status"] = res2.status_code
+        resultado["busqueda_sku_respuesta"] = res2.text[:500]
+    except Exception as e:
+        resultado["busqueda_sku_error"] = str(e)
+
+    # 3. Probar inventory con cantidad fija
+    try:
+        headers = walmart_headers()
+        payload = {
+            "InventoryHeader": {"version": "1.4"},
+            "Inventory": [{
+                "sku": "CBSNCPB001",
+                "quantity": {"unit": "EACH", "amount": 10}
+            }]
+        }
+        res3 = req.put(
+            f"{WALMART_BASE_URL}/v3/inventory",
+            headers=headers,
+            json=payload
+        )
+        resultado["inventory_sin_param_status"] = res3.status_code
+        resultado["inventory_sin_param_respuesta"] = res3.text[:500]
+    except Exception as e:
+        resultado["inventory_error"] = str(e)
+
+    return resultado
+
 @app.route("/walmart/test_stock_one")
 def walmart_test_stock_one():
     """Prueba actualizar stock de UN solo producto para debug"""
