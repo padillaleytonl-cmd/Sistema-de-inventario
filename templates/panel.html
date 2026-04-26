@@ -1061,10 +1061,14 @@ tbody td {
         </div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">Ventas hoy</div>
+        <div class="metric-label">Ventas hoy — total</div>
         <div class="metric-value" id="metricVentas">—</div>
-        <div style="font-size:12px;font-weight:500;color:var(--success);margin-bottom:4px;" id="metricIngreso">$0</div>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:2px;">
+        <div style="font-size:13px;font-weight:600;color:var(--success);margin-bottom:6px;" id="metricIngreso">$0</div>
+        <div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+          <span style="font-size:11px;background:var(--info-bg);color:var(--navy);padding:2px 8px;border-radius:20px;" id="ventasWoo">Woo: 0</span>
+          <span style="font-size:11px;background:#f0fff4;color:#059669;padding:2px 8px;border-radius:20px;" id="ventasWalmart">WM: 0</span>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;">
           <span class="metric-badge badge-up">Desde medianoche</span>
           <button class="btn-ver-mas" onclick="abrirModal('ventas')">Ver más</button>
         </div>
@@ -1837,10 +1841,29 @@ function actualizarDashboard(productos, movimientos){
     const precio = p ? (p.precio_oferta > 0 ? p.precio_oferta : p.precio_normal) : 0;
     return acc + (precio * m.cantidad);
   }, 0);
+
+  // Separar por canal
+  const ventasWoo = ventasHoy.filter(m => m.canal === 'WooCommerce');
+  const ventasWM = ventasHoy.filter(m => m.canal === 'Walmart');
+  const ingresoWoo = ventasWoo.reduce((acc, m) => {
+    const p = productosGlobal.find(p => p.sku === m.sku);
+    const precio = p ? (p.precio_oferta > 0 ? p.precio_oferta : p.precio_normal) : 0;
+    return acc + (precio * m.cantidad);
+  }, 0);
+  const ingresoWM = ventasWM.reduce((acc, m) => {
+    const p = productosGlobal.find(p => p.sku === m.sku);
+    const precio = p ? (p.precio_oferta > 0 ? p.precio_oferta : p.precio_normal) : 0;
+    return acc + (precio * m.cantidad);
+  }, 0);
+
   const ventasEl = document.getElementById('metricVentas');
   if(ventasEl) ventasEl.textContent = ventasHoy.length || '0';
   const ingEl = document.getElementById('metricIngreso');
   if(ingEl) ingEl.textContent = ingresoHoy > 0 ? '$'+ingresoHoy.toLocaleString('es-CL') : '$0';
+  const wooEl = document.getElementById('ventasWoo');
+  if(wooEl) wooEl.textContent = 'Woo: '+ventasWoo.length+' · $'+(ingresoWoo/1000).toFixed(0)+'k';
+  const wmEl = document.getElementById('ventasWalmart');
+  if(wmEl) wmEl.textContent = 'WM: '+ventasWM.length+' · $'+(ingresoWM/1000).toFixed(0)+'k';
 
   // Stock bajo lista
   const stockBajoList = document.getElementById('stockBajoList');

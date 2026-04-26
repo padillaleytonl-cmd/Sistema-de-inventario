@@ -167,6 +167,7 @@ def entrada():
             guardar_producto(p)
             registrar_movimiento("entrada", p["sku"], p["nombre"], int(data["cantidad"]), data.get("motivo"), usuario="Luis Padilla", canal="Manual")
             actualizar_stock_woo(p["sku"], p["stock"])
+            actualizar_stock_walmart(p["sku"], p["stock"])
             return {"ok": True}
     return {"error": "no encontrado"}
 
@@ -182,6 +183,7 @@ def salida():
             guardar_producto(p)
             registrar_movimiento("salida", p["sku"], p["nombre"], int(data["cantidad"]), data.get("motivo"), usuario="Luis Padilla", canal="Manual")
             actualizar_stock_woo(p["sku"], p["stock"])
+            actualizar_stock_walmart(p["sku"], p["stock"])
             return {"ok": True}
     return {"error": "no encontrado"}
 
@@ -370,38 +372,68 @@ def walmart_sync_precios():
 def walmart_sync_ordenes():
     if not session.get("logged"):
         return {"error": "no autorizado"}, 401
-    ordenes = obtener_ordenes_walmart("Created")
+
     productos = cargar_productos()
     nuevas = 0
+    errores = []
 
-    for o in ordenes:
-        order_id = o.get("purchaseOrderId")
-        if not order_id:
-            continue
-        if orden_ya_procesada(int(str(order_id).replace("-","")[:15])):
-            continue
+    # Walmart Chile usa Created y Acknowledged para ordenes pendientes
+    for estado in ["Created", "Acknowledged"]:
+        ordenes = obtener_ordenes_walmart(estado)
+        print(f"[Walmart Ordenes] Estado:{estado} Total:{len(ordenes)}")
 
-        lineas = o.get("orderLines", {}).get("orderLine", [])
-        if isinstance(lineas, dict):
-            lineas = [lineas]
+        for o in ordenes:
+            order_id = o.get("purchaseOrderId")
+            if not order_id:
+                continue
 
-        for linea in lineas:
-            sku = linea.get("item", {}).get("sku")
-            cantidad = int(linea.get("orderLineQuantity", {}).get("amount", 1))
-            for p in productos:
-                if p["sku"] == sku:
-                    p["stock"] -= cantidad
-                    guardar_producto(p)
-                    registrar_movimiento("salida", p["sku"], p["nombre"],
-                                        cantidad, "Venta Walmart",
-                                        usuario="Sistema", canal="Walmart")
-                    actualizar_stock_woo(p["sku"], p["stock"])
+            # Hash del order_id para evitar duplicados
+            order_hash = abs(hash(str(order_id))) % (10**15)
+            if orden_ya_procesada(order_hash):
+                continue
 
-        confirmar_orden_walmart(order_id)
-        marcar_orden_procesada(int(str(order_id).replace("-","")[:15]))
-        nuevas += 1
+            lineas = o.get("orderLines", {}).get("orderLine", [])
+            if isinstance(lineas, dict):
+                lineas = [lineas]
 
-    return {"ok": True, "nuevas_ordenes": nuevas}
+            for linea in lineas:
+                try:
+                    sku = linea.get("item", {}).get("sku")
+                    cantidad = int(float(linea.get("orderLineQuantity", {}).get("amount", 1)))
+                    if not sku:
+                        continue
+                    for p in productos:
+                        if p["sku"] == sku:
+                            p["stock"] = max(0, p["stock"] - cantidad)
+                            guardar_producto(p)
+                            registrar_movimiento("salida", p["sku"], p["nombre"],
+                                                cantidad, "Venta Walmart",
+                                                usuario="Sistema", canal="Walmart")
+                            actualizar_stock_woo(p["sku"], p["stock"])
+                            actualizar_stock_walmart(p["sku"], p["stock"])
+                except Exception as e:
+                    errores.append(str(e))
+
+            marcar_orden_procesada(order_hash)
+            nuevas += 1
+
+    return {"ok": True, "nuevas_ordenes": nuevas, "errores": errores[:5]}
+
+@app.route("/walmart/ver_ordenes")
+def walmart_ver_ordenes():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    resultado = {}
+    for estado in ["Created", "Acknowledged", "Shipped"]:
+        ordenes = obtener_ordenes_walmart(estado)
+        resultado[estado] = len(ordenes)
+        if ordenes:
+            o = ordenes[0]
+            resultado[estado + "_ejemplo"] = {
+                "purchaseOrderId": o.get("purchaseOrderId"),
+                "orderLines": str(o.get("orderLines", {}))[:400]
+            }
+    return resultado
 
 @app.route("/eliminar_producto", methods=["POST"])
 def eliminar_producto_route():
