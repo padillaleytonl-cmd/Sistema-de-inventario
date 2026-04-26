@@ -1478,11 +1478,18 @@ tbody td {
               <span style="font-size:11px;background:var(--warn-bg);color:var(--warn);padding:3px 10px;border-radius:20px;font-weight:500;">⏳ Próximo</span>
               <button class="btn-primary" style="padding:6px 12px;font-size:12px;opacity:0.5;" disabled>Conectar</button>
             </div>
-            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);">
+            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);" id="walmart-row">
               <div style="width:36px;height:36px;background:#f0fff4;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#059669;flex-shrink:0;">WM</div>
-              <div style="flex:1;"><div style="font-size:13px;font-weight:500;">Walmart Chile</div><div style="font-size:11px;color:var(--muted);">No conectado · Próximamente disponible</div></div>
-              <span style="font-size:11px;background:var(--warn-bg);color:var(--warn);padding:3px 10px;border-radius:20px;font-weight:500;">⏳ Próximo</span>
-              <button class="btn-primary" style="padding:6px 12px;font-size:12px;opacity:0.5;" disabled>Conectar</button>
+              <div style="flex:1;">
+                <div style="font-size:13px;font-weight:500;">Walmart Chile</div>
+                <div style="font-size:11px;color:var(--muted);" id="walmart-desc">Credenciales en Render · Listo para conectar</div>
+              </div>
+              <span id="walmart-badge" style="font-size:11px;background:var(--warn-bg);color:var(--warn);padding:3px 10px;border-radius:20px;font-weight:500;">⏳ Verificando...</span>
+              <div style="display:flex;gap:6px;">
+                <button onclick="walmartSyncStock()" class="btn-secondary" style="padding:6px 12px;font-size:12px;">↑ Stock</button>
+                <button onclick="walmartSyncPrecios()" class="btn-secondary" style="padding:6px 12px;font-size:12px;">$ Precios</button>
+                <button onclick="walmartSyncOrdenes()" class="btn-primary" style="padding:6px 12px;font-size:12px;">↓ Órdenes</button>
+              </div>
             </div>
             <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);">
               <div style="width:36px;height:36px;background:#f5f0ff;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#7c3aed;flex-shrink:0;">RP</div>
@@ -2480,6 +2487,54 @@ function eliminarProducto(sku, nombre){
       toast(d.error || 'Error al eliminar', 'error');
     }
   });
+}
+
+// ── WALMART
+(function verificarWalmart(){
+  fetch('/walmart/test').then(r=>r.json()).then(d=>{
+    const badge = document.getElementById('walmart-badge');
+    const desc = document.getElementById('walmart-desc');
+    if(!badge) return;
+    if(d.conectado){
+      badge.style.background='var(--success-bg)';
+      badge.style.color='var(--success)';
+      badge.textContent='● Conectado';
+      if(desc) desc.textContent='Walmart Chile · Sincronización activa';
+    } else {
+      badge.style.background='var(--danger-bg)';
+      badge.style.color='var(--danger)';
+      badge.textContent='✕ Error conexión';
+      if(desc) desc.textContent='Verificar credenciales en Render → Environment';
+    }
+  }).catch(()=>{});
+})();
+
+function walmartSyncStock(){
+  toast('Sincronizando stock con Walmart...');
+  fetch('/walmart/sync_stock', {method:'POST'})
+    .then(r=>r.json())
+    .then(d=>{
+      toast(`Walmart: ${d.ok} productos actualizados${d.error>0?' · '+d.error+' errores':''}`);
+    });
+}
+
+function walmartSyncPrecios(){
+  toast('Sincronizando precios con Walmart...');
+  fetch('/walmart/sync_precios', {method:'POST'})
+    .then(r=>r.json())
+    .then(d=>{
+      toast(`Walmart: ${d.ok} precios actualizados`);
+    });
+}
+
+function walmartSyncOrdenes(){
+  toast('Obteniendo órdenes de Walmart...');
+  fetch('/walmart/sync_ordenes')
+    .then(r=>r.json())
+    .then(d=>{
+      toast(`Walmart: ${d.nuevas_ordenes} órdenes nuevas procesadas`);
+      if(d.nuevas_ordenes > 0) cargar();
+    });
 }
 
 // ── EDITAR PRECIOS

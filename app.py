@@ -2,11 +2,14 @@ from flask import Flask, request, render_template, session, redirect
 import requests
 import os
 from config import *
+from walmart import (actualizar_stock_walmart, actualizar_precio_walmart,
+                     obtener_ordenes_walmart, confirmar_orden_walmart,
+                     verificar_conexion_walmart)
 from woo import actualizar_stock_woo
 from inventario import (cargar_productos, guardar_productos, guardar_producto,
                         registrar_movimiento, cargar_movimientos, cargar_movimientos_hoy,
                         init_db, orden_ya_procesada, marcar_orden_procesada, actualizar_precios,
-                        get_configuracion, set_configuracion, set_lead_time)
+                        get_configuracion, set_configuracion, set_lead_time, eliminar_producto)
 
 app = Flask(__name__)
 app.secret_key = "clave_super_segura"
@@ -223,6 +226,101 @@ def ver_productos():
 def ver_movimientos():
     limite = int(request.args.get("limite", 20))
     return {"movimientos": cargar_movimientos(limite)}
+
+# ── WALMART ──
+
+@app.route("/walmart/test")
+def walmart_test():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    ok = verificar_conexion_walmart()
+    return {"conectado": ok}
+
+@app.route("/walmart/sync_stock", methods=["POST"])
+def walmart_sync_stock():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    productos = cargar_productos()
+    ok = 0
+    error = 0
+    for p in productos:
+        if p.get("sku"):
+            resultado = actualizar_stock_walmart(p["sku"], p["stock"])
+            if resultado:
+                ok += 1
+            else:
+                error += 1
+    return {"ok": ok, "error": error, "total": len(productos)}
+
+@app.route("/walmart/sync_precios", methods=["POST"])
+def walmart_sync_precios():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from inventario import get_configuracion
+    cfg = get_configuracion()
+    comision = float(cfg.get("walmart_comision", 12)) / 100
+
+    productos = cargar_productos()
+    ok = 0
+    for p in productos:
+        if p.get("sku") and p.get("precio_normal", 0) > 0:
+            precio_base = p["precio_oferta"] if p.get("precio_oferta", 0) > 0 else p["precio_normal"]
+            precio_walmart = precio_base * (1 + comision)
+            # Redondear a x90
+            precio_walmart = int(precio_walmart / 100) * 100 + 90
+            if precio_walmart < precio_base:
+                precio_walmart += 100
+            actualizar_precio_walmart(p["sku"], precio_walmart)
+            ok += 1
+    return {"ok": ok}
+
+@app.route("/walmart/sync_ordenes")
+def walmart_sync_ordenes():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    ordenes = obtener_ordenes_walmart("Created")
+    productos = cargar_productos()
+    nuevas = 0
+
+    for o in ordenes:
+        order_id = o.get("purchaseOrderId")
+        if not order_id:
+            continue
+        if orden_ya_procesada(int(str(order_id).replace("-","")[:15])):
+            continue
+
+        lineas = o.get("orderLines", {}).get("orderLine", [])
+        if isinstance(lineas, dict):
+            lineas = [lineas]
+
+        for linea in lineas:
+            sku = linea.get("item", {}).get("sku")
+            cantidad = int(linea.get("orderLineQuantity", {}).get("amount", 1))
+            for p in productos:
+                if p["sku"] == sku:
+                    p["stock"] -= cantidad
+                    guardar_producto(p)
+                    registrar_movimiento("salida", p["sku"], p["nombre"],
+                                        cantidad, "Venta Walmart",
+                                        usuario="Sistema", canal="Walmart")
+                    actualizar_stock_woo(p["sku"], p["stock"])
+
+        confirmar_orden_walmart(order_id)
+        marcar_orden_procesada(int(str(order_id).replace("-","")[:15]))
+        nuevas += 1
+
+    return {"ok": True, "nuevas_ordenes": nuevas}
+
+@app.route("/eliminar_producto", methods=["POST"])
+def eliminar_producto_route():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    data = request.json
+    sku = data.get("sku")
+    if not sku:
+        return {"error": "SKU requerido"}
+    eliminar_producto(sku)
+    return {"ok": True}
 
 @app.route("/configuracion", methods=["GET","POST"])
 def configuracion():
