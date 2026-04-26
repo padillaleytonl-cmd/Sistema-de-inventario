@@ -277,17 +277,13 @@ def walmart_diagnostico():
     # 3. Probar inventory con cantidad fija
     try:
         headers = walmart_headers()
-        payload = {
-            "InventoryHeader": {"version": "1.4"},
-            "Inventory": [{
-                "sku": "CBSNCPB001",
-                "quantity": {"unit": "EACH", "amount": 10}
-            }]
-        }
+        headers["Content-Type"] = "application/json"
+        payload = {"quantity": {"unit": "EACH", "amount": 10}}
         res3 = req.put(
             f"{WALMART_BASE_URL}/v3/inventory",
             headers=headers,
-            json=payload
+            json=payload,
+            params={"sku": "CBSNCPB001"}
         )
         resultado["inventory_sin_param_status"] = res3.status_code
         resultado["inventory_sin_param_respuesta"] = res3.text[:500]
@@ -308,19 +304,14 @@ def walmart_test_stock_one():
     try:
         import requests as req
         from walmart import get_token, WALMART_BASE_URL, walmart_headers
-        payload = {
-            "InventoryHeader": {"version": "1.4"},
-            "Inventory": [{
-                "sku": p["sku"],
-                "quantity": {"unit": "EACH", "amount": p["stock"]}
-            }]
-        }
         headers = walmart_headers()
+        headers["Content-Type"] = "application/json"
+        payload = {"quantity": {"unit": "EACH", "amount": int(p["stock"])}}
         res = req.put(
             f"{WALMART_BASE_URL}/v3/inventory",
             headers=headers,
             json=payload,
-            params={"feedType": "inventory"}
+            params={"sku": p["sku"]}
         )
         return {
             "sku": p["sku"],

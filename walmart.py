@@ -52,22 +52,19 @@ def walmart_headers():
 def actualizar_stock_walmart(sku, cantidad):
     """Actualiza el stock de un producto en Walmart Chile"""
     try:
-        payload = {
-            "InventoryHeader": {"version": "1.4"},
-            "Inventory": [{
-                "sku": sku,
-                "quantity": {
-                    "unit": "EACH",
-                    "amount": cantidad
-                }
-            }]
-        }
+        # Walmart Chile usa endpoint directo por SKU con query param
+        headers = walmart_headers()
+        headers["Content-Type"] = "application/json"
+
+        # Método 1: endpoint directo por SKU
+        payload = {"quantity": {"unit": "EACH", "amount": int(cantidad)}}
         res = requests.put(
             f"{WALMART_BASE_URL}/v3/inventory",
-            headers=walmart_headers(),
+            headers=headers,
             json=payload,
-            params={"feedType": "inventory"}
+            params={"sku": sku}
         )
+        print(f"[Walmart Stock] SKU:{sku} Status:{res.status_code} Response:{res.text[:300]}")
         return res.status_code in [200, 201, 202]
     except Exception as e:
         print(f"[Walmart] Error actualizando stock {sku}: {e}")
