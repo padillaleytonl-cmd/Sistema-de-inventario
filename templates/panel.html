@@ -1089,27 +1089,44 @@ tbody td {
 
     <!-- Gráfico + Stock bajo -->
     <div class="dash-grid">
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">Ventas — ingresos</div>
-          <div style="display:flex;gap:4px;">
-            <button class="chart-period active" onclick="cambiarPlazo('semana',this)">Semana</button>
-            <button class="chart-period" onclick="cambiarPlazo('mes',this)">Mes</button>
-            <button class="chart-period" onclick="cambiarPlazo('anio',this)">Año</button>
+      <div style="display:flex;flex-direction:column;gap:16px;">
+        <!-- Gráfico de barras -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Ventas — ingresos</div>
+            <div style="display:flex;gap:4px;">
+              <button class="chart-period active" onclick="cambiarPlazo('semana',this)">Semana</button>
+              <button class="chart-period" onclick="cambiarPlazo('mes',this)">Mes</button>
+              <button class="chart-period" onclick="cambiarPlazo('anio',this)">Año</button>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
+            <div>
+              <div style="font-size:11px;color:var(--muted);">Total período</div>
+              <div style="font-size:18px;font-weight:600;color:var(--navy);" id="chartTotal">$0</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:11px;color:var(--muted);">Unidades vendidas</div>
+              <div style="font-size:18px;font-weight:600;color:var(--navy);" id="chartUnidades">0</div>
+            </div>
+          </div>
+          <!-- Tooltip detalle barra -->
+          <div id="barTooltip" style="display:none;background:var(--navy);color:white;padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px;line-height:1.6;"></div>
+          <div class="bar-chart" id="barChart">
+            <div style="color:var(--hint); font-size:12px; margin:auto;">Cargando datos...</div>
           </div>
         </div>
-        <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
-          <div>
-            <div style="font-size:11px;color:var(--muted);">Total período</div>
-            <div style="font-size:18px;font-weight:600;color:var(--navy);" id="chartTotal">$0</div>
+
+        <!-- Gráfico de torta por canal -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Ventas por canal</div>
+            <span class="card-tag">% del total</span>
           </div>
-          <div style="text-align:right;">
-            <div style="font-size:11px;color:var(--muted);">Unidades vendidas</div>
-            <div style="font-size:18px;font-weight:600;color:var(--navy);" id="chartUnidades">0</div>
+          <div style="display:flex;align-items:center;gap:20px;">
+            <canvas id="tortaCanvas" width="140" height="140" style="flex-shrink:0;"></canvas>
+            <div id="tortaLeyenda" style="flex:1;display:flex;flex-direction:column;gap:8px;"></div>
           </div>
-        </div>
-        <div class="bar-chart" id="barChart">
-          <div style="color:var(--hint); font-size:12px; margin:auto;">Cargando datos...</div>
         </div>
       </div>
       <div class="card">
@@ -1952,10 +1969,128 @@ function renderGrafico(plazo, movs, prods){
     const h = Math.max(3, Math.round((v/maxV)*110));
     const label = periodos[i].label;
     const vLabel = v > 0 ? '$'+Math.round(v/1000)+'k' : '';
-    return `<div class="bar-col">
+    return `<div class="bar-col" onclick="mostrarDetalleBar(${i})" style="cursor:pointer;" title="Click para ver detalle">
       <div class="bar-val" style="font-size:9px;">${vLabel}</div>
-      <div class="bar-fill${periodos[i].isHoy?' highlight':''}" style="height:${h}px"></div>
+      <div class="bar-fill${periodos[i].isHoy?' highlight':''}" style="height:${h}px;transition:opacity 0.15s;" onmouseover="this.style.opacity='0.75'" onmouseout="this.style.opacity='1'"></div>
       <div class="bar-day" style="font-size:${plazo==='mes'?'9':'10'}px;">${label}</div>
+    </div>`;
+  }).join('');
+
+  // Guardar periodos para el click
+  window._periodos = periodos;
+  window._movimientosActuales = movimientos;
+  window._productosActuales = productos;
+
+  // Dibujar torta por canal
+  renderTorta(movimientos, productos);
+}
+
+function mostrarDetalleBar(idx){
+  const periodos = window._periodos || [];
+  const movimientos = window._movimientosActuales || [];
+  const productos = window._productosActuales || productosGlobal;
+  const p = periodos[idx];
+  if(!p) return;
+
+  let ventasPeriodo;
+  if(plazoActual === 'anio'){
+    ventasPeriodo = movimientos.filter(m => {
+      if(m.tipo !== 'salida') return false;
+      const parts = m.fecha.split('/');
+      return parts[1] === p.mesNum && parts[2] === String(p.anioNum);
+    });
+  } else {
+    ventasPeriodo = movimientos.filter(m => m.tipo === 'salida' && m.fecha === p.fecha);
+  }
+
+  const ingreso = calcularIngreso(ventasPeriodo, productos);
+  const unidades = ventasPeriodo.reduce((a,m) => a+m.cantidad, 0);
+
+  const tooltip = document.getElementById('barTooltip');
+  if(!tooltip) return;
+
+  if(!ventasPeriodo.length){
+    tooltip.style.display = 'block';
+    tooltip.innerHTML = `<strong>${p.label}${p.fecha?' — '+p.fecha:''}</strong> · Sin ventas registradas`;
+    return;
+  }
+
+  const detalle = ventasPeriodo.map(m => {
+    const prod = productos.find(pr => pr.sku === m.sku);
+    const precio = prod ? (prod.precio_oferta > 0 ? prod.precio_oferta : prod.precio_normal) : 0;
+    const subtotal = precio * m.cantidad;
+    return `${m.nombre.substring(0,35)} × ${m.cantidad} = $${subtotal.toLocaleString('es-CL')}`;
+  }).join('<br>');
+
+  tooltip.style.display = 'block';
+  tooltip.innerHTML = `<strong>${p.label}${p.fecha?' — '+p.fecha:''}</strong> · ${unidades} unidades · $${ingreso.toLocaleString('es-CL')}<br><div style="margin-top:6px;opacity:0.85;font-size:11px;">${detalle}</div>`;
+}
+
+function renderTorta(movimientos, productos){
+  const canvas = document.getElementById('tortaCanvas');
+  const leyenda = document.getElementById('tortaLeyenda');
+  if(!canvas || !leyenda) return;
+
+  // Calcular ingresos por canal
+  const canales = {};
+  movimientos.filter(m => m.tipo === 'salida').forEach(m => {
+    const canal = m.canal || 'Manual';
+    const prod = productos.find(p => p.sku === m.sku);
+    const precio = prod ? (prod.precio_oferta > 0 ? prod.precio_oferta : prod.precio_normal) : 0;
+    canales[canal] = (canales[canal] || 0) + precio * m.cantidad;
+  });
+
+  const total = Object.values(canales).reduce((a,b) => a+b, 0);
+  if(total === 0){
+    leyenda.innerHTML = '<div style="color:var(--muted);font-size:12px;">Sin ventas registradas</div>';
+    return;
+  }
+
+  const colores = ['#0d1f3c','#2563eb','#0ea5e9','#1D9E75','#BA7517','#E24B4A','#7c3aed'];
+  const entries = Object.entries(canales).sort((a,b) => b[1]-a[1]);
+
+  // Dibujar torta
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0,0,140,140);
+  let startAngle = -Math.PI/2;
+  const cx=70, cy=70, r=60;
+
+  entries.forEach(([canal, val], i) => {
+    const slice = (val/total) * 2 * Math.PI;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, r, startAngle, startAngle+slice);
+    ctx.closePath();
+    ctx.fillStyle = colores[i % colores.length];
+    ctx.fill();
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    startAngle += slice;
+  });
+
+  // Círculo interior (donut)
+  ctx.beginPath();
+  ctx.arc(cx, cy, 30, 0, 2*Math.PI);
+  ctx.fillStyle = 'white';
+  ctx.fill();
+
+  // Total en el centro
+  ctx.fillStyle = '#0d1f3c';
+  ctx.font = 'bold 10px DM Sans, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Total', cx, cy-4);
+  ctx.font = 'bold 9px DM Sans, sans-serif';
+  ctx.fillText('$'+Math.round(total/1000)+'k', cx, cy+8);
+
+  // Leyenda
+  leyenda.innerHTML = entries.map(([canal, val], i) => {
+    const pct = Math.round((val/total)*100);
+    return `<div style="display:flex;align-items:center;gap:8px;">
+      <div style="width:10px;height:10px;border-radius:50%;background:${colores[i%colores.length]};flex-shrink:0;"></div>
+      <div style="flex:1;font-size:12px;color:var(--text);">${canal}</div>
+      <div style="font-size:12px;font-weight:600;color:var(--navy);">${pct}%</div>
+      <div style="font-size:11px;color:var(--muted);">$${val.toLocaleString('es-CL')}</div>
     </div>`;
   }).join('');
 }

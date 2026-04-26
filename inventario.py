@@ -1,5 +1,12 @@
 import os
 import psycopg2
+from datetime import datetime, timezone, timedelta
+
+# Zona horaria Chile (UTC-3 en invierno, UTC-4 en verano — usamos UTC-4 como base)
+TZ_CHILE = timezone(timedelta(hours=-4))
+
+def now_chile():
+    return datetime.now(TZ_CHILE)
 
 def get_conn():
     return psycopg2.connect(os.environ.get("DATABASE_URL"))
@@ -126,10 +133,11 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
         conn.commit()
     except:
         conn.rollback()
+    fecha_chile = now_chile()
     cur.execute("""
-        INSERT INTO movimientos (tipo, sku, nombre, cantidad, motivo, usuario, canal)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-    """, (tipo, sku, nombre, cantidad, motivo, usuario, canal))
+        INSERT INTO movimientos (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """, (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha_chile))
     conn.commit()
     cur.close()
     conn.close()
@@ -146,8 +154,8 @@ def cargar_movimientos(limite=20):
         conn.rollback()
     cur.execute("""
         SELECT tipo, sku, nombre, cantidad, motivo,
-               TO_CHAR(fecha, 'DD/MM/YYYY') as fecha_fmt,
-               TO_CHAR(fecha, 'HH24:MI') as hora,
+               TO_CHAR(fecha AT TIME ZONE 'America/Santiago', 'DD/MM/YYYY') as fecha_fmt,
+               TO_CHAR(fecha AT TIME ZONE 'America/Santiago', 'HH24:MI') as hora,
                COALESCE(usuario, 'Sistema') as usuario,
                COALESCE(canal, 'Sistema') as canal
         FROM movimientos
@@ -177,9 +185,9 @@ def cargar_movimientos_hoy():
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT tipo, sku, nombre, cantidad, motivo, TO_CHAR(fecha, \'HH24:MI\') as hora "
+        "SELECT tipo, sku, nombre, cantidad, motivo, TO_CHAR(fecha AT TIME ZONE \'America/Santiago\', \'HH24:MI\') as hora "
         "FROM movimientos "
-        "WHERE DATE(fecha) = CURRENT_DATE AND tipo = \'salida\' "
+        "WHERE DATE(fecha AT TIME ZONE \'America/Santiago\') = CURRENT_DATE AND tipo = \'salida\' "
         "ORDER BY fecha DESC"
     )
     rows = cur.fetchall()
