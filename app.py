@@ -384,12 +384,16 @@ def walmart_sync_ordenes():
 
         for o in ordenes:
             order_id = o.get("purchaseOrderId")
+            print(f"[Walmart] Procesando orden:{order_id}")
             if not order_id:
+                print("[Walmart] Sin order_id, saltando")
                 continue
 
             # Hash del order_id para evitar duplicados
             order_hash = abs(hash(str(order_id))) % (10**15)
-            if orden_ya_procesada(order_hash):
+            ya = orden_ya_procesada(order_hash)
+            print(f"[Walmart] Hash:{order_hash} Ya procesada:{ya}")
+            if ya:
                 continue
 
             lineas = o.get("orderLines", {}).get("orderLine", [])
