@@ -196,6 +196,14 @@ def cargar_movimientos_hoy():
     return [{"tipo": r[0], "sku": r[1], "nombre": r[2],
              "cantidad": r[3], "motivo": r[4], "hora": r[5]} for r in rows]
 
+def eliminar_producto(sku):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM productos WHERE sku = %s", (sku,))
+    conn.commit()
+    cur.close()
+    conn.close()
+
 def orden_ya_procesada(orden_id):
     conn = get_conn()
     cur = conn.cursor()
