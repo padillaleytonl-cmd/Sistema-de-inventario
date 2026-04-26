@@ -399,9 +399,19 @@ def walmart_sync_ordenes():
             for linea in lineas:
                 try:
                     sku = linea.get("item", {}).get("sku")
-                    cantidad = int(float(linea.get("orderLineQuantity", {}).get("amount", 1)))
                     if not sku:
                         continue
+                    # Walmart Chile: cantidad viene en orderLineQuantity o es 1
+                    cantidad = 1
+                    qty = linea.get("orderLineQuantity", {})
+                    if qty and qty.get("amount"):
+                        cantidad = int(float(qty.get("amount", 1)))
+                    # También puede venir en statusQuantity
+                    if cantidad == 1:
+                        status_qty = linea.get("statusQuantity", {})
+                        if status_qty and status_qty.get("amount"):
+                            cantidad = int(float(status_qty.get("amount", 1)))
+
                     for p in productos:
                         if p["sku"] == sku:
                             p["stock"] = max(0, p["stock"] - cantidad)
@@ -411,8 +421,10 @@ def walmart_sync_ordenes():
                                                 usuario="Sistema", canal="Walmart")
                             actualizar_stock_woo(p["sku"], p["stock"])
                             actualizar_stock_walmart(p["sku"], p["stock"])
+                            print(f"[Walmart] Procesado SKU:{sku} Cant:{cantidad} Stock restante:{p['stock']}")
                 except Exception as e:
                     errores.append(str(e))
+                    print(f"[Walmart] Error linea: {e}")
 
             marcar_orden_procesada(order_hash)
             nuevas += 1
