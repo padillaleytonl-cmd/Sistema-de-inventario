@@ -240,6 +240,41 @@ def walmart_test():
     except Exception as e:
         return {"conectado": False, "error": str(e)}
 
+@app.route("/walmart/test_stock_one")
+def walmart_test_stock_one():
+    """Prueba actualizar stock de UN solo producto para debug"""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    productos = cargar_productos()
+    if not productos:
+        return {"error": "sin productos"}
+    p = productos[0]
+    try:
+        import requests as req
+        from walmart import get_token, WALMART_BASE_URL, walmart_headers
+        payload = {
+            "InventoryHeader": {"version": "1.4"},
+            "Inventory": [{
+                "sku": p["sku"],
+                "quantity": {"unit": "EACH", "amount": p["stock"]}
+            }]
+        }
+        headers = walmart_headers()
+        res = req.put(
+            f"{WALMART_BASE_URL}/v3/inventory",
+            headers=headers,
+            json=payload,
+            params={"feedType": "inventory"}
+        )
+        return {
+            "sku": p["sku"],
+            "stock": p["stock"],
+            "status": res.status_code,
+            "respuesta": res.text[:500]
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.route("/walmart/sync_stock", methods=["POST"])
 def walmart_sync_stock():
     if not session.get("logged"):
@@ -247,6 +282,8 @@ def walmart_sync_stock():
     productos = cargar_productos()
     ok = 0
     error = 0
+    errores_detalle = []
+    print(f"[Walmart] Iniciando sync stock — {len(productos)} productos")
     for p in productos:
         if p.get("sku"):
             resultado = actualizar_stock_walmart(p["sku"], p["stock"])
@@ -254,7 +291,9 @@ def walmart_sync_stock():
                 ok += 1
             else:
                 error += 1
-    return {"ok": ok, "error": error, "total": len(productos)}
+                errores_detalle.append(p["sku"])
+    print(f"[Walmart] Sync completado — OK:{ok} Error:{error}")
+    return {"ok": ok, "error": error, "total": len(productos), "errores": errores_detalle[:5]}
 
 @app.route("/walmart/sync_precios", methods=["POST"])
 def walmart_sync_precios():
