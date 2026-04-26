@@ -1,6 +1,7 @@
 import requests
 import os
 import time
+from datetime import datetime, timedelta
 
 WALMART_CLIENT_ID = os.environ.get("WALMART_CLIENT_ID")
 WALMART_CLIENT_SECRET = os.environ.get("WALMART_CLIENT_SECRET")
@@ -9,7 +10,6 @@ WALMART_BASE_URL = "https://marketplace.walmartapis.com"
 _token_cache = {"token": None, "expires_at": 0}
 
 def get_token():
-    """Obtiene y cachea el access token de Walmart"""
     now = time.time()
     if _token_cache["token"] and now < _token_cache["expires_at"] - 60:
         return _token_cache["token"]
@@ -50,11 +50,9 @@ def walmart_headers():
 # ── INVENTARIO ──
 
 def actualizar_stock_walmart(sku, cantidad):
-    """Actualiza el stock de un producto en Walmart Chile"""
     try:
         headers = walmart_headers()
         headers["Content-Type"] = "application/json"
-        # SKU debe ir dentro del body JSON según documentación oficial Chile
         payload = {
             "sku": sku,
             "quantity": {"unit": "EACH", "amount": int(cantidad)}
@@ -64,18 +62,17 @@ def actualizar_stock_walmart(sku, cantidad):
             headers=headers,
             json=payload
         )
-        print(f"[Walmart Stock] SKU:{sku} Status:{res.status_code} Response:{res.text[:300]}")
+        print(f"[Walmart Stock] SKU:{sku} Status:{res.status_code}")
         return res.status_code in [200, 201, 202]
     except Exception as e:
-        print(f"[Walmart] Error actualizando stock {sku}: {e}")
+        print(f"[Walmart] Error stock {sku}: {e}")
         return False
 
 # ── PRECIOS ──
 
 def actualizar_precio_walmart(sku, precio):
-    """Actualiza el precio de un producto en Walmart Chile (sin decimales)"""
     try:
-        precio_int = int(round(precio))  # Walmart Chile no acepta decimales
+        precio_int = int(round(precio))
         payload = {
             "PriceHeader": {"version": "1.7"},
             "Price": [{
@@ -97,62 +94,60 @@ def actualizar_precio_walmart(sku, precio):
         )
         return res.status_code in [200, 201, 202]
     except Exception as e:
-        print(f"[Walmart] Error actualizando precio {sku}: {e}")
+        print(f"[Walmart] Error precio {sku}: {e}")
         return False
 
-# ── ÓRDENES ──
+# ── ÓRDENES CON PAGINACIÓN ──
 
 def obtener_ordenes_walmart(estado="Created"):
-    """Obtiene órdenes de Walmart con el estado indicado"""
+    """Obtiene TODAS las órdenes de Walmart Chile con paginación completa"""
     try:
-        res = requests.get(
-            f"{WALMART_BASE_URL}/v3/orders",
-            headers=walmart_headers(),
-            params={
-                "status": estado,
+        fecha_inicio = (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%dT00:00:00.000Z")
+        todas = []
+        next_cursor = None
+
+        while True:
+            params = {
+                "createdStartDate": fecha_inicio,
                 "limit": 100
             }
-        )
-        print(f"[Walmart Ordenes] Estado:{estado} HTTP:{res.status_code} Resp:{res.text[:200]}")
-        if res.status_code != 200:
-            return []
+            if estado:
+                params["status"] = estado
+            if next_cursor and next_cursor != "-1":
+                params["nextCursor"] = next_cursor
 
-        data = res.json()
-        # Walmart puede retornar la lista en diferentes estructuras
-        lista = data.get("list", {})
-        elementos = lista.get("elements", {})
-        ordenes = elementos.get("order", [])
-        if isinstance(ordenes, dict):
-            ordenes = [ordenes]
-        return ordenes
-    except Exception as e:
-        print(f"[Walmart] Error obteniendo órdenes: {e}")
-        return []
+            res = requests.get(
+                f"{WALMART_BASE_URL}/v3/orders",
+                headers=walmart_headers(),
+                params=params
+            )
+            print(f"[Walmart Ordenes] Estado:{estado} Status:{res.status_code}")
 
-def obtener_todas_ordenes_walmart():
-    """Obtiene todas las órdenes sin filtro de estado"""
-    try:
-        res = requests.get(
-            f"{WALMART_BASE_URL}/v3/orders/released",
-            headers=walmart_headers(),
-            params={"limit": 100}
-        )
-        print(f"[Walmart Released] HTTP:{res.status_code} Resp:{res.text[:300]}")
-        if res.status_code != 200:
-            return []
-        data = res.json()
-        lista = data.get("list", {})
-        elementos = lista.get("elements", {})
-        ordenes = elementos.get("order", [])
-        if isinstance(ordenes, dict):
-            ordenes = [ordenes]
-        return ordenes
+            if res.status_code != 200:
+                print(f"[Walmart Ordenes] Error: {res.text[:200]}")
+                break
+
+            data = res.json()
+            lista = data.get("list", {})
+            meta = lista.get("meta", {})
+            ordenes = lista.get("elements", {}).get("order", [])
+
+            if isinstance(ordenes, dict):
+                ordenes = [ordenes]
+
+            todas.extend(ordenes)
+            print(f"[Walmart Ordenes] Página:{len(ordenes)} Total:{len(todas)}")
+
+            next_cursor = meta.get("nextCursor")
+            if not next_cursor or next_cursor == "-1":
+                break
+
+        return todas
     except Exception as e:
-        print(f"[Walmart] Error obteniendo released orders: {e}")
+        print(f"[Walmart] Error órdenes: {e}")
         return []
 
 def confirmar_orden_walmart(purchase_order_id):
-    """Confirma una orden en Walmart"""
     try:
         res = requests.post(
             f"{WALMART_BASE_URL}/v3/orders/{purchase_order_id}/acknowledge",
@@ -160,11 +155,10 @@ def confirmar_orden_walmart(purchase_order_id):
         )
         return res.status_code in [200, 201, 202]
     except Exception as e:
-        print(f"[Walmart] Error confirmando orden {purchase_order_id}: {e}")
+        print(f"[Walmart] Error confirmando orden: {e}")
         return False
 
 def verificar_conexion_walmart():
-    """Verifica que las credenciales de Walmart sean válidas"""
     try:
         token = get_token()
         return token is not None
