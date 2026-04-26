@@ -459,6 +459,42 @@ def walmart_ver_ordenes():
 
     return resultado
 
+@app.route("/walmart/debug_ordenes")
+def walmart_debug_ordenes():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from datetime import datetime, timedelta
+    import requests as req
+    from walmart import walmart_headers, WALMART_BASE_URL
+
+    fecha_inicio = (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%dT00:00:00.000Z")
+    h = walmart_headers()
+    res = req.get(
+        f"{WALMART_BASE_URL}/v3/orders",
+        headers=h,
+        params={"createdStartDate": fecha_inicio, "status": "Acknowledged", "limit": 5}
+    )
+    if res.status_code != 200:
+        return {"error": res.text}
+
+    data = res.json()
+    ordenes = data.get("list", {}).get("elements", {}).get("order", [])
+    if isinstance(ordenes, dict):
+        ordenes = [ordenes]
+
+    resultado = []
+    for o in ordenes:
+        order_id = o.get("purchaseOrderId")
+        order_hash = abs(hash(str(order_id))) % (10**15)
+        ya_procesada = orden_ya_procesada(order_hash)
+        resultado.append({
+            "purchaseOrderId": order_id,
+            "hash": order_hash,
+            "ya_procesada": ya_procesada
+        })
+
+    return {"ordenes": resultado, "total": len(ordenes)}
+
 @app.route("/eliminar_producto", methods=["POST"])
 def eliminar_producto_route():
     if not session.get("logged"):
