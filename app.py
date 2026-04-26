@@ -472,7 +472,7 @@ def walmart_debug_ordenes():
     res = req.get(
         f"{WALMART_BASE_URL}/v3/orders",
         headers=h,
-        params={"createdStartDate": fecha_inicio, "status": "Acknowledged", "limit": 5}
+        params={"createdStartDate": fecha_inicio, "status": "Acknowledged", "limit": 2}
     )
     if res.status_code != 200:
         return {"error": res.text}
@@ -482,18 +482,16 @@ def walmart_debug_ordenes():
     if isinstance(ordenes, dict):
         ordenes = [ordenes]
 
-    resultado = []
-    for o in ordenes:
-        order_id = o.get("purchaseOrderId")
-        order_hash = abs(hash(str(order_id))) % (10**15)
-        ya_procesada = orden_ya_procesada(order_hash)
-        resultado.append({
-            "purchaseOrderId": order_id,
-            "hash": order_hash,
-            "ya_procesada": ya_procesada
-        })
-
-    return {"ordenes": resultado, "total": len(ordenes)}
+    # Mostrar estructura completa de la primera orden
+    if ordenes:
+        o = ordenes[0]
+        return {
+            "purchaseOrderId": o.get("purchaseOrderId"),
+            "orderLines_raw": str(o.get("orderLines", {}))[:1000],
+            "keys_orden": list(o.keys()),
+            "orden_completa": str(o)[:1500]
+        }
+    return {"mensaje": "sin ordenes"}
 
 @app.route("/eliminar_producto", methods=["POST"])
 def eliminar_producto_route():
