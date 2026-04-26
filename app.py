@@ -423,16 +423,22 @@ def walmart_sync_ordenes():
 def walmart_ver_ordenes():
     if not session.get("logged"):
         return {"error": "no autorizado"}, 401
+    from walmart import obtener_todas_ordenes_walmart
     resultado = {}
-    for estado in ["Created", "Acknowledged", "Shipped"]:
+    for estado in ["Created", "Acknowledged", "Shipped", "Delivered"]:
         ordenes = obtener_ordenes_walmart(estado)
         resultado[estado] = len(ordenes)
         if ordenes:
             o = ordenes[0]
             resultado[estado + "_ejemplo"] = {
                 "purchaseOrderId": o.get("purchaseOrderId"),
-                "orderLines": str(o.get("orderLines", {}))[:400]
+                "orderLines": str(o.get("orderLines", {}))[:300]
             }
+    # También probar released orders
+    released = obtener_todas_ordenes_walmart()
+    resultado["released"] = len(released)
+    if released:
+        resultado["released_ejemplo"] = str(released[0])[:400]
     return resultado
 
 @app.route("/eliminar_producto", methods=["POST"])
