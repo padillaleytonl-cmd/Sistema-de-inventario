@@ -1033,6 +1033,36 @@ def devoluciones_buscar_codigo():
         return {"error": "no encontrada"}, 404
     return {"devolucion": dev}
 
+@app.route("/devoluciones/lookup_oc")
+def devoluciones_lookup_oc():
+    """Busca productos asociados a una OC en movimientos"""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    oc = request.args.get("oc", "").strip()
+    if not oc:
+        return {"error": "OC requerida"}, 400
+    conn = __import__('psycopg2').connect(__import__('os').environ.get("DATABASE_URL"))
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT DISTINCT m.sku, m.nombre, m.canal,
+               ABS(m.cantidad) as cantidad,
+               TO_CHAR(
+                 CASE WHEN COALESCE(m.canal,'') IN ('Walmart','WooCommerce')
+                      THEN m.fecha - INTERVAL '4 hours'
+                      ELSE m.fecha
+                 END, 'DD/MM/YYYY HH24:MI') as fecha
+        FROM movimientos m
+        WHERE m.orden_id = %s AND m.tipo = 'salida'
+        ORDER BY m.sku
+    """, (oc,))
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    if not rows:
+        return {"error": "OC no encontrada en movimientos"}, 404
+    items = [{"sku": r[0], "nombre": r[1], "canal": r[2],
+              "cantidad": r[3], "fecha": r[4]} for r in rows]
+    return {"items": items, "oc": oc}
+
 @app.route("/devoluciones/<int:dev_id>/actualizar", methods=["POST"])
 def devoluciones_actualizar(dev_id):
     if not session.get("logged"):
