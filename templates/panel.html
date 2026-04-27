@@ -318,19 +318,26 @@ body {
 }
 .chan-dropdown {
   display: none;
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  background: var(--color-background-primary);
-  border: 0.5px solid var(--color-border-secondary);
+  position: fixed;
+  top: 60px;
+  right: 120px;
+  background: var(--white, #ffffff);
+  border: 1px solid var(--color-border-secondary);
   border-radius: var(--border-radius-lg);
   padding: 8px;
-  min-width: 280px;
-  z-index: 9999;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.1);
-  backdrop-filter: none;
+  min-width: 290px;
+  z-index: 99999;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.22), 0 2px 8px rgba(0,0,0,0.12);
 }
 .chan-dropdown.open { display: block; }
+.chan-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 99998;
+  background: transparent;
+}
+.chan-overlay.open { display: block; }
 .chan-row {
   display: flex;
   align-items: center;
@@ -1139,6 +1146,7 @@ tbody td {
           <div class="chan-dot" style="background:#059669;"></div>
           WM
         </button>
+        <div class="chan-overlay" id="chanOverlay" onclick="cerrarChanDropdown()"></div>
         <div class="chan-dropdown" id="chanDropdown">
           <div class="chan-row" id="rowWC">
             <div class="chan-icon-sm" style="background:#e6f0ff;color:#2563eb;">WC</div>
@@ -1147,8 +1155,8 @@ tbody td {
               <div class="chan-status" id="chanWCStatus">● Activo</div>
             </div>
             <div class="chan-btns">
-              <button class="chan-action-btn" onclick="sincronizarWoo();toggleChanDropdown()">↺ Sync</button>
-              <button class="chan-action-btn" id="chanWCBtn" onclick="sincronizarWoo();toggleChanDropdown()">↓ OC</button>
+              <button class="chan-action-btn" onclick="sincronizarWoo();cerrarChanDropdown()">↺ Sync</button>
+              <button class="chan-action-btn" id="chanWCBtn" onclick="sincronizarWoo();cerrarChanDropdown()">↓ OC</button>
             </div>
           </div>
           <div class="chan-row" id="rowWM">
@@ -1158,8 +1166,8 @@ tbody td {
               <div class="chan-status" id="chanWMStatus">Verificando...</div>
             </div>
             <div class="chan-btns">
-              <button class="chan-action-btn" onclick="walmartSyncStock();toggleChanDropdown()">↑ Stock</button>
-              <button class="chan-action-btn" id="chanWMBtn" onclick="walmartSyncOrdenes();toggleChanDropdown()">↓ OC</button>
+              <button class="chan-action-btn" onclick="walmartSyncStock();cerrarChanDropdown()">↑ Stock</button>
+              <button class="chan-action-btn" id="chanWMBtn" onclick="walmartSyncOrdenes();cerrarChanDropdown()">↓ OC</button>
             </div>
           </div>
           <div style="border-top:0.5px solid var(--border);margin:6px 0;"></div>
@@ -2906,19 +2914,19 @@ function eliminarProducto(sku, nombre){
 }
 
 // ── SELECTOR DE CANALES NAVBAR
-function toggleChanDropdown(){
+function cerrarChanDropdown(){
   const dd = document.getElementById('chanDropdown');
+  const ov = document.getElementById('chanOverlay');
   if(dd) dd.classList.toggle('open');
+  if(ov) ov.classList.toggle('open');
 }
 
-// Cerrar dropdown al hacer click fuera
-document.addEventListener('click', function(e){
-  const sel = document.getElementById('chanSelector');
-  if(sel && !sel.contains(e.target)){
-    const dd = document.getElementById('chanDropdown');
-    if(dd) dd.classList.remove('open');
-  }
-});
+function cerrarChanDropdown(){
+  const dd = document.getElementById('chanDropdown');
+  const ov = document.getElementById('chanOverlay');
+  if(dd) dd.classList.remove('open');
+  if(ov) ov.classList.remove('open');
+}
 
 function sincronizarWoo(){
   toast('Sincronizando órdenes WooCommerce...');
