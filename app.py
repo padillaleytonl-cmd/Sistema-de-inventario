@@ -476,6 +476,20 @@ def walmart_ver_ordenes():
 
     return resultado
 
+@app.route("/hora_servidor")
+def hora_servidor():
+    from datetime import datetime
+    import pytz
+    utc_now = datetime.utcnow()
+    chile_tz = pytz.timezone('America/Santiago')
+    chile_now = datetime.now(chile_tz)
+    return {
+        "utc": utc_now.strftime("%d/%m/%Y %H:%M:%S"),
+        "chile_pytz": chile_now.strftime("%d/%m/%Y %H:%M:%S"),
+        "chile_offset": str(chile_now.utcoffset()),
+        "postgres_now": None
+    }
+
 @app.route("/fix_db")
 def fix_db():
     """Crea columnas faltantes en la BD"""
