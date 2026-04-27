@@ -2,6 +2,8 @@ from flask import Flask, request, render_template, session, redirect
 import requests
 import os
 from config import *
+from apscheduler.schedulers.background import BackgroundScheduler
+import atexit
 from walmart import (actualizar_stock_walmart, actualizar_precio_walmart,
                      obtener_ordenes_walmart, confirmar_orden_walmart,
                      verificar_conexion_walmart)
@@ -16,6 +18,70 @@ app = Flask(__name__)
 app.secret_key = "clave_super_segura"
 
 init_db()
+
+# ── SYNC AUTOMÁTICO WALMART CADA 5 MINUTOS ──
+def _sync_walmart_automatico():
+    """Tarea de background: sincroniza órdenes Walmart sin requerir sesión"""
+    try:
+        print("[Scheduler] Iniciando sync automático Walmart...")
+        productos = cargar_productos()
+        nuevas = 0
+        errores = []
+
+        for estado in ["Created", "Acknowledged"]:
+            ordenes = obtener_ordenes_walmart(estado)
+            for o in ordenes:
+                order_id = o.get("purchaseOrderId")
+                if not order_id:
+                    continue
+                customer_order_id = str(o.get("customerOrderId", order_id))
+                if orden_ya_procesada_texto(customer_order_id):
+                    continue
+
+                lineas = o.get("orderLines", {}).get("orderLine", [])
+                if isinstance(lineas, dict):
+                    lineas = [lineas]
+
+                for linea in lineas:
+                    try:
+                        sku = linea.get("item", {}).get("sku")
+                        if not sku:
+                            continue
+                        cantidad = 1
+                        qty = linea.get("orderLineQuantity", {})
+                        if qty and qty.get("amount"):
+                            cantidad = int(float(qty.get("amount", 1)))
+                        if cantidad == 1:
+                            status_qty = linea.get("statusQuantity", {})
+                            if status_qty and status_qty.get("amount"):
+                                cantidad = int(float(status_qty.get("amount", 1)))
+
+                        for p in productos:
+                            if p["sku"] == sku:
+                                p["stock"] = max(0, p["stock"] - cantidad)
+                                guardar_producto(p)
+                                registrar_movimiento("salida", p["sku"], p["nombre"],
+                                                    cantidad, "Venta Walmart",
+                                                    usuario="Sistema", canal="Walmart",
+                                                    orden_id=customer_order_id)
+                                actualizar_stock_woo(p["sku"], p["stock"])
+                                actualizar_stock_walmart(p["sku"], p["stock"])
+                                print(f"[Scheduler] SKU:{sku} Cant:{cantidad} Stock:{p['stock']}")
+                    except Exception as e:
+                        errores.append(str(e))
+                        print(f"[Scheduler] Error linea: {e}")
+
+                marcar_orden_procesada_texto(customer_order_id)
+                nuevas += 1
+
+        print(f"[Scheduler] Sync completado — nuevas:{nuevas} errores:{len(errores)}")
+    except Exception as e:
+        print(f"[Scheduler] Error general: {e}")
+
+scheduler = BackgroundScheduler(daemon=True)
+scheduler.add_job(_sync_walmart_automatico, "interval", minutes=5, id="walmart_sync")
+scheduler.start()
+atexit.register(lambda: scheduler.shutdown(wait=False))
 
 @app.route("/agregar", methods=["POST"])
 def agregar():
@@ -813,9 +879,10 @@ def walmart_sync_debug():
                 log.append("Sin order_id, saltando")
                 continue
 
-            order_hash = abs(hash(str(order_id))) % (10**15)
-            ya = orden_ya_procesada(order_hash)
-            log.append(f"Orden {order_id} hash:{order_hash} ya_procesada:{ya}")
+            # Bug ③ fix: usar customerOrderId consistente con el resto del sistema
+            customer_order_id = str(o.get("customerOrderId", order_id))
+            ya = orden_ya_procesada_texto(customer_order_id)
+            log.append(f"Orden {order_id} customerOrderId:{customer_order_id} ya_procesada:{ya}")
 
             if ya:
                 continue
@@ -832,6 +899,10 @@ def walmart_sync_debug():
                 qty = linea.get("orderLineQuantity", {})
                 if qty and qty.get("amount"):
                     cantidad = int(float(qty["amount"]))
+                if cantidad == 1:
+                    status_qty = linea.get("statusQuantity", {})
+                    if status_qty and status_qty.get("amount"):
+                        cantidad = int(float(status_qty.get("amount", 1)))
 
                 log.append(f"  SKU:{sku} Cantidad:{cantidad}")
 
@@ -844,13 +915,14 @@ def walmart_sync_debug():
                         guardar_producto(p)
                         registrar_movimiento("salida", p["sku"], p["nombre"],
                                             cantidad, "Venta Walmart",
-                                            usuario="Sistema", canal="Walmart")
+                                            usuario="Sistema", canal="Walmart",
+                                            orden_id=customer_order_id)
                         actualizar_stock_woo(p["sku"], p["stock"])
                         actualizar_stock_walmart(p["sku"], p["stock"])
-                        log.append(f"  ✅ {p['nombre']} stock:{stock_antes}→{p['stock']}")
+                        log.append(f"  OK {p['nombre']} stock:{stock_antes}->{p['stock']}")
 
                 if not encontrado:
-                    log.append(f"  ❌ SKU {sku} no encontrado en Lusync")
+                    log.append(f"  SKU {sku} no encontrado en Lusync")
 
             marcar_orden_procesada_texto(customer_order_id)
             nuevas += 1

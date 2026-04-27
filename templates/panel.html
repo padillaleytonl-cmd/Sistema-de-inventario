@@ -2011,6 +2011,7 @@ function buscar(){
 
 // ── DASHBOARD MÉTRICAS
 function actualizarDashboard(productos, movimientos){
+  movimientos = movimientos || window._movimientos || [];
   // Métricas
   const totalEl = document.getElementById('metricTotal');
   if(totalEl) totalEl.textContent = productos.length;
