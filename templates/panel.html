@@ -2617,40 +2617,82 @@ function abrirModal(tipo){
 
   else if(tipo === 'canales'){
     titulo.textContent = 'Canales activos';
-    sub.textContent = 'Estado de conexión de cada canal';
-    body.innerHTML = `
-      <div class="canal-card">
-        <div class="canal-icon" style="background:#f0f4ff;color:#1a1f5e;">WC</div>
-        <div class="canal-info">
-          <div class="canal-nombre">WooCommerce — babymine.cl</div>
-          <div class="canal-estado">Conectado · Sincronización automática activa</div>
-        </div>
-        <span class="canal-badge" style="background:var(--success-bg);color:var(--success);">● Activo</span>
-      </div>
-      <div class="canal-card">
-        <div class="canal-icon" style="background:#fff7e6;color:#f59e0b;">ML</div>
-        <div class="canal-info">
-          <div class="canal-nombre">MercadoLibre</div>
-          <div class="canal-estado">No conectado · Próximamente disponible</div>
-        </div>
-        <span class="canal-badge" style="background:var(--warn-bg);color:var(--warn);">⏳ Próximo</span>
-      </div>
-      <div class="canal-card">
-        <div class="canal-icon" style="background:#fff0f0;color:#e94560;">FA</div>
-        <div class="canal-info">
-          <div class="canal-nombre">Falabella</div>
-          <div class="canal-estado">No conectado · Próximamente disponible</div>
-        </div>
-        <span class="canal-badge" style="background:var(--warn-bg);color:var(--warn);">⏳ Próximo</span>
-      </div>
-      <div class="canal-card">
-        <div class="canal-icon" style="background:#f0fff4;color:#059669;">WM</div>
-        <div class="canal-info">
-          <div class="canal-nombre">Walmart</div>
-          <div class="canal-estado">No conectado · Próximamente disponible</div>
-        </div>
-        <span class="canal-badge" style="background:var(--warn-bg);color:var(--warn);">⏳ Próximo</span>
-      </div>`;
+    sub.textContent = 'Verificando estado...';
+    body.innerHTML = '<div style="text-align:center;color:var(--muted);padding:30px;">Verificando conexiones...</div>';
+
+    // Verificar Walmart dinámicamente
+    fetch('/walmart/test').then(r=>r.json()).then(wm => {
+      const wmOk = wm.conectado;
+      sub.textContent = (wmOk ? 2 : 1) + ' canales activos';
+
+      const canales = [
+        {
+          abrev: 'WC', nombre: 'WooCommerce — babymine.cl',
+          desc: 'Stock + Precios + Órdenes · Sync automático cada 15s',
+          bg: '#e6f0ff', color: '#2563eb',
+          activo: true, badge: '● Activo',
+          badgeBg: 'var(--success-bg)', badgeColor: 'var(--success)',
+          ventas: (window._movimientos||[]).filter(m=>m.canal==='WooCommerce'&&esVentaReal(m)).length
+        },
+        {
+          abrev: 'WM', nombre: 'Walmart Chile',
+          desc: wmOk ? 'Stock + Precios + Órdenes · Credenciales activas' : 'Error de conexión · Verificar credenciales en Render',
+          bg: '#d1fae5', color: '#059669',
+          activo: wmOk, badge: wmOk ? '● Activo' : '✕ Error',
+          badgeBg: wmOk ? 'var(--success-bg)' : 'var(--danger-bg)',
+          badgeColor: wmOk ? 'var(--success)' : 'var(--danger)',
+          ventas: (window._movimientos||[]).filter(m=>m.canal==='Walmart'&&esVentaReal(m)).length
+        },
+        {
+          abrev: 'ML', nombre: 'MercadoLibre',
+          desc: 'En desarrollo · OAuth 2.0 pendiente',
+          bg: '#fff7e6', color: '#f59e0b',
+          activo: false, badge: '⏳ Próximo',
+          badgeBg: 'var(--warn-bg)', badgeColor: 'var(--warn)', ventas: 0
+        },
+        {
+          abrev: 'FA', nombre: 'Falabella Seller',
+          desc: 'En desarrollo · Próximamente',
+          bg: '#fff0f0', color: '#e94560',
+          activo: false, badge: '⏳ Próximo',
+          badgeBg: 'var(--warn-bg)', badgeColor: 'var(--warn)', ventas: 0
+        },
+        {
+          abrev: 'RP', nombre: 'Ripley',
+          desc: 'En desarrollo · Próximamente',
+          bg: '#f5f0ff', color: '#7c3aed',
+          activo: false, badge: '⏳ Próximo',
+          badgeBg: 'var(--warn-bg)', badgeColor: 'var(--warn)', ventas: 0
+        },
+        {
+          abrev: 'PA', nombre: 'París',
+          desc: 'En desarrollo · Próximamente',
+          bg: '#fdf4ff', color: '#9333ea',
+          activo: false, badge: '⏳ Próximo',
+          badgeBg: 'var(--warn-bg)', badgeColor: 'var(--warn)', ventas: 0
+        },
+        {
+          abrev: 'JS', nombre: 'Jumpseller',
+          desc: 'En desarrollo · Próximamente',
+          bg: '#e8f4fd', color: '#0284c7',
+          activo: false, badge: '⏳ Próximo',
+          badgeBg: 'var(--warn-bg)', badgeColor: 'var(--warn)', ventas: 0
+        }
+      ];
+
+      body.innerHTML = canales.map(c => `
+        <div class="canal-card" style="border-left:3px solid ${c.activo ? c.color : 'var(--border)'};">
+          <div class="canal-icon" style="background:${c.bg};color:${c.color};">${c.abrev}</div>
+          <div class="canal-info">
+            <div class="canal-nombre">${c.nombre}</div>
+            <div class="canal-estado">${c.desc}</div>
+            ${c.activo && c.ventas > 0 ? `<div style="font-size:11px;color:${c.color};margin-top:3px;font-weight:500;">${c.ventas} ventas registradas hoy</div>` : ''}
+          </div>
+          <span class="canal-badge" style="background:${c.badgeBg};color:${c.badgeColor};">${c.badge}</span>
+        </div>`).join('');
+    }).catch(() => {
+      body.innerHTML = '<div style="text-align:center;color:var(--muted);padding:30px;">Error al verificar conexiones</div>';
+    });
   }
 }
 
