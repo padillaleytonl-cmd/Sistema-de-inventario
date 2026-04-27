@@ -155,8 +155,16 @@ def cargar_movimientos(limite=20):
         conn.rollback()
     cur.execute("""
         SELECT tipo, sku, nombre, cantidad, motivo,
-               TO_CHAR(fecha AT TIME ZONE 'America/Santiago', 'DD/MM/YYYY') as fecha_fmt,
-               TO_CHAR(fecha AT TIME ZONE 'America/Santiago', 'HH24:MI') as hora,
+               TO_CHAR(
+                   CASE WHEN COALESCE(canal,'') = 'Walmart'
+                        THEN fecha - INTERVAL '3 hours'
+                        ELSE fecha
+                   END, 'DD/MM/YYYY') as fecha_fmt,
+               TO_CHAR(
+                   CASE WHEN COALESCE(canal,'') = 'Walmart'
+                        THEN fecha - INTERVAL '3 hours'
+                        ELSE fecha
+                   END, 'HH24:MI') as hora,
                COALESCE(usuario, 'Sistema') as usuario,
                COALESCE(canal, 'Sistema') as canal
         FROM movimientos
@@ -185,14 +193,23 @@ def cargar_movimientos(limite=20):
 def cargar_movimientos_hoy():
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute(
-        "SELECT tipo, sku, nombre, cantidad, motivo, "
-        "TO_CHAR(fecha AT TIME ZONE 'America/Santiago', 'HH24:MI') as hora, "
-        "COALESCE(canal, 'Sistema') as canal "
-        "FROM movimientos "
-        "WHERE DATE(fecha AT TIME ZONE 'America/Santiago') = CURRENT_DATE AND tipo = 'salida' "
-        "ORDER BY fecha DESC"
-    )
+    cur.execute("""
+        SELECT tipo, sku, nombre, cantidad, motivo,
+               TO_CHAR(
+                   CASE WHEN COALESCE(canal,'') = 'Walmart'
+                        THEN fecha - INTERVAL '3 hours'
+                        ELSE fecha
+                   END, 'HH24:MI') as hora,
+               COALESCE(canal, 'Sistema') as canal
+        FROM movimientos
+        WHERE DATE(
+                   CASE WHEN COALESCE(canal,'') = 'Walmart'
+                        THEN fecha - INTERVAL '3 hours'
+                        ELSE fecha
+                   END) = CURRENT_DATE
+        AND tipo = 'salida'
+        ORDER BY fecha DESC
+    """)
     rows = cur.fetchall()
     cur.close()
     conn.close()
