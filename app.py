@@ -15,13 +15,15 @@ from inventario import (cargar_productos, guardar_productos, guardar_producto,
                         orden_ya_procesada_texto, marcar_orden_procesada_texto,
                         init_devoluciones, generar_codigo_dev, crear_devolucion,
                         asignar_codigo_dev, actualizar_devolucion, listar_devoluciones,
-                        get_devolucion)
+                        get_devolucion,
+                        init_audit, registrar_audit, listar_audit)
 
 app = Flask(__name__)
 app.secret_key = "clave_super_segura"
 
 init_db()
 init_devoluciones()
+init_audit()
 
 # ── SYNC AUTOMÁTICO WALMART CADA 5 MINUTOS ──
 def _sync_walmart_automatico():
@@ -1096,12 +1098,21 @@ def devoluciones_eliminar(dev_id):
     clave = data.get("clave", "")
     clave_admin = __import__('os').environ.get("PASSWORD", "")
     if clave != clave_admin:
+        registrar_audit(session.get("usuario","?"), request.remote_addr,
+                        "intento_eliminar_devolucion", entidad="devoluciones", entidad_id=str(dev_id),
+                        resultado="fallido", detalle="Clave admin incorrecta")
         return {"error": "Clave incorrecta"}, 403
     conn = __import__('psycopg2').connect(__import__('os').environ.get("DATABASE_URL"))
     cur = conn.cursor()
+    cur.execute("SELECT codigo, oc_origen, nombre FROM devoluciones WHERE id = %s", (dev_id,))
+    row = cur.fetchone()
+    detalle_dev = str(row) if row else str(dev_id)
     cur.execute("DELETE FROM devoluciones WHERE id = %s", (dev_id,))
     conn.commit()
     cur.close(); conn.close()
+    registrar_audit(session.get("usuario","admin"), request.remote_addr,
+                    "eliminar_devolucion", entidad="devoluciones", entidad_id=str(dev_id),
+                    detalle=f"Devolución eliminada: {detalle_dev}", dato_antes=detalle_dev)
     return {"ok": True}
 
 @app.route("/devoluciones/<int:dev_id>/generar_codigo", methods=["POST"])
@@ -1117,6 +1128,19 @@ def devoluciones_generar_codigo(dev_id):
     asignar_codigo_dev(dev_id, codigo)
     return {"ok": True, "codigo": codigo}
 
+# ── AUDIT LOG ──
+
+@app.route("/audit")
+def audit_view():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    limite = int(request.args.get("limite", 200))
+    filtro_accion   = request.args.get("accion") or None
+    filtro_usuario  = request.args.get("usuario") or None
+    filtro_resultado = request.args.get("resultado") or None
+    logs = listar_audit(limite, filtro_accion, filtro_usuario, filtro_resultado)
+    return {"logs": logs, "total": len(logs)}
+
 # ── LOGIN / PANEL ──
 
 @app.route("/")
@@ -1130,11 +1154,15 @@ def login_check():
     data = request.json
     if data.get("user") == USUARIO and data.get("password") == PASSWORD:
         session["logged"] = True
+        session["usuario"] = data.get("user")
+        registrar_audit(data.get("user"), request.remote_addr, "login", detalle="Inicio de sesión exitoso")
         return {"ok": True}
+    registrar_audit(data.get("user","?"), request.remote_addr, "login", resultado="fallido", detalle="Clave incorrecta")
     return {"ok": False}
 
 @app.route("/logout")
 def logout():
+    registrar_audit(session.get("usuario","?"), request.remote_addr, "logout", detalle="Cierre de sesión")
     session.clear()
     return redirect("/")
 

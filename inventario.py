@@ -231,6 +231,85 @@ def eliminar_producto(sku):
     conn.close()
 
 
+# ── AUDIT LOG ──
+
+def init_audit():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id SERIAL PRIMARY KEY,
+            fecha TIMESTAMP DEFAULT NOW(),
+            usuario TEXT,
+            ip TEXT,
+            accion TEXT,
+            entidad TEXT,
+            entidad_id TEXT,
+            detalle TEXT,
+            resultado TEXT DEFAULT 'ok',
+            dato_antes TEXT,
+            dato_despues TEXT
+        )
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def registrar_audit(usuario, ip, accion, entidad='', entidad_id='', detalle='', resultado='ok', dato_antes='', dato_despues=''):
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO audit_log (usuario, ip, accion, entidad, entidad_id, detalle, resultado, dato_antes, dato_despues)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (usuario, ip, accion, entidad, str(entidad_id), detalle, resultado, str(dato_antes)[:500], str(dato_despues)[:500]))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"[Audit] Error: {e}")
+
+def listar_audit(limite=200, filtro_accion=None, filtro_usuario=None, filtro_resultado=None):
+    conn = get_conn()
+    cur = conn.cursor()
+    where = []
+    vals = []
+    if filtro_accion:
+        where.append("accion = %s"); vals.append(filtro_accion)
+    if filtro_usuario:
+        where.append("usuario ILIKE %s"); vals.append(f'%{filtro_usuario}%')
+    if filtro_resultado:
+        where.append("resultado = %s"); vals.append(filtro_resultado)
+    w = ('WHERE ' + ' AND '.join(where)) if where else ''
+    vals.append(limite)
+    cur.execute(f"""
+        SELECT id,
+               TO_CHAR(fecha AT TIME ZONE 'America/Santiago', 'DD/MM/YYYY HH24:MI:SS') as fecha,
+               usuario, ip, accion, entidad, entidad_id, detalle, resultado, dato_antes, dato_despues
+        FROM audit_log {w}
+        ORDER BY fecha DESC LIMIT %s
+    """, vals)
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    cols = ['id','fecha','usuario','ip','accion','entidad','entidad_id','detalle','resultado','dato_antes','dato_despues']
+    return [dict(zip(cols, r)) for r in rows]
+
+def limpiar_audit_antiguo(dias=90):
+    """Nunca borra — solo archiva moviendo a audit_log_archivo"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS audit_log_archivo (LIKE audit_log INCLUDING ALL)
+    """)
+    cur.execute(f"""
+        WITH moved AS (
+            DELETE FROM audit_log WHERE fecha < NOW() - INTERVAL '{dias} days' RETURNING *
+        )
+        INSERT INTO audit_log_archivo SELECT * FROM moved
+    """)
+    conn.commit()
+    cur.close(); conn.close()
+
 # ── DEVOLUCIONES ──
 
 def init_devoluciones():

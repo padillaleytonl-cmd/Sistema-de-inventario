@@ -1146,6 +1146,7 @@ tbody td {
       <button class="nav-btn" onclick="showSection('inventario', this)">Inventario</button>
       <button class="nav-btn" onclick="showSection('movimientos', this)">Movimientos</button>
       <button class="nav-btn" onclick="showSection('devoluciones', this)">Devoluciones</button>
+      <button class="nav-btn" id="auditNavBtn" style="display:none;" onclick="showSection('audit', this)">⚙ Audit Log</button>
     </div>
     <div class="navbar-right">
       <!-- Selector de canales -->
@@ -1705,6 +1706,55 @@ tbody td {
     </div>
   </div>
 
+  <!-- ── SECCIÓN AUDIT LOG ── -->
+  <div id="sec-audit" class="main" style="display:none;">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Audit Log</div>
+        <div class="page-date">Registro completo de acciones del sistema — solo visible para administrador</div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button onclick="exportarAudit()" style="background:transparent;border:0.5px solid var(--border);border-radius:8px;padding:7px 14px;font-size:12px;cursor:pointer;color:var(--text);">↓ Exportar CSV</button>
+        <button onclick="cargarAudit()" style="background:var(--text);color:var(--bg);border:none;border-radius:8px;padding:7px 14px;font-size:12px;cursor:pointer;">↻ Actualizar</button>
+      </div>
+    </div>
+
+    <!-- Filtros -->
+    <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center;">
+      <select id="auditFiltroAccion" onchange="cargarAudit()" style="padding:6px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
+        <option value="">Todas las acciones</option>
+        <option value="login">Login</option>
+        <option value="logout">Logout</option>
+        <option value="salida_manual">Salida manual</option>
+        <option value="eliminar_devolucion">Eliminar devolución</option>
+        <option value="intento_eliminar_devolucion">Intento eliminación</option>
+      </select>
+      <select id="auditFiltroResultado" onchange="cargarAudit()" style="padding:6px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
+        <option value="">Todos los resultados</option>
+        <option value="ok">Exitoso</option>
+        <option value="fallido">Fallido</option>
+      </select>
+      <input id="auditFiltroUsuario" type="text" placeholder="Filtrar por usuario..." oninput="cargarAudit()" style="padding:6px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);width:180px;">
+      <span id="auditTotal" style="font-size:11px;color:var(--muted);margin-left:auto;"></span>
+    </div>
+
+    <!-- Tabla -->
+    <div class="card" style="padding:0;overflow:hidden;display:flex;flex-direction:column;height:calc(100vh - 200px);">
+      <div style="display:grid;grid-template-columns:130px 100px 80px 140px 80px minmax(0,1fr) 70px;align-items:center;gap:8px;padding:7px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);flex-shrink:0;">
+        <span style="font-size:10px;font-weight:500;color:var(--muted);">FECHA</span>
+        <span style="font-size:10px;font-weight:500;color:var(--muted);">USUARIO</span>
+        <span style="font-size:10px;font-weight:500;color:var(--muted);">IP</span>
+        <span style="font-size:10px;font-weight:500;color:var(--muted);">ACCIÓN</span>
+        <span style="font-size:10px;font-weight:500;color:var(--muted);">ENTIDAD</span>
+        <span style="font-size:10px;font-weight:500;color:var(--muted);">DETALLE</span>
+        <span style="font-size:10px;font-weight:500;color:var(--muted);">RESULTADO</span>
+      </div>
+      <div id="auditList" style="overflow-y:auto;flex:1;scrollbar-width:thin;scrollbar-color:var(--border) transparent;">
+        <div style="color:var(--hint);font-size:12px;text-align:center;padding:40px;">Cargando...</div>
+      </div>
+    </div>
+  </div>
+
   <!-- ── SECCIÓN CONFIGURACIÓN ── -->
   <div id="sec-configuracion" class="main" style="display:none;">
     <div class="page-header">
@@ -2123,7 +2173,7 @@ function doLogout(){
 
 // ── NAVEGACIÓN
 function showSection(sec, btn){
-  ['dashboard','inventario','movimientos','devoluciones','configuracion'].forEach(s => {
+  ['dashboard','inventario','movimientos','devoluciones','audit','configuracion'].forEach(s => {
     const el = document.getElementById('sec-' + s);
     if(el) el.style.display = s === sec ? '' : 'none';
   });
@@ -2133,6 +2183,7 @@ function showSection(sec, btn){
   if(btn) btn.classList.add('active');
   if(sec === 'movimientos') cargarMovimientosFull();
   if(sec === 'devoluciones') cargarDevoluciones('todas');
+  if(sec === 'audit') cargarAudit();
   if(sec === 'configuracion'){
     if(gear) gear.classList.add('active');
     cargarConfiguracion();
@@ -3389,6 +3440,101 @@ document.getElementById('modalPrecios').addEventListener('click', function(e){
 // ── CARGAR DATOS AL INICIAR
 cargar();
 setInterval(() => fetch('/sync_ordenes').then(r=>r.json()).then(()=>cargar()), 15000);
+
+// ── AUDIT LOG
+let _auditData = [];
+
+const AUDIT_ACCION_LABEL = {
+  login:                       {label:'Login',                 bg:'#EAF3DE', color:'#27500A'},
+  logout:                      {label:'Logout',                bg:'#F1EFE8', color:'#444441'},
+  salida_manual:               {label:'Salida manual',         bg:'#FAEEDA', color:'#633806'},
+  eliminar_devolucion:         {label:'Eliminar DEV',          bg:'#FCEBEB', color:'#791F1F'},
+  intento_eliminar_devolucion: {label:'Intento eliminación',   bg:'#FCEBEB', color:'#A32D2D'},
+  crear_devolucion:            {label:'Crear DEV',             bg:'#EEEDFE', color:'#3C3489'},
+  actualizar_devolucion:       {label:'Actualizar DEV',        bg:'#EEEDFE', color:'#3C3489'},
+  generar_codigo_dev:          {label:'Generar código DEV',    bg:'#EEEDFE', color:'#3C3489'},
+  importar_woo:                {label:'Importar Woo',          bg:'#E6F1FB', color:'#0C447C'},
+  sincronizar_precios:         {label:'Sincronizar precios',   bg:'#E6F1FB', color:'#0C447C'},
+  sync_walmart:                {label:'Sync Walmart',          bg:'#E1F5EE', color:'#085041'},
+};
+
+function cargarAudit(){
+  const accion    = document.getElementById('auditFiltroAccion')?.value || '';
+  const resultado = document.getElementById('auditFiltroResultado')?.value || '';
+  const usuario   = document.getElementById('auditFiltroUsuario')?.value || '';
+  let url = '/audit?limite=300';
+  if(accion)    url += '&accion='    + encodeURIComponent(accion);
+  if(resultado) url += '&resultado=' + encodeURIComponent(resultado);
+  if(usuario)   url += '&usuario='   + encodeURIComponent(usuario);
+
+  fetch(url).then(r=>r.json()).then(d=>{
+    _auditData = d.logs || [];
+    document.getElementById('auditTotal').textContent = _auditData.length + ' registros';
+    renderAudit(_auditData);
+  });
+}
+
+function renderAudit(lista){
+  const el = document.getElementById('auditList');
+  if(!lista.length){
+    el.innerHTML = '<div style="color:var(--hint);font-size:12px;text-align:center;padding:40px;">Sin registros</div>';
+    return;
+  }
+  el.innerHTML = lista.map((log, i) => {
+    const a = AUDIT_ACCION_LABEL[log.accion] || {label: log.accion, bg:'#F1EFE8', color:'#444441'};
+    const esOk = log.resultado === 'ok';
+    const resBg    = esOk ? '#EAF3DE' : '#FCEBEB';
+    const resColor = esOk ? '#27500A' : '#A32D2D';
+    const resLabel = esOk ? '✓ ok' : '✕ fallido';
+    const divider  = i < lista.length-1 ? '<div style="height:0.5px;background:var(--border);"></div>' : '';
+
+    // Expandir detalle al hacer click
+    const hasExtra = log.dato_antes || log.dato_despues;
+
+    return `<div style="display:grid;grid-template-columns:130px 100px 80px 140px 80px minmax(0,1fr) 70px;align-items:center;gap:8px;padding:7px 14px;${!esOk?'background:#FFF5F5;':''}" ${hasExtra ? `onclick="toggleAuditDetalle(this)" style="cursor:pointer;"` : ''}>
+      <div style="font-size:11px;font-family:monospace;color:var(--muted);white-space:nowrap;">${log.fecha||'—'}</div>
+      <div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${log.usuario||'—'}</div>
+      <div style="font-size:11px;font-family:monospace;color:var(--hint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${log.ip||'—'}</div>
+      <div><span style="background:${a.bg};color:${a.color};font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;white-space:nowrap;">${a.label}</span></div>
+      <div style="font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${log.entidad||'—'}${log.entidad_id?' #'+log.entidad_id:''}</div>
+      <div>
+        <div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${log.detalle||'—'}</div>
+        <div class="audit-extra" style="display:none;margin-top:6px;font-size:11px;color:var(--muted);font-family:monospace;white-space:pre-wrap;background:var(--bg2);padding:6px 8px;border-radius:6px;">
+          ${log.dato_antes  ? '<b>Antes:</b>  '+log.dato_antes+'
+':''}${log.dato_despues ? '<b>Después:</b> '+log.dato_despues:''}
+        </div>
+      </div>
+      <div><span style="background:${resBg};color:${resColor};font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;">${resLabel}</span></div>
+    </div>${divider}`;
+  }).join('');
+}
+
+function toggleAuditDetalle(row){
+  const extra = row.querySelector('.audit-extra');
+  if(extra) extra.style.display = extra.style.display === 'none' ? '' : 'none';
+}
+
+function exportarAudit(){
+  if(!_auditData.length){ toast('Sin datos para exportar'); return; }
+  const cols = ['fecha','usuario','ip','accion','entidad','entidad_id','detalle','resultado','dato_antes','dato_despues'];
+  const csv  = [cols.join(','),
+    ..._auditData.map(r => cols.map(c => '"'+(r[c]||'').toString().replace(/"/g,'""')+'"').join(','))
+  ].join('
+');
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+  a.download = 'audit_lusync_' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click();
+}
+
+// Mostrar pestaña Audit solo al admin
+function verificarAdmin(){
+  // Por ahora siempre hay un solo usuario que es admin
+  // Cuando se agreguen roles, filtrar aquí
+  const btn = document.getElementById('auditNavBtn');
+  if(btn) btn.style.display = '';
+}
+document.addEventListener('DOMContentLoaded', verificarAdmin);
 
 // ── ELIMINAR DEVOLUCIÓN (solo admin)
 function eliminarDevolucion(){
