@@ -475,6 +475,26 @@ def walmart_ver_ordenes():
 
     return resultado
 
+@app.route("/walmart/fix_canales")
+def walmart_fix_canales():
+    """Corrige el canal de movimientos de Walmart que quedaron como Sistema"""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from inventario import get_conn
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE movimientos
+        SET canal = 'Walmart'
+        WHERE motivo = 'Venta Walmart'
+        AND (canal = 'Sistema' OR canal IS NULL)
+    """)
+    actualizados = cur.rowcount
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"ok": True, "movimientos_corregidos": actualizados}
+
 @app.route("/walmart/sync_debug")
 def walmart_sync_debug():
     """Ejecuta el sync completo y retorna resultado detallado"""
