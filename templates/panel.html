@@ -1835,7 +1835,7 @@ function actualizarDashboard(productos, movimientos){
   const yyyy = hoyDate.getFullYear();
   const fechaHoyStr = dd+'/'+mm+'/'+yyyy;
 
-  const ventasHoy = movimientos.filter(m => m.tipo === 'salida' && m.fecha === fechaHoyStr && MOTIVOS_VENTA.some(v => m.motivo && m.motivo.includes(v.split(' ')[1] || v)));
+  const ventasHoy = movimientos.filter(m => esVentaReal(m) && m.fecha === fechaHoyStr);
   const ingresoHoy = ventasHoy.reduce((acc, m) => {
     const p = productosGlobal.find(p => p.sku === m.sku);
     const precio = p ? (p.precio_oferta > 0 ? p.precio_oferta : p.precio_normal) : 0;
@@ -1913,11 +1913,16 @@ function actualizarDashboard(productos, movimientos){
 
 let plazoActual = 'semana';
 
-const MOTIVOS_VENTA = ['Venta Web', 'Venta Walmart', 'Venta MercadoLibre', 'Venta Falabella', 'Venta Ripley', 'Venta Paris', 'Venta tienda'];
+// Canales que cuentan como venta real
+const CANALES_VENTA = ['WooCommerce','Walmart','MercadoLibre','Falabella','Ripley','Paris','Lider'];
+const MOTIVOS_NO_VENTA = ['Ajuste','Merma','Devolución','Ingreso','ajuste','merma'];
 
 function esVentaReal(m){
-  // Solo cuenta salidas por venta, no ajustes de inventario ni mermas
-  return m.tipo === 'salida' && MOTIVOS_VENTA.some(v => m.motivo && m.motivo.includes(v.split(' ')[1] || v));
+  // Es venta si el canal es un marketplace O si el motivo contiene "Venta"
+  if(m.tipo !== 'salida') return false;
+  if(CANALES_VENTA.includes(m.canal)) return true;
+  if(m.motivo && m.motivo.includes('Venta')) return true;
+  return false;
 }
 
 function calcularIngreso(movs, prods){
@@ -2079,7 +2084,7 @@ function renderTorta(movimientos, productos){
 
   // Calcular ingresos por canal
   const canales = {};
-  movimientos.filter(m => m.tipo === 'salida').forEach(m => {
+  movimientos.filter(m => esVentaReal(m)).forEach(m => {
     const canal = m.canal || 'Manual';
     const prod = productos.find(p => p.sku === m.sku);
     const precio = prod ? (prod.precio_oferta > 0 ? prod.precio_oferta : prod.precio_normal) : 0;
@@ -2381,9 +2386,9 @@ function abrirModal(tipo){
       'FA': '#e94560', 'RP': '#7c3aed', 'PA': '#0369a1', 'MN': '#6b7280', 'SIS': '#9ca3af'
     };
 
-    fetch('/movimientos_hoy')
-      .then(r => r.json())
-      .then(d => {
+    // Usar movimientos ya cargados en memoria, filtrados por hoy y tipo venta
+    const ventasHoyModal = movimientos.filter(m => esVentaReal(m) && m.fecha === fechaHoyStr);
+    Promise.resolve({ventas: ventasHoyModal}).then(d => {
         const ventas = d.ventas || [];
         sub.textContent = ventas.length + ' ventas registradas hoy';
 
