@@ -322,12 +322,13 @@ body {
   top: calc(100% + 8px);
   right: 0;
   background: var(--color-background-primary);
-  border: 0.5px solid var(--color-border-tertiary);
+  border: 0.5px solid var(--color-border-secondary);
   border-radius: var(--border-radius-lg);
   padding: 8px;
-  min-width: 260px;
-  z-index: 200;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+  min-width: 280px;
+  z-index: 9999;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.1);
+  backdrop-filter: none;
 }
 .chan-dropdown.open { display: block; }
 .chan-row {
