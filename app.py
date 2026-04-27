@@ -475,6 +475,31 @@ def walmart_ver_ordenes():
 
     return resultado
 
+@app.route("/walmart/ver_movimientos_db")
+def walmart_ver_movimientos_db():
+    """Ver movimientos de hoy en la BD para diagnóstico"""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from inventario import get_conn
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT tipo, sku, nombre, cantidad, motivo, canal, usuario,
+               TO_CHAR(fecha AT TIME ZONE 'America/Santiago', 'HH24:MI') as hora
+        FROM movimientos
+        WHERE DATE(fecha AT TIME ZONE 'America/Santiago') = CURRENT_DATE
+        ORDER BY fecha DESC
+        LIMIT 20
+    """)
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return {"movimientos": [
+        {"tipo":r[0],"sku":r[1],"nombre":r[2][:30],"cantidad":r[3],
+         "motivo":r[4],"canal":r[5],"usuario":r[6],"hora":r[7]}
+        for r in rows
+    ]}
+
 @app.route("/walmart/fix_canales")
 def walmart_fix_canales():
     """Corrige el canal de movimientos de Walmart que quedaron como Sistema"""
