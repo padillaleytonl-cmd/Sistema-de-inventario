@@ -1125,10 +1125,10 @@ tbody td {
         <div class="card">
           <div class="card-header">
             <div class="card-title">Ventas por canal</div>
-            <span class="card-tag">% del total</span>
+            <button class="btn-ver-mas" onclick="abrirModal('canales_detalle')">Ver más</button>
           </div>
           <div style="display:flex;align-items:center;gap:20px;">
-            <canvas id="tortaCanvas" width="140" height="140" style="flex-shrink:0;"></canvas>
+            <canvas id="tortaCanvas" width="140" height="140" style="flex-shrink:0;cursor:pointer;" onclick="abrirModal('canales_detalle')"></canvas>
             <div id="tortaLeyenda" style="flex:1;display:flex;flex-direction:column;gap:8px;"></div>
           </div>
         </div>
@@ -1835,7 +1835,7 @@ function actualizarDashboard(productos, movimientos){
   const yyyy = hoyDate.getFullYear();
   const fechaHoyStr = dd+'/'+mm+'/'+yyyy;
 
-  const ventasHoy = movimientos.filter(m => m.tipo === 'salida' && m.fecha === fechaHoyStr);
+  const ventasHoy = movimientos.filter(m => m.tipo === 'salida' && m.fecha === fechaHoyStr && MOTIVOS_VENTA.some(v => m.motivo && m.motivo.includes(v.split(' ')[1] || v)));
   const ingresoHoy = ventasHoy.reduce((acc, m) => {
     const p = productosGlobal.find(p => p.sku === m.sku);
     const precio = p ? (p.precio_oferta > 0 ? p.precio_oferta : p.precio_normal) : 0;
@@ -1913,8 +1913,15 @@ function actualizarDashboard(productos, movimientos){
 
 let plazoActual = 'semana';
 
+const MOTIVOS_VENTA = ['Venta Web', 'Venta Walmart', 'Venta MercadoLibre', 'Venta Falabella', 'Venta Ripley', 'Venta Paris', 'Venta tienda'];
+
+function esVentaReal(m){
+  // Solo cuenta salidas por venta, no ajustes de inventario ni mermas
+  return m.tipo === 'salida' && MOTIVOS_VENTA.some(v => m.motivo && m.motivo.includes(v.split(' ')[1] || v));
+}
+
 function calcularIngreso(movs, prods){
-  return movs.reduce((acc, m) => {
+  return movs.filter(esVentaReal).reduce((acc, m) => {
     const p = prods.find(p => p.sku === m.sku);
     const precio = p ? (p.precio_oferta > 0 ? p.precio_oferta : p.precio_normal) : 0;
     return acc + (precio * m.cantidad);
@@ -2493,6 +2500,55 @@ function abrirModal(tipo){
           }).join('')}
         </tbody>
       </table>`;
+  }
+
+  else if(tipo === 'canales_detalle'){
+    titulo.textContent = 'Detalle de ventas por canal';
+    sub.textContent = 'Desglose completo del período seleccionado';
+    const movs = window._movimientosActuales || [];
+    const prods = productosGlobal || [];
+    const canalAbrevD = {'WooCommerce':'WC','Walmart':'WM','MercadoLibre':'ML','Falabella':'FA','Ripley':'RP','Paris':'PA','Manual':'MN','Sistema':'SIS'};
+    const coloresD = {'WC':'#0d1f3c','WM':'#059669','ML':'#f59e0b','FA':'#e94560','RP':'#7c3aed','PA':'#0369a1','MN':'#6b7280','SIS':'#9ca3af'};
+
+    // Agrupar por canal
+    const porCanal = {};
+    movs.filter(m => m.tipo === 'salida' && MOTIVOS_VENTA.some(v => m.motivo && m.motivo.includes(v.split(' ')[1]||v))).forEach(m => {
+      const abrev = canalAbrevD[m.canal] || m.canal || '—';
+      if(!porCanal[abrev]) porCanal[abrev] = {ventas:[], total:0, unidades:0};
+      const p = prods.find(p => p.sku === m.sku);
+      const precio = p ? (p.precio_oferta > 0 ? p.precio_oferta : p.precio_normal) : 0;
+      porCanal[abrev].total += precio * m.cantidad;
+      porCanal[abrev].unidades += m.cantidad;
+      porCanal[abrev].ventas.push(m);
+    });
+
+    const totalGeneral = Object.values(porCanal).reduce((a,c) => a+c.total, 0);
+
+    body.innerHTML = Object.entries(porCanal).sort((a,b)=>b[1].total-a[1].total).map(([canal, data]) => {
+      const pct = totalGeneral > 0 ? Math.round((data.total/totalGeneral)*100) : 0;
+      const color = coloresD[canal] || '#6b7280';
+      const top3 = data.ventas.slice(0,3).map(m => {
+        const p = prods.find(p => p.sku === m.sku);
+        const precio = p ? (p.precio_oferta > 0 ? p.precio_oferta : p.precio_normal) : 0;
+        return `<div style="font-size:11px;color:var(--muted);margin-top:2px;">• ${m.nombre.substring(0,35)} · $${(precio*m.cantidad).toLocaleString('es-CL')}</div>`;
+      }).join('');
+      return `<div style="border:0.5px solid var(--border);border-radius:var(--radius);padding:14px 16px;margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+          <span style="background:${color};color:white;font-size:12px;font-weight:700;padding:3px 10px;border-radius:6px;">${canal}</span>
+          <div style="flex:1;">
+            <div style="font-size:14px;font-weight:600;color:var(--navy);">$${data.total.toLocaleString('es-CL')}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:13px;font-weight:600;color:var(--navy);">${pct}%</div>
+            <div style="font-size:11px;color:var(--muted);">${data.unidades} uds · ${data.ventas.length} ventas</div>
+          </div>
+        </div>
+        <div style="height:6px;background:var(--bg);border-radius:3px;margin-bottom:8px;">
+          <div style="width:${pct}%;height:100%;background:${color};border-radius:3px;"></div>
+        </div>
+        ${top3}
+      </div>`;
+    }).join('') || '<div style="text-align:center;color:var(--muted);padding:30px;">Sin ventas en el período</div>';
   }
 
   else if(tipo === 'canales'){
