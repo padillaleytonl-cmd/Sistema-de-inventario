@@ -204,14 +204,10 @@ def sync_ordenes():
         if orden_ya_procesada(o["id"]):
             continue
 
-        # Usar fecha real de la orden en hora Chile
+        # WooCommerce ya guarda en hora Chile — usar directamente sin convertir
         from datetime import datetime
-        import pytz
-        chile_tz = pytz.timezone('America/Santiago')
         try:
-            fecha_utc = datetime.strptime(o.get("date_created",""), "%Y-%m-%dT%H:%M:%S")
-            fecha_utc = pytz.utc.localize(fecha_utc)
-            fecha_real = fecha_utc.astimezone(chile_tz)
+            fecha_real = datetime.strptime(o.get("date_created",""), "%Y-%m-%dT%H:%M:%S")
         except:
             fecha_real = None
 
@@ -520,13 +516,12 @@ def fix_woo_limpiar_duplicados():
 
     productos = cargar_productos()
     registrados = 0
-    chile_tz = pytz.timezone('America/Santiago')
+    chile_tz = pytz.timezone('America/Santiago')  # pytz maneja UTC-3/UTC-4 automáticamente
 
     for o in res.json():
         try:
-            fecha_utc = datetime.strptime(o.get("date_created",""), "%Y-%m-%dT%H:%M:%S")
-            fecha_utc = pytz.utc.localize(fecha_utc)
-            fecha_real = fecha_utc.astimezone(chile_tz)
+            # WooCommerce ya guarda en hora Chile — sin conversión
+            fecha_real = datetime.strptime(o.get("date_created",""), "%Y-%m-%dT%H:%M:%S")
         except:
             fecha_real = None
 
@@ -560,7 +555,7 @@ def fix_woo_fechas():
         SET fecha = fecha - INTERVAL '3 hours'
         WHERE canal = 'WooCommerce'
         AND DATE(fecha) = '2026-04-27'
-        AND EXTRACT(HOUR FROM fecha) < 6
+        AND EXTRACT(HOUR FROM fecha) < 7
     """)
     corregidos = cur.rowcount
     conn.commit()
@@ -608,7 +603,7 @@ def fix_woo_movimientos():
         # Registrar el movimiento con la fecha REAL de la orden de WooCommerce
         from datetime import datetime
         import pytz
-        chile_tz = pytz.timezone('America/Santiago')
+        chile_tz = pytz.timezone('America/Santiago')  # pytz maneja UTC-3/UTC-4 automáticamente
         fecha_orden_str = o.get("date_created", "")
         try:
             # WooCommerce devuelve fecha en UTC — convertir a Chile
@@ -660,7 +655,7 @@ def hora_servidor():
     from datetime import datetime
     import pytz
     utc_now = datetime.utcnow()
-    chile_tz = pytz.timezone('America/Santiago')
+    chile_tz = pytz.timezone('America/Santiago')  # pytz maneja UTC-3/UTC-4 automáticamente
     chile_now = datetime.now(chile_tz)
     return {
         "utc": utc_now.strftime("%d/%m/%Y %H:%M:%S"),
