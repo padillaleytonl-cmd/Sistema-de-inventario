@@ -491,6 +491,61 @@ def walmart_ver_ordenes():
 
     return resultado
 
+@app.route("/fix_woo_limpiar_duplicados")
+def fix_woo_limpiar_duplicados():
+    """Limpia duplicados de WooCommerce y deja solo 1 movimiento por orden+SKU con fecha real"""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from inventario import get_conn
+    from datetime import datetime
+    import pytz
+    conn = get_conn()
+    cur = conn.cursor()
+
+    # 1. Borrar TODOS los movimientos de WooCommerce para empezar limpio
+    cur.execute("DELETE FROM movimientos WHERE canal = 'WooCommerce'")
+    borrados = cur.rowcount
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    # 2. Volver a registrar desde WooCommerce con fecha real de compra
+    res = requests.get(
+        "https://www.babymine.cl/wp-json/wc/v3/orders",
+        params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET,
+                "status": "processing", "per_page": 100}
+    )
+    if res.status_code != 200:
+        return {"error": "Woo error", "borrados": borrados}
+
+    productos = cargar_productos()
+    registrados = 0
+    chile_tz = pytz.timezone('America/Santiago')
+
+    for o in res.json():
+        try:
+            fecha_utc = datetime.strptime(o.get("date_created",""), "%Y-%m-%dT%H:%M:%S")
+            fecha_utc = pytz.utc.localize(fecha_utc)
+            fecha_real = fecha_utc.astimezone(chile_tz)
+        except:
+            fecha_real = None
+
+        for item in o.get("line_items", []):
+            sku = item.get("sku")
+            cantidad = item.get("quantity", 1)
+            for p in productos:
+                if p["sku"] == sku:
+                    registrar_movimiento(
+                        "salida", p["sku"], p["nombre"],
+                        cantidad, "Venta Web",
+                        usuario="Sistema", canal="WooCommerce",
+                        orden_id=str(o["id"]),
+                        fecha_override=fecha_real
+                    )
+                    registrados += 1
+
+    return {"ok": True, "borrados": borrados, "registrados": registrados}
+
 @app.route("/fix_woo_fechas")
 def fix_woo_fechas():
     """Corrige la fecha de movimientos WooCommerce guardados con hora UTC incorrecta"""
