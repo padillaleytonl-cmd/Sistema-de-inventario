@@ -475,6 +475,33 @@ def walmart_ver_ordenes():
 
     return resultado
 
+@app.route("/walmart/ver_fechas")
+def walmart_ver_fechas():
+    """Ver fechas exactas de movimientos de Walmart"""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from inventario import get_conn
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT
+            TO_CHAR(fecha, 'DD/MM/YYYY HH24:MI') as utc,
+            TO_CHAR(fecha AT TIME ZONE 'America/Santiago', 'DD/MM/YYYY HH24:MI') as santiago,
+            TO_CHAR(fecha AT TIME ZONE 'America/Santiago', 'DD/MM/YYYY') as fecha_santiago,
+            motivo, canal
+        FROM movimientos
+        WHERE canal = 'Walmart'
+        ORDER BY fecha DESC
+        LIMIT 5
+    """)
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return {"movimientos": [
+        {"utc":r[0],"santiago":r[1],"fecha_santiago":r[2],"motivo":r[3],"canal":r[4]}
+        for r in rows
+    ]}
+
 @app.route("/walmart/ver_movimientos_db")
 def walmart_ver_movimientos_db():
     """Ver movimientos de hoy en la BD para diagnóstico"""
@@ -502,17 +529,20 @@ def walmart_ver_movimientos_db():
 
 @app.route("/walmart/fix_canales")
 def walmart_fix_canales():
-    """Corrige el canal de movimientos de Walmart que quedaron como Sistema"""
+    """Corrige hora UTC de movimientos de Walmart procesados antes del fix de timezone"""
     if not session.get("logged"):
         return {"error": "no autorizado"}, 401
     from inventario import get_conn
     conn = get_conn()
     cur = conn.cursor()
+    # Restar 4 horas a movimientos de Walmart con hora incorrecta (04:01 UTC = 00:01 Santiago)
     cur.execute("""
         UPDATE movimientos
-        SET canal = 'Walmart'
-        WHERE motivo = 'Venta Walmart'
-        AND (canal = 'Sistema' OR canal IS NULL)
+        SET fecha = fecha - INTERVAL '4 hours'
+        WHERE canal = 'Walmart'
+        AND motivo = 'Venta Walmart'
+        AND EXTRACT(HOUR FROM fecha AT TIME ZONE 'UTC') = 4
+        AND EXTRACT(MINUTE FROM fecha AT TIME ZONE 'UTC') = 1
     """)
     actualizados = cur.rowcount
     conn.commit()
