@@ -476,6 +476,27 @@ def walmart_ver_ordenes():
 
     return resultado
 
+@app.route("/debug_woo_ordenes")
+def debug_woo_ordenes():
+    """Ver órdenes de WooCommerce en estado processing"""
+    res = requests.get(
+        "https://www.babymine.cl/wp-json/wc/v3/orders",
+        params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET, "status": "processing", "per_page": 10}
+    )
+    if res.status_code != 200:
+        return {"error": res.status_code, "detalle": res.text[:200]}
+    ordenes = res.json()
+    resultado = []
+    for o in ordenes:
+        ya = orden_ya_procesada(o["id"])
+        resultado.append({
+            "id": o["id"],
+            "fecha": o.get("date_created"),
+            "ya_procesada": ya,
+            "items": [{"sku": i.get("sku"), "cantidad": i.get("quantity")} for i in o.get("line_items", [])]
+        })
+    return {"total": len(ordenes), "ordenes": resultado}
+
 @app.route("/hora_servidor")
 def hora_servidor():
     from datetime import datetime
