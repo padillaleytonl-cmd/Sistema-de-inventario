@@ -506,19 +506,19 @@ def walmart_reset_y_limpiar():
     conn = get_conn()
     cur = conn.cursor()
 
-    # 1. Borrar movimientos de Walmart
+    # 1. Borrar movimientos de Walmart únicamente
     cur.execute("DELETE FROM movimientos WHERE canal = 'Walmart' AND motivo = 'Venta Walmart'")
     movimientos_borrados = cur.rowcount
 
-    # 2. Limpiar tabla ordenes_procesadas completamente para Walmart
-    cur.execute("DELETE FROM ordenes_procesadas")
+    # 2. Limpiar SOLO órdenes de Walmart (las que tienen order_id_texto con formato P...)
+    cur.execute("""
+        DELETE FROM ordenes_procesadas
+        WHERE order_id_texto IS NOT NULL
+    """)
     ordenes_borradas = cur.rowcount
 
-    # 3. Crear columna order_id_texto si no existe para guardar el ID real
-    cur.execute("""
-        ALTER TABLE ordenes_procesadas
-        ADD COLUMN IF NOT EXISTS order_id_texto TEXT UNIQUE
-    """)
+    # 3. Crear columna order_id_texto si no existe
+    cur.execute("ALTER TABLE ordenes_procesadas ADD COLUMN IF NOT EXISTS order_id_texto TEXT")
 
     conn.commit()
     cur.close()
