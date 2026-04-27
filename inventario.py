@@ -124,7 +124,7 @@ def actualizar_precios(sku, precio_normal, precio_oferta):
     cur.close()
     conn.close()
 
-def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistema", canal="Sistema", orden_id=None):
+def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistema", canal="Sistema", orden_id=None, fecha_override=None):
     conn = get_conn()
     cur = conn.cursor()
     try:
@@ -134,11 +134,15 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
         conn.commit()
     except:
         conn.rollback()
-    fecha_chile = now_chile()
+    # Si se pasa una fecha específica, usarla; si no, usar hora Chile actual
+    if fecha_override:
+        fecha = fecha_override
+    else:
+        fecha = now_chile()
     cur.execute("""
         INSERT INTO movimientos (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """, (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha_chile, orden_id))
+    """, (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id))
     conn.commit()
     cur.close()
     conn.close()
@@ -156,12 +160,12 @@ def cargar_movimientos(limite=20):
     cur.execute("""
         SELECT tipo, sku, nombre, cantidad, motivo,
                TO_CHAR(
-                   CASE WHEN COALESCE(canal,'') = 'Walmart'
+                   CASE WHEN COALESCE(canal,'') IN ('Walmart', 'WooCommerce')
                         THEN fecha - INTERVAL '3 hours'
                         ELSE fecha
                    END, 'DD/MM/YYYY') as fecha_fmt,
                TO_CHAR(
-                   CASE WHEN COALESCE(canal,'') = 'Walmart'
+                   CASE WHEN COALESCE(canal,'') IN ('Walmart', 'WooCommerce')
                         THEN fecha - INTERVAL '3 hours'
                         ELSE fecha
                    END, 'HH24:MI') as hora,

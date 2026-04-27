@@ -203,6 +203,18 @@ def sync_ordenes():
     for o in res.json():
         if orden_ya_procesada(o["id"]):
             continue
+
+        # Usar fecha real de la orden en hora Chile
+        from datetime import datetime
+        import pytz
+        chile_tz = pytz.timezone('America/Santiago')
+        try:
+            fecha_utc = datetime.strptime(o.get("date_created",""), "%Y-%m-%dT%H:%M:%S")
+            fecha_utc = pytz.utc.localize(fecha_utc)
+            fecha_real = fecha_utc.astimezone(chile_tz)
+        except:
+            fecha_real = None
+
         for item in o["line_items"]:
             sku = item.get("sku")
             cantidad = item.get("quantity")
@@ -210,8 +222,11 @@ def sync_ordenes():
                 if p["sku"] == sku:
                     p["stock"] -= cantidad
                     guardar_producto(p)
-                    registrar_movimiento("salida", p["sku"], p["nombre"], cantidad, "Venta Web", usuario="Sistema", canal="WooCommerce", orden_id=str(o["id"]))
+                    registrar_movimiento("salida", p["sku"], p["nombre"], cantidad, "Venta Web",
+                                        usuario="Sistema", canal="WooCommerce",
+                                        orden_id=str(o["id"]), fecha_override=fecha_real)
                     actualizar_stock_woo(p["sku"], p["stock"])
+                    actualizar_stock_walmart(p["sku"], p["stock"])
         marcar_orden_procesada(o["id"])
         nuevas += 1
 
@@ -476,6 +491,28 @@ def walmart_ver_ordenes():
 
     return resultado
 
+@app.route("/fix_woo_fechas")
+def fix_woo_fechas():
+    """Corrige la fecha de movimientos WooCommerce guardados con hora UTC incorrecta"""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from inventario import get_conn
+    conn = get_conn()
+    cur = conn.cursor()
+    # Restar 3 horas a movimientos de WooCommerce del 27/04 que son del 26/04 en Chile
+    cur.execute("""
+        UPDATE movimientos
+        SET fecha = fecha - INTERVAL '3 hours'
+        WHERE canal = 'WooCommerce'
+        AND DATE(fecha) = '2026-04-27'
+        AND EXTRACT(HOUR FROM fecha) < 6
+    """)
+    corregidos = cur.rowcount
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"ok": True, "corregidos": corregidos}
+
 @app.route("/fix_woo_movimientos")
 def fix_woo_movimientos():
     """Registra movimientos faltantes de órdenes WooCommerce ya procesadas"""
@@ -513,7 +550,19 @@ def fix_woo_movimientos():
         if ya_tiene_movimiento:
             continue
 
-        # Registrar el movimiento faltante
+        # Registrar el movimiento con la fecha REAL de la orden de WooCommerce
+        from datetime import datetime
+        import pytz
+        chile_tz = pytz.timezone('America/Santiago')
+        fecha_orden_str = o.get("date_created", "")
+        try:
+            # WooCommerce devuelve fecha en UTC — convertir a Chile
+            fecha_utc = datetime.strptime(fecha_orden_str, "%Y-%m-%dT%H:%M:%S")
+            fecha_utc = pytz.utc.localize(fecha_utc)
+            fecha_chile = fecha_utc.astimezone(chile_tz)
+        except:
+            fecha_chile = None
+
         for item in o.get("line_items", []):
             sku = item.get("sku")
             cantidad = item.get("quantity", 1)
@@ -523,7 +572,8 @@ def fix_woo_movimientos():
                         "salida", p["sku"], p["nombre"],
                         cantidad, "Venta Web",
                         usuario="Sistema", canal="WooCommerce",
-                        orden_id=str(o["id"])
+                        orden_id=str(o["id"]),
+                        fecha_override=fecha_chile
                     )
                     registrados += 1
 
