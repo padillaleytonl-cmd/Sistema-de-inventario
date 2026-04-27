@@ -535,14 +535,13 @@ def walmart_fix_canales():
     from inventario import get_conn
     conn = get_conn()
     cur = conn.cursor()
-    # Restar 4 horas a movimientos de Walmart con hora incorrecta (04:01 UTC = 00:01 Santiago)
+    # Restar 4 horas a todos los movimientos de Walmart del 27/04 en UTC (que son del 26/04 en Chile)
     cur.execute("""
         UPDATE movimientos
         SET fecha = fecha - INTERVAL '4 hours'
         WHERE canal = 'Walmart'
         AND motivo = 'Venta Walmart'
-        AND EXTRACT(HOUR FROM fecha AT TIME ZONE 'UTC') = 4
-        AND EXTRACT(MINUTE FROM fecha AT TIME ZONE 'UTC') = 1
+        AND DATE(fecha AT TIME ZONE 'UTC') = '2026-04-27'
     """)
     actualizados = cur.rowcount
     conn.commit()
