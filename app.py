@@ -476,6 +476,27 @@ def walmart_ver_ordenes():
 
     return resultado
 
+@app.route("/fix_db")
+def fix_db():
+    """Crea columnas faltantes en la BD"""
+    from inventario import get_conn
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS orden_id TEXT DEFAULT NULL")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS usuario TEXT DEFAULT 'Sistema'")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS canal TEXT DEFAULT 'Sistema'")
+        cur.execute("ALTER TABLE ordenes_procesadas ADD COLUMN IF NOT EXISTS order_id_texto TEXT")
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"ok": True, "mensaje": "Columnas creadas correctamente"}
+    except Exception as e:
+        conn.rollback()
+        cur.close()
+        conn.close()
+        return {"error": str(e)}
+
 @app.route("/walmart/reset_y_limpiar")
 def walmart_reset_y_limpiar():
     """Borra movimientos de Walmart y limpia órdenes procesadas para resincronizar limpio"""
