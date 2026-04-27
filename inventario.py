@@ -161,12 +161,12 @@ def cargar_movimientos(limite=20):
         SELECT tipo, sku, nombre, cantidad, motivo,
                TO_CHAR(
                    CASE WHEN COALESCE(canal,'') IN ('Walmart', 'WooCommerce')
-                        THEN fecha - INTERVAL '3 hours'
+                        THEN fecha - INTERVAL '4 hours'
                         ELSE fecha
                    END, 'DD/MM/YYYY') as fecha_fmt,
                TO_CHAR(
                    CASE WHEN COALESCE(canal,'') IN ('Walmart', 'WooCommerce')
-                        THEN fecha - INTERVAL '3 hours'
+                        THEN fecha - INTERVAL '4 hours'
                         ELSE fecha
                    END, 'HH24:MI') as hora,
                COALESCE(usuario, 'Sistema') as usuario,
