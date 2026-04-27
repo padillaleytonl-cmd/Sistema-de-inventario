@@ -1,9 +1,10 @@
 import os
 import psycopg2
 from datetime import datetime, timezone, timedelta
+import pytz
 
-# Zona horaria Chile (UTC-3 en invierno, UTC-4 en verano — usamos UTC-4 como base)
-TZ_CHILE = timezone(timedelta(hours=-4))
+# Zona horaria Chile — se ajusta automáticamente entre GMT-3 y GMT-4
+TZ_CHILE = pytz.timezone('America/Santiago')
 
 def now_chile():
     return datetime.now(TZ_CHILE)
