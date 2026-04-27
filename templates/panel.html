@@ -267,6 +267,106 @@ body {
   color: rgba(255,255,255,0.7);
 }
 
+.chan-selector {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 3px;
+  position: relative;
+}
+.chan-pill {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.55);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: 'DM Sans', sans-serif;
+  transition: all 0.15s;
+  position: relative;
+}
+.chan-pill:hover { color: white; background: rgba(255,255,255,0.1); }
+.chan-pill.activo { color: white; background: rgba(255,255,255,0.15); }
+.chan-pill.novedad { color: white; background: rgba(255,255,255,0.15); animation: pulse-chan 2s infinite; }
+.chan-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.chan-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  background: #e24b4a;
+  color: white;
+  border-radius: 50%;
+  width: 15px;
+  height: 15px;
+  font-size: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  border: 1.5px solid #0d1f3c;
+}
+@keyframes pulse-chan {
+  0%,100% { box-shadow: 0 0 0 0 rgba(226,75,74,0.4); }
+  50% { box-shadow: 0 0 0 4px rgba(226,75,74,0); }
+}
+.chan-dropdown {
+  display: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  background: var(--color-background-primary);
+  border: 0.5px solid var(--color-border-tertiary);
+  border-radius: var(--border-radius-lg);
+  padding: 8px;
+  min-width: 260px;
+  z-index: 200;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+}
+.chan-dropdown.open { display: block; }
+.chan-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: default;
+}
+.chan-row:hover { background: var(--color-background-secondary); }
+.chan-icon-sm {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.chan-info { flex: 1; }
+.chan-name { font-size: 12px; font-weight: 500; color: var(--color-text-primary); }
+.chan-status { font-size: 11px; color: var(--color-text-secondary); margin-top: 1px; }
+.chan-btns { display: flex; gap: 4px; }
+.chan-action-btn {
+  background: var(--color-background-secondary);
+  border: 0.5px solid var(--color-border-tertiary);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 10px;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  font-family: 'DM Sans', sans-serif;
+  transition: all 0.15s;
+}
+.chan-action-btn:hover { background: var(--navy); color: white; border-color: var(--navy); }
+
 .btn-gear {
   background: rgba(255,255,255,0.08);
   border: 1px solid rgba(255,255,255,0.12);
@@ -1028,6 +1128,59 @@ tbody td {
       <button class="nav-btn" onclick="showSection('movimientos', this)">Movimientos</button>
     </div>
     <div class="navbar-right">
+      <!-- Selector de canales -->
+      <div class="chan-selector" id="chanSelector">
+        <button class="chan-pill activo" id="chanWC" onclick="toggleChanDropdown()" title="WooCommerce">
+          <div class="chan-dot" style="background:#2563eb;"></div>
+          WC
+        </button>
+        <button class="chan-pill activo" id="chanWM" onclick="toggleChanDropdown()" title="Walmart">
+          <div class="chan-dot" style="background:#059669;"></div>
+          WM
+        </button>
+        <div class="chan-dropdown" id="chanDropdown">
+          <div class="chan-row" id="rowWC">
+            <div class="chan-icon-sm" style="background:#e6f0ff;color:#2563eb;">WC</div>
+            <div class="chan-info">
+              <div class="chan-name">WooCommerce</div>
+              <div class="chan-status" id="chanWCStatus">● Activo</div>
+            </div>
+            <div class="chan-btns">
+              <button class="chan-action-btn" onclick="sincronizarWoo();toggleChanDropdown()">↺ Sync</button>
+              <button class="chan-action-btn" id="chanWCBtn" onclick="sincronizarWoo();toggleChanDropdown()">↓ OC</button>
+            </div>
+          </div>
+          <div class="chan-row" id="rowWM">
+            <div class="chan-icon-sm" style="background:#d1fae5;color:#059669;">WM</div>
+            <div class="chan-info">
+              <div class="chan-name">Walmart Chile</div>
+              <div class="chan-status" id="chanWMStatus">Verificando...</div>
+            </div>
+            <div class="chan-btns">
+              <button class="chan-action-btn" onclick="walmartSyncStock();toggleChanDropdown()">↑ Stock</button>
+              <button class="chan-action-btn" id="chanWMBtn" onclick="walmartSyncOrdenes();toggleChanDropdown()">↓ OC</button>
+            </div>
+          </div>
+          <div style="border-top:0.5px solid var(--border);margin:6px 0;"></div>
+          <div class="chan-row" style="opacity:0.5;">
+            <div class="chan-icon-sm" style="background:#fff7e6;color:#f59e0b;">ML</div>
+            <div class="chan-info"><div class="chan-name">MercadoLibre</div><div class="chan-status">⏳ Próximamente</div></div>
+          </div>
+          <div class="chan-row" style="opacity:0.5;">
+            <div class="chan-icon-sm" style="background:#fff0f0;color:#e94560;">FA</div>
+            <div class="chan-info"><div class="chan-name">Falabella</div><div class="chan-status">⏳ Próximamente</div></div>
+          </div>
+          <div class="chan-row" style="opacity:0.5;">
+            <div class="chan-icon-sm" style="background:#f5f0ff;color:#7c3aed;">RP</div>
+            <div class="chan-info"><div class="chan-name">Ripley</div><div class="chan-status">⏳ Próximamente</div></div>
+          </div>
+          <div class="chan-row" style="opacity:0.5;">
+            <div class="chan-icon-sm" style="background:#fdf4ff;color:#9333ea;">PA</div>
+            <div class="chan-info"><div class="chan-name">París</div><div class="chan-status">⏳ Próximamente</div></div>
+          </div>
+        </div>
+      </div>
+
       <button class="btn-gear" id="gearBtn" onclick="showSection('configuracion', null)" title="Configuración">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
@@ -1047,7 +1200,7 @@ tbody td {
         <div style="font-size:11px;color:var(--hint);margin-top:2px;" id="horaServidorLabel"></div>
       </div>
       <div class="header-actions">
-        <button class="btn-secondary" onclick="syncOrdenes()">&#8635; Sincronizar</button>
+  <button class="btn-secondary" onclick="sincronizarWoo()">&#8635; Sincronizar</button>
         <button class="btn-primary" onclick="importarWoo()">&#8593; Importar Woo</button>
       </div>
     </div>
@@ -2750,6 +2903,98 @@ function eliminarProducto(sku, nombre){
     }
   });
 }
+
+// ── SELECTOR DE CANALES NAVBAR
+function toggleChanDropdown(){
+  const dd = document.getElementById('chanDropdown');
+  if(dd) dd.classList.toggle('open');
+}
+
+// Cerrar dropdown al hacer click fuera
+document.addEventListener('click', function(e){
+  const sel = document.getElementById('chanSelector');
+  if(sel && !sel.contains(e.target)){
+    const dd = document.getElementById('chanDropdown');
+    if(dd) dd.classList.remove('open');
+  }
+});
+
+function sincronizarWoo(){
+  toast('Sincronizando órdenes WooCommerce...');
+  fetch('/sync_ordenes').then(r=>r.json()).then(d=>{
+    toast('WooCommerce: '+d.nuevas_ordenes+' órdenes nuevas');
+    cargar();
+  });
+}
+
+function actualizarEstadoCanales(){
+  // Verificar Walmart
+  fetch('/walmart/test').then(r=>r.json()).then(d=>{
+    const wmPill = document.getElementById('chanWM');
+    const wmStatus = document.getElementById('chanWMStatus');
+    if(d.conectado){
+      if(wmPill) wmPill.className = 'chan-pill activo';
+      if(wmStatus) wmStatus.textContent = '● Activo';
+    } else {
+      if(wmPill) wmPill.className = 'chan-pill';
+      if(wmStatus) wmStatus.textContent = '✕ Error de conexión';
+    }
+  }).catch(()=>{});
+}
+
+// Verificar estado al cargar
+actualizarEstadoCanales();
+
+// Verificar órdenes pendientes cada 2 minutos
+function actualizarPill(pillId, statusId, btnId, pendientes, colorActivo){
+  const pill = document.getElementById(pillId);
+  const status = document.getElementById(statusId);
+  const btn = document.getElementById(btnId);
+  if(!pill) return;
+  const oldBadge = pill.querySelector('.chan-badge');
+  if(oldBadge) oldBadge.remove();
+  if(pendientes > 0){
+    pill.className = 'chan-pill novedad';
+    const dot = pill.querySelector('.chan-dot');
+    if(dot) dot.style.background = '#e24b4a';
+    const badge = document.createElement('div');
+    badge.className = 'chan-badge';
+    badge.textContent = pendientes;
+    pill.appendChild(badge);
+    if(status){ status.textContent = pendientes+' órdenes nuevas sin procesar'; status.style.color='#e24b4a'; status.style.fontWeight='500'; }
+    if(btn){ btn.textContent = '↓ '+pendientes+' OC'; btn.style.background='#e24b4a'; btn.style.color='white'; btn.style.borderColor='#e24b4a'; btn.style.animation='pulse-chan 1.5s infinite'; }
+    const row = btn ? btn.closest('.chan-row') : null;
+    if(row){ row.style.background='rgba(226,75,74,0.05)'; row.style.border='0.5px solid rgba(226,75,74,0.2)'; row.style.borderRadius='8px'; }
+  } else {
+    pill.className = 'chan-pill activo';
+    const dot = pill.querySelector('.chan-dot');
+    if(dot) dot.style.background = colorActivo;
+    if(status){ status.textContent = '● Activo · Al día'; status.style.color=''; status.style.fontWeight=''; }
+    if(btn){ btn.textContent = '↓ OC'; btn.style.background=''; btn.style.color=''; btn.style.borderColor=''; btn.style.animation=''; }
+    const row = btn ? btn.closest('.chan-row') : null;
+    if(row){ row.style.background=''; row.style.border=''; }
+  }
+}
+
+function verificarPendientes(){
+  // WooCommerce — verificar órdenes processing no procesadas
+  fetch('/debug_woo_ordenes').then(r=>r.json()).then(d=>{
+    const pendientes = (d.ordenes||[]).filter(o=>!o.ya_procesada).length;
+    actualizarPill('chanWC','chanWCStatus','chanWCBtn', pendientes, '#2563eb');
+  }).catch(()=>{});
+
+  // Walmart — verificar órdenes Acknowledged
+  fetch('/walmart/ver_ordenes').then(r=>r.json()).then(d=>{
+    try {
+      const ackResp = JSON.parse(d.Acknowledged_resp || '{}');
+      const pendientes = ackResp?.list?.meta?.totalCount || 0;
+      actualizarPill('chanWM','chanWMStatus','chanWMBtn', pendientes, '#059669');
+    } catch(e){}
+  }).catch(()=>{});
+}
+
+verificarPendientes();
+setInterval(verificarPendientes, 120000);
 
 // ── WALMART
 (function verificarWalmart(){
