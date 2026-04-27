@@ -1435,9 +1435,20 @@ tbody td {
         <div style="font-size:13px;color:var(--muted);margin-top:2px;font-family:'DM Mono',monospace;" id="relojMov"></div>
       </div>
     </div>
-    <div class="card">
-      <div class="activity-list" id="movimientosList">
-        <div style="color:var(--hint); font-size:12px;">Cargando movimientos...</div>
+    <div class="card" style="padding:0;overflow:hidden;display:flex;flex-direction:column;height:calc(100vh - 180px);">
+      <div style="display:grid;grid-template-columns:20px minmax(0,1fr) 110px 96px 44px;align-items:center;gap:8px;padding:7px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);flex-shrink:0;">
+        <div></div>
+        <div style="font-size:10px;font-weight:500;color:var(--muted);">Producto · OC</div>
+        <div style="font-size:10px;font-weight:500;color:var(--muted);">Fecha · Canal</div>
+        <div style="font-size:10px;font-weight:500;color:var(--muted);">Origen</div>
+        <div style="font-size:10px;font-weight:500;color:var(--muted);text-align:right;">Cant.</div>
+      </div>
+      <div id="movimientosList" style="overflow-y:auto;flex:1;scrollbar-width:thin;scrollbar-color:var(--border) transparent;">
+        <div style="color:var(--hint);font-size:12px;text-align:center;padding:40px;">Cargando movimientos...</div>
+      </div>
+      <div id="movimientosFooter" style="padding:6px 14px;border-top:0.5px solid var(--border);background:var(--bg2);flex-shrink:0;display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-size:11px;color:var(--muted);">— movimientos</span>
+        <span style="font-size:11px;color:var(--muted);">↓ scroll para ver más</span>
       </div>
     </div>
   </div>
@@ -2413,42 +2424,70 @@ function renderMovimientoItem(m){
 }
 
 function cargarMovimientosFull(){
-  fetch('/movimientos?limite=100').then(r=>r.json()).then(d=>{
+  fetch('/movimientos?limite=200').then(r=>r.json()).then(d=>{
     const movs = d.movimientos || [];
+    window._movimientos = movs;
+    window._movimientosActuales = movs;
     const el = document.getElementById('movimientosList');
+    const footer = document.getElementById('movimientosFooter');
     if(!el) return;
     if(!movs.length){
       el.innerHTML = '<div style="color:var(--hint);font-size:12px;text-align:center;padding:40px;">Sin movimientos registrados</div>';
+      if(footer) footer.querySelector('span').textContent = '0 movimientos';
       return;
     }
-    el.innerHTML = movs.map(m => {
-      const isEntrada = m.tipo === 'entrada';
-      const isVenta = m.canal === 'WooCommerce' || m.motivo === 'Venta Web';
-      const iconClass = isVenta ? 'icon-venta' : isEntrada ? 'icon-entrada' : 'icon-salida';
-      const iconLetter = isVenta ? 'V' : isEntrada ? 'E' : 'S';
-      const signo = isEntrada ? '+' : '-';
-      const color = isEntrada ? 'var(--success)' : 'var(--danger)';
-      const canal = m.canal || 'Manual';
-      const usuario = m.usuario || 'Sistema';
-      const motivo = m.motivo || '—';
 
-      return `<div class="activity-row" style="flex-direction:column;align-items:flex-start;gap:6px;">
-        <div style="display:flex;align-items:center;gap:10px;width:100%;">
-          <div class="activity-icon ${iconClass}">${iconLetter}</div>
-          <div style="flex:1;">
-            <div style="font-size:13px;font-weight:500;color:var(--text);">${m.nombre}</div>
-            <div style="font-size:11px;color:var(--muted);">SKU: ${m.sku}</div>
-          </div>
-          <div style="font-size:16px;font-weight:600;color:${color};">${signo}${m.cantidad}</div>
+    const canalBadge = {
+      'WooCommerce': '<span style="display:inline-flex;align-items:center;font-size:10px;font-weight:500;padding:1px 6px;border-radius:20px;background:#E6F1FB;color:#0C447C;white-space:nowrap;">WC</span>',
+      'Walmart':     '<span style="display:inline-flex;align-items:center;font-size:10px;font-weight:500;padding:1px 6px;border-radius:20px;background:#E1F5EE;color:#085041;white-space:nowrap;">WM</span>',
+      'Manual':      '<span style="display:inline-flex;align-items:center;font-size:10px;font-weight:500;padding:1px 6px;border-radius:20px;background:#F1EFE8;color:#444441;white-space:nowrap;">Manual</span>',
+      'Sistema':     '<span style="display:inline-flex;align-items:center;font-size:10px;font-weight:500;padding:1px 6px;border-radius:20px;background:#F1EFE8;color:#444441;white-space:nowrap;">Sistema</span>'
+    };
+
+    function getBadge(canal){ return canalBadge[canal] || `<span style="display:inline-flex;align-items:center;font-size:10px;font-weight:500;padding:1px 6px;border-radius:20px;background:#F1EFE8;color:#444441;">${canal||'—'}</span>`; }
+
+    function getOrigenDot(usuario){
+      const isAuto = !usuario || usuario === 'Sistema';
+      const dot = isAuto
+        ? '<span style="width:14px;height:14px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:500;background:#EEEDFE;color:#3C3489;flex-shrink:0;">⚙</span>'
+        : `<span style="width:14px;height:14px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:500;background:#FAEEDA;color:#633806;flex-shrink:0;">${(usuario||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase()}</span>`;
+      const label = isAuto ? 'Sistema' : usuario;
+      return `<div style="display:flex;align-items:center;gap:3px;">${dot}<span style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${label}</span></div>`;
+    }
+
+    el.innerHTML = movs.map((m, i) => {
+      const isEntrada = m.tipo === 'entrada';
+      const dotBg   = isEntrada ? '#EAF3DE' : '#FCEBEB';
+      const dotColor = isEntrada ? '#27500A' : '#A32D2D';
+      const dotLetter = isEntrada ? 'E' : 'S';
+      const qty = isEntrada
+        ? `<span style="font-size:12px;font-weight:500;color:#27500A;">+${m.cantidad}</span>`
+        : `<span style="font-size:12px;font-weight:500;color:#A32D2D;">−${m.cantidad}</span>`;
+      const ocTag = m.orden_id
+        ? `<span style="font-size:10px;font-family:monospace;color:var(--muted);background:var(--bg2);padding:1px 5px;border-radius:4px;border:0.5px solid var(--border);white-space:nowrap;">OC-${m.orden_id}</span>`
+        : `<span style="font-size:10px;font-family:monospace;color:var(--muted);background:var(--bg2);padding:1px 5px;border-radius:4px;border:0.5px solid var(--border);">—</span>`;
+      const divider = i < movs.length - 1 ? '<div style="height:0.5px;background:var(--border);flex-shrink:0;"></div>' : '';
+
+      return `<div style="display:grid;grid-template-columns:20px minmax(0,1fr) 110px 96px 44px;align-items:center;gap:8px;padding:5px 14px;">
+        <div style="width:16px;height:16px;border-radius:50%;background:${dotBg};display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:500;color:${dotColor};flex-shrink:0;">${dotLetter}</div>
+        <div style="min-width:0;">
+          <div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${m.nombre}</div>
+          <div style="display:flex;align-items:center;gap:5px;margin-top:1px;">${ocTag}<span style="font-size:10px;color:var(--hint);">${m.sku}</span></div>
         </div>
-        <div style="display:flex;gap:12px;margin-left:42px;flex-wrap:wrap;">
-          <span style="font-size:11px;background:var(--bg);padding:2px 8px;border-radius:20px;color:var(--muted);">📅 ${m.fecha} ${m.hora}</span>
-          <span style="font-size:11px;background:var(--bg);padding:2px 8px;border-radius:20px;color:var(--muted);">📦 ${canal}</span>
-          <span style="font-size:11px;background:var(--bg);padding:2px 8px;border-radius:20px;color:var(--muted);">👤 ${usuario}</span>
-          <span style="font-size:11px;background:var(--bg);padding:2px 8px;border-radius:20px;color:var(--muted);">💬 ${motivo}</span>
+        <div>
+          <div style="font-size:11px;color:var(--text);">${m.fecha} ${m.hora}</div>
+          ${getBadge(m.canal)}
         </div>
-      </div>`;
+        ${getOrigenDot(m.usuario)}
+        <div style="text-align:right;">${qty}</div>
+      </div>${divider}`;
     }).join('');
+
+    if(footer){
+      const spans = footer.querySelectorAll('span');
+      if(spans[0]) spans[0].textContent = `${movs.length} movimientos`;
+      if(spans[1]) spans[1].style.display = movs.length > 10 ? '' : 'none';
+    }
   });
 }
 
