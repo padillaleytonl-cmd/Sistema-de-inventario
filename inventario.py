@@ -124,21 +124,21 @@ def actualizar_precios(sku, precio_normal, precio_oferta):
     cur.close()
     conn.close()
 
-def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistema", canal="Sistema"):
+def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistema", canal="Sistema", orden_id=None):
     conn = get_conn()
     cur = conn.cursor()
-    # Agregar columnas usuario y canal si no existen
     try:
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS usuario TEXT DEFAULT 'Sistema'")
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS canal TEXT DEFAULT 'Sistema'")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS orden_id TEXT DEFAULT NULL")
         conn.commit()
     except:
         conn.rollback()
     fecha_chile = now_chile()
     cur.execute("""
-        INSERT INTO movimientos (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-    """, (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha_chile))
+        INSERT INTO movimientos (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """, (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha_chile, orden_id))
     conn.commit()
     cur.close()
     conn.close()
@@ -166,7 +166,8 @@ def cargar_movimientos(limite=20):
                         ELSE fecha
                    END, 'HH24:MI') as hora,
                COALESCE(usuario, 'Sistema') as usuario,
-               COALESCE(canal, 'Sistema') as canal
+               COALESCE(canal, 'Sistema') as canal,
+               COALESCE(orden_id, '') as orden_id
         FROM movimientos
         ORDER BY fecha DESC
         LIMIT %s
@@ -184,7 +185,8 @@ def cargar_movimientos(limite=20):
             "fecha": r[5],
             "hora": r[6],
             "usuario": r[7],
-            "canal": r[8]
+            "canal": r[8],
+            "orden_id": r[9]
         }
         for r in rows
     ]
@@ -221,6 +223,41 @@ def eliminar_producto(sku):
     cur = conn.cursor()
     cur.execute("DELETE FROM productos WHERE sku = %s", (sku,))
     conn.commit()
+    cur.close()
+    conn.close()
+
+
+def orden_ya_procesada_texto(order_id_texto):
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("ALTER TABLE ordenes_procesadas ADD COLUMN IF NOT EXISTS order_id_texto TEXT")
+        conn.commit()
+    except:
+        conn.rollback()
+    cur.execute("SELECT 1 FROM ordenes_procesadas WHERE order_id_texto = %s", (str(order_id_texto),))
+    existe = cur.fetchone() is not None
+    cur.close()
+    conn.close()
+    return existe
+
+def marcar_orden_procesada_texto(order_id_texto):
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("ALTER TABLE ordenes_procesadas ADD COLUMN IF NOT EXISTS order_id_texto TEXT")
+        conn.commit()
+    except:
+        conn.rollback()
+    try:
+        cur.execute(
+            "INSERT INTO ordenes_procesadas (orden_id, order_id_texto) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            (abs(hash(str(order_id_texto))) % (10**15), str(order_id_texto))
+        )
+        conn.commit()
+    except Exception as e:
+        print(f"[Walmart] Error marcando orden: {e}")
+        conn.rollback()
     cur.close()
     conn.close()
 

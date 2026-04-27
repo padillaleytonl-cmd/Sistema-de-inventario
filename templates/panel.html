@@ -2168,28 +2168,26 @@ function cargar(){
 
 function renderMovimientoItem(m){
   const isEntrada = m.tipo === 'entrada';
-  const isVenta = m.canal === 'WooCommerce' || m.motivo === 'Venta Web';
+  const isVenta = CANALES_VENTA.includes(m.canal) || (m.motivo && m.motivo.includes('Venta'));
   const iconClass = isVenta ? 'icon-venta' : isEntrada ? 'icon-entrada' : 'icon-salida';
   const iconLetter = isVenta ? 'V' : isEntrada ? 'E' : 'S';
   const signo = isEntrada ? '+' : '-';
   const color = isEntrada ? 'var(--success)' : 'var(--danger)';
-
-  // Línea principal
-  const descripcion = isVenta
-    ? `Venta Web · ${m.nombre}`
-    : `${m.motivo || (isEntrada ? 'Entrada' : 'Salida')} · ${m.nombre}`;
-
-  // Metadata
-  const meta = isVenta
-    ? `${m.canal} · ${m.fecha} ${m.hora}`
-    : `${m.usuario} · ${m.fecha} ${m.hora} · ${m.motivo || '—'}`;
+  const canalAbrev = {'WooCommerce':'WC','Walmart':'WM','MercadoLibre':'ML','Falabella':'FA','Ripley':'RP','Paris':'PA','Manual':'MN','Sistema':'SIS'};
+  const abrev = canalAbrev[m.canal] || m.canal || '—';
+  const ordenTag = m.orden_id ? `<span style="font-family:'DM Mono',monospace;background:var(--bg);padding:1px 6px;border-radius:4px;font-size:9px;color:var(--muted);">OC: ${m.orden_id}</span>` : '';
 
   return `<div class="hist-item">
     <div style="display:flex;align-items:center;gap:8px;">
       <div class="activity-icon ${iconClass}" style="width:24px;height:24px;font-size:10px;flex-shrink:0;">${iconLetter}</div>
       <div style="flex:1;min-width:0;">
-        <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${descripcion}</div>
-        <div style="font-size:10px;color:var(--muted);margin-top:1px;">${meta}</div>
+        <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${m.nombre}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:2px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          <span style="background:var(--info-bg);color:var(--navy);padding:1px 5px;border-radius:4px;font-size:9px;font-weight:600;">${abrev}</span>
+          <span>${m.fecha} ${m.hora}</span>
+          <span>👤 ${m.usuario}</span>
+          ${ordenTag}
+        </div>
       </div>
       <div style="font-size:12px;font-weight:600;color:${color};flex-shrink:0;">${signo}${m.cantidad}</div>
     </div>

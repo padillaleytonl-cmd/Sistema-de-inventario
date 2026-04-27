@@ -9,7 +9,8 @@ from woo import actualizar_stock_woo
 from inventario import (cargar_productos, guardar_productos, guardar_producto,
                         registrar_movimiento, cargar_movimientos, cargar_movimientos_hoy,
                         init_db, orden_ya_procesada, marcar_orden_procesada, actualizar_precios,
-                        get_configuracion, set_configuracion, set_lead_time, eliminar_producto)
+                        get_configuracion, set_configuracion, set_lead_time, eliminar_producto,
+                        orden_ya_procesada_texto, marcar_orden_procesada_texto)
 
 app = Flask(__name__)
 app.secret_key = "clave_super_segura"
@@ -209,7 +210,7 @@ def sync_ordenes():
                 if p["sku"] == sku:
                     p["stock"] -= cantidad
                     guardar_producto(p)
-                    registrar_movimiento("salida", p["sku"], p["nombre"], cantidad, "Venta Web", usuario="Sistema", canal="WooCommerce")
+                    registrar_movimiento("salida", p["sku"], p["nombre"], cantidad, "Venta Web", usuario="Sistema", canal="WooCommerce", orden_id=str(o["id"]))
                     actualizar_stock_woo(p["sku"], p["stock"])
         marcar_orden_procesada(o["id"])
         nuevas += 1
@@ -389,11 +390,10 @@ def walmart_sync_ordenes():
                 print("[Walmart] Sin order_id, saltando")
                 continue
 
-            # Hash del order_id para evitar duplicados
-            order_hash = abs(hash(str(order_id))) % (10**15)
-            ya = orden_ya_procesada(order_hash)
-            print(f"[Walmart] Hash:{order_hash} Ya procesada:{ya}")
-            if ya:
+            # Usar customerOrderId (número largo) para evitar duplicados
+            customer_order_id = str(o.get("customerOrderId", order_id))
+            if orden_ya_procesada_texto(customer_order_id):
+                print(f"[Walmart] Orden {customer_order_id} ya procesada, saltando")
                 continue
 
             lineas = o.get("orderLines", {}).get("orderLine", [])
@@ -422,7 +422,8 @@ def walmart_sync_ordenes():
                             guardar_producto(p)
                             registrar_movimiento("salida", p["sku"], p["nombre"],
                                                 cantidad, "Venta Walmart",
-                                                usuario="Sistema", canal="Walmart")
+                                                usuario="Sistema", canal="Walmart",
+                                                orden_id=customer_order_id)
                             actualizar_stock_woo(p["sku"], p["stock"])
                             actualizar_stock_walmart(p["sku"], p["stock"])
                             print(f"[Walmart] Procesado SKU:{sku} Cant:{cantidad} Stock restante:{p['stock']}")
@@ -430,7 +431,7 @@ def walmart_sync_ordenes():
                     errores.append(str(e))
                     print(f"[Walmart] Error linea: {e}")
 
-            marcar_orden_procesada(order_hash)
+            marcar_orden_procesada_texto(customer_order_id)
             nuevas += 1
 
     return {"ok": True, "nuevas_ordenes": nuevas, "errores": errores[:5]}
@@ -474,6 +475,39 @@ def walmart_ver_ordenes():
             resultado[estado+"_error"] = str(e)
 
     return resultado
+
+@app.route("/walmart/reset_y_limpiar")
+def walmart_reset_y_limpiar():
+    """Borra movimientos de Walmart y limpia órdenes procesadas para resincronizar limpio"""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from inventario import get_conn
+    conn = get_conn()
+    cur = conn.cursor()
+
+    # 1. Borrar movimientos de Walmart
+    cur.execute("DELETE FROM movimientos WHERE canal = 'Walmart' AND motivo = 'Venta Walmart'")
+    movimientos_borrados = cur.rowcount
+
+    # 2. Limpiar tabla ordenes_procesadas completamente para Walmart
+    cur.execute("DELETE FROM ordenes_procesadas")
+    ordenes_borradas = cur.rowcount
+
+    # 3. Crear columna order_id_texto si no existe para guardar el ID real
+    cur.execute("""
+        ALTER TABLE ordenes_procesadas
+        ADD COLUMN IF NOT EXISTS order_id_texto TEXT UNIQUE
+    """)
+
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {
+        "ok": True,
+        "movimientos_borrados": movimientos_borrados,
+        "ordenes_borradas": ordenes_borradas,
+        "mensaje": "Listo. Ahora sincroniza órdenes de Walmart desde el panel."
+    }
 
 @app.route("/walmart/ver_fechas")
 def walmart_ver_fechas():
@@ -535,13 +569,14 @@ def walmart_fix_canales():
     from inventario import get_conn
     conn = get_conn()
     cur = conn.cursor()
-    # Restar 4 horas a todos los movimientos de Walmart del 27/04 en UTC (que son del 26/04 en Chile)
+    # Restar 1 hora adicional a movimientos de Walmart del 27/04 (ya se restaron 4, falta 1 más → total 3h)
     cur.execute("""
         UPDATE movimientos
-        SET fecha = fecha - INTERVAL '4 hours'
+        SET fecha = fecha - INTERVAL '1 hour'
         WHERE canal = 'Walmart'
         AND motivo = 'Venta Walmart'
         AND DATE(fecha AT TIME ZONE 'UTC') = '2026-04-27'
+        AND EXTRACT(HOUR FROM fecha AT TIME ZONE 'UTC') = 0
     """)
     actualizados = cur.rowcount
     conn.commit()
@@ -608,7 +643,7 @@ def walmart_sync_debug():
                 if not encontrado:
                     log.append(f"  ❌ SKU {sku} no encontrado en Lusync")
 
-            marcar_orden_procesada(order_hash)
+            marcar_orden_procesada_texto(customer_order_id)
             nuevas += 1
 
     return {"nuevas_ordenes": nuevas, "log": log}
