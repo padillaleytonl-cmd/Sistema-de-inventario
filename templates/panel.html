@@ -1054,40 +1054,40 @@ tbody td {
 
     <!-- Métricas -->
     <div class="metrics-grid">
-      <div class="metric-card">
-        <div class="metric-label">Productos en stock</div>
+      <div class="metric-card" style="border-top:3px solid #2563eb;">
+        <div class="metric-label" style="color:#2563eb;">📦 Productos en stock</div>
         <div class="metric-value" id="metricTotal">—</div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
           <span class="metric-badge badge-info">Total productos</span>
           <button class="btn-ver-mas" onclick="abrirModal('productos')">Ver más</button>
         </div>
       </div>
-      <div class="metric-card">
-        <div class="metric-label">Ventas hoy — total</div>
+      <div class="metric-card" style="border-top:3px solid #059669;">
+        <div class="metric-label" style="color:#059669;">💰 Ventas hoy — total</div>
         <div class="metric-value" id="metricVentas">—</div>
-        <div style="font-size:13px;font-weight:600;color:var(--success);margin-bottom:6px;" id="metricIngreso">$0</div>
+        <div style="font-size:13px;font-weight:600;color:#059669;margin-bottom:6px;" id="metricIngreso">$0</div>
         <div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
-          <span style="font-size:11px;background:var(--info-bg);color:var(--navy);padding:2px 8px;border-radius:20px;" id="ventasWoo">Woo: 0</span>
-          <span style="font-size:11px;background:#f0fff4;color:#059669;padding:2px 8px;border-radius:20px;" id="ventasWalmart">WM: 0</span>
+          <span style="font-size:11px;background:#e6f0ff;color:#2563eb;padding:3px 10px;border-radius:20px;font-weight:600;border:1px solid #bfdbfe;" id="ventasWoo">WC: 0</span>
+          <span style="font-size:11px;background:#d1fae5;color:#059669;padding:3px 10px;border-radius:20px;font-weight:600;border:1px solid #6ee7b7;" id="ventasWalmart">WM: 0</span>
         </div>
         <div style="display:flex;align-items:center;justify-content:space-between;">
           <span class="metric-badge badge-up">Desde medianoche</span>
           <button class="btn-ver-mas" onclick="abrirModal('ventas')">Ver más</button>
         </div>
       </div>
-      <div class="metric-card">
-        <div class="metric-label">Stock bajo</div>
+      <div class="metric-card" style="border-top:3px solid #f59e0b;">
+        <div class="metric-label" style="color:#f59e0b;">⚠️ Stock bajo</div>
         <div class="metric-value" id="metricBajo">—</div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
           <span class="metric-badge badge-warn">Menos de 5 unidades</span>
           <button class="btn-ver-mas" onclick="abrirModal('stockbajo')">Ver más</button>
         </div>
       </div>
-      <div class="metric-card">
-        <div class="metric-label">Canales activos</div>
+      <div class="metric-card" style="border-top:3px solid #7c3aed;">
+        <div class="metric-label" style="color:#7c3aed;">🔗 Canales activos</div>
         <div class="metric-value">2</div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
-          <span class="metric-badge badge-info">Woo + ML próximo</span>
+          <span class="metric-badge" style="background:#f5f0ff;color:#7c3aed;">Woo ● WM ●</span>
           <button class="btn-ver-mas" onclick="abrirModal('canales')">Ver más</button>
         </div>
       </div>
@@ -1893,9 +1893,17 @@ function actualizarDashboard(productos, movimientos){
   const ingEl = document.getElementById('metricIngreso');
   if(ingEl) ingEl.textContent = ingresoHoy > 0 ? '$'+ingresoHoy.toLocaleString('es-CL') : '$0';
   const wooEl = document.getElementById('ventasWoo');
-  if(wooEl) wooEl.textContent = 'Woo: '+ventasWoo.length+' · $'+(ingresoWoo/1000).toFixed(0)+'k';
+  if(wooEl){
+    wooEl.textContent = 'WC: '+ventasWoo.length+' · $'+(ingresoWoo/1000).toFixed(0)+'k';
+    wooEl.style.background = ventasWoo.length > 0 ? '#e6f0ff' : '#f1f5f9';
+    wooEl.style.color = ventasWoo.length > 0 ? '#2563eb' : '#94a3b8';
+  }
   const wmEl = document.getElementById('ventasWalmart');
-  if(wmEl) wmEl.textContent = 'WM: '+ventasWM.length+' · $'+(ingresoWM/1000).toFixed(0)+'k';
+  if(wmEl){
+    wmEl.textContent = 'WM: '+ventasWM.length+' · $'+(ingresoWM/1000).toFixed(0)+'k';
+    wmEl.style.background = ventasWM.length > 0 ? '#d1fae5' : '#f1f5f9';
+    wmEl.style.color = ventasWM.length > 0 ? '#059669' : '#94a3b8';
+  }
 
   // Stock bajo lista
   const stockBajoList = document.getElementById('stockBajoList');
@@ -1947,13 +1955,13 @@ let plazoActual = 'semana';
 
 // Canales que cuentan como venta real
 const CANALES_VENTA = ['WooCommerce','Walmart','MercadoLibre','Falabella','Ripley','Paris','Lider'];
-const MOTIVOS_NO_VENTA = ['Ajuste','Merma','Devolución','Ingreso','ajuste','merma'];
 
 function esVentaReal(m){
-  // Es venta si el canal es un marketplace O si el motivo contiene "Venta"
   if(m.tipo !== 'salida') return false;
+  // Es venta si el canal es un marketplace conocido
   if(CANALES_VENTA.includes(m.canal)) return true;
-  if(m.motivo && m.motivo.includes('Venta')) return true;
+  // O si el motivo contiene "Venta" (venta tienda, etc)
+  if(m.motivo && m.motivo.toLowerCase().includes('venta')) return true;
   return false;
 }
 
@@ -2116,6 +2124,17 @@ function renderTorta(movimientos, productos){
 
   // Calcular ingresos por canal
   const canales = {};
+  // Orden fijo de canales para colores consistentes
+  const ORDEN_CANALES = ['WooCommerce','Walmart','MercadoLibre','Falabella','Ripley','Paris','Manual'];
+  const COLORES_CANAL = {
+    'WooCommerce': '#2563eb',
+    'Walmart': '#059669',
+    'MercadoLibre': '#f59e0b',
+    'Falabella': '#e94560',
+    'Ripley': '#7c3aed',
+    'Paris': '#0369a1',
+    'Manual': '#6b7280'
+  };
   movimientos.filter(m => esVentaReal(m)).forEach(m => {
     const canal = m.canal || 'Manual';
     const prod = productos.find(p => p.sku === m.sku);
@@ -2129,7 +2148,7 @@ function renderTorta(movimientos, productos){
     return;
   }
 
-  const colores = ['#0d1f3c','#2563eb','#0ea5e9','#1D9E75','#BA7517','#E24B4A','#7c3aed'];
+  const colores = ['#059669','#2563eb','#f59e0b','#e94560','#7c3aed','#0369a1','#9333ea','#0d1f3c'];
   const entries = Object.entries(canales).sort((a,b) => b[1]-a[1]);
 
   // Dibujar torta
@@ -2144,7 +2163,7 @@ function renderTorta(movimientos, productos){
     ctx.moveTo(cx, cy);
     ctx.arc(cx, cy, r, startAngle, startAngle+slice);
     ctx.closePath();
-    ctx.fillStyle = colores[i % colores.length];
+    ctx.fillStyle = COLORES_CANAL[canal] || colores[i % colores.length];
     ctx.fill();
     ctx.strokeStyle = 'white';
     ctx.lineWidth = 2;
@@ -2169,8 +2188,9 @@ function renderTorta(movimientos, productos){
   // Leyenda
   leyenda.innerHTML = entries.map(([canal, val], i) => {
     const pct = Math.round((val/total)*100);
+    const colorCanal = COLORES_CANAL[canal] || colores[i % colores.length];
     return `<div style="display:flex;align-items:center;gap:8px;">
-      <div style="width:10px;height:10px;border-radius:50%;background:${colores[i%colores.length]};flex-shrink:0;"></div>
+      <div style="width:10px;height:10px;border-radius:50%;background:${colorCanal};flex-shrink:0;"></div>
       <div style="flex:1;font-size:12px;color:var(--text);">${canal}</div>
       <div style="font-size:12px;font-weight:600;color:var(--navy);">${pct}%</div>
       <div style="font-size:11px;color:var(--muted);">$${val.toLocaleString('es-CL')}</div>
