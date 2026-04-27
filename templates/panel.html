@@ -1043,6 +1043,8 @@ tbody td {
       <div>
         <div class="page-title">Dashboard</div>
         <div class="page-date" id="fechaHoy"></div>
+        <div style="font-size:13px;color:var(--muted);margin-top:2px;font-family:'DM Mono',monospace;" id="relojHoy"></div>
+        <div style="font-size:11px;color:var(--hint);margin-top:2px;" id="horaServidorLabel"></div>
       </div>
       <div class="header-actions">
         <button class="btn-secondary" onclick="syncOrdenes()">&#8635; Sincronizar</button>
@@ -1162,6 +1164,7 @@ tbody td {
       <div>
         <div class="page-title">Inventario</div>
         <div class="page-date">Gestión de productos y stock</div>
+        <div style="font-size:13px;color:var(--muted);margin-top:2px;font-family:'DM Mono',monospace;" id="relojInv"></div>
       </div>
       <div style="display:flex;gap:8px;">
         <button class="btn-secondary" onclick="sincronizarPrecios()">&#8635; Sincronizar precios</button>
@@ -1267,6 +1270,7 @@ tbody td {
       <div>
         <div class="page-title">Historial de movimientos</div>
         <div class="page-date">Registro completo de entradas y salidas</div>
+        <div style="font-size:13px;color:var(--muted);margin-top:2px;font-family:'DM Mono',monospace;" id="relojMov"></div>
       </div>
     </div>
     <div class="card">
@@ -1603,14 +1607,42 @@ let productosGlobal = [];
 let USUARIO = '';
 let PASSWORD = '';
 
-// ── FECHA
-(function(){
+// ── FECHA Y RELOJ EN TIEMPO REAL
+function actualizarReloj(){
   const d = new Date();
-  const opts = { weekday:'long', year:'numeric', month:'long', day:'numeric' };
-  const s = d.toLocaleDateString('es-CL', opts);
-  const el = document.getElementById('fechaHoy');
-  if(el) el.textContent = s.charAt(0).toUpperCase() + s.slice(1);
-})();
+  const optsF = { weekday:'long', year:'numeric', month:'long', day:'numeric' };
+  const fecha = d.toLocaleDateString('es-CL', optsF);
+  const fechaStr = fecha.charAt(0).toUpperCase() + fecha.slice(1);
+
+  const hh = String(d.getHours()).padStart(2,'0');
+  const mm = String(d.getMinutes()).padStart(2,'0');
+  const ss = String(d.getSeconds()).padStart(2,'0');
+  const horaStr = hh+':'+mm+':'+ss;
+
+  ['fechaHoy'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.textContent = fechaStr;
+  });
+  ['relojHoy','relojInv','relojMov'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.textContent = horaStr;
+  });
+}
+actualizarReloj();
+setInterval(actualizarReloj, 1000);
+
+// ── HORA DEL SERVIDOR (para debug de zona horaria)
+function mostrarHoraServidor(){
+  fetch('/hora_servidor').then(r=>r.json()).then(d=>{
+    ['relojHoy','relojInv','relojMov'].forEach(id => {
+      const el = document.getElementById(id);
+      if(el) el.title = 'Servidor UTC: '+d.utc+' | Chile pytz: '+d.chile_pytz;
+    });
+    const srvEl = document.getElementById('horaServidorLabel');
+    if(srvEl) srvEl.textContent = 'Servidor UTC: '+d.utc+' · Chile (pytz): '+d.chile_pytz;
+  }).catch(()=>{});
+}
+mostrarHoraServidor();
 
 // ── TOGGLE PASSWORD
 function togglePass(){
