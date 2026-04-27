@@ -476,6 +476,59 @@ def walmart_ver_ordenes():
 
     return resultado
 
+@app.route("/fix_woo_movimientos")
+def fix_woo_movimientos():
+    """Registra movimientos faltantes de órdenes WooCommerce ya procesadas"""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+
+    res = requests.get(
+        "https://www.babymine.cl/wp-json/wc/v3/orders",
+        params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET,
+                "status": "processing", "per_page": 50}
+    )
+    if res.status_code != 200:
+        return {"error": "Woo error"}
+
+    productos = cargar_productos()
+    registrados = 0
+
+    for o in res.json():
+        # Solo procesar las ya marcadas (que no tienen movimiento)
+        if not orden_ya_procesada(o["id"]):
+            continue
+
+        # Verificar si ya tiene movimiento registrado
+        from inventario import get_conn
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM movimientos WHERE orden_id = %s AND canal = 'WooCommerce'",
+            (str(o["id"]),)
+        )
+        ya_tiene_movimiento = cur.fetchone() is not None
+        cur.close()
+        conn.close()
+
+        if ya_tiene_movimiento:
+            continue
+
+        # Registrar el movimiento faltante
+        for item in o.get("line_items", []):
+            sku = item.get("sku")
+            cantidad = item.get("quantity", 1)
+            for p in productos:
+                if p["sku"] == sku:
+                    registrar_movimiento(
+                        "salida", p["sku"], p["nombre"],
+                        cantidad, "Venta Web",
+                        usuario="Sistema", canal="WooCommerce",
+                        orden_id=str(o["id"])
+                    )
+                    registrados += 1
+
+    return {"ok": True, "movimientos_registrados": registrados}
+
 @app.route("/debug_woo_ordenes")
 def debug_woo_ordenes():
     """Ver órdenes de WooCommerce en estado processing"""
