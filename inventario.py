@@ -231,6 +231,144 @@ def eliminar_producto(sku):
     conn.close()
 
 
+# ── DEVOLUCIONES ──
+
+def init_devoluciones():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS devoluciones (
+            id SERIAL PRIMARY KEY,
+            codigo TEXT UNIQUE,
+            oc_origen TEXT NOT NULL,
+            canal TEXT,
+            sku TEXT,
+            nombre TEXT,
+            cantidad INTEGER DEFAULT 1,
+            motivo_cliente TEXT,
+            estado_producto TEXT,
+            resolucion TEXT,
+            observaciones TEXT,
+            responsable TEXT DEFAULT 'Sistema',
+            estado TEXT DEFAULT 'pendiente',
+            fecha_solicitud TIMESTAMP DEFAULT NOW(),
+            fecha_recepcion TIMESTAMP,
+            fecha_resolucion TIMESTAMP,
+            impacto_stock_reingresado BOOLEAN DEFAULT FALSE
+        )
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def generar_codigo_dev():
+    from datetime import datetime
+    conn = get_conn()
+    cur = conn.cursor()
+    hoy = datetime.now().strftime('%Y%m%d')
+    cur.execute("SELECT COUNT(*) FROM devoluciones WHERE codigo LIKE %s", (f'DEV-{hoy}-%',))
+    count = cur.fetchone()[0] + 1
+    cur.close()
+    conn.close()
+    return f"DEV-{hoy}-{str(count).zfill(4)}"
+
+def crear_devolucion(data):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO devoluciones (oc_origen, canal, sku, nombre, cantidad, motivo_cliente, responsable, estado, fecha_solicitud)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, 'pendiente', NOW())
+        RETURNING id
+    """, (data.get('oc_origen'), data.get('canal'), data.get('sku'), data.get('nombre'),
+          data.get('cantidad', 1), data.get('motivo_cliente'), data.get('responsable', 'Sistema')))
+    dev_id = cur.fetchone()[0]
+    conn.commit()
+    cur.close()
+    conn.close()
+    return dev_id
+
+def asignar_codigo_dev(dev_id, codigo):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE devoluciones SET codigo = %s WHERE id = %s", (codigo, dev_id))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def actualizar_devolucion(dev_id, data):
+    conn = get_conn()
+    cur = conn.cursor()
+    fields = []
+    vals = []
+    for k in ['motivo_cliente','estado_producto','resolucion','observaciones','responsable','estado']:
+        if k in data:
+            fields.append(f"{k} = %s")
+            vals.append(data[k])
+    if data.get('estado') == 'reingresada':
+        fields.append("fecha_resolucion = NOW()")
+        fields.append("impacto_stock_reingresado = TRUE")
+    elif data.get('estado') in ['reenviado','dado_de_baja','reembolsado']:
+        fields.append("fecha_resolucion = NOW()")
+    if data.get('recibido'):
+        fields.append("fecha_recepcion = NOW()")
+    if not fields:
+        return
+    vals.append(dev_id)
+    cur.execute(f"UPDATE devoluciones SET {', '.join(fields)} WHERE id = %s", vals)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def listar_devoluciones(estado=None):
+    conn = get_conn()
+    cur = conn.cursor()
+    if estado and estado != 'todas':
+        cur.execute("""
+            SELECT id, codigo, oc_origen, canal, sku, nombre, cantidad, motivo_cliente,
+                   estado_producto, resolucion, observaciones, responsable, estado,
+                   TO_CHAR(fecha_solicitud, 'DD/MM/YYYY') as fecha_sol,
+                   TO_CHAR(fecha_recepcion, 'DD/MM/YYYY HH24:MI') as fecha_rec,
+                   TO_CHAR(fecha_resolucion, 'DD/MM/YYYY HH24:MI') as fecha_res,
+                   impacto_stock_reingresado
+            FROM devoluciones WHERE estado = %s ORDER BY fecha_solicitud DESC
+        """, (estado,))
+    else:
+        cur.execute("""
+            SELECT id, codigo, oc_origen, canal, sku, nombre, cantidad, motivo_cliente,
+                   estado_producto, resolucion, observaciones, responsable, estado,
+                   TO_CHAR(fecha_solicitud, 'DD/MM/YYYY') as fecha_sol,
+                   TO_CHAR(fecha_recepcion, 'DD/MM/YYYY HH24:MI') as fecha_rec,
+                   TO_CHAR(fecha_resolucion, 'DD/MM/YYYY HH24:MI') as fecha_res,
+                   impacto_stock_reingresado
+            FROM devoluciones ORDER BY fecha_solicitud DESC
+        """)
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    cols = ['id','codigo','oc_origen','canal','sku','nombre','cantidad','motivo_cliente',
+            'estado_producto','resolucion','observaciones','responsable','estado',
+            'fecha_solicitud','fecha_recepcion','fecha_resolucion','impacto_stock_reingresado']
+    return [dict(zip(cols, r)) for r in rows]
+
+def get_devolucion(dev_id=None, codigo=None):
+    conn = get_conn()
+    cur = conn.cursor()
+    if codigo:
+        cur.execute("SELECT * FROM devoluciones WHERE codigo = %s", (codigo,))
+    else:
+        cur.execute("SELECT * FROM devoluciones WHERE id = %s", (dev_id,))
+    row = cur.fetchone()
+    if not row:
+        cur.close(); conn.close(); return None
+    cols = [d[0] for d in cur.description]
+    cur.close()
+    conn.close()
+    d = dict(zip(cols, row))
+    for k in ['fecha_solicitud','fecha_recepcion','fecha_resolucion']:
+        if d.get(k):
+            d[k] = d[k].strftime('%d/%m/%Y %H:%M') if hasattr(d[k], 'strftime') else str(d[k])
+    return d
+
 def orden_ya_procesada_texto(order_id_texto):
     conn = get_conn()
     cur = conn.cursor()

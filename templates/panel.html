@@ -1116,6 +1116,17 @@ tbody td {
   .form-row { grid-template-columns: 1fr 1fr; }
   .navbar-nav { display: none; }
 }
+
+.dev-filter-btn{padding:5px 12px;border-radius:8px;font-size:12px;cursor:pointer;border:0.5px solid var(--border);background:transparent;color:var(--muted);}
+.dev-filter-btn.active{background:var(--text);color:var(--bg);border-color:transparent;}
+.dev-chip{padding:5px 12px;border-radius:8px;font-size:11px;font-weight:500;cursor:pointer;border:1.5px solid transparent;background:var(--bg2);color:var(--muted);transition:all .15s;}
+.dev-chip.sel{border-color:currentColor;}
+.dev-chip.sel[data-val="buen_estado"],.dev-chip.sel[data-val="perfecto"],.dev-chip.sel[data-val="reingresada"]{background:#EAF3DE;color:#27500A;}
+.dev-chip.sel[data-val="reenviado"]{background:#EEEDFE;color:#3C3489;}
+.dev-chip.sel[data-val="danado_reparable"]{background:#FAEEDA;color:#633806;}
+.dev-chip.sel[data-val="danado_baja"],.dev-chip.sel[data-val="dado_de_baja"]{background:#FCEBEB;color:#791F1F;}
+.dev-chip.sel[data-val="reembolsado"]{background:#F1EFE8;color:#444441;}
+.dev-row:hover{background:var(--bg2);}
 </style>
 </head>
 <body>
@@ -1134,6 +1145,7 @@ tbody td {
       <button class="nav-btn active" onclick="showSection('dashboard', this)">Dashboard</button>
       <button class="nav-btn" onclick="showSection('inventario', this)">Inventario</button>
       <button class="nav-btn" onclick="showSection('movimientos', this)">Movimientos</button>
+      <button class="nav-btn" onclick="showSection('devoluciones', this)">Devoluciones</button>
     </div>
     <div class="navbar-right">
       <!-- Selector de canales -->
@@ -1449,6 +1461,162 @@ tbody td {
       <div id="movimientosFooter" style="padding:6px 14px;border-top:0.5px solid var(--border);background:var(--bg2);flex-shrink:0;display:flex;align-items:center;justify-content:space-between;">
         <span style="font-size:11px;color:var(--muted);">— movimientos</span>
         <span style="font-size:11px;color:var(--muted);">↓ scroll para ver más</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SECCIÓN DEVOLUCIONES ── -->
+  <div id="sec-devoluciones" class="main" style="display:none;">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Devoluciones</div>
+        <div class="page-date">Trazabilidad completa de devoluciones por canal</div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-secondary" onclick="abrirModalNuevaDevolucion()">+ Nueva devolución</button>
+      </div>
+    </div>
+
+    <!-- Filtros -->
+    <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap;">
+      <button class="dev-filter-btn active" onclick="filtrarDev('todas',this)">Todas</button>
+      <button class="dev-filter-btn" onclick="filtrarDev('pendiente',this)">Pendientes</button>
+      <button class="dev-filter-btn" onclick="filtrarDev('reingresada',this)">Reingresadas</button>
+      <button class="dev-filter-btn" onclick="filtrarDev('dado_de_baja',this)">Dadas de baja</button>
+      <button class="dev-filter-btn" onclick="filtrarDev('reenviado',this)">Reenviadas</button>
+      <button class="dev-filter-btn" onclick="filtrarDev('reembolsado',this)">Reembolsadas</button>
+      <input id="devBuscador" type="text" placeholder="Buscar OC, SKU, producto, DEV-..." style="margin-left:auto;padding:6px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);width:240px;" oninput="filtrarDevLocal(this.value)">
+    </div>
+
+    <!-- Tabla devoluciones -->
+    <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px;">
+      <div style="display:grid;grid-template-columns:110px minmax(0,1fr) 60px 90px 120px 70px;align-items:center;gap:8px;padding:7px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);">
+        <span style="font-size:10px;font-weight:500;color:var(--muted);">OC ORIGEN</span>
+        <span style="font-size:10px;font-weight:500;color:var(--muted);">PRODUCTO · SKU</span>
+        <span style="font-size:10px;font-weight:500;color:var(--muted);">CANAL</span>
+        <span style="font-size:10px;font-weight:500;color:var(--muted);">FECHA</span>
+        <span style="font-size:10px;font-weight:500;color:var(--muted);">ESTADO</span>
+        <span style="font-size:10px;font-weight:500;color:var(--muted);">ACCIÓN</span>
+      </div>
+      <div id="devolucionesList">
+        <div style="color:var(--hint);font-size:12px;text-align:center;padding:40px;">Cargando devoluciones...</div>
+      </div>
+    </div>
+
+    <!-- Ficha detalle -->
+    <div id="devFicha" style="display:none;">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px;font-weight:500;text-transform:uppercase;letter-spacing:.04em;" id="devFichaTitulo">Ficha de devolución</div>
+      <div style="display:grid;grid-template-columns:1fr 320px;gap:14px;">
+
+        <div class="card" style="padding:16px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <div>
+              <div style="font-size:14px;font-weight:500;color:var(--text);" id="devFichaNombre">—</div>
+              <div style="display:flex;gap:6px;margin-top:4px;align-items:center;flex-wrap:wrap;">
+                <span style="font-size:11px;color:var(--muted);font-family:monospace;" id="devFichaSku">—</span>
+                <span id="devFichaCanal" style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;"></span>
+                <span style="font-size:11px;color:var(--muted);font-family:monospace;" id="devFichaOC">—</span>
+              </div>
+            </div>
+            <span id="devFichaEstadoBadge" style="font-size:11px;font-weight:500;padding:4px 12px;border-radius:20px;"></span>
+          </div>
+
+          <div style="height:0.5px;background:var(--border);margin-bottom:14px;"></div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+            <div>
+              <div style="font-size:10px;color:var(--muted);margin-bottom:3px;">Fecha devolución</div>
+              <div class="input-field" id="devFichaFecha" style="padding:7px 10px;font-size:12px;background:var(--bg2);border:0.5px solid var(--border);border-radius:8px;">—</div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--muted);margin-bottom:3px;">Cantidad devuelta</div>
+              <div class="input-field" id="devFichaCantidad" style="padding:7px 10px;font-size:12px;background:var(--bg2);border:0.5px solid var(--border);border-radius:8px;text-align:center;font-weight:500;">—</div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--muted);margin-bottom:3px;">Motivo del cliente</div>
+              <select id="devMotivoCliente" style="width:100%;padding:7px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
+                <option value="">Sin especificar</option>
+                <option value="Producto defectuoso">Producto defectuoso</option>
+                <option value="No era lo esperado">No era lo esperado</option>
+                <option value="Llegó dañado">Llegó dañado</option>
+                <option value="Error de despacho">Error de despacho</option>
+                <option value="Otro">Otro</option>
+              </select>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--muted);margin-bottom:3px;">Responsable revisión</div>
+              <div class="input-field" style="padding:7px 10px;font-size:12px;background:var(--bg2);border:0.5px solid var(--border);border-radius:8px;">Luis Padilla</div>
+            </div>
+          </div>
+
+          <div style="margin-bottom:14px;">
+            <div style="font-size:10px;color:var(--muted);margin-bottom:6px;">Estado del producto al recibir</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;" id="devEstadoProductoOpts">
+              <button class="dev-chip" data-val="perfecto">Perfecto estado</button>
+              <button class="dev-chip" data-val="buen_estado">Buen estado · reingresar</button>
+              <button class="dev-chip" data-val="danado_reparable">Dañado reparable</button>
+              <button class="dev-chip" data-val="danado_baja">Dañado · dar de baja</button>
+            </div>
+          </div>
+
+          <div style="margin-bottom:14px;">
+            <div style="font-size:10px;color:var(--muted);margin-bottom:6px;">Observaciones</div>
+            <textarea id="devObservaciones" rows="3" style="width:100%;padding:10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);resize:vertical;box-sizing:border-box;" placeholder="Describe el estado del producto, problema observado, etc..."></textarea>
+          </div>
+
+          <div style="margin-bottom:14px;">
+            <div style="font-size:10px;color:var(--muted);margin-bottom:6px;">Resolución</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;" id="devResolucionOpts">
+              <button class="dev-chip" data-val="reingresada">Reingresar al stock</button>
+              <button class="dev-chip" data-val="reenviado">Reenviar producto nuevo</button>
+              <button class="dev-chip" data-val="reembolsado">Reembolso</button>
+              <button class="dev-chip" data-val="dado_de_baja">Dar de baja</button>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr auto;gap:8px;">
+            <button onclick="guardarFichaDevolucion()" style="background:var(--text);color:var(--bg);border:none;border-radius:8px;padding:9px 16px;font-size:12px;cursor:pointer;font-weight:500;">Guardar ficha · actualizar estado</button>
+            <button onclick="generarCodigoDev()" style="background:transparent;border:0.5px solid var(--border);border-radius:8px;padding:9px 14px;font-size:12px;cursor:pointer;color:var(--text);white-space:nowrap;">⊞ Generar código</button>
+          </div>
+
+          <!-- Código generado -->
+          <div id="devCodigoBox" style="display:none;margin-top:10px;background:#1a1f2e;border-radius:8px;padding:12px 14px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;">
+              <div>
+                <div style="font-size:10px;color:#8892a4;margin-bottom:2px;">Código de trazabilidad</div>
+                <div id="devCodigoText" style="font-size:15px;font-weight:500;color:#fff;font-family:monospace;letter-spacing:1px;">—</div>
+              </div>
+              <div style="display:flex;gap:6px;">
+                <button onclick="imprimirEtiquetaDev()" style="background:#378ADD;border:none;border-radius:6px;padding:6px 12px;font-size:11px;color:#fff;cursor:pointer;">Imprimir etiqueta</button>
+                <button onclick="copiarCodigoDev()" style="background:transparent;border:0.5px solid #8892a4;border-radius:6px;padding:6px 10px;font-size:11px;color:#8892a4;cursor:pointer;">Copiar</button>
+              </div>
+            </div>
+            <svg id="devBarcode" style="width:100%;background:#fff;border-radius:4px;padding:8px;"></svg>
+          </div>
+        </div>
+
+        <!-- Panel derecho -->
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div class="card" style="padding:12px 14px;">
+            <div style="font-size:12px;font-weight:500;color:var(--text);margin-bottom:10px;">Línea de tiempo</div>
+            <div id="devTimeline" style="display:flex;flex-direction:column;gap:0;font-size:12px;color:var(--muted);">—</div>
+          </div>
+          <div class="card" style="padding:12px 14px;">
+            <div style="font-size:12px;font-weight:500;color:var(--text);margin-bottom:8px;">Impacto en inventario</div>
+            <div id="devImpacto" style="font-size:12px;color:var(--muted);">—</div>
+          </div>
+          <div class="card" style="padding:12px 14px;background:var(--bg2);">
+            <div style="font-size:11px;font-weight:500;color:var(--text);margin-bottom:6px;">Estados posibles</div>
+            <div style="display:flex;flex-direction:column;gap:5px;font-size:10px;color:var(--muted);">
+              <div style="display:flex;align-items:center;gap:6px;"><span style="background:#FAEEDA;color:#633806;font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;">Pendiente</span> recibido, sin revisar</div>
+              <div style="display:flex;align-items:center;gap:6px;"><span style="background:#EAF3DE;color:#27500A;font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;">Reingresada</span> volvió al stock</div>
+              <div style="display:flex;align-items:center;gap:6px;"><span style="background:#EEEDFE;color:#3C3489;font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;">Reenviado</span> se despachó repuesto</div>
+              <div style="display:flex;align-items:center;gap:6px;"><span style="background:#FCEBEB;color:#791F1F;font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;">Dado de baja</span> no se puede vender</div>
+              <div style="display:flex;align-items:center;gap:6px;"><span style="background:#F1EFE8;color:#444441;font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;">Reembolsado</span> nota de crédito emitida</div>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
   </div>
@@ -1871,7 +2039,7 @@ function doLogout(){
 
 // ── NAVEGACIÓN
 function showSection(sec, btn){
-  ['dashboard','inventario','movimientos','configuracion'].forEach(s => {
+  ['dashboard','inventario','movimientos','devoluciones','configuracion'].forEach(s => {
     const el = document.getElementById('sec-' + s);
     if(el) el.style.display = s === sec ? '' : 'none';
   });
@@ -1880,6 +2048,7 @@ function showSection(sec, btn){
   if(gear) gear.classList.remove('active');
   if(btn) btn.classList.add('active');
   if(sec === 'movimientos') cargarMovimientosFull();
+  if(sec === 'devoluciones') cargarDevoluciones('todas');
   if(sec === 'configuracion'){
     if(gear) gear.classList.add('active');
     cargarConfiguracion();
@@ -3136,6 +3305,281 @@ document.getElementById('modalPrecios').addEventListener('click', function(e){
 // ── CARGAR DATOS AL INICIAR
 cargar();
 setInterval(() => fetch('/sync_ordenes').then(r=>r.json()).then(()=>cargar()), 15000);
+
+// ── JSBARCODE CDN
+(function loadJsBarcode(){
+  const s = document.createElement('script');
+  s.src = 'https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js';
+  document.head.appendChild(s);
+})();
+
+// ── DEVOLUCIONES
+let _devolucionesTodas = [];
+let _devActualId = null;
+let _devEstadoProductoSel = '';
+let _devResolucionSel = '';
+
+const DEV_ESTADO_BADGE = {
+  pendiente:    {bg:'#FAEEDA',color:'#633806',label:'Pendiente revisión'},
+  reingresada:  {bg:'#EAF3DE',color:'#27500A',label:'Reingresada'},
+  reenviado:    {bg:'#EEEDFE',color:'#3C3489',label:'Reenviado'},
+  dado_de_baja: {bg:'#FCEBEB',color:'#791F1F',label:'Dado de baja'},
+  reembolsado:  {bg:'#F1EFE8',color:'#444441',label:'Reembolsado'},
+};
+const DEV_CANAL_BADGE = {
+  Walmart:      {bg:'#E1F5EE',color:'#085041',label:'WM'},
+  WooCommerce:  {bg:'#E6F1FB',color:'#0C447C',label:'WC'},
+  MercadoLibre: {bg:'#FAEEDA',color:'#633806',label:'ML'},
+};
+
+function estadoBadgeHtml(estado){
+  const e = DEV_ESTADO_BADGE[estado] || {bg:'#F1EFE8',color:'#444441',label:estado||'—'};
+  return `<span style="background:${e.bg};color:${e.color};font-size:10px;font-weight:500;padding:2px 8px;border-radius:20px;">${e.label}</span>`;
+}
+function canalBadgeHtml(canal){
+  const c = DEV_CANAL_BADGE[canal] || {bg:'#F1EFE8',color:'#444441',label:canal||'—'};
+  return `<span style="background:${c.bg};color:${c.color};font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;">${c.label}</span>`;
+}
+
+function cargarDevoluciones(estado){
+  fetch('/devoluciones?estado='+estado)
+    .then(r=>r.json())
+    .then(d=>{
+      _devolucionesTodas = d.devoluciones || [];
+      renderDevoluciones(_devolucionesTodas);
+    });
+}
+
+function filtrarDev(estado, btn){
+  document.querySelectorAll('.dev-filter-btn').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+  cargarDevoluciones(estado);
+  document.getElementById('devFicha').style.display = 'none';
+  _devActualId = null;
+}
+
+function filtrarDevLocal(q){
+  q = q.toLowerCase();
+  const filtradas = _devolucionesTodas.filter(d =>
+    (d.oc_origen||'').toLowerCase().includes(q) ||
+    (d.sku||'').toLowerCase().includes(q) ||
+    (d.nombre||'').toLowerCase().includes(q) ||
+    (d.codigo||'').toLowerCase().includes(q)
+  );
+  renderDevoluciones(filtradas);
+}
+
+function renderDevoluciones(lista){
+  const el = document.getElementById('devolucionesList');
+  if(!el) return;
+  if(!lista.length){
+    el.innerHTML = '<div style="color:var(--hint);font-size:12px;text-align:center;padding:40px;">Sin devoluciones registradas</div>';
+    return;
+  }
+  el.innerHTML = lista.map((d,i) => {
+    const divider = i < lista.length-1 ? '<div style="height:0.5px;background:var(--border);"></div>' : '';
+    return `<div class="dev-row" style="display:grid;grid-template-columns:110px minmax(0,1fr) 60px 90px 120px 70px;align-items:center;gap:8px;padding:8px 14px;cursor:pointer;" onclick="abrirFichaDev(${d.id})">
+      <div style="font-size:11px;font-family:monospace;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${d.oc_origen||'—'}</div>
+      <div style="min-width:0;">
+        <div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${d.nombre||'—'}</div>
+        <div style="font-size:10px;color:var(--hint);">${d.sku||'—'}${d.codigo?' · <span style="font-family:monospace;">'+d.codigo+'</span>':''}</div>
+      </div>
+      ${canalBadgeHtml(d.canal)}
+      <div style="font-size:11px;color:var(--muted);">${d.fecha_solicitud||'—'}</div>
+      ${estadoBadgeHtml(d.estado)}
+      <button onclick="event.stopPropagation();abrirFichaDev(${d.id})" style="font-size:11px;background:transparent;border:0.5px solid var(--border);border-radius:6px;padding:3px 10px;cursor:pointer;color:var(--text);">Ver</button>
+    </div>${divider}`;
+  }).join('');
+}
+
+function abrirFichaDev(id){
+  fetch('/devoluciones/'+id)
+    .then(r=>r.json())
+    .then(d=>{
+      const dev = d.devolucion;
+      _devActualId = id;
+      _devEstadoProductoSel = dev.estado_producto || '';
+      _devResolucionSel = dev.resolucion || '';
+
+      document.getElementById('devFichaTitulo').textContent = 'Ficha · ' + (dev.nombre||'Devolución');
+      document.getElementById('devFichaNombre').textContent = dev.nombre||'—';
+      document.getElementById('devFichaSku').textContent = dev.sku||'—';
+      document.getElementById('devFichaOC').textContent = dev.oc_origen||'—';
+      document.getElementById('devFichaFecha').textContent = dev.fecha_solicitud||'—';
+      document.getElementById('devFichaCantidad').textContent = dev.cantidad||'1';
+
+      const cb = DEV_CANAL_BADGE[dev.canal]||{bg:'#F1EFE8',color:'#444441',label:dev.canal||'—'};
+      const cEl = document.getElementById('devFichaCanal');
+      cEl.textContent = cb.label; cEl.style.background = cb.bg; cEl.style.color = cb.color;
+
+      const eb = DEV_ESTADO_BADGE[dev.estado]||{bg:'#F1EFE8',color:'#444441',label:dev.estado||'—'};
+      const eEl = document.getElementById('devFichaEstadoBadge');
+      eEl.textContent = eb.label; eEl.style.background = eb.bg; eEl.style.color = eb.color;
+
+      document.getElementById('devMotivoCliente').value = dev.motivo_cliente||'';
+      document.getElementById('devObservaciones').value = dev.observaciones||'';
+
+      // Chips estado producto
+      document.querySelectorAll('#devEstadoProductoOpts .dev-chip').forEach(b=>{
+        b.classList.toggle('sel', b.dataset.val === _devEstadoProductoSel);
+      });
+      // Chips resolución
+      document.querySelectorAll('#devResolucionOpts .dev-chip').forEach(b=>{
+        b.classList.toggle('sel', b.dataset.val === _devResolucionSel);
+      });
+
+      // Timeline
+      const tl = document.getElementById('devTimeline');
+      const eventos = [
+        {label:'Devolución solicitada', fecha:dev.fecha_solicitud, color:'#378ADD'},
+        dev.fecha_recepcion ? {label:'Producto recibido en bodega', fecha:dev.fecha_recepcion, color:'#378ADD'} : null,
+        dev.codigo ? {label:'Código '+dev.codigo+' generado', fecha:dev.fecha_recepcion||dev.fecha_solicitud, color:'#EF9F27'} : null,
+        dev.fecha_resolucion ? {label:'Resuelto · '+(DEV_ESTADO_BADGE[dev.estado]||{label:dev.estado}).label, fecha:dev.fecha_resolucion, color:'#27500A'} : {label:'Pendiente resolución', fecha:null, color:'#D3D1C7'},
+      ].filter(Boolean);
+      tl.innerHTML = eventos.map((e,i) => {
+        const isLast = i === eventos.length-1;
+        return `<div style="display:flex;gap:10px;padding-bottom:${isLast?'0':'10px'};">
+          <div style="display:flex;flex-direction:column;align-items:center;">
+            <div style="width:10px;height:10px;border-radius:50%;background:${e.color};flex-shrink:0;margin-top:2px;"></div>
+            ${!isLast?'<div style="width:1.5px;flex:1;background:var(--border);min-height:18px;"></div>':''}
+          </div>
+          <div>
+            <div style="font-size:12px;color:var(--text);">${e.label}</div>
+            ${e.fecha?`<div style="font-size:10px;color:var(--muted);">${e.fecha}</div>`:''}
+          </div>
+        </div>`;
+      }).join('');
+
+      // Impacto stock
+      const imp = document.getElementById('devImpacto');
+      const prod = (window.productosGlobal||[]).find(p=>p.sku===dev.sku);
+      const stockActual = prod ? prod.stock : '?';
+      imp.innerHTML = `
+        <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:0.5px solid var(--border);"><span style="color:var(--muted);">Stock actual</span><span style="font-weight:500;">${stockActual} un.</span></div>
+        <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:0.5px solid var(--border);"><span style="color:var(--muted);">Cantidad devuelta</span><span style="color:#A32D2D;font-weight:500;">−${dev.cantidad||1}</span></div>
+        ${dev.impacto_stock_reingresado
+          ? `<div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="color:var(--muted);">Reingresado al stock</span><span style="color:#27500A;font-weight:500;">+${dev.cantidad||1}</span></div>`
+          : `<div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="color:var(--muted);">Si se reingresa</span><span style="color:#27500A;font-weight:500;">→ ${prod ? prod.stock + (dev.cantidad||1) : '?'} un.</span></div>`}`;
+
+      // Código si ya existe
+      if(dev.codigo){
+        mostrarCodigoDev(dev.codigo);
+      } else {
+        document.getElementById('devCodigoBox').style.display = 'none';
+      }
+
+      document.getElementById('devFicha').style.display = '';
+      document.getElementById('devFicha').scrollIntoView({behavior:'smooth', block:'start'});
+    });
+}
+
+// Chips interactivos
+document.addEventListener('click', function(e){
+  const chip = e.target.closest('.dev-chip');
+  if(!chip) return;
+  const parent = chip.closest('#devEstadoProductoOpts, #devResolucionOpts');
+  if(!parent) return;
+  parent.querySelectorAll('.dev-chip').forEach(b=>b.classList.remove('sel'));
+  chip.classList.add('sel');
+  if(parent.id === 'devEstadoProductoOpts') _devEstadoProductoSel = chip.dataset.val;
+  else _devResolucionSel = chip.dataset.val;
+});
+
+function guardarFichaDevolucion(){
+  if(!_devActualId) return;
+  const data = {
+    motivo_cliente: document.getElementById('devMotivoCliente').value,
+    observaciones: document.getElementById('devObservaciones').value,
+    estado_producto: _devEstadoProductoSel,
+    resolucion: _devResolucionSel,
+    estado: _devResolucionSel || 'pendiente',
+    recibido: true,
+  };
+  fetch('/devoluciones/'+_devActualId+'/actualizar', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)
+  }).then(r=>r.json()).then(d=>{
+    if(d.ok){
+      toast('Ficha guardada');
+      cargarDevoluciones('todas');
+      abrirFichaDev(_devActualId);
+    }
+  });
+}
+
+function generarCodigoDev(){
+  if(!_devActualId) return;
+  fetch('/devoluciones/'+_devActualId+'/generar_codigo', {method:'POST'})
+    .then(r=>r.json())
+    .then(d=>{
+      if(d.codigo) mostrarCodigoDev(d.codigo);
+    });
+}
+
+function mostrarCodigoDev(codigo){
+  document.getElementById('devCodigoBox').style.display = '';
+  document.getElementById('devCodigoText').textContent = codigo;
+  const svgEl = document.getElementById('devBarcode');
+  if(window.JsBarcode){
+    JsBarcode(svgEl, codigo, {
+      format:'CODE128', width:2, height:60,
+      displayValue:true, fontSize:13, margin:8,
+      background:'#ffffff', lineColor:'#000000'
+    });
+  } else {
+    setTimeout(()=>{ if(window.JsBarcode) JsBarcode(svgEl, codigo, {format:'CODE128',width:2,height:60,displayValue:true,fontSize:13,margin:8}); }, 1500);
+  }
+}
+
+function copiarCodigoDev(){
+  const txt = document.getElementById('devCodigoText').textContent;
+  navigator.clipboard.writeText(txt).then(()=>toast('Código copiado'));
+}
+
+function imprimirEtiquetaDev(){
+  const codigo = document.getElementById('devCodigoText').textContent;
+  const svgEl = document.getElementById('devBarcode');
+  const svgHtml = svgEl ? svgEl.outerHTML : '';
+  const nombre = document.getElementById('devFichaNombre').textContent;
+  const sku = document.getElementById('devFichaSku').textContent;
+  const oc = document.getElementById('devFichaOC').textContent;
+  const w = window.open('','_blank','width=400,height=300');
+  w.document.write(`<!DOCTYPE html><html><head><title>Etiqueta ${codigo}</title>
+    <style>body{font-family:monospace;padding:20px;text-align:center;}
+    .titulo{font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;}
+    .nombre{font-size:13px;font-weight:bold;margin:6px 0;}
+    .detalle{font-size:11px;color:#444;margin:2px 0;}
+    .codigo{font-size:16px;font-weight:bold;letter-spacing:2px;margin-top:8px;}
+    svg{max-width:100%;}</style></head>
+    <body onload="window.print()">
+    <div class="titulo">Lusync · Devolución</div>
+    ${svgHtml}
+    <div class="codigo">${codigo}</div>
+    <div class="nombre">${nombre}</div>
+    <div class="detalle">${sku} · OC: ${oc}</div>
+    </body></html>`);
+  w.document.close();
+}
+
+function abrirModalNuevaDevolucion(){
+  const oc = prompt('Número de orden de origen (OC Walmart o WooCommerce):');
+  if(!oc) return;
+  const canal = prompt('Canal (Walmart / WooCommerce / MercadoLibre):') || 'Manual';
+  const sku = prompt('SKU del producto devuelto:');
+  if(!sku) return;
+  const prod = (window.productosGlobal||[]).find(p=>p.sku===sku);
+  const nombre = prod ? prod.nombre : prompt('Nombre del producto:') || sku;
+  const cantidad = parseInt(prompt('Cantidad devuelta:') || '1');
+  fetch('/devoluciones/nueva', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({oc_origen:oc, canal, sku, nombre, cantidad, responsable:'Luis Padilla'})
+  }).then(r=>r.json()).then(d=>{
+    if(d.ok){
+      toast('Devolución creada');
+      cargarDevoluciones('todas');
+      setTimeout(()=>abrirFichaDev(d.id), 500);
+    }
+  });
+}
 </script>
 </body>
 </html>

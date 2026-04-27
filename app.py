@@ -12,12 +12,16 @@ from inventario import (cargar_productos, guardar_productos, guardar_producto,
                         registrar_movimiento, cargar_movimientos, cargar_movimientos_hoy,
                         init_db, orden_ya_procesada, marcar_orden_procesada, actualizar_precios,
                         get_configuracion, set_configuracion, set_lead_time, eliminar_producto,
-                        orden_ya_procesada_texto, marcar_orden_procesada_texto)
+                        orden_ya_procesada_texto, marcar_orden_procesada_texto,
+                        init_devoluciones, generar_codigo_dev, crear_devolucion,
+                        asignar_codigo_dev, actualizar_devolucion, listar_devoluciones,
+                        get_devolucion)
 
 app = Flask(__name__)
 app.secret_key = "clave_super_segura"
 
 init_db()
+init_devoluciones()
 
 # ── SYNC AUTOMÁTICO WALMART CADA 5 MINUTOS ──
 def _sync_walmart_automatico():
@@ -991,6 +995,81 @@ def lead_time():
     data = request.json
     set_lead_time(data.get("sku"), data.get("lead_time", 45))
     return {"ok": True}
+
+# ── DEVOLUCIONES ──
+
+@app.route("/devoluciones")
+def devoluciones_list():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    estado = request.args.get("estado", "todas")
+    return {"devoluciones": listar_devoluciones(estado)}
+
+@app.route("/devoluciones/nueva", methods=["POST"])
+def devoluciones_nueva():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    data = request.json
+    dev_id = crear_devolucion(data)
+    return {"ok": True, "id": dev_id}
+
+@app.route("/devoluciones/<int:dev_id>")
+def devoluciones_get(dev_id):
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    dev = get_devolucion(dev_id=dev_id)
+    if not dev:
+        return {"error": "no encontrada"}, 404
+    return {"devolucion": dev}
+
+@app.route("/devoluciones/buscar")
+def devoluciones_buscar_codigo():
+    """Lookup por código DEV para pistoleo"""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    codigo = request.args.get("codigo", "").strip()
+    dev = get_devolucion(codigo=codigo)
+    if not dev:
+        return {"error": "no encontrada"}, 404
+    return {"devolucion": dev}
+
+@app.route("/devoluciones/<int:dev_id>/actualizar", methods=["POST"])
+def devoluciones_actualizar(dev_id):
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    data = request.json
+    dev = get_devolucion(dev_id=dev_id)
+    if not dev:
+        return {"error": "no encontrada"}, 404
+    actualizar_devolucion(dev_id, data)
+    # Si se reingresa al stock, registrar movimiento
+    if data.get("estado") == "reingresada" and dev.get("sku") and not dev.get("impacto_stock_reingresado"):
+        productos = cargar_productos()
+        for p in productos:
+            if p["sku"] == dev["sku"]:
+                p["stock"] += int(dev.get("cantidad", 1))
+                guardar_producto(p)
+                registrar_movimiento("entrada", p["sku"], p["nombre"],
+                                     int(dev.get("cantidad", 1)), "Devolución reingresada",
+                                     usuario=session.get("usuario", "Sistema"),
+                                     canal="Manual", orden_id=dev.get("oc_origen"))
+                actualizar_stock_woo(p["sku"], p["stock"])
+                actualizar_stock_walmart(p["sku"], p["stock"])
+                break
+    return {"ok": True}
+
+@app.route("/devoluciones/<int:dev_id>/generar_codigo", methods=["POST"])
+def devoluciones_generar_codigo(dev_id):
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    dev = get_devolucion(dev_id=dev_id)
+    if not dev:
+        return {"error": "no encontrada"}, 404
+    if dev.get("codigo"):
+        return {"ok": True, "codigo": dev["codigo"]}
+    codigo = generar_codigo_dev()
+    asignar_codigo_dev(dev_id, codigo)
+    return {"ok": True, "codigo": codigo}
 
 # ── LOGIN / PANEL ──
 
