@@ -1088,6 +1088,22 @@ def devoluciones_actualizar(dev_id):
                 break
     return {"ok": True}
 
+@app.route("/devoluciones/<int:dev_id>/eliminar", methods=["POST"])
+def devoluciones_eliminar(dev_id):
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    data = request.json
+    clave = data.get("clave", "")
+    clave_admin = __import__('os').environ.get("PASSWORD", "")
+    if clave != clave_admin:
+        return {"error": "Clave incorrecta"}, 403
+    conn = __import__('psycopg2').connect(__import__('os').environ.get("DATABASE_URL"))
+    cur = conn.cursor()
+    cur.execute("DELETE FROM devoluciones WHERE id = %s", (dev_id,))
+    conn.commit()
+    cur.close(); conn.close()
+    return {"ok": True}
+
 @app.route("/devoluciones/<int:dev_id>/generar_codigo", methods=["POST"])
 def devoluciones_generar_codigo(dev_id):
     if not session.get("logged"):

@@ -1477,6 +1477,34 @@ tbody td {
       </div>
     </div>
 
+    <!-- Campo pistoleo lookup -->
+    <div style="margin-bottom:12px;">
+      <div style="display:flex;gap:8px;align-items:center;">
+        <div style="position:relative;flex:0 0 320px;">
+          <input id="devPistoleoInput" type="text" placeholder="Escanear código DEV-..." autocomplete="off"
+            style="width:100%;padding:8px 10px 8px 36px;border:1.5px solid #378ADD;border-radius:8px;font-size:13px;font-family:monospace;background:#E6F1FB;color:#0C447C;box-sizing:border-box;"
+            onkeydown="if(event.key==='Enter') lookupPistoleoDev(this.value)">
+          <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:14px;">⊡</span>
+        </div>
+        <span style="font-size:11px;color:var(--muted);">Pistolée un código DEV- para ver su estado al instante</span>
+      </div>
+    </div>
+
+    <!-- Modal lookup pistoleo -->
+    <div id="modalPistoleoDev" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9100;align-items:center;justify-content:center;">
+      <div style="background:var(--bg);border:0.5px solid var(--border);border-radius:12px;padding:24px;width:440px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.18);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+          <div style="font-size:15px;font-weight:500;color:var(--text);">Devolución escaneada</div>
+          <button onclick="cerrarModalPistoleoDev()" style="background:transparent;border:none;font-size:18px;cursor:pointer;color:var(--muted);">✕</button>
+        </div>
+        <div id="pistoleoDevContent"></div>
+        <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
+          <button onclick="cerrarModalPistoleoDev()" style="background:transparent;border:0.5px solid var(--border);border-radius:8px;padding:7px 14px;font-size:12px;cursor:pointer;color:var(--text);">Cerrar</button>
+          <button id="pistoleoVerFichaBtn" onclick="abrirFichaDesdeModal()" style="background:var(--text);color:var(--bg);border:none;border-radius:8px;padding:7px 16px;font-size:12px;cursor:pointer;font-weight:500;">Ver ficha completa →</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Filtros -->
     <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap;">
       <button class="dev-filter-btn active" onclick="filtrarDev('todas',this)">Todas</button>
@@ -1574,9 +1602,10 @@ tbody td {
             </div>
           </div>
 
-          <div style="display:grid;grid-template-columns:1fr auto;gap:8px;">
+          <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;">
             <button onclick="guardarFichaDevolucion()" style="background:var(--text);color:var(--bg);border:none;border-radius:8px;padding:9px 16px;font-size:12px;cursor:pointer;font-weight:500;">Guardar ficha · actualizar estado</button>
             <button onclick="generarCodigoDev()" style="background:transparent;border:0.5px solid var(--border);border-radius:8px;padding:9px 14px;font-size:12px;cursor:pointer;color:var(--text);white-space:nowrap;">⊞ Generar código</button>
+            <button onclick="eliminarDevolucion()" style="background:transparent;border:0.5px solid #F09595;border-radius:8px;padding:9px 14px;font-size:12px;cursor:pointer;color:#A32D2D;white-space:nowrap;">🗑 Eliminar</button>
           </div>
 
           <!-- Código generado -->
@@ -3361,6 +3390,105 @@ document.getElementById('modalPrecios').addEventListener('click', function(e){
 cargar();
 setInterval(() => fetch('/sync_ordenes').then(r=>r.json()).then(()=>cargar()), 15000);
 
+// ── ELIMINAR DEVOLUCIÓN (solo admin)
+function eliminarDevolucion(){
+  if(!_devActualId){ toast('Sin devolución seleccionada'); return; }
+  const clave = prompt('Clave de administrador para eliminar esta devolución:');
+  if(!clave) return;
+  fetch('/devoluciones/'+_devActualId+'/eliminar', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({clave})
+  })
+  .then(r=>r.json())
+  .then(d=>{
+    if(d.ok){
+      toast('Devolución eliminada');
+      document.getElementById('devFicha').style.display = 'none';
+      _devActualId = null;
+      cargarDevoluciones('todas');
+    } else {
+      toast(d.error || 'Clave incorrecta', true);
+    }
+  });
+}
+
+// ── PISTOLEO LOOKUP DEV
+let _pistoleoDevId = null;
+
+function lookupPistoleoDev(codigo){
+  codigo = (codigo||'').trim();
+  if(!codigo || !codigo.startsWith('DEV-')) return;
+  document.getElementById('devPistoleoInput').value = '';
+
+  fetch('/devoluciones/buscar?codigo=' + encodeURIComponent(codigo))
+    .then(r=>r.json())
+    .then(d=>{
+      if(d.error){
+        toast('Código no encontrado: ' + codigo, true);
+        return;
+      }
+      const dev = d.devolucion;
+      _pistoleoDevId = dev.id;
+      const eb = DEV_ESTADO_BADGE[dev.estado] || {bg:'#F1EFE8',color:'#444441',label:dev.estado||'—'};
+      const cb = DEV_CANAL_BADGE[dev.canal] || {bg:'#F1EFE8',color:'#444441',label:dev.canal||'—'};
+
+      document.getElementById('pistoleoDevContent').innerHTML = `
+        <div style="background:var(--bg2);border:0.5px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">
+            <div style="min-width:0;">
+              <div style="font-size:14px;font-weight:500;color:var(--text);">${dev.nombre||'—'}</div>
+              <div style="display:flex;gap:6px;margin-top:4px;align-items:center;flex-wrap:wrap;">
+                <span style="font-size:11px;font-family:monospace;color:var(--muted);">${dev.sku||'—'}</span>
+                <span style="background:${cb.bg};color:${cb.color};font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;">${cb.label}</span>
+              </div>
+            </div>
+            <span style="background:${eb.bg};color:${eb.color};font-size:11px;font-weight:500;padding:4px 12px;border-radius:20px;flex-shrink:0;margin-left:10px;">${eb.label}</span>
+          </div>
+          <div style="height:0.5px;background:var(--border);margin-bottom:10px;"></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;">
+            <div><span style="color:var(--muted);">OC origen</span><div style="font-family:monospace;color:var(--text);margin-top:2px;">${dev.oc_origen||'—'}</div></div>
+            <div><span style="color:var(--muted);">Cantidad</span><div style="font-weight:500;color:var(--text);margin-top:2px;">${dev.cantidad||1} un.</div></div>
+            <div><span style="color:var(--muted);">Fecha solicitud</span><div style="color:var(--text);margin-top:2px;">${dev.fecha_solicitud||'—'}</div></div>
+            <div><span style="color:var(--muted);">Código</span><div style="font-family:monospace;color:var(--text);margin-top:2px;font-size:11px;">${dev.codigo||'—'}</div></div>
+          </div>
+          ${dev.observaciones ? `<div style="margin-top:10px;font-size:11px;color:var(--muted);font-style:italic;border-top:0.5px solid var(--border);padding-top:8px;">"${dev.observaciones}"</div>` : ''}
+        </div>
+        ${dev.resolucion ? `<div style="font-size:12px;color:var(--muted);">Resolución: <strong style="color:var(--text);">${dev.resolucion.replace(/_/g,' ')}</strong></div>` : ''}
+      `;
+
+      // Actualizar chips resolución si hay
+      document.querySelectorAll('#devResolucionOpts .dev-chip').forEach(b=>{
+        b.classList.toggle('sel', b.dataset.val === (dev.resolucion||''));
+      });
+
+      document.getElementById('modalPistoleoDev').style.display = 'flex';
+    })
+    .catch(()=> toast('Error de conexión', true));
+}
+
+function cerrarModalPistoleoDev(){
+  document.getElementById('modalPistoleoDev').style.display = 'none';
+  document.getElementById('devPistoleoInput').focus();
+}
+
+function abrirFichaDesdeModal(){
+  cerrarModalPistoleoDev();
+  if(_pistoleoDevId) abrirFichaDev(_pistoleoDevId);
+}
+
+// Escuchar input del pistoleo (lector dispara Enter)
+document.addEventListener('DOMContentLoaded', function(){
+  const inp = document.getElementById('devPistoleoInput');
+  if(inp){
+    inp.addEventListener('keydown', function(e){
+      if(e.key === 'Enter'){
+        lookupPistoleoDev(this.value);
+      }
+    });
+  }
+});
+
 // ── JSBARCODE CDN
 (function loadJsBarcode(){
   const s = document.createElement('script');
@@ -3592,26 +3720,117 @@ function copiarCodigoDev(){
 
 function imprimirEtiquetaDev(){
   const codigo = document.getElementById('devCodigoText').textContent;
-  const svgEl = document.getElementById('devBarcode');
-  const svgHtml = svgEl ? svgEl.outerHTML : '';
   const nombre = document.getElementById('devFichaNombre').textContent;
-  const sku = document.getElementById('devFichaSku').textContent;
-  const oc = document.getElementById('devFichaOC').textContent;
-  const w = window.open('','_blank','width=400,height=300');
-  w.document.write(`<!DOCTYPE html><html><head><title>Etiqueta ${codigo}</title>
-    <style>body{font-family:monospace;padding:20px;text-align:center;}
-    .titulo{font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;}
-    .nombre{font-size:13px;font-weight:bold;margin:6px 0;}
-    .detalle{font-size:11px;color:#444;margin:2px 0;}
-    .codigo{font-size:16px;font-weight:bold;letter-spacing:2px;margin-top:8px;}
-    svg{max-width:100%;}</style></head>
-    <body onload="window.print()">
-    <div class="titulo">Lusync · Devolución</div>
-    ${svgHtml}
-    <div class="codigo">${codigo}</div>
+  const sku    = document.getElementById('devFichaSku').textContent;
+  const oc     = document.getElementById('devFichaOC').textContent;
+  const canal  = document.getElementById('devFichaCanal').textContent;
+  const estado = document.getElementById('devFichaEstadoBadge').textContent;
+  const fecha  = new Date().toLocaleDateString('es-CL');
+
+  // Generar SVG del código de barras inline para la impresión
+  const tempSvg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+  if(window.JsBarcode){
+    JsBarcode(tempSvg, codigo, {
+      format:'CODE128', width:2.2, height:44,
+      displayValue:true, fontSize:10, margin:4,
+      background:'#ffffff', lineColor:'#000000'
+    });
+  }
+  const svgHtml = tempSvg.outerHTML;
+
+  const w = window.open('','_blank','width=300,height=200');
+  w.document.write(`<!DOCTYPE html><html><head>
+    <meta charset="UTF-8">
+    <title>Etiqueta ${codigo}</title>
+    <style>
+      /* Etiqueta 60mm x 40mm — configurar impresora en ese tamaño */
+      @page {
+        size: 60mm 40mm;
+        margin: 0;
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        width: 60mm;
+        height: 40mm;
+        font-family: Arial, Helvetica, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: space-between;
+        padding: 2mm 2mm 1.5mm 2mm;
+        overflow: hidden;
+      }
+      .top-row {
+        width: 100%;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .marca {
+        font-size: 7pt;
+        font-weight: bold;
+        color: #1a1f2e;
+        letter-spacing: .03em;
+      }
+      .dev-badge {
+        font-size: 6pt;
+        font-weight: bold;
+        background: #FAEEDA;
+        color: #633806;
+        padding: 1px 5px;
+        border-radius: 3px;
+      }
+      .barcode-wrap {
+        width: 100%;
+        display: flex;
+        justify-content: center;
+      }
+      .barcode-wrap svg {
+        max-width: 56mm;
+        height: auto;
+      }
+      .nombre {
+        font-size: 6.5pt;
+        font-weight: bold;
+        color: #000;
+        text-align: center;
+        width: 100%;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 56mm;
+      }
+      .bottom-row {
+        width: 100%;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .meta {
+        font-size: 5.5pt;
+        color: #444;
+      }
+      .canal-tag {
+        font-size: 5.5pt;
+        font-weight: bold;
+        background: #eee;
+        padding: 1px 4px;
+        border-radius: 2px;
+      }
+    </style>
+  </head>
+  <body onload="window.print();setTimeout(()=>window.close(),800)">
+    <div class="top-row">
+      <span class="marca">LUSYNC</span>
+      <span class="dev-badge">DEV</span>
+    </div>
+    <div class="barcode-wrap">${svgHtml}</div>
     <div class="nombre">${nombre}</div>
-    <div class="detalle">${sku} · OC: ${oc}</div>
-    </body></html>`);
+    <div class="bottom-row">
+      <span class="meta">SKU: ${sku} · OC: ${oc}</span>
+      <span class="canal-tag">${canal}</span>
+    </div>
+  </body></html>`);
   w.document.close();
 }
 
