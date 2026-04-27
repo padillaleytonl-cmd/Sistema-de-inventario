@@ -185,16 +185,18 @@ def cargar_movimientos_hoy():
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT tipo, sku, nombre, cantidad, motivo, TO_CHAR(fecha AT TIME ZONE \'America/Santiago\', \'HH24:MI\') as hora "
+        "SELECT tipo, sku, nombre, cantidad, motivo, "
+        "TO_CHAR(fecha AT TIME ZONE 'America/Santiago', 'HH24:MI') as hora, "
+        "COALESCE(canal, 'Sistema') as canal "
         "FROM movimientos "
-        "WHERE DATE(fecha AT TIME ZONE \'America/Santiago\') = CURRENT_DATE AND tipo = \'salida\' "
+        "WHERE DATE(fecha AT TIME ZONE 'America/Santiago') = CURRENT_DATE AND tipo = 'salida' "
         "ORDER BY fecha DESC"
     )
     rows = cur.fetchall()
     cur.close()
     conn.close()
     return [{"tipo": r[0], "sku": r[1], "nombre": r[2],
-             "cantidad": r[3], "motivo": r[4], "hora": r[5]} for r in rows]
+             "cantidad": r[3], "motivo": r[4], "hora": r[5], "canal": r[6]} for r in rows]
 
 def eliminar_producto(sku):
     conn = get_conn()

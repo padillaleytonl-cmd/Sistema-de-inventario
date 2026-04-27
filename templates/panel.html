@@ -2362,31 +2362,108 @@ function abrirModal(tipo){
 
   else if(tipo === 'ventas'){
     titulo.textContent = 'Ventas de hoy';
-    sub.textContent = 'Movimientos registrados hoy';
+    sub.textContent = 'Cargando...';
+    body.innerHTML = '<div style="text-align:center;color:var(--hint);padding:40px;">Cargando ventas...</div>';
+
+    const canalAbrev = {
+      'WooCommerce': 'WC', 'Walmart': 'WM', 'MercadoLibre': 'ML',
+      'Falabella': 'FA', 'Ripley': 'RP', 'Paris': 'PA', 'Manual': 'MN', 'Sistema': 'SIS'
+    };
+    const canalColor = {
+      'WC': '#2563eb', 'WM': '#059669', 'ML': '#f59e0b',
+      'FA': '#e94560', 'RP': '#7c3aed', 'PA': '#0369a1', 'MN': '#6b7280', 'SIS': '#9ca3af'
+    };
+
     fetch('/movimientos_hoy')
       .then(r => r.json())
       .then(d => {
         const ventas = d.ventas || [];
         sub.textContent = ventas.length + ' ventas registradas hoy';
+
         if(!ventas.length){
           body.innerHTML = '<div style="text-align:center;color:var(--hint);padding:40px;">Sin ventas registradas hoy</div>';
           return;
         }
+
+        // Calcular totales por canal
+        const totalesCanalMonto = {};
+        const totalesCanalUnidades = {};
+        let totalGeneral = 0;
+        let unidadesGeneral = 0;
+
+        ventas.forEach(v => {
+          const p = productosGlobal.find(p => p.sku === v.sku);
+          const precio = p ? (p.precio_oferta > 0 ? p.precio_oferta : p.precio_normal) : 0;
+          const subtotal = precio * v.cantidad;
+          const abrev = canalAbrev[v.canal] || v.canal;
+          totalesCanalMonto[abrev] = (totalesCanalMonto[abrev] || 0) + subtotal;
+          totalesCanalUnidades[abrev] = (totalesCanalUnidades[abrev] || 0) + v.cantidad;
+          totalGeneral += subtotal;
+          unidadesGeneral += v.cantidad;
+        });
+
+        const filas = ventas.map(v => {
+          const p = productosGlobal.find(p => p.sku === v.sku);
+          const precio = p ? (p.precio_oferta > 0 ? p.precio_oferta : p.precio_normal) : 0;
+          const subtotal = precio * v.cantidad;
+          const abrev = canalAbrev[v.canal] || v.canal;
+          const color = canalColor[abrev] || '#6b7280';
+          return `<tr>
+            <td>
+              <span style="background:${color}15;color:${color};font-size:11px;font-weight:600;padding:2px 7px;border-radius:5px;">${abrev}</span>
+            </td>
+            <td><span class="sku-code">${v.sku}</span></td>
+            <td style="font-size:12px;max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${v.nombre}</td>
+            <td style="text-align:center;font-weight:500;">${v.cantidad}</td>
+            <td style="text-align:right;font-family:'DM Mono',monospace;font-size:12px;">${precio > 0 ? '$'+precio.toLocaleString('es-CL') : '—'}</td>
+            <td style="text-align:right;font-family:'DM Mono',monospace;font-size:12px;font-weight:500;">${subtotal > 0 ? '$'+subtotal.toLocaleString('es-CL') : '—'}</td>
+            <td style="color:var(--muted);font-size:11px;">${v.hora}</td>
+          </tr>`;
+        }).join('');
+
+        const totalesCanal = Object.entries(totalesCanalMonto).map(([canal, monto]) => `
+          <tr style="background:var(--bg);">
+            <td colspan="4" style="text-align:right;font-size:12px;color:var(--muted);padding:6px 12px;">
+              Total ${canal} (${totalesCanalUnidades[canal]} uds)
+            </td>
+            <td></td>
+            <td style="text-align:right;font-family:'DM Mono',monospace;font-size:12px;font-weight:600;color:var(--navy);padding:6px 12px;">
+              $${monto.toLocaleString('es-CL')}
+            </td>
+            <td></td>
+          </tr>`).join('');
+
         body.innerHTML = `
-          <table class="modal-table">
-            <thead><tr><th>Producto</th><th>SKU</th><th>Cantidad</th><th>Canal</th><th>Hora</th></tr></thead>
-            <tbody>
-              ${ventas.map(v => `<tr>
-                <td>${v.nombre}</td>
-                <td><span class="sku-code">${v.sku}</span></td>
-                <td><span class="stock-pill pill-danger">-${v.cantidad}</span></td>
-                <td>${v.motivo}</td>
-                <td style="color:var(--muted);font-size:12px;">${v.hora}</td>
-              </tr>`).join('')}
-            </tbody>
-          </table>`;
+          <div style="overflow-x:auto;">
+            <table class="modal-table" style="font-size:12px;">
+              <thead>
+                <tr>
+                  <th style="width:50px;">Canal</th>
+                  <th>SKU</th>
+                  <th>Producto</th>
+                  <th style="text-align:center;">Cant.</th>
+                  <th style="text-align:right;">Precio</th>
+                  <th style="text-align:right;">Total</th>
+                  <th>Hora</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${filas}
+                ${totalesCanal}
+                <tr style="border-top:2px solid var(--navy);">
+                  <td colspan="4" style="text-align:right;font-size:13px;font-weight:600;color:var(--navy);padding:10px 12px;">
+                    TOTAL GENERAL (${unidadesGeneral} uds)
+                  </td>
+                  <td></td>
+                  <td style="text-align:right;font-family:'DM Mono',monospace;font-size:14px;font-weight:700;color:var(--navy);padding:10px 12px;">
+                    $${totalGeneral.toLocaleString('es-CL')}
+                  </td>
+                  <td></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>`;
       });
-    body.innerHTML = '<div style="text-align:center;color:var(--hint);padding:40px;">Cargando ventas...</div>';
   }
 
   else if(tipo === 'stockbajo'){
