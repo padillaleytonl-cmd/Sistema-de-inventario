@@ -262,12 +262,20 @@ def salida():
 
 @app.route("/sync_ordenes")
 def sync_ordenes():
-    res = requests.get(
-        "https://www.babymine.cl/wp-json/wc/v3/orders",
-        params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET, "status": "processing"}
-    )
+    try:
+        res = requests.get(
+            "https://www.babymine.cl/wp-json/wc/v3/orders",
+            params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET, "status": "processing"},
+            timeout=15
+        )
+    except requests.exceptions.Timeout:
+        print("[WooCommerce] Timeout en sync_ordenes")
+        return {"ok": True, "nuevas_ordenes": 0, "warn": "timeout"}
+    except Exception as e:
+        print(f"[WooCommerce] Error en sync_ordenes: {e}")
+        return {"ok": True, "nuevas_ordenes": 0, "warn": str(e)}
     if res.status_code != 200:
-        return {"error": "Woo error"}
+        return {"error": "Woo error", "status": res.status_code}
 
     productos = cargar_productos()
     nuevas = 0
@@ -306,12 +314,24 @@ def movimientos_hoy():
 
 @app.route("/productos")
 def ver_productos():
-    return {"productos": cargar_productos()}
+    if not session.get("logged"):
+        return {"productos": [], "error": "no autorizado"}, 401
+    try:
+        return {"productos": cargar_productos()}
+    except Exception as e:
+        print(f"[/productos] Error: {e}")
+        return {"productos": [], "error": str(e)}, 500
 
 @app.route("/movimientos")
 def ver_movimientos():
-    limite = int(request.args.get("limite", 20))
-    return {"movimientos": cargar_movimientos(limite)}
+    if not session.get("logged"):
+        return {"movimientos": [], "error": "no autorizado"}, 401
+    try:
+        limite = int(request.args.get("limite", 20))
+        return {"movimientos": cargar_movimientos(limite)}
+    except Exception as e:
+        print(f"[/movimientos] Error: {e}")
+        return {"movimientos": [], "error": str(e)}, 500
 
 # ── WALMART ──
 
