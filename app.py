@@ -80,6 +80,64 @@ def _sync_walmart_automatico():
                 marcar_orden_procesada_texto(customer_order_id)
                 nuevas += 1
 
+        # ── CANCELACIONES WALMART — devolver stock si se canceló una orden ya procesada
+        try:
+            canceladas = obtener_ordenes_walmart("Cancelled")
+            reingresadas = 0
+            for o in canceladas:
+                order_id = o.get("purchaseOrderId")
+                if not order_id:
+                    continue
+                customer_order_id = str(o.get("customerOrderId", order_id))
+                cancel_key = f"CANCEL-{customer_order_id}"
+
+                # Solo procesar si la orden fue previamente descontada Y no se reingresó antes
+                if not orden_ya_procesada_texto(customer_order_id):
+                    continue  # nunca se procesó, no hay stock que devolver
+                if orden_ya_procesada_texto(cancel_key):
+                    continue  # ya se procesó la cancelación
+
+                lineas = o.get("orderLines", {}).get("orderLine", [])
+                if isinstance(lineas, dict):
+                    lineas = [lineas]
+
+                productos = cargar_productos()
+                for linea in lineas:
+                    try:
+                        sku = linea.get("item", {}).get("sku")
+                        if not sku:
+                            continue
+                        cantidad = 1
+                        qty = linea.get("orderLineQuantity", {})
+                        if qty and qty.get("amount"):
+                            cantidad = int(float(qty.get("amount", 1)))
+                        if cantidad == 1:
+                            status_qty = linea.get("statusQuantity", {})
+                            if status_qty and status_qty.get("amount"):
+                                cantidad = int(float(status_qty.get("amount", 1)))
+
+                        for p in productos:
+                            if p["sku"] == sku:
+                                p["stock"] = p["stock"] + cantidad
+                                guardar_producto(p)
+                                registrar_movimiento("entrada", p["sku"], p["nombre"],
+                                                    cantidad, "Cancelación Walmart",
+                                                    usuario="Sistema", canal="Walmart",
+                                                    orden_id=customer_order_id)
+                                actualizar_stock_woo(p["sku"], p["stock"])
+                                actualizar_stock_walmart(p["sku"], p["stock"])
+                                print(f"[Scheduler] CANCELACIÓN SKU:{sku} +{cantidad} Stock:{p['stock']}")
+                    except Exception as e:
+                        print(f"[Scheduler] Error cancelación linea: {e}")
+
+                marcar_orden_procesada_texto(cancel_key)
+                reingresadas += 1
+
+            if reingresadas:
+                print(f"[Scheduler] Cancelaciones procesadas: {reingresadas}")
+        except Exception as e:
+            print(f"[Scheduler] Error procesando cancelaciones: {e}")
+
         print(f"[Scheduler] Sync completado — nuevas:{nuevas} errores:{len(errores)}")
     except Exception as e:
         print(f"[Scheduler] Error general: {e}")
@@ -958,6 +1016,45 @@ def walmart_sync_debug():
 
             marcar_orden_procesada_texto(customer_order_id)
             nuevas += 1
+
+    # ── CANCELACIONES en sync manual
+    try:
+        canceladas = obtener_ordenes_walmart("Cancelled")
+        for o in canceladas:
+            order_id = o.get("purchaseOrderId")
+            if not order_id:
+                continue
+            customer_order_id = str(o.get("customerOrderId", order_id))
+            cancel_key = f"CANCEL-{customer_order_id}"
+            if not orden_ya_procesada_texto(customer_order_id):
+                continue
+            if orden_ya_procesada_texto(cancel_key):
+                continue
+            lineas = o.get("orderLines", {}).get("orderLine", [])
+            if isinstance(lineas, dict):
+                lineas = [lineas]
+            for linea in lineas:
+                sku = linea.get("item", {}).get("sku")
+                if not sku:
+                    continue
+                cantidad = 1
+                qty = linea.get("orderLineQuantity", {})
+                if qty and qty.get("amount"):
+                    cantidad = int(float(qty.get("amount", 1)))
+                for p in productos:
+                    if p["sku"] == sku:
+                        p["stock"] += cantidad
+                        guardar_producto(p)
+                        registrar_movimiento("entrada", p["sku"], p["nombre"],
+                                            cantidad, "Cancelación Walmart",
+                                            usuario="Sistema", canal="Walmart",
+                                            orden_id=customer_order_id)
+                        actualizar_stock_woo(p["sku"], p["stock"])
+                        actualizar_stock_walmart(p["sku"], p["stock"])
+                        log.append(f"CANCELACION SKU:{sku} +{cantidad} Stock:{p['stock']}")
+            marcar_orden_procesada_texto(cancel_key)
+    except Exception as e:
+        log.append(f"Error cancelaciones: {e}")
 
     return {"nuevas_ordenes": nuevas, "log": log}
 
