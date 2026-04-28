@@ -245,6 +245,7 @@ def _sync_recuperacion():
                     except Exception as e:
                         print(f"[Recuperación] Error linea: {e}")
 
+                marcar_orden_procesada_texto(customer_order_id)
                 recuperadas += 1
 
         # También recuperar cancelaciones
@@ -1557,9 +1558,6 @@ def panel():
         return redirect("/")
     return render_template("panel.html")
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
-
 @app.route("/debug/estado_bd")
 def debug_estado_bd():
     if not session.get("logged"):
@@ -1618,34 +1616,6 @@ def debug_estado_bd():
         "ultimas_ordenes_procesadas": ultimas_op
     }
 
-@app.route("/debug/estado_bd")
-def debug_estado_bd():
-    if not session.get("logged"):
-        return {"error": "no autorizado"}, 401
-    from inventario import get_conn
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT
-          (SELECT COUNT(*) FROM ordenes_procesadas),
-          (SELECT COUNT(*) FROM ordenes_procesadas WHERE order_id_texto IS NOT NULL),
-          (SELECT COUNT(DISTINCT order_id_texto) FROM ordenes_procesadas WHERE order_id_texto IS NOT NULL),
-          (SELECT COUNT(*) FROM movimientos WHERE canal='Walmart')
-    """)
-    r = cur.fetchone()
-    cur.execute("""
-        SELECT orden_id, sku, COUNT(*) as veces
-        FROM movimientos
-        WHERE canal='Walmart' AND orden_id IS NOT NULL AND orden_id != ''
-        GROUP BY orden_id, sku HAVING COUNT(*) > 1
-        ORDER BY veces DESC LIMIT 20
-    """)
-    dupes = [{"orden_id": x[0], "sku": x[1], "veces": x[2]} for x in cur.fetchall()]
-    cur.execute("SELECT orden_id, order_id_texto FROM ordenes_procesadas ORDER BY fecha DESC LIMIT 10")
-    ultimas = [{"orden_id": x[0], "texto": x[1]} for x in cur.fetchall()]
-    cur.close(); conn.close()
-    return {"total_op": r[0], "con_texto": r[1], "unicos": r[2],
-            "mov_walmart": r[3], "duplicados": dupes, "ultimas_op": ultimas}
 
 @app.route("/fix/limpiar_duplicados")
 def fix_limpiar_duplicados():
@@ -1654,3 +1624,6 @@ def fix_limpiar_duplicados():
     from inventario import limpiar_movimientos_duplicados
     eliminados = limpiar_movimientos_duplicados()
     return {"ok": True, "duplicados_eliminados": eliminados}
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

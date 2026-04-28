@@ -490,27 +490,21 @@ def orden_ya_procesada_texto(order_id_texto):
     return existe
 
 def marcar_orden_procesada_texto(order_id_texto):
-    """Marca orden como procesada. UNIQUE en order_id_texto garantiza que nunca se duplique."""
+    """UNIQUE en order_id_texto — nunca se duplica."""
     conn = get_conn()
     cur = conn.cursor()
     try:
         cur.execute("ALTER TABLE ordenes_procesadas ADD COLUMN IF NOT EXISTS order_id_texto TEXT")
-        cur.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_op_order_id_texto
-            ON ordenes_procesadas(order_id_texto)
-            WHERE order_id_texto IS NOT NULL
-        """)
+        cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_op_order_id_texto
+            ON ordenes_procesadas(order_id_texto) WHERE order_id_texto IS NOT NULL""")
         conn.commit()
     except Exception:
         conn.rollback()
     try:
         import random
-        orden_id_num = random.randint(1, 9007199254740991)
-        cur.execute("""
-            INSERT INTO ordenes_procesadas (orden_id, order_id_texto)
-            VALUES (%s, %s)
-            ON CONFLICT (order_id_texto) DO NOTHING
-        """, (orden_id_num, str(order_id_texto)))
+        cur.execute("""INSERT INTO ordenes_procesadas (orden_id, order_id_texto)
+            VALUES (%s, %s) ON CONFLICT (order_id_texto) DO NOTHING""",
+            (random.randint(1, 9007199254740991), str(order_id_texto)))
         conn.commit()
     except Exception as e:
         print(f"[Marcado orden] Error: {e}")
@@ -539,26 +533,18 @@ def marcar_orden_procesada(orden_id):
     conn.close()
 
 
-# ── LIMPIEZA DE DUPLICADOS ──
-
 def limpiar_movimientos_duplicados():
-    """Elimina movimientos duplicados: misma orden_id + sku + canal + tipo, deja el más antiguo."""
+    """Elimina duplicados: misma orden_id + sku + canal + tipo, deja el más antiguo."""
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        DELETE FROM movimientos
-        WHERE id IN (
+        DELETE FROM movimientos WHERE id IN (
             SELECT id FROM (
-                SELECT id,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY orden_id, sku, canal, tipo
-                           ORDER BY fecha ASC, id ASC
-                       ) AS rn
-                FROM movimientos
+                SELECT id, ROW_NUMBER() OVER (
+                    PARTITION BY orden_id, sku, canal, tipo ORDER BY fecha ASC, id ASC
+                ) AS rn FROM movimientos
                 WHERE orden_id IS NOT NULL AND orden_id != ''
-            ) t
-            WHERE rn > 1
-        )
+            ) t WHERE rn > 1)
     """)
     eliminados = cur.rowcount
     conn.commit()
