@@ -1283,9 +1283,9 @@ tbody td {
       </div>
       <div class="metric-card" style="border-top:3px solid #7c3aed;">
         <div class="metric-label" style="color:#7c3aed;">🔗 Canales activos</div>
-        <div class="metric-value">2</div>
+        <div class="metric-value" id="metricCanales">3</div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
-          <span class="metric-badge" style="background:#f5f0ff;color:#7c3aed;">Woo ● WM ●</span>
+          <span class="metric-badge" style="background:#f5f0ff;color:#7c3aed;" id="metricCanalesBadge">WC ● WM ● PA ●</span>
           <button class="btn-ver-mas" onclick="abrirModal('canales')">Ver más</button>
         </div>
       </div>
@@ -3162,7 +3162,15 @@ function abrirModal(tipo){
     // Verificar Walmart dinámicamente
     fetch('/walmart/test').then(r=>r.json()).then(wm => {
       const wmOk = wm.conectado;
-      sub.textContent = (wmOk ? 2 : 1) + ' canales activos';
+      // Verificar Paris
+      fetch('/paris/test').then(r=>r.json()).then(pa => {
+        const paOk = pa.conectado;
+        const totalActivos = 1 + (wmOk ? 1 : 0) + (paOk ? 1 : 0);
+        var metricEl = document.getElementById('metricCanales');
+        if(metricEl) metricEl.textContent = totalActivos;
+        var badgeEl = document.getElementById('metricCanalesBadge');
+        if(badgeEl) badgeEl.textContent = 'WC ●' + (wmOk ? ' WM ●' : '') + (paOk ? ' PA ●' : '');
+        sub.textContent = totalActivos + ' canales activos';
 
       const canales = [
         {
@@ -3207,8 +3215,10 @@ function abrirModal(tipo){
           abrev: 'PA', nombre: 'París Marketplace',
           desc: 'Stock + Órdenes + Precios · API Cencosud · Sync cada 5 min',
           bg: '#e0f2fe', color: '#0369a1',
-          activo: true, badge: '● Activo',
-          badgeBg: 'var(--warn-bg)', badgeColor: 'var(--warn)', ventas: (window._movimientos||[]).filter(function(m){return m.canal==='Paris'&&esVentaReal(m);}).length
+          activo: paOk, badge: paOk ? '● Activo' : '✕ Error',
+          badgeBg: paOk ? 'var(--success-bg)' : 'var(--danger-bg)',
+          badgeColor: paOk ? 'var(--success)' : 'var(--danger)',
+          ventas: (window._movimientos||[]).filter(function(m){return m.canal==='Paris'&&esVentaReal(m);}).length
         },
         {
           abrev: 'JS', nombre: 'Jumpseller',
@@ -3218,6 +3228,7 @@ function abrirModal(tipo){
           badgeBg: 'var(--warn-bg)', badgeColor: 'var(--warn)', ventas: 0
         }
       ];
+      }).catch(function(){ /* Paris no disponible */ });
 
       body.innerHTML = canales.map(c => `
         <div class="canal-card" style="border-left:3px solid ${c.activo ? c.color : 'var(--border)'};">

@@ -38,7 +38,7 @@ def _sync_walmart_automatico():
         nuevas = 0
         errores = []
 
-        for estado in ["Created", "Acknowledged"]:
+        for estado in ["Created", "Acknowledged", "Shipped", "Delivered"]:
             ordenes = obtener_ordenes_walmart(estado)
             for o in ordenes:
                 order_id = o.get("purchaseOrderId")
@@ -189,6 +189,107 @@ scheduler = BackgroundScheduler(daemon=True)
 scheduler.add_job(_sync_walmart_automatico, "interval", minutes=5, id="walmart_sync")
 scheduler.start()
 atexit.register(lambda: scheduler.shutdown(wait=False))
+
+# ── SYNC DE RECUPERACIÓN AL ARRANCAR ──
+# Busca órdenes perdidas durante caídas del servidor
+def _sync_recuperacion():
+    try:
+        print("[Recuperación] Buscando órdenes no procesadas...")
+        productos = cargar_productos()
+        recuperadas = 0
+        for estado in ["Created", "Acknowledged", "Shipped", "Delivered"]:
+            ordenes = obtener_ordenes_walmart(estado)
+            for o in ordenes:
+                order_id = o.get("purchaseOrderId")
+                if not order_id:
+                    continue
+                customer_order_id = str(o.get("customerOrderId", order_id))
+                if orden_ya_procesada_texto(customer_order_id):
+                    continue
+
+                lineas = o.get("orderLines", {}).get("orderLine", [])
+                if isinstance(lineas, dict):
+                    lineas = [lineas]
+
+                for linea in lineas:
+                    try:
+                        sku = linea.get("item", {}).get("sku")
+                        if not sku:
+                            continue
+                        cantidad = 1
+                        qty = linea.get("orderLineQuantity", {})
+                        if qty and qty.get("amount"):
+                            cantidad = int(float(qty.get("amount", 1)))
+                        if cantidad == 1:
+                            status_qty = linea.get("statusQuantity", {})
+                            if status_qty and status_qty.get("amount"):
+                                cantidad = int(float(status_qty.get("amount", 1)))
+
+                        for p in productos:
+                            if p["sku"] == sku:
+                                p["stock"] = max(0, p["stock"] - cantidad)
+                                guardar_producto(p)
+                                registrar_movimiento("salida", p["sku"], p["nombre"],
+                                                    cantidad, "Venta Walmart (recuperada)",
+                                                    usuario="Sistema", canal="Walmart",
+                                                    orden_id=customer_order_id)
+                                actualizar_stock_woo(p["sku"], p["stock"])
+                                actualizar_stock_walmart(p["sku"], p["stock"])
+                                actualizar_stock_paris(p["sku"], p["stock"])
+                                print(f"[Recuperación] SKU:{sku} Cant:{cantidad} OC:{customer_order_id}")
+                    except Exception as e:
+                        print(f"[Recuperación] Error linea: {e}")
+
+                marcar_orden_procesada_texto(customer_order_id)
+                recuperadas += 1
+
+        # También recuperar cancelaciones
+        try:
+            canceladas = obtener_ordenes_walmart("Cancelled")
+            for o in canceladas:
+                order_id = o.get("purchaseOrderId")
+                if not order_id:
+                    continue
+                customer_order_id = str(o.get("customerOrderId", order_id))
+                cancel_key = f"CANCEL-{customer_order_id}"
+                if not orden_ya_procesada_texto(customer_order_id):
+                    continue
+                if orden_ya_procesada_texto(cancel_key):
+                    continue
+                lineas = o.get("orderLines", {}).get("orderLine", [])
+                if isinstance(lineas, dict):
+                    lineas = [lineas]
+                for linea in lineas:
+                    sku = linea.get("item", {}).get("sku")
+                    if not sku:
+                        continue
+                    cantidad = 1
+                    qty = linea.get("orderLineQuantity", {})
+                    if qty and qty.get("amount"):
+                        cantidad = int(float(qty.get("amount", 1)))
+                    for p in productos:
+                        if p["sku"] == sku:
+                            p["stock"] += cantidad
+                            guardar_producto(p)
+                            registrar_movimiento("entrada", p["sku"], p["nombre"],
+                                                cantidad, "Cancelación Walmart (recuperada)",
+                                                usuario="Sistema", canal="Walmart",
+                                                orden_id=customer_order_id)
+                            actualizar_stock_woo(p["sku"], p["stock"])
+                            actualizar_stock_walmart(p["sku"], p["stock"])
+                            actualizar_stock_paris(p["sku"], p["stock"])
+                marcar_orden_procesada_texto(cancel_key)
+        except Exception as e:
+            print(f"[Recuperación] Error cancelaciones: {e}")
+
+        print(f"[Recuperación] Completado — {recuperadas} órdenes recuperadas")
+    except Exception as e:
+        print(f"[Recuperación] Error general: {e}")
+
+# Ejecutar recuperación 10 segundos después del arranque
+scheduler.add_job(_sync_recuperacion, "date", 
+                  run_date=__import__("datetime").datetime.now() + __import__("datetime").timedelta(seconds=10),
+                  id="recovery_sync")
 
 @app.route("/agregar", methods=["POST"])
 def agregar():
@@ -593,7 +694,7 @@ def walmart_sync_ordenes():
     errores = []
 
     # Walmart Chile usa Created y Acknowledged para ordenes pendientes
-    for estado in ["Created", "Acknowledged"]:
+    for estado in ["Created", "Acknowledged", "Shipped", "Delivered"]:
         ordenes = obtener_ordenes_walmart(estado)
         print(f"[Walmart Ordenes] Estado:{estado} Total:{len(ordenes)}")
 
@@ -676,7 +777,7 @@ def walmart_ver_ordenes():
         resultado["sin_filtro_error"] = str(e)
 
     # Probar con cada estado
-    for estado in ["Created", "Acknowledged", "Shipped"]:
+    for estado in ["Created", "Acknowledged", "Shipped", "Delivered"]:
         try:
             h2 = walmart_headers()
             res2 = req.get(
@@ -1007,7 +1108,7 @@ def walmart_sync_debug():
     log = []
     nuevas = 0
 
-    for estado in ["Created", "Acknowledged"]:
+    for estado in ["Created", "Acknowledged", "Shipped", "Delivered"]:
         ordenes = obtener_ordenes_walmart(estado)
         log.append(f"Estado {estado}: {len(ordenes)} ordenes")
 
