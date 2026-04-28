@@ -1146,7 +1146,7 @@ tbody td {
       <button class="nav-btn" onclick="showSection('inventario', this)">Inventario</button>
       <button class="nav-btn" onclick="showSection('movimientos', this)">Movimientos</button>
       <button class="nav-btn" onclick="showSection('devoluciones', this)">Devoluciones</button>
-      <button class="nav-btn" id="auditNavBtn" style="display:none;" onclick="showSection('audit', this)">⚙ Audit Log</button>
+
     </div>
     <div class="navbar-right">
       <!-- Selector de canales -->
@@ -1206,9 +1206,31 @@ tbody td {
       <button class="btn-gear" id="gearBtn" onclick="showSection('configuracion', null)" title="Configuración">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
-      <div class="navbar-avatar">LP</div>
-      <span class="navbar-username">Luis Padilla</span>
-      <button class="btn-logout" onclick="doLogout()">Salir</button>
+      <div style="position:relative;">
+        <div style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:4px 8px;border-radius:8px;transition:background .15s;" onclick="toggleUserMenu()" id="userMenuTrigger">
+          <div class="navbar-avatar">LP</div>
+          <span class="navbar-username">Luis Padilla</span>
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="color:#8892a4;"><path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <div id="userMenu" style="display:none;position:absolute;right:0;top:calc(100% + 8px);background:var(--bg);border:0.5px solid var(--border);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.15);min-width:180px;z-index:500;overflow:hidden;">
+          <div style="padding:12px 14px;border-bottom:0.5px solid var(--border);">
+            <div style="font-size:13px;font-weight:500;color:var(--text);">Luis Padilla</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:2px;">Administrador</div>
+          </div>
+          <div style="padding:6px;">
+            <button onclick="showSection('configuracion',null);cerrarUserMenu();" style="width:100%;text-align:left;padding:8px 10px;border:none;background:transparent;border-radius:6px;font-size:12px;color:var(--text);cursor:pointer;display:flex;align-items:center;gap:8px;" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'">
+              ⚙ Configuración
+            </button>
+            <button id="auditMenuBtn" onclick="showSection('audit',null);cerrarUserMenu();" style="width:100%;text-align:left;padding:8px 10px;border:none;background:transparent;border-radius:6px;font-size:12px;color:var(--text);cursor:pointer;display:flex;align-items:center;gap:8px;" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'">
+              📋 Audit Log
+            </button>
+            <div style="height:0.5px;background:var(--border);margin:4px 0;"></div>
+            <button onclick="doLogout()" style="width:100%;text-align:left;padding:8px 10px;border:none;background:transparent;border-radius:6px;font-size:12px;color:#A32D2D;cursor:pointer;display:flex;align-items:center;gap:8px;" onmouseover="this.style.background='#FFF5F5'" onmouseout="this.style.background='transparent'">
+              &#8594; Salir
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   </nav>
 
@@ -3540,13 +3562,22 @@ function exportarAudit(){
   a.download = 'audit_lusync_' + new Date().toISOString().slice(0,10) + '.csv';
   a.click();
 }
-function verificarAdmin(){
-  // Por ahora siempre hay un solo usuario que es admin
-  // Cuando se agreguen roles, filtrar aquí
-  const btn = document.getElementById('auditNavBtn');
-  if(btn) btn.style.display = '';
+// ── USER MENU
+function toggleUserMenu(){
+  var m = document.getElementById('userMenu');
+  if(m) m.style.display = m.style.display === 'none' ? '' : 'none';
 }
-document.addEventListener('DOMContentLoaded', verificarAdmin);
+function cerrarUserMenu(){
+  var m = document.getElementById('userMenu');
+  if(m) m.style.display = 'none';
+}
+document.addEventListener('click', function(e){
+  var trigger = document.getElementById('userMenuTrigger');
+  var menu    = document.getElementById('userMenu');
+  if(menu && trigger && !trigger.contains(e.target) && !menu.contains(e.target)){
+    menu.style.display = 'none';
+  }
+});
 
 // ── ELIMINAR DEVOLUCIÓN (solo admin)
 function eliminarDevolucion(){

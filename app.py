@@ -104,6 +104,7 @@ def agregar():
 
 @app.route("/importar_woo")
 def importar():
+    registrar_audit(session.get("usuario","Sistema"), request.remote_addr, "importar_woo", entidad="productos", detalle="Importación desde WooCommerce")
     nuevos = 0
     productos = cargar_productos()
     skus_existentes = {p["sku"] for p in productos}
@@ -155,6 +156,7 @@ def importar():
 
 @app.route("/sincronizar_precios_woo")
 def sincronizar_precios_woo():
+    registrar_audit(session.get("usuario","Sistema"), request.remote_addr, "sincronizar_precios", entidad="productos", detalle="Sincronización de precios WooCommerce")
     actualizados = 0
     res = requests.get(
         "https://www.babymine.cl/wp-json/wc/v3/products",
@@ -193,6 +195,7 @@ def sincronizar_precios_woo():
 
 @app.route("/actualizar_precios", methods=["POST"])
 def actualizar_precios_route():
+    registrar_audit(session.get("usuario","Sistema"), request.remote_addr, "actualizar_precios", entidad="productos", detalle="Actualización manual de precios")
     data = request.json
     sku = data.get("sku")
     precio_normal = float(data.get("precio_normal", 0))
@@ -232,6 +235,7 @@ def actualizar_precios_route():
 
 @app.route("/entrada", methods=["POST"])
 def entrada():
+    registrar_audit(session.get("usuario","Sistema"), request.remote_addr, "entrada_manual", entidad="productos", detalle="Entrada manual de stock")
     data = request.json
     productos = cargar_productos()
     for p in productos:
@@ -246,6 +250,7 @@ def entrada():
 
 @app.route("/salida", methods=["POST"])
 def salida():
+    registrar_audit(session.get("usuario","Sistema"), request.remote_addr, "salida_manual", entidad="productos", detalle="Salida manual de stock")
     data = request.json
     productos = cargar_productos()
     for p in productos:
@@ -474,6 +479,7 @@ def walmart_sync_precios():
 
 @app.route("/walmart/sync_ordenes")
 def walmart_sync_ordenes():
+    registrar_audit(session.get("usuario","Sistema"), request.remote_addr, "sync_walmart", entidad="ordenes", detalle="Sync manual órdenes Walmart")
     if not session.get("logged"):
         return {"error": "no autorizado"}, 401
 
@@ -991,6 +997,10 @@ def walmart_debug_ordenes():
 
 @app.route("/eliminar_producto", methods=["POST"])
 def eliminar_producto_route():
+    data_in = request.json or {}
+    registrar_audit(session.get("usuario","Sistema"), request.remote_addr, "eliminar_producto",
+                    entidad="productos", entidad_id=data_in.get("sku","?"),
+                    detalle=f"Eliminación producto SKU:{data_in.get('sku','?')}")
     if not session.get("logged"):
         return {"error": "no autorizado"}, 401
     data = request.json
@@ -1033,6 +1043,9 @@ def devoluciones_nueva():
         return {"error": "no autorizado"}, 401
     data = request.json
     dev_id = crear_devolucion(data)
+    registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                    "crear_devolucion", entidad="devoluciones", entidad_id=str(dev_id),
+                    detalle=f"Nueva DEV: OC={data.get('oc_origen')} SKU={data.get('sku')}")
     return {"ok": True, "id": dev_id}
 
 @app.route("/devoluciones/<int:dev_id>")
@@ -1090,6 +1103,9 @@ def devoluciones_actualizar(dev_id):
     if not session.get("logged"):
         return {"error": "no autorizado"}, 401
     data = request.json
+    registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                    "actualizar_devolucion", entidad="devoluciones", entidad_id=str(dev_id),
+                    detalle=f"Estado: {data.get('estado','?')} · Resolución: {data.get('resolucion','?')}")
     dev = get_devolucion(dev_id=dev_id)
     if not dev:
         return {"error": "no encontrada"}, 404
@@ -1146,6 +1162,9 @@ def devoluciones_generar_codigo(dev_id):
         return {"ok": True, "codigo": dev["codigo"]}
     codigo = generar_codigo_dev()
     asignar_codigo_dev(dev_id, codigo)
+    registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                    "generar_codigo_dev", entidad="devoluciones", entidad_id=str(dev_id),
+                    detalle=f"Código generado: {codigo}")
     return {"ok": True, "codigo": codigo}
 
 # ── AUDIT LOG ──
