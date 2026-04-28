@@ -160,12 +160,12 @@ def cargar_movimientos(limite=20):
     cur.execute("""
         SELECT tipo, sku, nombre, cantidad, motivo,
                TO_CHAR(
-                   CASE WHEN COALESCE(canal,'') = 'Walmart'
+                   CASE WHEN COALESCE(canal,'') IN ('Walmart','WooCommerce','Paris')
                         THEN fecha - INTERVAL '4 hours'
                         ELSE fecha
                    END, 'DD/MM/YYYY') as fecha_fmt,
                TO_CHAR(
-                   CASE WHEN COALESCE(canal,'') = 'Walmart'
+                   CASE WHEN COALESCE(canal,'') IN ('Walmart','WooCommerce','Paris')
                         THEN fecha - INTERVAL '4 hours'
                         ELSE fecha
                    END, 'HH24:MI') as hora,
@@ -202,14 +202,14 @@ def cargar_movimientos_hoy():
     cur.execute("""
         SELECT tipo, sku, nombre, cantidad, motivo,
                TO_CHAR(
-                   CASE WHEN COALESCE(canal,'') = 'Walmart'
+                   CASE WHEN COALESCE(canal,'') IN ('Walmart','WooCommerce','Paris')
                         THEN fecha - INTERVAL '4 hours'
                         ELSE fecha
                    END, 'HH24:MI') as hora,
                COALESCE(canal, 'Sistema') as canal
         FROM movimientos
         WHERE DATE(
-                   CASE WHEN COALESCE(canal,'') = 'Walmart'
+                   CASE WHEN COALESCE(canal,'') IN ('Walmart','WooCommerce','Paris')
                         THEN fecha - INTERVAL '4 hours'
                         ELSE fecha
                    END) = CURRENT_DATE

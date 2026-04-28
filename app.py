@@ -7,6 +7,10 @@ import atexit
 from walmart import (actualizar_stock_walmart, actualizar_precio_walmart,
                      obtener_ordenes_walmart, confirmar_orden_walmart,
                      verificar_conexion_walmart)
+from paris import (verificar_conexion_paris, obtener_ordenes_paris_todas,
+                   actualizar_stock_paris, obtener_stock_paris,
+                   actualizar_precio_paris, obtener_orden_paris,
+                   get_seller_id as get_paris_seller_id)
 from woo import actualizar_stock_woo
 from inventario import (cargar_productos, guardar_productos, guardar_producto,
                         registrar_movimiento, cargar_movimientos, cargar_movimientos_hoy,
@@ -137,6 +141,43 @@ def _sync_walmart_automatico():
                 print(f"[Scheduler] Cancelaciones procesadas: {reingresadas}")
         except Exception as e:
             print(f"[Scheduler] Error procesando cancelaciones: {e}")
+
+        # ── SYNC PARIS (si está configurado) ──
+        try:
+            import os as _os
+            if _os.environ.get("PARIS_API_KEY"):
+                from paris import obtener_ordenes_paris_todas
+                ordenes_paris = obtener_ordenes_paris_todas(dias=7, estado="awaiting_fullfillment")
+                for so in ordenes_paris:
+                    sub_order_num = str(so.get("subOrderNumber", ""))
+                    paris_key = f"PARIS-{sub_order_num}"
+                    if orden_ya_procesada_texto(paris_key):
+                        continue
+                    shipments = so.get("shipments", [])
+                    for ship in shipments:
+                        items = ship.get("items", [])
+                        for item in items:
+                            sku_seller = item.get("seller_sku") or item.get("sellerSku") or ""
+                            cantidad = 1
+                            if not sku_seller:
+                                continue
+                            for p in productos:
+                                if p["sku"] == sku_seller:
+                                    p["stock"] = max(0, p["stock"] - cantidad)
+                                    guardar_producto(p)
+                                    registrar_movimiento("salida", p["sku"], p["nombre"],
+                                                        cantidad, "Venta Paris",
+                                                        usuario="Sistema", canal="Paris",
+                                                        orden_id=sub_order_num)
+                                    actualizar_stock_woo(p["sku"], p["stock"])
+                                    actualizar_stock_walmart(p["sku"], p["stock"])
+                                    actualizar_stock_paris(p["sku"], p["stock"])
+                                    print(f"[Scheduler] Paris SKU:{sku_seller} -{cantidad} Stock:{p['stock']}")
+                    marcar_orden_procesada_texto(paris_key)
+                    nuevas += 1
+                print(f"[Scheduler] Paris sync OK")
+        except Exception as e:
+            print(f"[Scheduler] Paris error: {e}")
 
         print(f"[Scheduler] Sync completado — nuevas:{nuevas} errores:{len(errores)}")
     except Exception as e:
@@ -1263,6 +1304,72 @@ def devoluciones_generar_codigo(dev_id):
                     "generar_codigo_dev", entidad="devoluciones", entidad_id=str(dev_id),
                     detalle=f"Código generado: {codigo}")
     return {"ok": True, "codigo": codigo}
+
+# ── PARIS ──
+
+@app.route("/paris/test")
+def paris_test():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    result = verificar_conexion_paris()
+    registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                    "paris_test", detalle=f"Test conexión Paris: {result}")
+    return result
+
+@app.route("/paris/ordenes")
+def paris_ordenes():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    dias = int(request.args.get("dias", 30))
+    estado = request.args.get("estado") or None
+    ordenes = obtener_ordenes_paris_todas(dias=dias, estado=estado)
+    return {"ordenes": ordenes, "total": len(ordenes)}
+
+@app.route("/paris/stock")
+def paris_stock():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    data = obtener_stock_paris()
+    return data or {"error": "sin datos"}
+
+@app.route("/paris/sync_ordenes")
+def paris_sync_ordenes():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                    "sync_paris", detalle="Sync manual órdenes Paris")
+    productos = cargar_productos()
+    nuevas = 0
+    errores = []
+    for estado in ["awaiting_fullfillment", "ready_to_ship"]:
+        ordenes = obtener_ordenes_paris_todas(dias=7, estado=estado)
+        for so in ordenes:
+            sub_order_num = str(so.get("subOrderNumber", ""))
+            paris_key = f"PARIS-{sub_order_num}"
+            if orden_ya_procesada_texto(paris_key):
+                continue
+            shipments = so.get("shipments", [])
+            for ship in shipments:
+                items = ship.get("items", [])
+                for item in items:
+                    sku_seller = item.get("seller_sku") or item.get("sellerSku") or ""
+                    cantidad = 1
+                    if not sku_seller:
+                        continue
+                    for p in productos:
+                        if p["sku"] == sku_seller:
+                            p["stock"] = max(0, p["stock"] - cantidad)
+                            guardar_producto(p)
+                            registrar_movimiento("salida", p["sku"], p["nombre"],
+                                                cantidad, "Venta Paris",
+                                                usuario="Sistema", canal="Paris",
+                                                orden_id=sub_order_num)
+                            actualizar_stock_woo(p["sku"], p["stock"])
+                            actualizar_stock_walmart(p["sku"], p["stock"])
+                            actualizar_stock_paris(p["sku"], p["stock"])
+            marcar_orden_procesada_texto(paris_key)
+            nuevas += 1
+    return {"ok": True, "nuevas_ordenes": nuevas}
 
 # ── AUDIT LOG ──
 

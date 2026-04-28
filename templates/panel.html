@@ -1197,8 +1197,8 @@ tbody td {
             <div class="chan-info"><div class="chan-name">Ripley</div><div class="chan-status">⏳ Próximamente</div></div>
           </div>
           <div class="chan-row" style="opacity:0.5;">
-            <div class="chan-icon-sm" style="background:#fdf4ff;color:#9333ea;">PA</div>
-            <div class="chan-info"><div class="chan-name">París</div><div class="chan-status">⏳ Próximamente</div></div>
+            <div class="chan-icon-sm" style="background:#e0f2fe;color:#0369a1;">PA</div>
+            <div class="chan-info"><div class="chan-name">París</div><div class="chan-status" style="color:#0369a1;">● Conectado</div></div>
           </div>
         </div>
       </div>
@@ -1266,6 +1266,7 @@ tbody td {
         <div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
           <span style="font-size:11px;background:#e6f0ff;color:#2563eb;padding:3px 10px;border-radius:20px;font-weight:600;border:1px solid #bfdbfe;" id="ventasWoo">WC: 0</span>
           <span style="font-size:11px;background:#d1fae5;color:#059669;padding:3px 10px;border-radius:20px;font-weight:600;border:1px solid #6ee7b7;" id="ventasWalmart">WM: 0</span>
+          <span style="font-size:11px;background:#e0f2fe;color:#0369a1;padding:3px 10px;border-radius:20px;font-weight:600;border:1px solid #7dd3fc;" id="ventasParis">PA: 0</span>
         </div>
         <div style="display:flex;align-items:center;justify-content:space-between;">
           <span class="metric-badge badge-up">Desde medianoche</span>
@@ -2376,34 +2377,42 @@ function actualizarDashboard(productos, movimientos){
   }, 0);
 
   // Separar por canal
-  const ventasWoo = ventasHoy.filter(m => m.canal === 'WooCommerce');
-  const ventasWM = ventasHoy.filter(m => m.canal === 'Walmart');
-  const ingresoWoo = ventasWoo.reduce((acc, m) => {
-    const p = productosGlobal.find(p => p.sku === m.sku);
-    const precio = p ? (p.precio_oferta > 0 ? p.precio_oferta : p.precio_normal) : 0;
-    return acc + (precio * m.cantidad);
-  }, 0);
-  const ingresoWM = ventasWM.reduce((acc, m) => {
-    const p = productosGlobal.find(p => p.sku === m.sku);
-    const precio = p ? (p.precio_oferta > 0 ? p.precio_oferta : p.precio_normal) : 0;
-    return acc + (precio * m.cantidad);
-  }, 0);
+  // Calcular ventas por canal
+  function calcIngresoCanal(movs) {
+    return movs.reduce(function(acc, m) {
+      var p = productosGlobal.find(function(p){ return p.sku === m.sku; });
+      var precio = p ? (p.precio_oferta > 0 ? p.precio_oferta : p.precio_normal) : 0;
+      return acc + (precio * m.cantidad);
+    }, 0);
+  }
+  var ventasWoo = ventasHoy.filter(function(m){ return m.canal === 'WooCommerce'; });
+  var ventasWM  = ventasHoy.filter(function(m){ return m.canal === 'Walmart'; });
+  var ventasPA  = ventasHoy.filter(function(m){ return m.canal === 'Paris'; });
+  var ingresoWoo = calcIngresoCanal(ventasWoo);
+  var ingresoWM  = calcIngresoCanal(ventasWM);
+  var ingresoPA  = calcIngresoCanal(ventasPA);
 
-  const ventasEl = document.getElementById('metricVentas');
+  var ventasEl = document.getElementById('metricVentas');
   if(ventasEl) ventasEl.textContent = ventasHoy.length || '0';
-  const ingEl = document.getElementById('metricIngreso');
+  var ingEl = document.getElementById('metricIngreso');
   if(ingEl) ingEl.textContent = ingresoHoy > 0 ? '$'+ingresoHoy.toLocaleString('es-CL') : '$0';
-  const wooEl = document.getElementById('ventasWoo');
+  var wooEl = document.getElementById('ventasWoo');
   if(wooEl){
     wooEl.textContent = 'WC: '+ventasWoo.length+' · $'+(ingresoWoo/1000).toFixed(0)+'k';
     wooEl.style.background = ventasWoo.length > 0 ? '#e6f0ff' : '#f1f5f9';
     wooEl.style.color = ventasWoo.length > 0 ? '#2563eb' : '#94a3b8';
   }
-  const wmEl = document.getElementById('ventasWalmart');
+  var wmEl = document.getElementById('ventasWalmart');
   if(wmEl){
     wmEl.textContent = 'WM: '+ventasWM.length+' · $'+(ingresoWM/1000).toFixed(0)+'k';
     wmEl.style.background = ventasWM.length > 0 ? '#d1fae5' : '#f1f5f9';
     wmEl.style.color = ventasWM.length > 0 ? '#059669' : '#94a3b8';
+  }
+  var paEl = document.getElementById('ventasParis');
+  if(paEl){
+    paEl.textContent = 'PA: '+ventasPA.length+' · $'+(ingresoPA/1000).toFixed(0)+'k';
+    paEl.style.background = ventasPA.length > 0 ? '#e0f2fe' : '#f1f5f9';
+    paEl.style.color = ventasPA.length > 0 ? '#0369a1' : '#94a3b8';
   }
 
   // Stock bajo lista
@@ -2434,11 +2443,12 @@ function actualizarDashboard(productos, movimientos){
     } else {
       actEl.innerHTML = movimientos.slice(0,6).map(m => {
         const isEntrada = m.tipo === 'entrada';
-        const isVenta = m.canal === 'WooCommerce' || m.motivo === 'Venta Web';
+        const isVenta = CANALES_VENTA.includes(m.canal);
         const iconClass = isVenta ? 'icon-venta' : isEntrada ? 'icon-entrada' : 'icon-salida';
         const iconLetter = isVenta ? 'V' : isEntrada ? 'E' : 'S';
         const signo = isEntrada ? '+' : '-';
-        const desc = isVenta ? `Venta Web · ${m.nombre}` : `${m.motivo} · ${m.nombre}`;
+        const canalAbrev = {'WooCommerce':'WC','Walmart':'WM','Paris':'PA','MercadoLibre':'ML'};
+        const desc = isVenta ? `${canalAbrev[m.canal]||m.canal} · ${m.nombre}` : `${m.motivo} · ${m.nombre}`;
         return `<div class="activity-row">
           <div class="activity-icon ${iconClass}">${iconLetter}</div>
           <div class="activity-desc">${desc}</div>
@@ -2459,11 +2469,8 @@ const CANALES_VENTA = ['WooCommerce','Walmart','MercadoLibre','Falabella','Riple
 
 function esVentaReal(m){
   if(m.tipo !== 'salida') return false;
-  // Es venta si el canal es un marketplace conocido
-  if(CANALES_VENTA.includes(m.canal)) return true;
-  // O si el motivo contiene "Venta" (venta tienda, etc)
-  if(m.motivo && m.motivo.toLowerCase().includes('venta')) return true;
-  return false;
+  // Solo canales marketplace — NO manuales
+  return CANALES_VENTA.includes(m.canal);
 }
 
 function calcularIngreso(movs, prods){
@@ -2769,6 +2776,7 @@ function cargarMovimientosFull(){
     const canalBadge = {
       'WooCommerce': '<span style="display:inline-flex;align-items:center;font-size:10px;font-weight:500;padding:1px 6px;border-radius:20px;background:#E6F1FB;color:#0C447C;white-space:nowrap;">WC</span>',
       'Walmart':     '<span style="display:inline-flex;align-items:center;font-size:10px;font-weight:500;padding:1px 6px;border-radius:20px;background:#E1F5EE;color:#085041;white-space:nowrap;">WM</span>',
+      'Paris':       '<span style="display:inline-flex;align-items:center;font-size:10px;font-weight:500;padding:1px 6px;border-radius:20px;background:#e0f2fe;color:#0369a1;white-space:nowrap;">PA</span>',
       'Manual':      '<span style="display:inline-flex;align-items:center;font-size:10px;font-weight:500;padding:1px 6px;border-radius:20px;background:#F1EFE8;color:#444441;white-space:nowrap;">Manual</span>',
       'Sistema':     '<span style="display:inline-flex;align-items:center;font-size:10px;font-weight:500;padding:1px 6px;border-radius:20px;background:#F1EFE8;color:#444441;white-space:nowrap;">Sistema</span>'
     };
@@ -3196,11 +3204,11 @@ function abrirModal(tipo){
           badgeBg: 'var(--warn-bg)', badgeColor: 'var(--warn)', ventas: 0
         },
         {
-          abrev: 'PA', nombre: 'París',
-          desc: 'En desarrollo · Próximamente',
-          bg: '#fdf4ff', color: '#9333ea',
-          activo: false, badge: '⏳ Próximo',
-          badgeBg: 'var(--warn-bg)', badgeColor: 'var(--warn)', ventas: 0
+          abrev: 'PA', nombre: 'París Marketplace',
+          desc: 'Stock + Órdenes + Precios · API Cencosud · Sync cada 5 min',
+          bg: '#e0f2fe', color: '#0369a1',
+          activo: true, badge: '● Activo',
+          badgeBg: 'var(--warn-bg)', badgeColor: 'var(--warn)', ventas: (window._movimientos||[]).filter(function(m){return m.canal==='Paris'&&esVentaReal(m);}).length
         },
         {
           abrev: 'JS', nombre: 'Jumpseller',
@@ -3728,6 +3736,7 @@ const DEV_CANAL_BADGE = {
   Walmart:      {bg:'#E1F5EE',color:'#085041',label:'WM'},
   WooCommerce:  {bg:'#E6F1FB',color:'#0C447C',label:'WC'},
   MercadoLibre: {bg:'#FAEEDA',color:'#633806',label:'ML'},
+  Paris:        {bg:'#e0f2fe',color:'#0369a1',label:'PA'},
 };
 
 function estadoBadgeHtml(estado){
