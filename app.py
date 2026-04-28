@@ -1270,12 +1270,35 @@ def devoluciones_generar_codigo(dev_id):
 def audit_view():
     if not session.get("logged"):
         return {"error": "no autorizado"}, 401
+    # Asegurar tabla existe (por si el deploy no la creó)
+    init_audit()
+    # Registrar que el admin consultó el log
+    registrar_audit(
+        session.get("usuario", "admin"),
+        request.remote_addr,
+        "consultar_audit",
+        detalle="Vista del Audit Log"
+    )
     limite = int(request.args.get("limite", 200))
-    filtro_accion   = request.args.get("accion") or None
-    filtro_usuario  = request.args.get("usuario") or None
+    filtro_accion    = request.args.get("accion") or None
+    filtro_usuario   = request.args.get("usuario") or None
     filtro_resultado = request.args.get("resultado") or None
     logs = listar_audit(limite, filtro_accion, filtro_usuario, filtro_resultado)
     return {"logs": logs, "total": len(logs)}
+
+@app.route("/audit/test", methods=["POST"])
+def audit_test():
+    """Endpoint para verificar que el audit funciona — solo admin"""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    init_audit()
+    registrar_audit(
+        session.get("usuario", "admin"),
+        request.remote_addr,
+        "test_audit",
+        detalle="Test manual del sistema de audit"
+    )
+    return {"ok": True, "mensaje": "Registro de prueba creado"}
 
 # ── LOGIN / PANEL ──
 

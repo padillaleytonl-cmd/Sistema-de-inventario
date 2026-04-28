@@ -234,26 +234,36 @@ def eliminar_producto(sku):
 # ── AUDIT LOG ──
 
 def init_audit():
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS audit_log (
-            id SERIAL PRIMARY KEY,
-            fecha TIMESTAMP DEFAULT NOW(),
-            usuario TEXT,
-            ip TEXT,
-            accion TEXT,
-            entidad TEXT,
-            entidad_id TEXT,
-            detalle TEXT,
-            resultado TEXT DEFAULT 'ok',
-            dato_antes TEXT,
-            dato_despues TEXT
-        )
-    """)
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id SERIAL PRIMARY KEY,
+                fecha TIMESTAMP DEFAULT NOW(),
+                usuario TEXT,
+                ip TEXT,
+                accion TEXT,
+                entidad TEXT,
+                entidad_id TEXT,
+                detalle TEXT,
+                resultado TEXT DEFAULT 'ok',
+                dato_antes TEXT,
+                dato_despues TEXT
+            )
+        """)
+        # Asegurar columnas si tabla ya existía sin ellas
+        for col in ['usuario','ip','accion','entidad','entidad_id','detalle','resultado','dato_antes','dato_despues']:
+            try:
+                cur.execute(f"ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS {col} TEXT")
+            except:
+                pass
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("[Audit] Tabla audit_log lista")
+    except Exception as e:
+        print(f"[Audit] Error init_audit: {e}")
 
 def registrar_audit(usuario, ip, accion, entidad='', entidad_id='', detalle='', resultado='ok', dato_antes='', dato_despues=''):
     try:
@@ -262,12 +272,29 @@ def registrar_audit(usuario, ip, accion, entidad='', entidad_id='', detalle='', 
         cur.execute("""
             INSERT INTO audit_log (usuario, ip, accion, entidad, entidad_id, detalle, resultado, dato_antes, dato_despues)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (usuario, ip, accion, entidad, str(entidad_id), detalle, resultado, str(dato_antes)[:500], str(dato_despues)[:500]))
+        """, (
+            str(usuario or 'Sistema'),
+            str(ip or '—'),
+            str(accion),
+            str(entidad or ''),
+            str(entidad_id or ''),
+            str(detalle or '')[:500],
+            str(resultado or 'ok'),
+            str(dato_antes or '')[:500],
+            str(dato_despues or '')[:500]
+        ))
         conn.commit()
         cur.close()
         conn.close()
+        print(f"[Audit] {accion} · {usuario} · {resultado}")
     except Exception as e:
-        print(f"[Audit] Error: {e}")
+        print(f"[Audit] ERROR registrando: {e}")
+        # Reintentar creando la tabla si no existe
+        try:
+            init_audit()
+            registrar_audit(usuario, ip, accion, entidad, entidad_id, detalle, resultado, dato_antes, dato_despues)
+        except Exception as e2:
+            print(f"[Audit] ERROR reintento: {e2}")
 
 def listar_audit(limite=200, filtro_accion=None, filtro_usuario=None, filtro_resultado=None):
     conn = get_conn()

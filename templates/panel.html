@@ -1736,6 +1736,7 @@ tbody td {
         <div class="page-date">Registro completo de acciones del sistema — solo visible para administrador</div>
       </div>
       <div style="display:flex;gap:8px;">
+        <button onclick="testAudit()" style="background:transparent;border:0.5px solid #97C459;border-radius:8px;padding:7px 14px;font-size:12px;cursor:pointer;color:#27500A;">⚡ Test registro</button>
         <button onclick="exportarAudit()" style="background:transparent;border:0.5px solid var(--border);border-radius:8px;padding:7px 14px;font-size:12px;cursor:pointer;color:var(--text);">↓ Exportar CSV</button>
         <button onclick="cargarAudit()" style="background:var(--text);color:var(--bg);border:none;border-radius:8px;padding:7px 14px;font-size:12px;cursor:pointer;">↻ Actualizar</button>
       </div>
@@ -3473,6 +3474,20 @@ setInterval(cargar, 30000);
 // ── AUDIT LOG
 let _auditData = [];
 
+function testAudit(){
+  fetch('/audit/test', {method:'POST'})
+    .then(r=>r.json())
+    .then(d=>{
+      if(d.ok){
+        toast('Registro de prueba creado');
+        setTimeout(cargarAudit, 500);
+      } else {
+        toast('Error: ' + (d.error||'desconocido'));
+      }
+    })
+    .catch(e => toast('Error de conexión: ' + e));
+}
+
 const AUDIT_ACCION_LABEL = {
   login:                       {label:'Login',                 bg:'#EAF3DE', color:'#27500A'},
   logout:                      {label:'Logout',                bg:'#F1EFE8', color:'#444441'},
@@ -3488,21 +3503,32 @@ const AUDIT_ACCION_LABEL = {
 };
 
 function cargarAudit(){
-  const accion    = document.getElementById('auditFiltroAccion')?.value || '';
-  const resultado = document.getElementById('auditFiltroResultado')?.value || '';
-  const usuario   = document.getElementById('auditFiltroUsuario')?.value || '';
-  let url = '/audit?limite=300';
+  var el = document.getElementById('auditList');
+  if(el) el.innerHTML = '<div style="color:var(--hint);font-size:12px;text-align:center;padding:40px;">Cargando...</div>';
+  var accion    = (document.getElementById('auditFiltroAccion')    || {}).value || '';
+  var resultado = (document.getElementById('auditFiltroResultado') || {}).value || '';
+  var usuario   = (document.getElementById('auditFiltroUsuario')   || {}).value || '';
+  var url = '/audit?limite=300';
   if(accion)    url += '&accion='    + encodeURIComponent(accion);
   if(resultado) url += '&resultado=' + encodeURIComponent(resultado);
   if(usuario)   url += '&usuario='   + encodeURIComponent(usuario);
-
-  fetch(url).then(r=>r.json()).then(d=>{
-    _auditData = d.logs || [];
-    document.getElementById('auditTotal').textContent = _auditData.length + ' registros';
-    renderAudit(_auditData);
-  });
+  fetch(url)
+    .then(function(r){
+      if(r.status === 401){ throw new Error('No autorizado'); }
+      if(!r.ok){ throw new Error('Error HTTP ' + r.status); }
+      return r.json();
+    })
+    .then(function(d){
+      _auditData = d.logs || [];
+      var tot = document.getElementById('auditTotal');
+      if(tot) tot.textContent = _auditData.length + ' registros';
+      renderAudit(_auditData);
+    })
+    .catch(function(e){
+      console.error('[Audit]', e);
+      if(el) el.innerHTML = '<div style="color:#A32D2D;font-size:12px;text-align:center;padding:40px;">Error: ' + e.message + '<br><small>Abre la consola (F12) para más detalles</small></div>';
+    });
 }
-
 function renderAudit(lista){
   var el = document.getElementById('auditList');
   if(!lista.length){
