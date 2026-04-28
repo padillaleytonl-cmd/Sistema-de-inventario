@@ -48,6 +48,9 @@ def _sync_walmart_automatico():
                 if orden_ya_procesada_texto(customer_order_id):
                     continue
 
+                # Marcar ANTES de procesar líneas — evita duplicados si hay crash/OOM
+                marcar_orden_procesada_texto(customer_order_id)
+
                 lineas = o.get("orderLines", {}).get("orderLine", [])
                 if isinstance(lineas, dict):
                     lineas = [lineas]
@@ -82,7 +85,6 @@ def _sync_walmart_automatico():
                         errores.append(str(e))
                         print(f"[Scheduler] Error linea: {e}")
 
-                marcar_orden_procesada_texto(customer_order_id)
                 nuevas += 1
 
         # ── CANCELACIONES WALMART — devolver stock si se canceló una orden ya procesada
@@ -207,6 +209,9 @@ def _sync_recuperacion():
                 if orden_ya_procesada_texto(customer_order_id):
                     continue
 
+                # Marcar ANTES de procesar líneas — evita duplicados si hay crash/OOM
+                marcar_orden_procesada_texto(customer_order_id)
+
                 lineas = o.get("orderLines", {}).get("orderLine", [])
                 if isinstance(lineas, dict):
                     lineas = [lineas]
@@ -240,7 +245,6 @@ def _sync_recuperacion():
                     except Exception as e:
                         print(f"[Recuperación] Error linea: {e}")
 
-                marcar_orden_procesada_texto(customer_order_id)
                 recuperadas += 1
 
         # También recuperar cancelaciones
@@ -711,6 +715,9 @@ def walmart_sync_ordenes():
                 print(f"[Walmart] Orden {customer_order_id} ya procesada, saltando")
                 continue
 
+            # Marcar ANTES de procesar líneas — evita duplicados si hay crash/OOM
+            marcar_orden_procesada_texto(customer_order_id)
+
             lineas = o.get("orderLines", {}).get("orderLine", [])
             if isinstance(lineas, dict):
                 lineas = [lineas]
@@ -747,7 +754,6 @@ def walmart_sync_ordenes():
                     errores.append(str(e))
                     print(f"[Walmart] Error linea: {e}")
 
-            marcar_orden_procesada_texto(customer_order_id)
             nuevas += 1
 
     return {"ok": True, "nuevas_ordenes": nuevas, "errores": errores[:5]}
@@ -1126,6 +1132,9 @@ def walmart_sync_debug():
             if ya:
                 continue
 
+            # Marcar ANTES de procesar líneas — evita duplicados si hay crash/OOM
+            marcar_orden_procesada_texto(customer_order_id)
+
             lineas = o.get("orderLines", {}).get("orderLine", [])
             if isinstance(lineas, dict):
                 lineas = [lineas]
@@ -1164,7 +1173,6 @@ def walmart_sync_debug():
                 if not encontrado:
                     log.append(f"  SKU {sku} no encontrado en Lusync")
 
-            marcar_orden_procesada_texto(customer_order_id)
             nuevas += 1
 
     # ── CANCELACIONES en sync manual
