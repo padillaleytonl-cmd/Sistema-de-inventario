@@ -48,6 +48,7 @@ def _sync_walmart_automatico():
                 if orden_ya_procesada_texto(customer_order_id):
                     continue
 
+
                 # Marcar ANTES — evita duplicados si hay crash/OOM
                 marcar_orden_procesada_texto(customer_order_id)
 
@@ -224,6 +225,7 @@ def _sync_recuperacion():
                 if orden_ya_procesada_texto(customer_order_id):
                     continue
 
+
                 # Marcar ANTES — evita duplicados si hay crash/OOM
                 marcar_orden_procesada_texto(customer_order_id)
 
@@ -274,7 +276,6 @@ def _sync_recuperacion():
                     except Exception as e:
                         print(f"[Recuperación] Error linea: {e}")
 
-                marcar_orden_procesada_texto(customer_order_id)
                 recuperadas += 1
 
         # También recuperar cancelaciones
@@ -746,6 +747,7 @@ def walmart_sync_ordenes():
                 print(f"[Walmart] Orden {customer_order_id} ya procesada, saltando")
                 continue
 
+
             # Marcar ANTES — evita duplicados si hay crash/OOM
             marcar_orden_procesada_texto(customer_order_id)
 
@@ -1176,6 +1178,7 @@ def walmart_sync_debug():
 
             if ya:
                 continue
+
 
             # Marcar ANTES — evita duplicados si hay crash/OOM
             marcar_orden_procesada_texto(customer_order_id)
@@ -1676,6 +1679,7 @@ def debug_estado_bd():
     }
 
 
+
 @app.route("/fix/limpiar_duplicados")
 def fix_limpiar_duplicados():
     if not session.get("logged"):
@@ -1684,12 +1688,8 @@ def fix_limpiar_duplicados():
     eliminados = limpiar_movimientos_duplicados()
     return {"ok": True, "duplicados_eliminados": eliminados}
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
-
 @app.route("/fix/corregir_fechas_walmart")
 def fix_corregir_fechas_walmart():
-    """Re-importa las fechas reales de Walmart para movimientos existentes."""
     if not session.get("logged"):
         return {"error": "no autorizado"}, 401
     from inventario import get_conn
@@ -1698,18 +1698,10 @@ def fix_corregir_fechas_walmart():
     chile_tz = pytz.timezone("America/Santiago")
     conn = get_conn()
     cur = conn.cursor()
-    # Obtener todos los orden_id de movimientos Walmart
-    cur.execute("""
-        SELECT DISTINCT orden_id FROM movimientos
-        WHERE canal='Walmart' AND orden_id IS NOT NULL AND orden_id != ''
-    """)
+    cur.execute("SELECT DISTINCT orden_id FROM movimientos WHERE canal='Walmart' AND orden_id IS NOT NULL AND orden_id != ''")
     orden_ids = [r[0] for r in cur.fetchall()]
-    cur.close()
-    conn.close()
-
+    cur.close(); conn.close()
     corregidos = 0
-    errores = []
-    # Traer órdenes de Walmart de todos los estados
     for estado in ["Created", "Acknowledged", "Shipped", "Delivered", "Cancelled"]:
         try:
             ordenes = obtener_ordenes_walmart(estado)
@@ -1726,18 +1718,15 @@ def fix_corregir_fechas_walmart():
                     fecha_chile = fecha_utc.astimezone(chile_tz)
                     conn = get_conn()
                     cur = conn.cursor()
-                    cur.execute("""
-                        UPDATE movimientos SET fecha = %s
-                        WHERE orden_id = %s AND canal = 'Walmart'
-                    """, (fecha_chile, coid))
+                    cur.execute("UPDATE movimientos SET fecha = %s WHERE orden_id = %s AND canal = 'Walmart'", (fecha_chile, coid))
                     if cur.rowcount > 0:
                         corregidos += cur.rowcount
-                    conn.commit()
-                    cur.close()
-                    conn.close()
-                except Exception as e:
-                    errores.append(f"{coid}: {e}")
-        except Exception as e:
-            errores.append(f"Estado {estado}: {e}")
+                    conn.commit(); cur.close(); conn.close()
+                except:
+                    pass
+        except:
+            pass
+    return {"ok": True, "movimientos_corregidos": corregidos}
 
-    return {"ok": True, "movimientos_corregidos": corregidos, "errores": errores[:10]}
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

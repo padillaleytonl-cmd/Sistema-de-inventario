@@ -534,7 +534,7 @@ def marcar_orden_procesada(orden_id):
 
 
 def limpiar_movimientos_duplicados():
-    """Elimina duplicados: misma orden_id + sku + canal + tipo, deja el más antiguo."""
+    """Elimina duplicados: misma orden_id + sku + canal + tipo, deja el mas antiguo."""
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
