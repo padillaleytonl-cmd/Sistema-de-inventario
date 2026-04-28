@@ -76,6 +76,7 @@ def _sync_walmart_automatico():
                                                     orden_id=customer_order_id)
                                 actualizar_stock_woo(p["sku"], p["stock"])
                                 actualizar_stock_walmart(p["sku"], p["stock"])
+                                actualizar_stock_paris(p["sku"], p["stock"])
                                 print(f"[Scheduler] SKU:{sku} Cant:{cantidad} Stock:{p['stock']}")
                     except Exception as e:
                         errores.append(str(e))
@@ -130,6 +131,7 @@ def _sync_walmart_automatico():
                                                     orden_id=customer_order_id)
                                 actualizar_stock_woo(p["sku"], p["stock"])
                                 actualizar_stock_walmart(p["sku"], p["stock"])
+                                actualizar_stock_paris(p["sku"], p["stock"])
                                 print(f"[Scheduler] CANCELACIÓN SKU:{sku} +{cantidad} Stock:{p['stock']}")
                     except Exception as e:
                         print(f"[Scheduler] Error cancelación linea: {e}")
@@ -344,6 +346,7 @@ def entrada():
             registrar_movimiento("entrada", p["sku"], p["nombre"], int(data["cantidad"]), data.get("motivo"), usuario="Luis Padilla", canal="Manual")
             actualizar_stock_woo(p["sku"], p["stock"])
             actualizar_stock_walmart(p["sku"], p["stock"])
+            actualizar_stock_paris(p["sku"], p["stock"])
             return {"ok": True}
     return {"error": "no encontrado"}
 
@@ -361,6 +364,7 @@ def salida():
             registrar_movimiento("salida", p["sku"], p["nombre"], int(data["cantidad"]), data.get("motivo"), usuario="Luis Padilla", canal="Manual")
             actualizar_stock_woo(p["sku"], p["stock"])
             actualizar_stock_walmart(p["sku"], p["stock"])
+            actualizar_stock_paris(p["sku"], p["stock"])
             return {"ok": True}
     return {"error": "no encontrado"}
 
@@ -407,6 +411,7 @@ def sync_ordenes():
                                         orden_id=str(o["id"]), fecha_override=fecha_real)
                     actualizar_stock_woo(p["sku"], p["stock"])
                     actualizar_stock_walmart(p["sku"], p["stock"])
+                    actualizar_stock_paris(p["sku"], p["stock"])
         marcar_orden_procesada(o["id"])
         nuevas += 1
 
@@ -546,6 +551,7 @@ def walmart_sync_stock():
     for p in productos:
         if p.get("sku"):
             resultado = actualizar_stock_walmart(p["sku"], p["stock"])
+            actualizar_stock_paris(p["sku"], p["stock"])
             if resultado:
                 ok += 1
             else:
@@ -634,6 +640,7 @@ def walmart_sync_ordenes():
                                                 orden_id=customer_order_id)
                             actualizar_stock_woo(p["sku"], p["stock"])
                             actualizar_stock_walmart(p["sku"], p["stock"])
+                            actualizar_stock_paris(p["sku"], p["stock"])
                             print(f"[Walmart] Procesado SKU:{sku} Cant:{cantidad} Stock restante:{p['stock']}")
                 except Exception as e:
                     errores.append(str(e))
@@ -1050,6 +1057,7 @@ def walmart_sync_debug():
                                             orden_id=customer_order_id)
                         actualizar_stock_woo(p["sku"], p["stock"])
                         actualizar_stock_walmart(p["sku"], p["stock"])
+                        actualizar_stock_paris(p["sku"], p["stock"])
                         log.append(f"  OK {p['nombre']} stock:{stock_antes}->{p['stock']}")
 
                 if not encontrado:
@@ -1092,6 +1100,7 @@ def walmart_sync_debug():
                                             orden_id=customer_order_id)
                         actualizar_stock_woo(p["sku"], p["stock"])
                         actualizar_stock_walmart(p["sku"], p["stock"])
+                        actualizar_stock_paris(p["sku"], p["stock"])
                         log.append(f"CANCELACION SKU:{sku} +{cantidad} Stock:{p['stock']}")
             marcar_orden_procesada_texto(cancel_key)
     except Exception as e:
@@ -1261,6 +1270,7 @@ def devoluciones_actualizar(dev_id):
                                      canal="Manual", orden_id=dev.get("oc_origen"))
                 actualizar_stock_woo(p["sku"], p["stock"])
                 actualizar_stock_walmart(p["sku"], p["stock"])
+                actualizar_stock_paris(p["sku"], p["stock"])
                 break
     return {"ok": True}
 
