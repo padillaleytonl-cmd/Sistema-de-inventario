@@ -1146,6 +1146,7 @@ tbody td {
       <button class="nav-btn" onclick="showSection('inventario', this)">Inventario</button>
       <button class="nav-btn" onclick="showSection('movimientos', this)">Movimientos</button>
       <button class="nav-btn" onclick="showSection('devoluciones', this)">Devoluciones</button>
+      <button class="nav-btn" onclick="showSection('skumapeo', this)">Mapeo SKUs</button>
 
     </div>
     <div class="navbar-right">
@@ -1780,6 +1781,69 @@ tbody td {
   </div>
 
   <!-- ── SECCIÓN CONFIGURACIÓN ── -->
+  <!-- ── MAPEO DE SKUs ── -->
+  <div id="sec-skumapeo" class="main" style="display:none;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px;">
+      <div class="page-title">Mapeo de SKUs por Canal</div>
+      <button onclick="mostrarFormMapeo()" style="background:var(--text);color:var(--bg);border:none;border-radius:8px;padding:8px 16px;font-size:13px;cursor:pointer;font-weight:500;">+ Nuevo mapeo</button>
+    </div>
+
+    <div style="background:var(--info-bg);border:0.5px solid #93c5fd;border-radius:10px;padding:12px 16px;margin-bottom:20px;font-size:12px;color:#1e40af;line-height:1.6;">
+      <strong>¿Para qué sirve esto?</strong> Algunos canales usan SKUs distintos a los de Lusync. Por ejemplo, Lusync usa <code>SDCMR001</code> pero París espera <code>SDCR2021-1</code>. Aquí vinculas ambos para que el sync de stock funcione correctamente.
+    </div>
+
+    <!-- Formulario nuevo mapeo -->
+    <div id="formMapeoWrap" style="display:none;background:var(--white);border:0.5px solid var(--border);border-radius:12px;padding:20px;margin-bottom:20px;">
+      <div style="font-size:13px;font-weight:500;margin-bottom:14px;color:var(--text);">Nuevo mapeo de SKU</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px;">
+        <div>
+          <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">SKU Lusync *</label>
+          <input id="mapeoSkuLusync" type="text" placeholder="Ej: SDCMR001" style="width:100%;padding:8px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">Canal *</label>
+          <select id="mapeoCanal" style="width:100%;padding:8px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);">
+            <option value="">Seleccionar...</option>
+            <option value="Paris">París</option>
+            <option value="Walmart">Walmart</option>
+            <option value="WooCommerce">WooCommerce</option>
+            <option value="Ripley">Ripley</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">SKU en el canal *</label>
+          <input id="mapeoSkuCanal" type="text" placeholder="Ej: SDCR2021-1" style="width:100%;padding:8px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);">
+        </div>
+      </div>
+      <div style="margin-bottom:14px;">
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">Notas (opcional)</label>
+        <input id="mapeoNotas" type="text" placeholder="Ej: SKU de París para el coche reversible pro" style="width:100%;padding:8px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);">
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button onclick="guardarMapeo()" style="background:var(--text);color:var(--bg);border:none;border-radius:8px;padding:8px 20px;font-size:13px;cursor:pointer;font-weight:500;">Guardar</button>
+        <button onclick="document.getElementById('formMapeoWrap').style.display='none'" style="background:transparent;border:0.5px solid var(--border);color:var(--muted);border-radius:8px;padding:8px 16px;font-size:13px;cursor:pointer;">Cancelar</button>
+      </div>
+    </div>
+
+    <!-- Tabla de mapeos -->
+    <div style="background:var(--white);border:0.5px solid var(--border);border-radius:12px;overflow:hidden;">
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="background:var(--bg);border-bottom:0.5px solid var(--border);">
+            <th style="padding:10px 16px;text-align:left;font-size:11px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;">SKU Lusync</th>
+            <th style="padding:10px 16px;text-align:left;font-size:11px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;">Canal</th>
+            <th style="padding:10px 16px;text-align:left;font-size:11px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;">SKU Canal</th>
+            <th style="padding:10px 16px;text-align:left;font-size:11px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;">Notas</th>
+            <th style="padding:10px 16px;text-align:center;font-size:11px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;width:80px;"></th>
+          </tr>
+        </thead>
+        <tbody id="tbodyMapeo">
+          <tr><td colspan="5" style="text-align:center;padding:32px;color:var(--hint);font-size:13px;">Cargando...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <div id="sec-configuracion" class="main" style="display:none;">
     <div class="page-header">
       <div>
@@ -2197,7 +2261,7 @@ function doLogout(){
 
 // ── NAVEGACIÓN
 function showSection(sec, btn){
-  ['dashboard','inventario','movimientos','devoluciones','audit','configuracion'].forEach(s => {
+  ['dashboard','inventario','movimientos','devoluciones','audit','configuracion','skumapeo'].forEach(s => {
     const el = document.getElementById('sec-' + s);
     if(el) el.style.display = s === sec ? '' : 'none';
   });
@@ -2208,6 +2272,7 @@ function showSection(sec, btn){
   if(sec === 'movimientos') cargarMovimientosFull();
   if(sec === 'devoluciones') cargarDevoluciones('todas');
   if(sec === 'audit') cargarAudit();
+  if(sec === 'skumapeo') cargarMapeos();
   if(sec === 'configuracion'){
     if(gear) gear.classList.add('active');
     cargarConfiguracion();
@@ -4227,6 +4292,74 @@ function confirmarNuevaDevolucion(){
     } else {
       toast('Error al crear devolución');
     }
+  });
+}
+
+// ── MAPEO DE SKUs ──
+function cargarMapeos(){
+  fetch('/sku_mapeo').then(r=>r.json()).then(d=>{
+    const tbody = document.getElementById('tbodyMapeo');
+    if(!d.mapeos || d.mapeos.length === 0){
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--hint);font-size:13px;">No hay mapeos configurados. Agrega el primero con "+ Nuevo mapeo".</td></tr>';
+      return;
+    }
+    const canalBadge = c => {
+      const colores = {Paris:'#9FE1CB;color:#085041',Walmart:'#B5D4F4;color:#0C447C',WooCommerce:'#C0DD97;color:#27500A',Ripley:'#F4C0D1;color:#72243E'};
+      const s = colores[c] || 'var(--bg);color:var(--muted)';
+      const [bg, txt] = s.split(';');
+      return `<span style="background:${bg};${txt};padding:2px 8px;border-radius:6px;font-size:11px;font-weight:500;">${c}</span>`;
+    };
+    tbody.innerHTML = d.mapeos.map(m=>`
+      <tr style="border-bottom:0.5px solid var(--border);">
+        <td style="padding:10px 16px;font-size:13px;font-family:'DM Mono',monospace;color:var(--text);">${m.sku_lusync}</td>
+        <td style="padding:10px 16px;">${canalBadge(m.canal)}</td>
+        <td style="padding:10px 16px;font-size:13px;font-family:'DM Mono',monospace;color:var(--text);">${m.sku_canal}</td>
+        <td style="padding:10px 16px;font-size:12px;color:var(--muted);">${m.notas||'—'}</td>
+        <td style="padding:10px 16px;text-align:center;">
+          <button onclick="eliminarMapeo(${m.id},'${m.sku_lusync}→${m.canal}')" style="background:transparent;border:none;color:var(--danger);cursor:pointer;font-size:13px;" title="Eliminar">✕</button>
+        </td>
+      </tr>
+    `).join('');
+  }).catch(()=>{
+    document.getElementById('tbodyMapeo').innerHTML = '<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--danger);font-size:13px;">Error cargando mapeos</td></tr>';
+  });
+}
+
+function mostrarFormMapeo(){
+  document.getElementById('formMapeoWrap').style.display = 'block';
+  document.getElementById('mapeoSkuLusync').focus();
+}
+
+function guardarMapeo(){
+  const sku_lusync = document.getElementById('mapeoSkuLusync').value.trim();
+  const canal = document.getElementById('mapeoCanal').value;
+  const sku_canal = document.getElementById('mapeoSkuCanal').value.trim();
+  const notas = document.getElementById('mapeoNotas').value.trim();
+  if(!sku_lusync || !canal || !sku_canal){
+    toast('Completa SKU Lusync, Canal y SKU Canal'); return;
+  }
+  fetch('/sku_mapeo/guardar',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({sku_lusync,canal,sku_canal,notas})})
+  .then(r=>r.json()).then(d=>{
+    if(d.ok){
+      toast('Mapeo guardado ✓');
+      document.getElementById('formMapeoWrap').style.display='none';
+      document.getElementById('mapeoSkuLusync').value='';
+      document.getElementById('mapeoCanal').value='';
+      document.getElementById('mapeoSkuCanal').value='';
+      document.getElementById('mapeoNotas').value='';
+      cargarMapeos();
+    } else { toast('Error: '+(d.error||'desconocido')); }
+  });
+}
+
+function eliminarMapeo(id, label){
+  if(!confirm(`¿Eliminar mapeo "${label}"?`)) return;
+  fetch('/sku_mapeo/eliminar',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id})})
+  .then(r=>r.json()).then(d=>{
+    if(d.ok){ toast('Mapeo eliminado'); cargarMapeos(); }
+    else { toast('Error al eliminar'); }
   });
 }
 </script>

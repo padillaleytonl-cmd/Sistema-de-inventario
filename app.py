@@ -20,7 +20,9 @@ from inventario import (cargar_productos, guardar_productos, guardar_producto,
                         init_devoluciones, generar_codigo_dev, crear_devolucion,
                         asignar_codigo_dev, actualizar_devolucion, listar_devoluciones,
                         get_devolucion,
-                        init_audit, registrar_audit, listar_audit)
+                        init_audit, registrar_audit, listar_audit,
+                        get_sku_canal, listar_sku_mapeo, guardar_sku_mapeo, eliminar_sku_mapeo,
+                        limpiar_movimientos_duplicados, limpiar_ordenes_procesadas_duplicadas)
 
 app = Flask(__name__)
 app.secret_key = "clave_super_segura"
@@ -28,6 +30,11 @@ app.secret_key = "clave_super_segura"
 init_db()
 init_devoluciones()
 init_audit()
+
+def _actualizar_stock_paris_mapeado(sku_lusync, stock):
+    """Wrapper: busca el SKU de París via tabla de mapeo antes de sincronizar."""
+    sku_paris = get_sku_canal(sku_lusync, "Paris")
+    return actualizar_stock_paris(sku_paris, stock)
 
 # ── SYNC AUTOMÁTICO WALMART CADA 5 MINUTOS ──
 def _sync_walmart_automatico():
@@ -76,7 +83,7 @@ def _sync_walmart_automatico():
                                                     orden_id=customer_order_id)
                                 actualizar_stock_woo(p["sku"], p["stock"])
                                 actualizar_stock_walmart(p["sku"], p["stock"])
-                                actualizar_stock_paris(p["sku"], p["stock"])
+                                _actualizar_stock_paris_mapeado(p["sku"], p["stock"])
                                 print(f"[Scheduler] SKU:{sku} Cant:{cantidad} Stock:{p['stock']}")
                     except Exception as e:
                         errores.append(str(e))
@@ -131,7 +138,7 @@ def _sync_walmart_automatico():
                                                     orden_id=customer_order_id)
                                 actualizar_stock_woo(p["sku"], p["stock"])
                                 actualizar_stock_walmart(p["sku"], p["stock"])
-                                actualizar_stock_paris(p["sku"], p["stock"])
+                                _actualizar_stock_paris_mapeado(p["sku"], p["stock"])
                                 print(f"[Scheduler] CANCELACIÓN SKU:{sku} +{cantidad} Stock:{p['stock']}")
                     except Exception as e:
                         print(f"[Scheduler] Error cancelación linea: {e}")
@@ -173,7 +180,7 @@ def _sync_walmart_automatico():
                                                         orden_id=sub_order_num)
                                     actualizar_stock_woo(p["sku"], p["stock"])
                                     actualizar_stock_walmart(p["sku"], p["stock"])
-                                    actualizar_stock_paris(p["sku"], p["stock"])
+                                    _actualizar_stock_paris_mapeado(p["sku"], p["stock"])
                                     print(f"[Scheduler] Paris SKU:{sku_seller} -{cantidad} Stock:{p['stock']}")
                     marcar_orden_procesada_texto(paris_key)
                     nuevas += 1
@@ -235,7 +242,7 @@ def _sync_recuperacion():
                                                     orden_id=customer_order_id)
                                 actualizar_stock_woo(p["sku"], p["stock"])
                                 actualizar_stock_walmart(p["sku"], p["stock"])
-                                actualizar_stock_paris(p["sku"], p["stock"])
+                                _actualizar_stock_paris_mapeado(p["sku"], p["stock"])
                                 print(f"[Recuperación] SKU:{sku} Cant:{cantidad} OC:{customer_order_id}")
                     except Exception as e:
                         print(f"[Recuperación] Error linea: {e}")
@@ -277,7 +284,7 @@ def _sync_recuperacion():
                                                 orden_id=customer_order_id)
                             actualizar_stock_woo(p["sku"], p["stock"])
                             actualizar_stock_walmart(p["sku"], p["stock"])
-                            actualizar_stock_paris(p["sku"], p["stock"])
+                            _actualizar_stock_paris_mapeado(p["sku"], p["stock"])
                 marcar_orden_procesada_texto(cancel_key)
         except Exception as e:
             print(f"[Recuperación] Error cancelaciones: {e}")
@@ -447,7 +454,7 @@ def entrada():
             registrar_movimiento("entrada", p["sku"], p["nombre"], int(data["cantidad"]), data.get("motivo"), usuario="Luis Padilla", canal="Manual")
             actualizar_stock_woo(p["sku"], p["stock"])
             actualizar_stock_walmart(p["sku"], p["stock"])
-            actualizar_stock_paris(p["sku"], p["stock"])
+            _actualizar_stock_paris_mapeado(p["sku"], p["stock"])
             return {"ok": True}
     return {"error": "no encontrado"}
 
@@ -465,7 +472,7 @@ def salida():
             registrar_movimiento("salida", p["sku"], p["nombre"], int(data["cantidad"]), data.get("motivo"), usuario="Luis Padilla", canal="Manual")
             actualizar_stock_woo(p["sku"], p["stock"])
             actualizar_stock_walmart(p["sku"], p["stock"])
-            actualizar_stock_paris(p["sku"], p["stock"])
+            _actualizar_stock_paris_mapeado(p["sku"], p["stock"])
             return {"ok": True}
     return {"error": "no encontrado"}
 
@@ -512,7 +519,7 @@ def sync_ordenes():
                                         orden_id=str(o["id"]), fecha_override=fecha_real)
                     actualizar_stock_woo(p["sku"], p["stock"])
                     actualizar_stock_walmart(p["sku"], p["stock"])
-                    actualizar_stock_paris(p["sku"], p["stock"])
+                    _actualizar_stock_paris_mapeado(p["sku"], p["stock"])
         marcar_orden_procesada(o["id"])
         nuevas += 1
 
@@ -652,7 +659,7 @@ def walmart_sync_stock():
     for p in productos:
         if p.get("sku"):
             resultado = actualizar_stock_walmart(p["sku"], p["stock"])
-            actualizar_stock_paris(p["sku"], p["stock"])
+            _actualizar_stock_paris_mapeado(p["sku"], p["stock"])
             if resultado:
                 ok += 1
             else:
@@ -741,7 +748,7 @@ def walmart_sync_ordenes():
                                                 orden_id=customer_order_id)
                             actualizar_stock_woo(p["sku"], p["stock"])
                             actualizar_stock_walmart(p["sku"], p["stock"])
-                            actualizar_stock_paris(p["sku"], p["stock"])
+                            _actualizar_stock_paris_mapeado(p["sku"], p["stock"])
                             print(f"[Walmart] Procesado SKU:{sku} Cant:{cantidad} Stock restante:{p['stock']}")
                 except Exception as e:
                     errores.append(str(e))
@@ -1158,7 +1165,7 @@ def walmart_sync_debug():
                                             orden_id=customer_order_id)
                         actualizar_stock_woo(p["sku"], p["stock"])
                         actualizar_stock_walmart(p["sku"], p["stock"])
-                        actualizar_stock_paris(p["sku"], p["stock"])
+                        _actualizar_stock_paris_mapeado(p["sku"], p["stock"])
                         log.append(f"  OK {p['nombre']} stock:{stock_antes}->{p['stock']}")
 
                 if not encontrado:
@@ -1201,7 +1208,7 @@ def walmart_sync_debug():
                                             orden_id=customer_order_id)
                         actualizar_stock_woo(p["sku"], p["stock"])
                         actualizar_stock_walmart(p["sku"], p["stock"])
-                        actualizar_stock_paris(p["sku"], p["stock"])
+                        _actualizar_stock_paris_mapeado(p["sku"], p["stock"])
                         log.append(f"CANCELACION SKU:{sku} +{cantidad} Stock:{p['stock']}")
             marcar_orden_procesada_texto(cancel_key)
     except Exception as e:
@@ -1371,7 +1378,7 @@ def devoluciones_actualizar(dev_id):
                                      canal="Manual", orden_id=dev.get("oc_origen"))
                 actualizar_stock_woo(p["sku"], p["stock"])
                 actualizar_stock_walmart(p["sku"], p["stock"])
-                actualizar_stock_paris(p["sku"], p["stock"])
+                _actualizar_stock_paris_mapeado(p["sku"], p["stock"])
                 break
     return {"ok": True}
 
@@ -1477,7 +1484,7 @@ def paris_sync_ordenes():
                                                 orden_id=sub_order_num)
                             actualizar_stock_woo(p["sku"], p["stock"])
                             actualizar_stock_walmart(p["sku"], p["stock"])
-                            actualizar_stock_paris(p["sku"], p["stock"])
+                            _actualizar_stock_paris_mapeado(p["sku"], p["stock"])
             marcar_orden_procesada_texto(paris_key)
             nuevas += 1
     return {"ok": True, "nuevas_ordenes": nuevas}
@@ -1548,6 +1555,95 @@ def panel():
     if not session.get("logged"):
         return redirect("/")
     return render_template("panel.html")
+
+# ── MAPEO DE SKUs ──
+
+@app.route("/sku_mapeo")
+def sku_mapeo_list():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    return {"mapeos": listar_sku_mapeo()}
+
+@app.route("/sku_mapeo/guardar", methods=["POST"])
+def sku_mapeo_guardar():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    data = request.json
+    sku_lusync = data.get("sku_lusync", "").strip()
+    canal = data.get("canal", "").strip()
+    sku_canal = data.get("sku_canal", "").strip()
+    notas = data.get("notas", "")
+    if not sku_lusync or not canal or not sku_canal:
+        return {"error": "Faltan campos requeridos"}, 400
+    guardar_sku_mapeo(sku_lusync, canal, sku_canal, notas)
+    registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
+                    "guardar_sku_mapeo",
+                    detalle=f"SKU:{sku_lusync} → {canal}:{sku_canal}")
+    return {"ok": True}
+
+@app.route("/sku_mapeo/eliminar", methods=["POST"])
+def sku_mapeo_eliminar():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    data = request.json
+    mapeo_id = data.get("id")
+    if not mapeo_id:
+        return {"error": "ID requerido"}, 400
+    eliminar_sku_mapeo(mapeo_id)
+    registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
+                    "eliminar_sku_mapeo", detalle=f"Mapeo ID:{mapeo_id}")
+    return {"ok": True}
+
+# ── LIMPIEZA DE DUPLICADOS ──
+
+@app.route("/fix/limpiar_duplicados")
+def fix_limpiar_duplicados():
+    """
+    Limpia duplicados en movimientos y ordenes_procesadas.
+    Ejecutar UNA VEZ después del deploy para sanear la BD.
+    """
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    mov_eliminados = limpiar_movimientos_duplicados()
+    op_eliminadas = limpiar_ordenes_procesadas_duplicadas()
+    registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
+                    "fix_limpiar_duplicados",
+                    detalle=f"Movimientos eliminados:{mov_eliminados} OrdenesProcesadas:{op_eliminadas}")
+    return {
+        "ok": True,
+        "movimientos_duplicados_eliminados": mov_eliminados,
+        "ordenes_procesadas_duplicadas_eliminadas": op_eliminadas,
+        "mensaje": "Listo. El sistema de marcado está ahora protegido con índice UNIQUE."
+    }
+
+@app.route("/fix/forzar_orden_walmart", methods=["POST"])
+def fix_forzar_orden_walmart():
+    """
+    Elimina el marcado de una orden específica para forzar su re-proceso.
+    Usar para el caso de la orden 6842663003256 u otras que no aparecen.
+    """
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    data = request.json
+    order_id_texto = str(data.get("order_id_texto", "")).strip()
+    if not order_id_texto:
+        return {"error": "order_id_texto requerido"}, 400
+    from inventario import get_conn
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM ordenes_procesadas WHERE order_id_texto = %s", (order_id_texto,))
+    eliminados = cur.rowcount
+    conn.commit()
+    cur.close()
+    conn.close()
+    registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
+                    "fix_forzar_orden", detalle=f"Orden desmarcada: {order_id_texto}")
+    return {
+        "ok": True,
+        "registros_eliminados": eliminados,
+        "mensaje": f"Orden {order_id_texto} desmarcada. El próximo sync la procesará."
+    }
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

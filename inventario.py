@@ -54,6 +54,30 @@ def init_db():
     cur.execute("CREATE TABLE IF NOT EXISTS configuracion (clave TEXT PRIMARY KEY, valor TEXT)")
     cur.execute("ALTER TABLE productos ADD COLUMN IF NOT EXISTS lead_time INTEGER DEFAULT 45")
     cur.execute("ALTER TABLE productos ADD COLUMN IF NOT EXISTS ventas_dia NUMERIC(10,4) DEFAULT 0")
+
+    # ── TABLA MAPEO DE SKUs POR CANAL ──
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS sku_mapeo (
+            id SERIAL PRIMARY KEY,
+            sku_lusync TEXT NOT NULL,
+            canal TEXT NOT NULL,
+            sku_canal TEXT NOT NULL,
+            notas TEXT,
+            UNIQUE(sku_lusync, canal)
+        )
+    """)
+
+    # ── FIX: UNIQUE en order_id_texto para evitar duplicados por colisión de hash ──
+    cur.execute("ALTER TABLE ordenes_procesadas ADD COLUMN IF NOT EXISTS order_id_texto TEXT")
+    try:
+        cur.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_ordenes_procesadas_texto
+            ON ordenes_procesadas(order_id_texto)
+            WHERE order_id_texto IS NOT NULL
+        """)
+    except Exception:
+        pass  # ya existe
+
     conn.commit()
     cur.close()
     conn.close()
@@ -490,21 +514,25 @@ def orden_ya_procesada_texto(order_id_texto):
     return existe
 
 def marcar_orden_procesada_texto(order_id_texto):
+    """Marca una orden como procesada. La unicidad real es por order_id_texto (índice UNIQUE)."""
     conn = get_conn()
     cur = conn.cursor()
     try:
         cur.execute("ALTER TABLE ordenes_procesadas ADD COLUMN IF NOT EXISTS order_id_texto TEXT")
         conn.commit()
-    except:
+    except Exception:
         conn.rollback()
     try:
-        cur.execute(
-            "INSERT INTO ordenes_procesadas (orden_id, order_id_texto) VALUES (%s, %s) ON CONFLICT DO NOTHING",
-            (abs(hash(str(order_id_texto))) % (10**15), str(order_id_texto))
-        )
+        import random
+        orden_id_num = random.randint(1, 9007199254740991)
+        cur.execute("""
+            INSERT INTO ordenes_procesadas (orden_id, order_id_texto)
+            VALUES (%s, %s)
+            ON CONFLICT (order_id_texto) DO NOTHING
+        """, (orden_id_num, str(order_id_texto)))
         conn.commit()
     except Exception as e:
-        print(f"[Walmart] Error marcando orden: {e}")
+        print(f"[Marcado orden] Error marcando {order_id_texto}: {e}")
         conn.rollback()
     cur.close()
     conn.close()
@@ -528,3 +556,113 @@ def marcar_orden_procesada(orden_id):
     conn.commit()
     cur.close()
     conn.close()
+
+
+# ── MAPEO DE SKUs POR CANAL ──
+
+def get_sku_canal(sku_lusync, canal):
+    """Retorna el SKU del canal para un SKU de Lusync. Si no hay mapeo, retorna el mismo SKU."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT sku_canal FROM sku_mapeo WHERE sku_lusync = %s AND canal = %s",
+        (sku_lusync, canal)
+    )
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return row[0] if row else sku_lusync
+
+def listar_sku_mapeo():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, sku_lusync, canal, sku_canal, notas
+        FROM sku_mapeo ORDER BY canal, sku_lusync
+    """)
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [{"id": r[0], "sku_lusync": r[1], "canal": r[2],
+             "sku_canal": r[3], "notas": r[4]} for r in rows]
+
+def guardar_sku_mapeo(sku_lusync, canal, sku_canal, notas=""):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO sku_mapeo (sku_lusync, canal, sku_canal, notas)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (sku_lusync, canal) DO UPDATE SET
+            sku_canal = EXCLUDED.sku_canal,
+            notas = EXCLUDED.notas
+    """, (sku_lusync, canal, sku_canal, notas))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def eliminar_sku_mapeo(mapeo_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM sku_mapeo WHERE id = %s", (mapeo_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+# ── LIMPIEZA DE DUPLICADOS ──
+
+def limpiar_movimientos_duplicados():
+    """
+    Elimina movimientos duplicados: mantiene el más antiguo por (sku, canal, orden_id, tipo).
+    Retorna cuántos se eliminaron.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        DELETE FROM movimientos
+        WHERE id IN (
+            SELECT id FROM (
+                SELECT id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY sku, canal, orden_id, tipo
+                           ORDER BY fecha ASC, id ASC
+                       ) AS rn
+                FROM movimientos
+                WHERE orden_id IS NOT NULL AND orden_id != ''
+            ) t
+            WHERE rn > 1
+        )
+    """)
+    eliminados = cur.rowcount
+    conn.commit()
+    cur.close()
+    conn.close()
+    return eliminados
+
+def limpiar_ordenes_procesadas_duplicadas():
+    """
+    Limpia registros en ordenes_procesadas con order_id_texto duplicado
+    (producto de colisiones de hash antiguas). Deja solo el más reciente.
+    Retorna cuántos se eliminaron.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        DELETE FROM ordenes_procesadas
+        WHERE id IN (
+            SELECT id FROM (
+                SELECT id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY order_id_texto
+                           ORDER BY fecha ASC, id ASC
+                       ) AS rn
+                FROM ordenes_procesadas
+                WHERE order_id_texto IS NOT NULL
+            ) t
+            WHERE rn > 1
+        )
+    """)
+    eliminados = cur.rowcount
+    conn.commit()
+    cur.close()
+    conn.close()
+    return eliminados
