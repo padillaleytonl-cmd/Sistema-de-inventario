@@ -48,7 +48,7 @@ def _sync_walmart_automatico():
                 if orden_ya_procesada_texto(customer_order_id):
                     continue
 
-                # Marcar ANTES de procesar líneas — evita duplicados si hay crash/OOM
+                # Marcar ANTES — evita duplicados si hay crash/OOM
                 marcar_orden_procesada_texto(customer_order_id)
 
                 lineas = o.get("orderLines", {}).get("orderLine", [])
@@ -209,7 +209,7 @@ def _sync_recuperacion():
                 if orden_ya_procesada_texto(customer_order_id):
                     continue
 
-                # Marcar ANTES de procesar líneas — evita duplicados si hay crash/OOM
+                # Marcar ANTES — evita duplicados si hay crash/OOM
                 marcar_orden_procesada_texto(customer_order_id)
 
                 lineas = o.get("orderLines", {}).get("orderLine", [])
@@ -715,7 +715,7 @@ def walmart_sync_ordenes():
                 print(f"[Walmart] Orden {customer_order_id} ya procesada, saltando")
                 continue
 
-            # Marcar ANTES de procesar líneas — evita duplicados si hay crash/OOM
+            # Marcar ANTES — evita duplicados si hay crash/OOM
             marcar_orden_procesada_texto(customer_order_id)
 
             lineas = o.get("orderLines", {}).get("orderLine", [])
@@ -1132,7 +1132,7 @@ def walmart_sync_debug():
             if ya:
                 continue
 
-            # Marcar ANTES de procesar líneas — evita duplicados si hay crash/OOM
+            # Marcar ANTES — evita duplicados si hay crash/OOM
             marcar_orden_procesada_texto(customer_order_id)
 
             lineas = o.get("orderLines", {}).get("orderLine", [])
@@ -1617,3 +1617,40 @@ def debug_estado_bd():
         "duplicados_detalle": dupes,
         "ultimas_ordenes_procesadas": ultimas_op
     }
+
+@app.route("/debug/estado_bd")
+def debug_estado_bd():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from inventario import get_conn
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT
+          (SELECT COUNT(*) FROM ordenes_procesadas),
+          (SELECT COUNT(*) FROM ordenes_procesadas WHERE order_id_texto IS NOT NULL),
+          (SELECT COUNT(DISTINCT order_id_texto) FROM ordenes_procesadas WHERE order_id_texto IS NOT NULL),
+          (SELECT COUNT(*) FROM movimientos WHERE canal='Walmart')
+    """)
+    r = cur.fetchone()
+    cur.execute("""
+        SELECT orden_id, sku, COUNT(*) as veces
+        FROM movimientos
+        WHERE canal='Walmart' AND orden_id IS NOT NULL AND orden_id != ''
+        GROUP BY orden_id, sku HAVING COUNT(*) > 1
+        ORDER BY veces DESC LIMIT 20
+    """)
+    dupes = [{"orden_id": x[0], "sku": x[1], "veces": x[2]} for x in cur.fetchall()]
+    cur.execute("SELECT orden_id, order_id_texto FROM ordenes_procesadas ORDER BY fecha DESC LIMIT 10")
+    ultimas = [{"orden_id": x[0], "texto": x[1]} for x in cur.fetchall()]
+    cur.close(); conn.close()
+    return {"total_op": r[0], "con_texto": r[1], "unicos": r[2],
+            "mov_walmart": r[3], "duplicados": dupes, "ultimas_op": ultimas}
+
+@app.route("/fix/limpiar_duplicados")
+def fix_limpiar_duplicados():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from inventario import limpiar_movimientos_duplicados
+    eliminados = limpiar_movimientos_duplicados()
+    return {"ok": True, "duplicados_eliminados": eliminados}

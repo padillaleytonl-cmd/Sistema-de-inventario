@@ -490,13 +490,13 @@ def orden_ya_procesada_texto(order_id_texto):
     return existe
 
 def marcar_orden_procesada_texto(order_id_texto):
-    """Marca orden como procesada. Usa índice UNIQUE en order_id_texto — nunca colisiona."""
+    """Marca orden como procesada. UNIQUE en order_id_texto garantiza que nunca se duplique."""
     conn = get_conn()
     cur = conn.cursor()
     try:
         cur.execute("ALTER TABLE ordenes_procesadas ADD COLUMN IF NOT EXISTS order_id_texto TEXT")
         cur.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_op_texto
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_op_order_id_texto
             ON ordenes_procesadas(order_id_texto)
             WHERE order_id_texto IS NOT NULL
         """)
@@ -542,16 +542,9 @@ def marcar_orden_procesada(orden_id):
 # ── LIMPIEZA DE DUPLICADOS ──
 
 def limpiar_movimientos_duplicados():
-    """
-    Elimina movimientos duplicados usando dos criterios:
-    1. Misma orden_id + sku + canal + tipo → deja solo el más antiguo.
-    2. Sin orden_id: misma sku + canal + tipo + cantidad dentro de una ventana de 60 segundos → deja solo el más antiguo.
-    Retorna cuántos se eliminaron.
-    """
+    """Elimina movimientos duplicados: misma orden_id + sku + canal + tipo, deja el más antiguo."""
     conn = get_conn()
     cur = conn.cursor()
-
-    # Criterio 1: duplicados con orden_id (el caso más común — misma orden procesada N veces)
     cur.execute("""
         DELETE FROM movimientos
         WHERE id IN (
@@ -567,29 +560,8 @@ def limpiar_movimientos_duplicados():
             WHERE rn > 1
         )
     """)
-    eliminados_con_orden = cur.rowcount
-
-    # Criterio 2: duplicados sin orden_id (entradas manuales repetidas accidentalmente)
-    # Ventana de 60 segundos entre movimientos idénticos
-    cur.execute("""
-        DELETE FROM movimientos
-        WHERE id IN (
-            SELECT id FROM (
-                SELECT id,
-                       LAG(fecha) OVER (
-                           PARTITION BY sku, canal, tipo, cantidad
-                           ORDER BY fecha ASC, id ASC
-                       ) AS fecha_anterior
-                FROM movimientos
-                WHERE orden_id IS NULL OR orden_id = ''
-            ) t
-            WHERE fecha_anterior IS NOT NULL
-              AND fecha - fecha_anterior < INTERVAL '60 seconds'
-        )
-    """)
-    eliminados_sin_orden = cur.rowcount
-
+    eliminados = cur.rowcount
     conn.commit()
     cur.close()
     conn.close()
-    return eliminados_con_orden + eliminados_sin_orden
+    return eliminados
