@@ -12,7 +12,7 @@ from paris import (verificar_conexion_paris, obtener_ordenes_paris_todas,
                    actualizar_precio_paris, obtener_orden_paris,
                    get_seller_id as get_paris_seller_id)
 from woo import actualizar_stock_woo
-from inventario import (cargar_productos, limpiar_movimientos_duplicados, guardar_productos, guardar_producto,
+from inventario import (cargar_productos, guardar_productos, guardar_producto,
                         registrar_movimiento, cargar_movimientos, cargar_movimientos_hoy,
                         init_db, orden_ya_procesada, marcar_orden_procesada, actualizar_precios,
                         get_configuracion, set_configuracion, set_lead_time, eliminar_producto,
@@ -48,9 +48,6 @@ def _sync_walmart_automatico():
                 if orden_ya_procesada_texto(customer_order_id):
                     continue
 
-                # Marcar ANTES de procesar líneas — evita duplicados si hay crash/OOM
-                marcar_orden_procesada_texto(customer_order_id)
-
                 lineas = o.get("orderLines", {}).get("orderLine", [])
                 if isinstance(lineas, dict):
                     lineas = [lineas]
@@ -85,6 +82,7 @@ def _sync_walmart_automatico():
                         errores.append(str(e))
                         print(f"[Scheduler] Error linea: {e}")
 
+                marcar_orden_procesada_texto(customer_order_id)
                 nuevas += 1
 
         # ── CANCELACIONES WALMART — devolver stock si se canceló una orden ya procesada
@@ -209,9 +207,6 @@ def _sync_recuperacion():
                 if orden_ya_procesada_texto(customer_order_id):
                     continue
 
-                # Marcar ANTES de procesar líneas — evita duplicados si hay crash/OOM
-                marcar_orden_procesada_texto(customer_order_id)
-
                 lineas = o.get("orderLines", {}).get("orderLine", [])
                 if isinstance(lineas, dict):
                     lineas = [lineas]
@@ -245,6 +240,7 @@ def _sync_recuperacion():
                     except Exception as e:
                         print(f"[Recuperación] Error linea: {e}")
 
+                marcar_orden_procesada_texto(customer_order_id)
                 recuperadas += 1
 
         # También recuperar cancelaciones
@@ -715,9 +711,6 @@ def walmart_sync_ordenes():
                 print(f"[Walmart] Orden {customer_order_id} ya procesada, saltando")
                 continue
 
-            # Marcar ANTES de procesar líneas — evita duplicados si hay crash/OOM
-            marcar_orden_procesada_texto(customer_order_id)
-
             lineas = o.get("orderLines", {}).get("orderLine", [])
             if isinstance(lineas, dict):
                 lineas = [lineas]
@@ -754,6 +747,7 @@ def walmart_sync_ordenes():
                     errores.append(str(e))
                     print(f"[Walmart] Error linea: {e}")
 
+            marcar_orden_procesada_texto(customer_order_id)
             nuevas += 1
 
     return {"ok": True, "nuevas_ordenes": nuevas, "errores": errores[:5]}
@@ -996,25 +990,6 @@ def fix_db():
         conn.close()
         return {"error": str(e)}
 
-@app.route("/fix/limpiar_duplicados")
-def fix_limpiar_duplicados():
-    """
-    Limpia movimientos duplicados en la BD.
-    Criterio: misma orden_id + sku + canal + tipo → deja solo el más antiguo.
-    Ejecutar UNA VEZ después del deploy para sanear datos existentes.
-    """
-    if not session.get("logged"):
-        return {"error": "no autorizado"}, 401
-    eliminados = limpiar_movimientos_duplicados()
-    registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
-                    "fix_limpiar_duplicados",
-                    detalle=f"Movimientos duplicados eliminados: {eliminados}")
-    return {
-        "ok": True,
-        "duplicados_eliminados": eliminados,
-        "mensaje": "Listo. Ir al panel de movimientos para verificar."
-    }
-
 @app.route("/walmart/reset_y_limpiar")
 def walmart_reset_y_limpiar():
     """Borra movimientos de Walmart y limpia órdenes procesadas para resincronizar limpio"""
@@ -1151,9 +1126,6 @@ def walmart_sync_debug():
             if ya:
                 continue
 
-            # Marcar ANTES de procesar líneas — evita duplicados si hay crash/OOM
-            marcar_orden_procesada_texto(customer_order_id)
-
             lineas = o.get("orderLines", {}).get("orderLine", [])
             if isinstance(lineas, dict):
                 lineas = [lineas]
@@ -1192,6 +1164,7 @@ def walmart_sync_debug():
                 if not encontrado:
                     log.append(f"  SKU {sku} no encontrado en Lusync")
 
+            marcar_orden_procesada_texto(customer_order_id)
             nuevas += 1
 
     # ── CANCELACIONES en sync manual
@@ -1578,3 +1551,61 @@ def panel():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
+@app.route("/debug/estado_bd")
+def debug_estado_bd():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from inventario import get_conn
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT
+          (SELECT COUNT(*) FROM ordenes_procesadas) as total_op,
+          (SELECT COUNT(*) FROM ordenes_procesadas WHERE order_id_texto IS NOT NULL) as con_texto,
+          (SELECT COUNT(DISTINCT order_id_texto) FROM ordenes_procesadas
+           WHERE order_id_texto IS NOT NULL) as unicos,
+          (SELECT COUNT(*) FROM movimientos
+           WHERE canal='Walmart') as mov_walmart_total,
+          (SELECT COUNT(*) FROM movimientos
+           WHERE canal='Walmart' AND orden_id IN (
+             SELECT orden_id FROM movimientos
+             WHERE canal='Walmart' AND orden_id IS NOT NULL AND orden_id != ''
+             GROUP BY orden_id HAVING COUNT(*) > 1
+           )) as mov_con_orden_duplicada
+    """)
+    r = cur.fetchone()
+
+    cur.execute("""
+        SELECT orden_id, sku, COUNT(*) as veces,
+               MIN(TO_CHAR(fecha, 'DD/MM HH24:MI')) as primera,
+               MAX(TO_CHAR(fecha, 'DD/MM HH24:MI')) as ultima
+        FROM movimientos
+        WHERE canal='Walmart' AND orden_id IS NOT NULL AND orden_id != ''
+        GROUP BY orden_id, sku
+        HAVING COUNT(*) > 1
+        ORDER BY veces DESC
+        LIMIT 20
+    """)
+    dupes = [{"orden_id": x[0], "sku": x[1], "veces": x[2],
+              "primera": x[3], "ultima": x[4]} for x in cur.fetchall()]
+
+    cur.execute("""
+        SELECT orden_id, order_id_texto,
+               TO_CHAR(fecha, 'DD/MM HH24:MI') as fecha
+        FROM ordenes_procesadas
+        ORDER BY fecha DESC LIMIT 10
+    """)
+    ultimas_op = [{"orden_id": x[0], "texto": x[1], "fecha": x[2]}
+                  for x in cur.fetchall()]
+
+    cur.close(); conn.close()
+    return {
+        "ordenes_procesadas_total": r[0],
+        "con_order_id_texto": r[1],
+        "unicos": r[2],
+        "movimientos_walmart_total": r[3],
+        "movimientos_con_orden_duplicada": r[4],
+        "duplicados_detalle": dupes,
+        "ultimas_ordenes_procesadas": ultimas_op
+    }
