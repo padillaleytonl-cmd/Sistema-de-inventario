@@ -51,6 +51,19 @@ def _sync_walmart_automatico():
                 # Marcar ANTES — evita duplicados si hay crash/OOM
                 marcar_orden_procesada_texto(customer_order_id)
 
+                # Extraer fecha REAL del pedido Walmart
+                fecha_orden_walmart = None
+                try:
+                    from datetime import datetime
+                    import pytz
+                    _odate = o.get("orderDate", "")
+                    if _odate:
+                        _odate = _odate.replace("Z", "+00:00")
+                        _futc = datetime.fromisoformat(_odate)
+                        fecha_orden_walmart = _futc.astimezone(pytz.timezone("America/Santiago"))
+                except Exception:
+                    pass
+
                 lineas = o.get("orderLines", {}).get("orderLine", [])
                 if isinstance(lineas, dict):
                     lineas = [lineas]
@@ -76,7 +89,8 @@ def _sync_walmart_automatico():
                                 registrar_movimiento("salida", p["sku"], p["nombre"],
                                                     cantidad, "Venta Walmart",
                                                     usuario="Sistema", canal="Walmart",
-                                                    orden_id=customer_order_id)
+                                                    orden_id=customer_order_id,
+                                                    fecha_override=fecha_orden_walmart)
                                 actualizar_stock_woo(p["sku"], p["stock"])
                                 actualizar_stock_walmart(p["sku"], p["stock"])
                                 actualizar_stock_paris(p["sku"], p["stock"])
@@ -130,7 +144,8 @@ def _sync_walmart_automatico():
                                 registrar_movimiento("entrada", p["sku"], p["nombre"],
                                                     cantidad, "Cancelación Walmart",
                                                     usuario="Sistema", canal="Walmart",
-                                                    orden_id=customer_order_id)
+                                                    orden_id=customer_order_id,
+                                                    fecha_override=fecha_orden_walmart)
                                 actualizar_stock_woo(p["sku"], p["stock"])
                                 actualizar_stock_walmart(p["sku"], p["stock"])
                                 actualizar_stock_paris(p["sku"], p["stock"])
@@ -212,6 +227,19 @@ def _sync_recuperacion():
                 # Marcar ANTES — evita duplicados si hay crash/OOM
                 marcar_orden_procesada_texto(customer_order_id)
 
+                # Extraer fecha REAL del pedido Walmart
+                fecha_orden_walmart = None
+                try:
+                    from datetime import datetime
+                    import pytz
+                    _odate = o.get("orderDate", "")
+                    if _odate:
+                        _odate = _odate.replace("Z", "+00:00")
+                        _futc = datetime.fromisoformat(_odate)
+                        fecha_orden_walmart = _futc.astimezone(pytz.timezone("America/Santiago"))
+                except Exception:
+                    pass
+
                 lineas = o.get("orderLines", {}).get("orderLine", [])
                 if isinstance(lineas, dict):
                     lineas = [lineas]
@@ -237,7 +265,8 @@ def _sync_recuperacion():
                                 registrar_movimiento("salida", p["sku"], p["nombre"],
                                                     cantidad, "Venta Walmart (recuperada)",
                                                     usuario="Sistema", canal="Walmart",
-                                                    orden_id=customer_order_id)
+                                                    orden_id=customer_order_id,
+                                                    fecha_override=fecha_orden_walmart)
                                 actualizar_stock_woo(p["sku"], p["stock"])
                                 actualizar_stock_walmart(p["sku"], p["stock"])
                                 actualizar_stock_paris(p["sku"], p["stock"])
@@ -279,7 +308,8 @@ def _sync_recuperacion():
                             registrar_movimiento("entrada", p["sku"], p["nombre"],
                                                 cantidad, "Cancelación Walmart (recuperada)",
                                                 usuario="Sistema", canal="Walmart",
-                                                orden_id=customer_order_id)
+                                                orden_id=customer_order_id,
+                                                    fecha_override=fecha_orden_walmart)
                             actualizar_stock_woo(p["sku"], p["stock"])
                             actualizar_stock_walmart(p["sku"], p["stock"])
                             actualizar_stock_paris(p["sku"], p["stock"])
@@ -719,6 +749,19 @@ def walmart_sync_ordenes():
             # Marcar ANTES — evita duplicados si hay crash/OOM
             marcar_orden_procesada_texto(customer_order_id)
 
+            # Extraer fecha REAL del pedido Walmart
+            fecha_orden_walmart = None
+            try:
+                from datetime import datetime
+                import pytz
+                _odate = o.get("orderDate", "")
+                if _odate:
+                    _odate = _odate.replace("Z", "+00:00")
+                    _futc = datetime.fromisoformat(_odate)
+                    fecha_orden_walmart = _futc.astimezone(pytz.timezone("America/Santiago"))
+            except Exception:
+                pass
+
             lineas = o.get("orderLines", {}).get("orderLine", [])
             if isinstance(lineas, dict):
                 lineas = [lineas]
@@ -746,7 +789,8 @@ def walmart_sync_ordenes():
                             registrar_movimiento("salida", p["sku"], p["nombre"],
                                                 cantidad, "Venta Walmart",
                                                 usuario="Sistema", canal="Walmart",
-                                                orden_id=customer_order_id)
+                                                orden_id=customer_order_id,
+                                                    fecha_override=fecha_orden_walmart)
                             actualizar_stock_woo(p["sku"], p["stock"])
                             actualizar_stock_walmart(p["sku"], p["stock"])
                             actualizar_stock_paris(p["sku"], p["stock"])
@@ -1136,6 +1180,19 @@ def walmart_sync_debug():
             # Marcar ANTES — evita duplicados si hay crash/OOM
             marcar_orden_procesada_texto(customer_order_id)
 
+            # Extraer fecha REAL del pedido Walmart
+            fecha_orden_walmart = None
+            try:
+                from datetime import datetime
+                import pytz
+                _odate = o.get("orderDate", "")
+                if _odate:
+                    _odate = _odate.replace("Z", "+00:00")
+                    _futc = datetime.fromisoformat(_odate)
+                    fecha_orden_walmart = _futc.astimezone(pytz.timezone("America/Santiago"))
+            except Exception:
+                pass
+
             lineas = o.get("orderLines", {}).get("orderLine", [])
             if isinstance(lineas, dict):
                 lineas = [lineas]
@@ -1165,7 +1222,8 @@ def walmart_sync_debug():
                         registrar_movimiento("salida", p["sku"], p["nombre"],
                                             cantidad, "Venta Walmart",
                                             usuario="Sistema", canal="Walmart",
-                                            orden_id=customer_order_id)
+                                            orden_id=customer_order_id,
+                                                    fecha_override=fecha_orden_walmart)
                         actualizar_stock_woo(p["sku"], p["stock"])
                         actualizar_stock_walmart(p["sku"], p["stock"])
                         actualizar_stock_paris(p["sku"], p["stock"])
@@ -1207,7 +1265,8 @@ def walmart_sync_debug():
                         registrar_movimiento("entrada", p["sku"], p["nombre"],
                                             cantidad, "Cancelación Walmart",
                                             usuario="Sistema", canal="Walmart",
-                                            orden_id=customer_order_id)
+                                            orden_id=customer_order_id,
+                                                    fecha_override=fecha_orden_walmart)
                         actualizar_stock_woo(p["sku"], p["stock"])
                         actualizar_stock_walmart(p["sku"], p["stock"])
                         actualizar_stock_paris(p["sku"], p["stock"])
@@ -1627,3 +1686,58 @@ def fix_limpiar_duplicados():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
+@app.route("/fix/corregir_fechas_walmart")
+def fix_corregir_fechas_walmart():
+    """Re-importa las fechas reales de Walmart para movimientos existentes."""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from inventario import get_conn
+    from datetime import datetime
+    import pytz
+    chile_tz = pytz.timezone("America/Santiago")
+    conn = get_conn()
+    cur = conn.cursor()
+    # Obtener todos los orden_id de movimientos Walmart
+    cur.execute("""
+        SELECT DISTINCT orden_id FROM movimientos
+        WHERE canal='Walmart' AND orden_id IS NOT NULL AND orden_id != ''
+    """)
+    orden_ids = [r[0] for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+
+    corregidos = 0
+    errores = []
+    # Traer órdenes de Walmart de todos los estados
+    for estado in ["Created", "Acknowledged", "Shipped", "Delivered", "Cancelled"]:
+        try:
+            ordenes = obtener_ordenes_walmart(estado)
+            for o in ordenes:
+                coid = str(o.get("customerOrderId", o.get("purchaseOrderId", "")))
+                if coid not in orden_ids:
+                    continue
+                order_date_str = o.get("orderDate", "")
+                if not order_date_str:
+                    continue
+                try:
+                    order_date_str = order_date_str.replace("Z", "+00:00")
+                    fecha_utc = datetime.fromisoformat(order_date_str)
+                    fecha_chile = fecha_utc.astimezone(chile_tz)
+                    conn = get_conn()
+                    cur = conn.cursor()
+                    cur.execute("""
+                        UPDATE movimientos SET fecha = %s
+                        WHERE orden_id = %s AND canal = 'Walmart'
+                    """, (fecha_chile, coid))
+                    if cur.rowcount > 0:
+                        corregidos += cur.rowcount
+                    conn.commit()
+                    cur.close()
+                    conn.close()
+                except Exception as e:
+                    errores.append(f"{coid}: {e}")
+        except Exception as e:
+            errores.append(f"Estado {estado}: {e}")
+
+    return {"ok": True, "movimientos_corregidos": corregidos, "errores": errores[:10]}
