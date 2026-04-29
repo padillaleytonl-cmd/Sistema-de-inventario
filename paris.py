@@ -80,17 +80,22 @@ def paris_headers():
 # ── STOCK ──
 
 def actualizar_stock_paris(sku_seller, cantidad):
-    """Actualiza stock en París usando SKU Seller (mapea automáticamente desde Lusync)."""
+    """Actualiza stock en París. Busca mapeo sku_lusync→paris antes de enviar."""
     try:
-        # Si el SKU no parece ser de París (es uno de Lusync), buscar mapeo
+        # Buscar SKU mapeado para París (Opción A: si no hay mapeo usa el mismo SKU)
         try:
             from inventario import get_sku_canal
-            sku_seller = get_sku_canal(sku_seller, "paris")
+            sku_paris = get_sku_canal(sku_seller, "paris")
+            if sku_paris != sku_seller:
+                print(f"[Paris] Mapeo: {sku_seller} → {sku_paris}")
         except Exception:
-            pass
+            sku_paris = sku_seller
+    except Exception:
+        sku_paris = sku_seller
+    try:
         payload = {
             "skus": [{
-                "skuSeller": sku_seller,
+                "skuSeller": sku_paris,
                 "quantity": int(cantidad)
             }]
         }

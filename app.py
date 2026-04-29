@@ -1608,166 +1608,51 @@ def debug_estado_bd():
     }
 
 
-# ════════════════════════════════════
-# MAPEO DE SKUs
-# ════════════════════════════════════
-
-_ERRORES_ES = {
-    'there is no unique or exclusion constraint': 'Índice ÚNICO faltante — ve a /fix/crear_indice_sku_mapeo',
-    'duplicate key value': 'SKU duplicado en el archivo',
-    'null value in column': 'Valor requerido vacío en la BD',
-    'invalid input syntax': 'Formato de dato inválido',
-    'does not exist': 'Columna o tabla no existe en BD',
-    'column': 'Error en columna de BD',
-}
-
-def _traducir_error_sql(msg):
-    for en, es in _ERRORES_ES.items():
-        if en.lower() in msg.lower():
-            return es + f' [{msg[:60]}]'
-    return msg[:120]
-
-@app.route("/sku_mapeo")
-def sku_mapeo_listar():
+@app.route("/debug/paris_stock")
+def debug_paris_stock():
+    """Diagnóstico completo de sincronización de stock con París."""
     if not session.get("logged"): return {"error": "no autorizado"}, 401
-    from inventario import listar_sku_mapeo, get_plataforma_web, CANAL_DISPLAY, init_sku_mapeo
-    try:
-        init_sku_mapeo()
-        return {"mapeos": listar_sku_mapeo(), "plataforma_web": get_plataforma_web(),
-                "canales": list(CANAL_DISPLAY.items())}
-    except Exception as e:
-        return {"error": str(e), "mapeos": [], "plataforma_web": "WooCommerce", "canales": []}, 200
+    from inventario import get_sku_canal
+    from paris import verificar_conexion_paris, actualizar_stock_paris
 
-@app.route("/sku_mapeo/historial")
-def sku_mapeo_historial():
-    if not session.get("logged"): return {"error": "no autorizado"}, 401
-    from inventario import listar_historial_mapeo
-    return {"historial": listar_historial_mapeo()}
+    # 1. Verificar conexión
+    conexion = verificar_conexion_paris()
 
-@app.route("/sku_mapeo/guardar", methods=["POST"])
-def sku_mapeo_guardar():
-    if not session.get("logged"): return {"error": "no autorizado"}, 401
-    from inventario import guardar_sku_mapeo_fila
-    data = request.json or {}
-    sku_lusync = (data.get("sku_lusync") or "").strip()
-    if not sku_lusync: return {"error": "sku_lusync requerido"}, 400
-    skus = {k: data.get(f"sku_{k}", "") for k in ["web","walmart","paris","falabella","ripley","mercadolibre","hites"]}
-    guardar_sku_mapeo_fila(sku_lusync, skus)
-    return {"ok": True}
+    # 2. Ver mapeos configurados para París
+    productos = cargar_productos()
+    mapeos = []
+    sin_mapeo = []
+    for p in productos:
+        sku_paris = get_sku_canal(p["sku"], "paris")
+        if sku_paris != p["sku"]:
+            mapeos.append({"sku_lusync": p["sku"], "sku_paris": sku_paris,
+                          "stock_actual": p["stock"]})
+        else:
+            sin_mapeo.append({"sku_lusync": p["sku"], "stock": p["stock"]})
 
-@app.route("/sku_mapeo/plataforma_web", methods=["POST"])
-def sku_mapeo_plataforma():
-    if not session.get("logged"): return {"error": "no autorizado"}, 401
-    from inventario import set_plataforma_web
-    data = request.json or {}
-    plataforma = (data.get("plataforma") or "").strip()
-    if plataforma not in ["WooCommerce","Shopify","VTEX","Prestashop","Jumpseller"]:
-        return {"error": "Plataforma inválida"}, 400
-    set_plataforma_web(plataforma)
-    return {"ok": True, "plataforma_web": plataforma}
-
-@app.route("/sku_mapeo/exportar_excel")
-def sku_mapeo_exportar_excel():
-    if not session.get("logged"): return {"error": "no autorizado"}, 401
-    from inventario import listar_sku_mapeo
-    from io import BytesIO
-    from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill, Alignment
-    from flask import send_file
-    wb = Workbook(); ws = wb.active; ws.title = "Mapeo SKUs"
-    headers = ["SKU LUSYNC","NOMBRE PRODUCTO","SKU WEB PROPIA","SKU WALMART",
-               "SKU PARIS","SKU FALABELLA","SKU RIPLEY","SKU MERCADO LIBRE","SKU HITES"]
-    for col, h in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col, value=h)
-        cell.font = Font(bold=True, color="FFFFFF", size=11)
-        cell.fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-    for i, m in enumerate(listar_sku_mapeo(), 2):
-        for j, k in enumerate(["sku_lusync","nombre","sku_web","sku_walmart","sku_paris",
-                                "sku_falabella","sku_ripley","sku_mercadolibre","sku_hites"], 1):
-            ws.cell(row=i, column=j, value=m.get(k,""))
-    for i, w in enumerate([18,40,20,20,20,20,20,22,20], 1):
-        ws.column_dimensions[chr(64+i)].width = w
-    ws.freeze_panes = "A2"
-    buf = BytesIO(); wb.save(buf); buf.seek(0)
-    return send_file(buf, as_attachment=True, download_name="mapeo_skus_lusync.xlsx",
-                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-@app.route("/sku_mapeo/importar_excel", methods=["POST"])
-def sku_mapeo_importar_excel():
-    if not session.get("logged"): return {"error": "no autorizado"}, 401
-    if "archivo" not in request.files: return {"error": "Falta archivo"}, 400
-    from inventario import guardar_sku_mapeo_fila, registrar_importacion_mapeo
-    from openpyxl import load_workbook
-    archivo = request.files["archivo"]
-    try:
-        wb = load_workbook(archivo, data_only=True)
-        ws = wb.active
-        importados = 0; errores = []
-        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), 2):
-            if not row or not row[0]: continue
-            try:
-                sku_lusync = str(row[0]).strip()
-                if not sku_lusync: continue
-                skus = {
-                    "web":          str(row[2]).strip() if len(row)>2 and row[2] else "",
-                    "walmart":      str(row[3]).strip() if len(row)>3 and row[3] else "",
-                    "paris":        str(row[4]).strip() if len(row)>4 and row[4] else "",
-                    "falabella":    str(row[5]).strip() if len(row)>5 and row[5] else "",
-                    "ripley":       str(row[6]).strip() if len(row)>6 and row[6] else "",
-                    "mercadolibre": str(row[7]).strip() if len(row)>7 and row[7] else "",
-                    "hites":        str(row[8]).strip() if len(row)>8 and row[8] else "",
-                }
-                guardar_sku_mapeo_fila(sku_lusync, skus)
-                importados += 1
-            except Exception as e:
-                # Mostrar error completo para diagnóstico
-                error_completo = str(e)
-                errores.append({"fila": row_idx,
-                                "error": _traducir_error_sql(error_completo),
-                                "error_raw": error_completo[:200],
-                                "valor": str(row[0]) if row else ""})
+    # 3. Test real: intentar actualizar el primer producto mapeado
+    test_resultado = None
+    if mapeos:
+        p_test = mapeos[0]
         try:
-            registrar_importacion_mapeo(session.get("usuario","Sistema"),
-                                        archivo.filename, importados, errores)
-        except: pass
-        return {"ok": True, "importados": importados, "errores": errores}
-    except Exception as e:
-        return {"error": str(e)}, 500
+            ok = actualizar_stock_paris(p_test["sku_lusync"], p_test["stock_actual"])
+            test_resultado = {
+                "sku_lusync": p_test["sku_lusync"],
+                "sku_paris": p_test["sku_paris"],
+                "stock": p_test["stock_actual"],
+                "exito": ok
+            }
+        except Exception as e:
+            test_resultado = {"error": str(e)}
 
-
-@app.route("/fix/reparar_tabla_sku_mapeo")
-def fix_reparar_tabla_sku_mapeo():
-    """Migra la tabla sku_mapeo al nuevo esquema (una fila por producto, no por canal)."""
-    if not session.get("logged"): return {"error": "no autorizado"}, 401
-    from inventario import get_conn
-    conn = get_conn()
-    cur = conn.cursor()
-    pasos = []
-    try:
-        # 1. Eliminar columna canal si existe (esquema viejo)
-        cur.execute("ALTER TABLE sku_mapeo DROP COLUMN IF EXISTS canal")
-        pasos.append("columna 'canal' eliminada")
-        # 2. Eliminar columna notas si existe (esquema viejo)
-        cur.execute("ALTER TABLE sku_mapeo DROP COLUMN IF EXISTS notas")
-        pasos.append("columna 'notas' eliminada")
-        # 3. Eliminar columna sku_canal si existe (esquema viejo)
-        cur.execute("ALTER TABLE sku_mapeo DROP COLUMN IF EXISTS sku_canal")
-        pasos.append("columna 'sku_canal' eliminada")
-        # 4. Agregar columnas del nuevo esquema
-        for col in ["sku_web","sku_walmart","sku_paris","sku_falabella","sku_ripley","sku_mercadolibre","sku_hites"]:
-            cur.execute(f"ALTER TABLE sku_mapeo ADD COLUMN IF NOT EXISTS {col} TEXT")
-        pasos.append("columnas nuevas agregadas")
-        # 5. Asegurar unique index en sku_lusync
-        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_sku_mapeo_lusync ON sku_mapeo(sku_lusync)")
-        pasos.append("índice UNIQUE confirmado")
-        conn.commit()
-        cur.close(); conn.close()
-        return {"ok": True, "pasos": pasos}
-    except Exception as e:
-        conn.rollback()
-        cur.close(); conn.close()
-        return {"error": str(e), "pasos_completados": pasos}, 500
+    return {
+        "conexion_paris": conexion,
+        "productos_con_mapeo": len(mapeos),
+        "productos_sin_mapeo": len(sin_mapeo),
+        "mapeos": mapeos,
+        "sin_mapeo_ejemplos": sin_mapeo[:5],
+        "test_update": test_resultado
+    }
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
