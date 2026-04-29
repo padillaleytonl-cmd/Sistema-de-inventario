@@ -1735,24 +1735,22 @@ def fix_reset_desde_domingo():
 
     # Domingo 27 de abril 2026 a las 00:00 hora Chile
     desde = chile_tz.localize(datetime(2026, 4, 27, 0, 0, 0))
+    desde_walmart = "2026-04-27T00:00:00.000Z"
 
     mov_borrados, op_borradas = borrar_movimientos_marketplace(desde)
 
-    # Reimportar Walmart
+    # Reimportar Walmart — SOLO desde el domingo, no 30 días
     walmart_importados = 0
     walmart_errores = []
     productos = cargar_productos()
     for estado in ["Created", "Acknowledged", "Shipped", "Delivered"]:
         try:
-            ordenes = obtener_ordenes_walmart(estado)
+            ordenes = obtener_ordenes_walmart(estado, fecha_desde=desde_walmart)
             for o in ordenes:
                 order_id = o.get("purchaseOrderId")
                 if not order_id:
                     continue
                 customer_order_id = str(o.get("customerOrderId", order_id))
-                if orden_ya_procesada_texto(customer_order_id):
-                    continue
-                marcar_orden_procesada_texto(customer_order_id)
 
                 # Fecha real del pedido
                 fecha_orden = None
@@ -1763,6 +1761,14 @@ def fix_reset_desde_domingo():
                         fecha_orden = datetime.fromisoformat(_od).astimezone(chile_tz)
                 except:
                     pass
+
+                # Solo importar si la fecha es >= domingo 27
+                if fecha_orden and fecha_orden < desde:
+                    continue
+
+                if orden_ya_procesada_texto(customer_order_id):
+                    continue
+                marcar_orden_procesada_texto(customer_order_id)
 
                 lineas = o.get("orderLines", {}).get("orderLine", [])
                 if isinstance(lineas, dict):
@@ -1784,7 +1790,7 @@ def fix_reset_desde_domingo():
                         for p in productos:
                             if p["sku"] == sku:
                                 registrar_movimiento("salida", p["sku"], p["nombre"],
-                                    cantidad, f"Venta Walmart",
+                                    cantidad, "Venta Walmart",
                                     usuario="Sistema", canal="Walmart",
                                     orden_id=customer_order_id,
                                     fecha_override=fecha_orden)
@@ -1797,15 +1803,14 @@ def fix_reset_desde_domingo():
     # Reimportar WooCommerce
     woo_importados = 0
     try:
-        from datetime import timedelta
-        fecha_desde = "2026-04-27T00:00:00"
+        fecha_desde_woo = "2026-04-27T00:00:00"
         page = 1
         while True:
             res = requests.get(
                 "https://www.babymine.cl/wp-json/wc/v3/orders",
                 params={
                     "consumer_key": WC_KEY, "consumer_secret": WC_SECRET,
-                    "after": fecha_desde, "per_page": 50, "page": page,
+                    "after": fecha_desde_woo, "per_page": 50, "page": page,
                     "status": "processing,completed"
                 }
             )
@@ -1819,7 +1824,6 @@ def fix_reset_desde_domingo():
                 if orden_ya_procesada_texto(f"woo_{woo_order_id}"):
                     continue
                 marcar_orden_procesada_texto(f"woo_{woo_order_id}")
-                # Fecha real
                 fecha_woo = None
                 try:
                     fecha_str = o.get("date_created", "")
@@ -1852,6 +1856,39 @@ def fix_reset_desde_domingo():
         "woo_reimportados": woo_importados,
         "errores": walmart_errores[:20]
     }
+
+
+@app.route("/fix/crear_indice_unico")
+def fix_crear_indice_unico():
+    """Limpia duplicados en ordenes_procesadas y crea índice UNIQUE."""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from inventario import get_conn
+    conn = get_conn()
+    cur = conn.cursor()
+    # Limpiar duplicados dejando solo el más reciente
+    cur.execute("""
+        DELETE FROM ordenes_procesadas WHERE id IN (
+            SELECT id FROM (
+                SELECT id, ROW_NUMBER() OVER (
+                    PARTITION BY order_id_texto ORDER BY fecha DESC, id DESC
+                ) AS rn FROM ordenes_procesadas
+                WHERE order_id_texto IS NOT NULL
+            ) t WHERE rn > 1
+        )
+    """)
+    dupes = cur.rowcount
+    # Ahora crear el índice
+    try:
+        cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_op_order_id_texto
+            ON ordenes_procesadas(order_id_texto) WHERE order_id_texto IS NOT NULL""")
+    except:
+        conn.rollback()
+        conn = get_conn()
+        cur = conn.cursor()
+    conn.commit()
+    cur.close(); conn.close()
+    return {"ok": True, "duplicados_limpiados": dupes, "indice_creado": True}
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

@@ -99,10 +99,13 @@ def actualizar_precio_walmart(sku, precio):
 
 # ── ÓRDENES CON PAGINACIÓN ──
 
-def obtener_ordenes_walmart(estado="Created"):
-    """Obtiene TODAS las órdenes de Walmart Chile con paginación completa"""
+def obtener_ordenes_walmart(estado="Created", dias=30, fecha_desde=None):
+    """Obtiene órdenes de Walmart Chile con paginación completa"""
     try:
-        fecha_inicio = (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%dT00:00:00.000Z")
+        if fecha_desde:
+            fecha_inicio = fecha_desde
+        else:
+            fecha_inicio = (datetime.utcnow() - timedelta(days=dias)).strftime("%Y-%m-%dT00:00:00.000Z")
         todas = []
         next_cursor = None
 
