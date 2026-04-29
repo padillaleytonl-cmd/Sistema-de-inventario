@@ -51,6 +51,7 @@ def init_db():
         )
     """)
 
+    cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_importacion TIMESTAMP")
     cur.execute("CREATE TABLE IF NOT EXISTS configuracion (clave TEXT PRIMARY KEY, valor TEXT)")
     cur.execute("ALTER TABLE productos ADD COLUMN IF NOT EXISTS lead_time INTEGER DEFAULT 45")
     cur.execute("ALTER TABLE productos ADD COLUMN IF NOT EXISTS ventas_dia NUMERIC(10,4) DEFAULT 0")
@@ -131,18 +132,22 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS usuario TEXT DEFAULT 'Sistema'")
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS canal TEXT DEFAULT 'Sistema'")
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS orden_id TEXT DEFAULT NULL")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_importacion TIMESTAMP")
         conn.commit()
     except:
         conn.rollback()
-    # Si se pasa una fecha específica, usarla; si no, usar hora Chile actual
+    # fecha = fecha real del pedido (o ahora si es manual)
+    # fecha_importacion = siempre la hora actual de importacion
+    ahora = now_chile()
     if fecha_override:
         fecha = fecha_override
     else:
-        fecha = now_chile()
+        fecha = ahora
+    fecha_importacion = ahora
     cur.execute("""
-        INSERT INTO movimientos (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """, (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id))
+        INSERT INTO movimientos (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id, fecha_importacion)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """, (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id, fecha_importacion))
     conn.commit()
     cur.close()
     conn.close()
@@ -159,19 +164,12 @@ def cargar_movimientos(limite=20):
         conn.rollback()
     cur.execute("""
         SELECT tipo, sku, nombre, cantidad, motivo,
-               TO_CHAR(
-                   CASE WHEN COALESCE(canal,'') IN ('Walmart','WooCommerce','Paris')
-                        THEN fecha - INTERVAL '4 hours'
-                        ELSE fecha
-                   END, 'DD/MM/YYYY') as fecha_fmt,
-               TO_CHAR(
-                   CASE WHEN COALESCE(canal,'') IN ('Walmart','WooCommerce','Paris')
-                        THEN fecha - INTERVAL '4 hours'
-                        ELSE fecha
-                   END, 'HH24:MI') as hora,
+               TO_CHAR(fecha, 'DD/MM/YYYY') as fecha_fmt,
+               TO_CHAR(fecha, 'HH24:MI') as hora,
                COALESCE(usuario, 'Sistema') as usuario,
                COALESCE(canal, 'Sistema') as canal,
-               COALESCE(orden_id, '') as orden_id
+               COALESCE(orden_id, '') as orden_id,
+               TO_CHAR(fecha_importacion, 'DD/MM/YYYY HH24:MI') as importado
         FROM movimientos
         ORDER BY fecha DESC
         LIMIT %s
@@ -190,7 +188,8 @@ def cargar_movimientos(limite=20):
             "hora": r[6],
             "usuario": r[7],
             "canal": r[8],
-            "orden_id": r[9]
+            "orden_id": r[9],
+            "importado": r[10] or ""
         }
         for r in rows
     ]
@@ -201,18 +200,10 @@ def cargar_movimientos_hoy():
     cur = conn.cursor()
     cur.execute("""
         SELECT tipo, sku, nombre, cantidad, motivo,
-               TO_CHAR(
-                   CASE WHEN COALESCE(canal,'') IN ('Walmart','WooCommerce','Paris')
-                        THEN fecha - INTERVAL '4 hours'
-                        ELSE fecha
-                   END, 'HH24:MI') as hora,
+               TO_CHAR(fecha, 'HH24:MI') as hora,
                COALESCE(canal, 'Sistema') as canal
         FROM movimientos
-        WHERE DATE(
-                   CASE WHEN COALESCE(canal,'') IN ('Walmart','WooCommerce','Paris')
-                        THEN fecha - INTERVAL '4 hours'
-                        ELSE fecha
-                   END) = CURRENT_DATE
+        WHERE DATE(fecha) = CURRENT_DATE
         AND tipo = 'salida'
         ORDER BY fecha DESC
     """)
@@ -551,3 +542,28 @@ def limpiar_movimientos_duplicados():
     cur.close()
     conn.close()
     return eliminados
+
+def borrar_movimientos_marketplace(desde_fecha):
+    """Borra movimientos de marketplaces desde una fecha y limpia ordenes_procesadas correspondientes."""
+    conn = get_conn()
+    cur = conn.cursor()
+    # Borrar movimientos de canales marketplace desde la fecha
+    cur.execute("""
+        DELETE FROM movimientos
+        WHERE canal IN ('Walmart', 'WooCommerce', 'Paris')
+        AND fecha >= %s
+    """, (desde_fecha,))
+    mov_borrados = cur.rowcount
+    # Limpiar ordenes_procesadas para que se reimporteen
+    cur.execute("""
+        DELETE FROM ordenes_procesadas
+        WHERE order_id_texto IN (
+            SELECT DISTINCT orden_id FROM movimientos
+            WHERE canal IN ('Walmart', 'WooCommerce', 'Paris')
+        ) OR fecha >= %s
+    """, (desde_fecha,))
+    op_borradas = cur.rowcount
+    conn.commit()
+    cur.close()
+    conn.close()
+    return mov_borrados, op_borradas

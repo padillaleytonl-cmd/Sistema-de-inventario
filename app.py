@@ -12,7 +12,7 @@ from paris import (verificar_conexion_paris, obtener_ordenes_paris_todas,
                    actualizar_precio_paris, obtener_orden_paris,
                    get_seller_id as get_paris_seller_id)
 from woo import actualizar_stock_woo
-from inventario import (cargar_productos, guardar_productos, guardar_producto,
+from inventario import (cargar_productos, limpiar_movimientos_duplicados, borrar_movimientos_marketplace, guardar_productos, guardar_producto,
                         registrar_movimiento, cargar_movimientos, cargar_movimientos_hoy,
                         init_db, orden_ya_procesada, marcar_orden_procesada, actualizar_precios,
                         get_configuracion, set_configuracion, set_lead_time, eliminar_producto,
@@ -52,16 +52,15 @@ def _sync_walmart_automatico():
                 # Marcar ANTES — evita duplicados si hay crash/OOM
                 marcar_orden_procesada_texto(customer_order_id)
 
-                # Extraer fecha REAL del pedido Walmart
+                # Fecha REAL del pedido Walmart
                 fecha_orden_walmart = None
                 try:
                     from datetime import datetime
                     import pytz
-                    _odate = o.get("orderDate", "")
-                    if _odate:
-                        _odate = _odate.replace("Z", "+00:00")
-                        _futc = datetime.fromisoformat(_odate)
-                        fecha_orden_walmart = _futc.astimezone(pytz.timezone("America/Santiago"))
+                    _od = o.get("orderDate", "")
+                    if _od:
+                        _od = _od.replace("Z", "+00:00")
+                        fecha_orden_walmart = datetime.fromisoformat(_od).astimezone(pytz.timezone("America/Santiago"))
                 except Exception:
                     pass
 
@@ -229,16 +228,15 @@ def _sync_recuperacion():
                 # Marcar ANTES — evita duplicados si hay crash/OOM
                 marcar_orden_procesada_texto(customer_order_id)
 
-                # Extraer fecha REAL del pedido Walmart
+                # Fecha REAL del pedido Walmart
                 fecha_orden_walmart = None
                 try:
                     from datetime import datetime
                     import pytz
-                    _odate = o.get("orderDate", "")
-                    if _odate:
-                        _odate = _odate.replace("Z", "+00:00")
-                        _futc = datetime.fromisoformat(_odate)
-                        fecha_orden_walmart = _futc.astimezone(pytz.timezone("America/Santiago"))
+                    _od = o.get("orderDate", "")
+                    if _od:
+                        _od = _od.replace("Z", "+00:00")
+                        fecha_orden_walmart = datetime.fromisoformat(_od).astimezone(pytz.timezone("America/Santiago"))
                 except Exception:
                     pass
 
@@ -751,16 +749,15 @@ def walmart_sync_ordenes():
             # Marcar ANTES — evita duplicados si hay crash/OOM
             marcar_orden_procesada_texto(customer_order_id)
 
-            # Extraer fecha REAL del pedido Walmart
+            # Fecha REAL del pedido Walmart
             fecha_orden_walmart = None
             try:
                 from datetime import datetime
                 import pytz
-                _odate = o.get("orderDate", "")
-                if _odate:
-                    _odate = _odate.replace("Z", "+00:00")
-                    _futc = datetime.fromisoformat(_odate)
-                    fecha_orden_walmart = _futc.astimezone(pytz.timezone("America/Santiago"))
+                _od = o.get("orderDate", "")
+                if _od:
+                    _od = _od.replace("Z", "+00:00")
+                    fecha_orden_walmart = datetime.fromisoformat(_od).astimezone(pytz.timezone("America/Santiago"))
             except Exception:
                 pass
 
@@ -1183,16 +1180,15 @@ def walmart_sync_debug():
             # Marcar ANTES — evita duplicados si hay crash/OOM
             marcar_orden_procesada_texto(customer_order_id)
 
-            # Extraer fecha REAL del pedido Walmart
+            # Fecha REAL del pedido Walmart
             fecha_orden_walmart = None
             try:
                 from datetime import datetime
                 import pytz
-                _odate = o.get("orderDate", "")
-                if _odate:
-                    _odate = _odate.replace("Z", "+00:00")
-                    _futc = datetime.fromisoformat(_odate)
-                    fecha_orden_walmart = _futc.astimezone(pytz.timezone("America/Santiago"))
+                _od = o.get("orderDate", "")
+                if _od:
+                    _od = _od.replace("Z", "+00:00")
+                    fecha_orden_walmart = datetime.fromisoformat(_od).astimezone(pytz.timezone("America/Santiago"))
             except Exception:
                 pass
 
@@ -1727,6 +1723,135 @@ def fix_corregir_fechas_walmart():
         except:
             pass
     return {"ok": True, "movimientos_corregidos": corregidos}
+
+@app.route("/fix/reset_desde_domingo")
+def fix_reset_desde_domingo():
+    """Borra movimientos de marketplaces desde el domingo 27/04 y reimporta con fechas reales."""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from datetime import datetime
+    import pytz
+    chile_tz = pytz.timezone("America/Santiago")
+
+    # Domingo 27 de abril 2026 a las 00:00 hora Chile
+    desde = chile_tz.localize(datetime(2026, 4, 27, 0, 0, 0))
+
+    mov_borrados, op_borradas = borrar_movimientos_marketplace(desde)
+
+    # Reimportar Walmart
+    walmart_importados = 0
+    walmart_errores = []
+    productos = cargar_productos()
+    for estado in ["Created", "Acknowledged", "Shipped", "Delivered"]:
+        try:
+            ordenes = obtener_ordenes_walmart(estado)
+            for o in ordenes:
+                order_id = o.get("purchaseOrderId")
+                if not order_id:
+                    continue
+                customer_order_id = str(o.get("customerOrderId", order_id))
+                if orden_ya_procesada_texto(customer_order_id):
+                    continue
+                marcar_orden_procesada_texto(customer_order_id)
+
+                # Fecha real del pedido
+                fecha_orden = None
+                try:
+                    _od = o.get("orderDate", "")
+                    if _od:
+                        _od = _od.replace("Z", "+00:00")
+                        fecha_orden = datetime.fromisoformat(_od).astimezone(chile_tz)
+                except:
+                    pass
+
+                lineas = o.get("orderLines", {}).get("orderLine", [])
+                if isinstance(lineas, dict):
+                    lineas = [lineas]
+
+                for linea in lineas:
+                    try:
+                        sku = linea.get("item", {}).get("sku")
+                        if not sku:
+                            continue
+                        cantidad = 1
+                        qty = linea.get("orderLineQuantity", {})
+                        if qty and qty.get("amount"):
+                            cantidad = int(float(qty.get("amount", 1)))
+                        if cantidad == 1:
+                            sq = linea.get("statusQuantity", {})
+                            if sq and sq.get("amount"):
+                                cantidad = int(float(sq.get("amount", 1)))
+                        for p in productos:
+                            if p["sku"] == sku:
+                                registrar_movimiento("salida", p["sku"], p["nombre"],
+                                    cantidad, f"Venta Walmart",
+                                    usuario="Sistema", canal="Walmart",
+                                    orden_id=customer_order_id,
+                                    fecha_override=fecha_orden)
+                                walmart_importados += 1
+                    except Exception as e:
+                        walmart_errores.append(str(e))
+        except Exception as e:
+            walmart_errores.append(f"Estado {estado}: {e}")
+
+    # Reimportar WooCommerce
+    woo_importados = 0
+    try:
+        from datetime import timedelta
+        fecha_desde = "2026-04-27T00:00:00"
+        page = 1
+        while True:
+            res = requests.get(
+                "https://www.babymine.cl/wp-json/wc/v3/orders",
+                params={
+                    "consumer_key": WC_KEY, "consumer_secret": WC_SECRET,
+                    "after": fecha_desde, "per_page": 50, "page": page,
+                    "status": "processing,completed"
+                }
+            )
+            if res.status_code != 200:
+                break
+            ordenes_woo = res.json()
+            if not ordenes_woo:
+                break
+            for o in ordenes_woo:
+                woo_order_id = str(o["id"])
+                if orden_ya_procesada_texto(f"woo_{woo_order_id}"):
+                    continue
+                marcar_orden_procesada_texto(f"woo_{woo_order_id}")
+                # Fecha real
+                fecha_woo = None
+                try:
+                    fecha_str = o.get("date_created", "")
+                    if fecha_str:
+                        fecha_utc = datetime.strptime(fecha_str, "%Y-%m-%dT%H:%M:%S")
+                        fecha_utc = pytz.utc.localize(fecha_utc)
+                        fecha_woo = fecha_utc.astimezone(chile_tz)
+                except:
+                    pass
+                for item in o.get("line_items", []):
+                    sku = item.get("sku")
+                    cantidad = item.get("quantity", 1)
+                    for p in productos:
+                        if p["sku"] == sku:
+                            registrar_movimiento("salida", p["sku"], p["nombre"],
+                                cantidad, "Venta Web",
+                                usuario="Sistema", canal="WooCommerce",
+                                orden_id=woo_order_id,
+                                fecha_override=fecha_woo)
+                            woo_importados += 1
+            page += 1
+    except Exception as e:
+        walmart_errores.append(f"WooCommerce: {e}")
+
+    return {
+        "ok": True,
+        "movimientos_borrados": mov_borrados,
+        "ordenes_procesadas_borradas": op_borradas,
+        "walmart_reimportados": walmart_importados,
+        "woo_reimportados": woo_importados,
+        "errores": walmart_errores[:20]
+    }
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
