@@ -1608,52 +1608,34 @@ def debug_estado_bd():
     }
 
 
-@app.route("/debug/paris_stock_raw")
-def debug_paris_stock_raw():
-    """Test París con respuesta cruda de la API para cada producto mapeado."""
+@app.route("/debug/paris_skus")
+def debug_paris_skus():
+    """Trae los SKUs reales de París para tu seller."""
     if not session.get("logged"): return {"error": "no autorizado"}, 401
     import requests as req
-    from paris import paris_headers, PARIS_BASE_URL, get_paris_token
-    from inventario import get_sku_canal
+    from paris import paris_headers, PARIS_BASE_URL, obtener_stock_paris, obtener_productos_paris
 
-    # Verificar token primero
+    # Opción 1: stock real
+    stock_data = obtener_stock_paris(limite=100, offset=0)
+
+    # Opción 2: productos publicados
+    prod_data = obtener_productos_paris(limite=25, offset=0)
+
+    # Opción 3: llamada directa a v2/stock para ver estructura
     try:
-        token = get_paris_token()
-        token_ok = bool(token)
+        res = req.get(f"{PARIS_BASE_URL}/v2/stock",
+                      headers=paris_headers(),
+                      params={"limit": 50, "offset": 0},
+                      timeout=15)
+        stock_raw = {"status": res.status_code, "body": res.json() if res.status_code == 200 else res.text[:500]}
     except Exception as e:
-        return {"error_token": str(e)}
+        stock_raw = {"error": str(e)}
 
-    productos = cargar_productos()
-    resultados = []
-
-    for p in productos:
-        sku_paris = get_sku_canal(p["sku"], "paris")
-        if sku_paris == p["sku"]:
-            continue  # Sin mapeo, saltar
-
-        try:
-            payload = {"skus": [{"skuSeller": sku_paris, "quantity": int(p["stock"])}]}
-            res = req.post(
-                f"{PARIS_BASE_URL}/v1/stock/sku-seller",
-                headers=paris_headers(),
-                json=payload,
-                timeout=15
-            )
-            resultados.append({
-                "sku_lusync": p["sku"],
-                "sku_paris": sku_paris,
-                "stock": p["stock"],
-                "status": res.status_code,
-                "respuesta": res.text[:300]
-            })
-        except Exception as e:
-            resultados.append({
-                "sku_lusync": p["sku"],
-                "sku_paris": sku_paris,
-                "error": str(e)
-            })
-
-    return {"token_ok": token_ok, "resultados": resultados}
+    return {
+        "stock_v2": stock_raw,
+        "productos_search": prod_data,
+        "stock_data": stock_data
+    }
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
