@@ -85,10 +85,15 @@ def _sync_walmart_automatico():
                     import pytz
                     _od = o.get("orderDate", "")
                     if _od:
-                        _od = _od.replace("Z", "+00:00")
-                        fecha_orden_walmart = datetime.fromisoformat(_od).astimezone(pytz.timezone("America/Santiago"))
-                except Exception:
-                    pass
+                        # orderDate viene como timestamp en milisegundos (int)
+                        if isinstance(_od, (int, float)):
+                            _ts = int(_od) / 1000 if int(_od) > 9999999999 else int(_od)
+                            fecha_orden_walmart = datetime.fromtimestamp(_ts, tz=pytz.timezone("America/Santiago"))
+                        else:
+                            _od = str(_od).replace("Z", "+00:00")
+                            fecha_orden_walmart = datetime.fromisoformat(_od).astimezone(pytz.timezone("America/Santiago"))
+                except Exception as _e:
+                    print(f"[Walmart fecha] Error parseando: {_e}")
 
                 lineas = o.get("orderLines", {}).get("orderLine", [])
                 if isinstance(lineas, dict):
@@ -261,10 +266,15 @@ def _sync_recuperacion():
                     import pytz
                     _od = o.get("orderDate", "")
                     if _od:
-                        _od = _od.replace("Z", "+00:00")
-                        fecha_orden_walmart = datetime.fromisoformat(_od).astimezone(pytz.timezone("America/Santiago"))
-                except Exception:
-                    pass
+                        # orderDate viene como timestamp en milisegundos (int)
+                        if isinstance(_od, (int, float)):
+                            _ts = int(_od) / 1000 if int(_od) > 9999999999 else int(_od)
+                            fecha_orden_walmart = datetime.fromtimestamp(_ts, tz=pytz.timezone("America/Santiago"))
+                        else:
+                            _od = str(_od).replace("Z", "+00:00")
+                            fecha_orden_walmart = datetime.fromisoformat(_od).astimezone(pytz.timezone("America/Santiago"))
+                except Exception as _e:
+                    print(f"[Walmart fecha] Error parseando: {_e}")
 
                 lineas = o.get("orderLines", {}).get("orderLine", [])
                 if isinstance(lineas, dict):
@@ -782,10 +792,14 @@ def walmart_sync_ordenes():
                 import pytz
                 _od = o.get("orderDate", "")
                 if _od:
-                    _od = _od.replace("Z", "+00:00")
-                    fecha_orden_walmart = datetime.fromisoformat(_od).astimezone(pytz.timezone("America/Santiago"))
-            except Exception:
-                pass
+                    if isinstance(_od, (int, float)):
+                        _ts = int(_od) / 1000 if int(_od) > 9999999999 else int(_od)
+                        fecha_orden_walmart = datetime.fromtimestamp(_ts, tz=pytz.timezone("America/Santiago"))
+                    else:
+                        _od = str(_od).replace("Z", "+00:00")
+                        fecha_orden_walmart = datetime.fromisoformat(_od).astimezone(pytz.timezone("America/Santiago"))
+            except Exception as _e:
+                print(f"[Walmart fecha] Error parseando: {_e}")
 
             lineas = o.get("orderLines", {}).get("orderLine", [])
             if isinstance(lineas, dict):
@@ -1213,10 +1227,14 @@ def walmart_sync_debug():
                 import pytz
                 _od = o.get("orderDate", "")
                 if _od:
-                    _od = _od.replace("Z", "+00:00")
-                    fecha_orden_walmart = datetime.fromisoformat(_od).astimezone(pytz.timezone("America/Santiago"))
-            except Exception:
-                pass
+                    if isinstance(_od, (int, float)):
+                        _ts = int(_od) / 1000 if int(_od) > 9999999999 else int(_od)
+                        fecha_orden_walmart = datetime.fromtimestamp(_ts, tz=pytz.timezone("America/Santiago"))
+                    else:
+                        _od = str(_od).replace("Z", "+00:00")
+                        fecha_orden_walmart = datetime.fromisoformat(_od).astimezone(pytz.timezone("America/Santiago"))
+            except Exception as _e:
+                print(f"[Walmart fecha] Error parseando: {_e}")
 
             lineas = o.get("orderLines", {}).get("orderLine", [])
             if isinstance(lineas, dict):
@@ -1789,10 +1807,14 @@ def fix_reset_desde_domingo():
                 try:
                     _od = o.get("orderDate", "")
                     if _od:
-                        _od = _od.replace("Z", "+00:00")
-                        fecha_orden = datetime.fromisoformat(_od).astimezone(chile_tz)
-                except:
-                    pass
+                        if isinstance(_od, (int, float)):
+                            _ts = int(_od) / 1000 if int(_od) > 9999999999 else int(_od)
+                            fecha_orden = datetime.fromtimestamp(_ts, tz=chile_tz)
+                        else:
+                            _od = str(_od).replace("Z", "+00:00")
+                            fecha_orden = datetime.fromisoformat(_od).astimezone(chile_tz)
+                except Exception as _e:
+                    print(f"[Walmart fecha] Error: {_e}")
                 if fecha_orden and fecha_orden < desde:
                     continue
                 if orden_ya_procesada_texto(customer_order_id):
@@ -2152,6 +2174,29 @@ def fix_corregir_fechas_walmart_v2():
         "ordenes_sin_fecha": len(no_encontrados),
         "ejemplos_sin_fecha": no_encontrados[:5]
     }
+
+
+@app.route("/fix/borrar_todos_movimientos", methods=["POST"])
+def fix_borrar_todos_movimientos():
+    """[DESARROLLO] Borra TODOS los movimientos y órdenes procesadas. Usar con cuidado."""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from inventario import get_conn
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM movimientos")
+    mov_borrados = cur.rowcount
+    cur.execute("DELETE FROM ordenes_procesadas")
+    op_borradas = cur.rowcount
+    conn.commit()
+    cur.close(); conn.close()
+    try:
+        registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
+                        "borrar_todos_movimientos",
+                        detalle=f"Mov:{mov_borrados} OP:{op_borradas}")
+    except:
+        pass
+    return {"ok": True, "movimientos_borrados": mov_borrados, "ordenes_procesadas_borradas": op_borradas}
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

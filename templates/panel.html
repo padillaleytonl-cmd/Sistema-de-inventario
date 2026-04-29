@@ -1471,6 +1471,11 @@ tbody td {
         <div class="page-date">Registro completo de entradas y salidas</div>
         <div style="font-size:13px;color:var(--muted);margin-top:2px;font-family:'DM Mono',monospace;" id="relojMov"></div>
       </div>
+      <div>
+        <button onclick="borrarTodosMovimientos()" style="padding:8px 14px;border:0.5px solid #DC2626;background:#FEE2E2;color:#991B1B;border-radius:8px;font-size:12px;cursor:pointer;font-weight:500;display:inline-flex;align-items:center;gap:6px;" title="DESARROLLO: borra todos los movimientos">
+          🗑 Borrar historial
+        </button>
+      </div>
     </div>
     <div class="card" style="padding:0;overflow:hidden;display:flex;flex-direction:column;height:calc(100vh - 180px);">
       <div style="display:grid;grid-template-columns:20px minmax(0,1fr) 110px 96px 44px;align-items:center;gap:8px;padding:7px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);flex-shrink:0;">
@@ -4401,6 +4406,21 @@ function importarExcelMapeo(input){
         toast('Error: ' + (d.error || 'desconocido'));
       }
       input.value = ''; // resetear
+    });
+}
+
+// [DESARROLLO] Borrar todos los movimientos
+function borrarTodosMovimientos(){
+  const conf = prompt('Esto borrará TODOS los movimientos y el registro de órdenes procesadas.\n\nEscribe "BORRAR" para confirmar:');
+  if(conf !== 'BORRAR') return;
+  fetch('/fix/borrar_todos_movimientos', {method: 'POST'})
+    .then(r=>r.json()).then(d=>{
+      if(d.ok){
+        toast(`✓ ${d.movimientos_borrados} movimientos borrados`);
+        cargarMovimientosFull();
+      } else {
+        toast('Error: ' + (d.error||'desconocido'));
+      }
     });
 }
 </script>
