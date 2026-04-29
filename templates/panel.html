@@ -1478,10 +1478,11 @@ tbody td {
       </div>
     </div>
     <div class="card" style="padding:0;overflow:hidden;display:flex;flex-direction:column;height:calc(100vh - 180px);">
-      <div style="display:grid;grid-template-columns:20px minmax(0,1fr) 110px 96px 44px;align-items:center;gap:8px;padding:7px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);flex-shrink:0;">
+      <div style="display:grid;grid-template-columns:20px minmax(0,1fr) 130px 110px 96px 44px;align-items:center;gap:8px;padding:7px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);flex-shrink:0;">
         <div></div>
         <div style="font-size:10px;font-weight:500;color:var(--muted);">Producto · OC</div>
-        <div style="font-size:10px;font-weight:500;color:var(--muted);">Fecha · Canal</div>
+        <div style="font-size:10px;font-weight:500;color:var(--muted);">Fecha compra · Canal</div>
+        <div style="font-size:10px;font-weight:500;color:var(--muted);">Importado</div>
         <div style="font-size:10px;font-weight:500;color:var(--muted);">Origen</div>
         <div style="font-size:10px;font-weight:500;color:var(--muted);text-align:right;">Cant.</div>
       </div>
@@ -1502,7 +1503,7 @@ tbody td {
         <div class="page-title">Mapeo de SKUs por canal</div>
         <div class="page-date" style="margin-top:2px;">SKU LUSYNC es el mandante. Si la celda de un canal está vacía, se usa el SKU LUSYNC.</div>
       </div>
-      <div style="display:flex;gap:8px;align-items:center;">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         <select id="selPlataformaWeb" onchange="cambiarPlataformaWeb()" style="padding:7px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg);color:var(--text);">
           <option value="WooCommerce">WooCommerce</option>
           <option value="Shopify">Shopify</option>
@@ -2855,20 +2856,22 @@ function cargarMovimientosFull(){
         ? `<span style="font-size:12px;font-weight:500;color:#27500A;">+${m.cantidad}</span>`
         : `<span style="font-size:12px;font-weight:500;color:#A32D2D;">−${m.cantidad}</span>`;
       const ocTag = m.orden_id
-        ? `<span style="font-size:10px;font-family:monospace;color:var(--muted);background:var(--bg2);padding:1px 5px;border-radius:4px;border:0.5px solid var(--border);white-space:nowrap;">OC-${m.orden_id}</span>`
+        ? `<span style="font-size:11px;font-family:'DM Mono',monospace;color:#1E40AF;background:#DBEAFE;padding:2px 7px;border-radius:5px;border:0.5px solid #93C5FD;white-space:nowrap;font-weight:500;letter-spacing:0.02em;">OC-${m.orden_id}</span>`
         : `<span style="font-size:10px;font-family:monospace;color:var(--muted);background:var(--bg2);padding:1px 5px;border-radius:4px;border:0.5px solid var(--border);">—</span>`;
       const divider = i < movs.length - 1 ? '<div style="height:0.5px;background:var(--border);flex-shrink:0;"></div>' : '';
+      const importadoTxt = m.importado || '—';
 
-      return `<div style="display:grid;grid-template-columns:20px minmax(0,1fr) 110px 96px 44px;align-items:center;gap:8px;padding:5px 14px;">
+      return `<div style="display:grid;grid-template-columns:20px minmax(0,1fr) 130px 110px 96px 44px;align-items:center;gap:8px;padding:5px 14px;">
         <div style="width:16px;height:16px;border-radius:50%;background:${dotBg};display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:500;color:${dotColor};flex-shrink:0;">${dotLetter}</div>
         <div style="min-width:0;">
           <div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${m.nombre}</div>
-          <div style="display:flex;align-items:center;gap:5px;margin-top:1px;">${ocTag}<span style="font-size:10px;color:var(--hint);">${m.sku}</span></div>
+          <div style="display:flex;align-items:center;gap:6px;margin-top:3px;">${ocTag}<span style="font-size:10px;color:var(--hint);font-family:'DM Mono',monospace;">${m.sku}</span></div>
         </div>
         <div>
           <div style="font-size:11px;color:var(--text);">${m.fecha} ${m.hora}</div>
           ${getBadge(m.canal)}
         </div>
+        <div style="font-size:10px;color:var(--muted);font-family:'DM Mono',monospace;">${importadoTxt}</div>
         ${getOrigenDot(m.usuario)}
         <div style="text-align:right;">${qty}</div>
       </div>${divider}`;
@@ -4287,14 +4290,12 @@ function confirmarNuevaDevolucion(){
 // ════════════════════════════════════════════
 // MAPEO DE SKUs
 // ════════════════════════════════════════════
-
 let _mapeoCache = [];
-let _mapeoEditando = {}; // {sku_lusync: {campo: valor}}
+let _mapeoEditando = {};
 
 function cargarSkuMapeo(){
   fetch('/sku_mapeo').then(r=>r.json()).then(d=>{
     _mapeoCache = d.mapeos || [];
-    // Setear plataforma web
     const sel = document.getElementById('selPlataformaWeb');
     if(sel && d.plataforma_web) sel.value = d.plataforma_web;
     const thWeb = document.getElementById('thWeb');
@@ -4346,10 +4347,8 @@ function guardarFilaSkuMapeo(skuLusync){
   if(!_mapeoEditando[skuLusync]) return;
   const fila = _mapeoCache.find(m => m.sku_lusync === skuLusync);
   if(!fila) return;
-  // Mergear cambios al objeto
   Object.assign(fila, _mapeoEditando[skuLusync]);
   delete _mapeoEditando[skuLusync];
-  // Enviar al servidor
   const payload = {
     sku_lusync: fila.sku_lusync,
     sku_web: fila.sku_web || '',
@@ -4405,7 +4404,7 @@ function importarExcelMapeo(input){
       } else {
         toast('Error: ' + (d.error || 'desconocido'));
       }
-      input.value = ''; // resetear
+      input.value = '';
     });
 }
 
