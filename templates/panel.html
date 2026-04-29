@@ -29,6 +29,79 @@
   --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
 }
 
+
+/* ══ TEMA PRO CLARO ══ */
+body.tema-pro {
+  --bg: #f4f6f9;
+  --white: #ffffff;
+  --border: rgba(0,0,0,0.07);
+  --text: #111827;
+  --muted: #6b7280;
+  --hint: #9ca3af;
+  --navy: #1a1f2e;
+  --navy-light: #252c3d;
+  --shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+body.tema-pro .card {
+  border: 0.5px solid rgba(0,0,0,0.07);
+  box-shadow: none;
+}
+body.tema-pro .navbar {
+  background: #1a1f2e;
+  border-bottom: none;
+}
+body.tema-pro .main {
+  padding: 20px 24px;
+}
+body.tema-pro .page-title {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+/* ══ TEMA OSCURO ══ */
+body.tema-dark {
+  --bg: #0d1117;
+  --white: #161b22;
+  --border: rgba(255,255,255,0.07);
+  --text: rgba(255,255,255,0.87);
+  --muted: rgba(255,255,255,0.4);
+  --hint: rgba(255,255,255,0.2);
+  --navy: #010409;
+  --navy-light: #0d1117;
+  --success: #34d399;
+  --success-bg: rgba(52,211,153,0.12);
+  --danger: #f87171;
+  --danger-bg: rgba(248,113,113,0.12);
+  --warn: #fbbf24;
+  --warn-bg: rgba(251,191,36,0.12);
+  --info-bg: rgba(99,102,241,0.12);
+  --shadow: none;
+}
+body.tema-dark .card {
+  border: 0.5px solid rgba(255,255,255,0.07);
+  box-shadow: none;
+}
+body.tema-dark .navbar {
+  background: #010409;
+  border-bottom: 0.5px solid rgba(255,255,255,0.06);
+}
+body.tema-dark input, body.tema-dark select, body.tema-dark textarea {
+  background: #0d1117;
+  color: rgba(255,255,255,0.87);
+  border-color: rgba(255,255,255,0.1);
+}
+body.tema-dark .nav-btn { color: rgba(255,255,255,0.4); }
+body.tema-dark .nav-btn:hover { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.8); }
+body.tema-dark .nav-btn.active { background: rgba(255,255,255,0.1); color: white; }
+body.tema-dark .cfg-tab { color: rgba(255,255,255,0.4); }
+body.tema-dark .cfg-tab:hover { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.7); }
+body.tema-dark .cfg-tab.active { background: rgba(255,255,255,0.08); color: white; }
+body.tema-dark label { color: rgba(255,255,255,0.5); }
+body.tema-dark .card-tag { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.4); }
+body.tema-dark .page-date { color: rgba(255,255,255,0.3); }
+body.tema-dark .btn-secondary { border-color: rgba(255,255,255,0.12); color: rgba(255,255,255,0.6); }
+body.tema-dark .btn-secondary:hover { background: rgba(255,255,255,0.06); }
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
@@ -1496,6 +1569,106 @@ tbody td {
     </div>
   </div>
 
+  
+        <!-- PERSONALIZACIÓN -->
+        <div id="cfg-personalizar" style="display:none;">
+          <div class="card" style="margin-bottom:14px;">
+            <div class="card-title" style="margin-bottom:4px;">Tema de interfaz</div>
+            <div class="page-date" style="margin-bottom:20px;">Elige cómo se ve Lusync. El tema se guarda en este dispositivo.</div>
+
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
+
+              <!-- CLÁSICO -->
+              <div id="tema-card-clasico" onclick="aplicarTema('clasico')" style="border:2px solid var(--violet);border-radius:12px;overflow:hidden;cursor:pointer;transition:all .2s;">
+                <div style="background:#0d1f3c;padding:8px 10px;display:flex;align-items:center;gap:6px;">
+                  <div style="width:20px;height:20px;background:#2563eb;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#fff;">LS</div>
+                  <span style="font-size:10px;color:rgba(255,255,255,0.7);font-weight:500;">Lusync</span>
+                </div>
+                <div style="background:#f0f1fa;padding:10px;">
+                  <div style="background:#fff;border-radius:6px;padding:8px;margin-bottom:6px;border:0.5px solid rgba(0,0,0,0.08);">
+                    <div style="font-size:9px;color:#9ca3af;margin-bottom:3px;">VENTAS HOY</div>
+                    <div style="font-size:16px;font-weight:700;color:#1a1a2e;">60</div>
+                  </div>
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+                    <div style="background:#fff;border-radius:5px;padding:5px;border:0.5px solid rgba(0,0,0,0.08);">
+                      <div style="font-size:8px;color:#9ca3af;">STOCK</div>
+                      <div style="font-size:11px;font-weight:600;color:#1a1a2e;">82</div>
+                    </div>
+                    <div style="background:#fff;border-radius:5px;padding:5px;border:0.5px solid rgba(0,0,0,0.08);">
+                      <div style="font-size:8px;color:#9ca3af;">CANALES</div>
+                      <div style="font-size:11px;font-weight:600;color:#1a1a2e;">3</div>
+                    </div>
+                  </div>
+                </div>
+                <div style="padding:8px 10px;background:#f0f1fa;border-top:0.5px solid rgba(0,0,0,0.06);display:flex;align-items:center;justify-content:space-between;">
+                  <span style="font-size:11px;font-weight:600;color:#1a1a2e;">Clásico</span>
+                  <span id="tema-check-clasico" style="font-size:11px;color:#2563eb;font-weight:600;">✓ Activo</span>
+                </div>
+              </div>
+
+              <!-- PRO CLARO -->
+              <div id="tema-card-pro" onclick="aplicarTema('pro')" style="border:2px solid transparent;border-radius:12px;overflow:hidden;cursor:pointer;transition:all .2s;">
+                <div style="background:#1a1f2e;padding:8px 10px;display:flex;align-items:center;gap:6px;">
+                  <div style="width:20px;height:20px;background:#2563eb;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#fff;">LS</div>
+                  <span style="font-size:10px;color:rgba(255,255,255,0.7);font-weight:500;">Lusync</span>
+                </div>
+                <div style="background:#f4f6f9;padding:10px;">
+                  <div style="background:#fff;border-radius:6px;padding:8px;margin-bottom:6px;border:0.5px solid rgba(0,0,0,0.07);">
+                    <div style="font-size:9px;color:#9ca3af;margin-bottom:3px;">VENTAS HOY</div>
+                    <div style="font-size:16px;font-weight:700;color:#111827;">60</div>
+                    <div style="font-size:8px;color:#059669;">+12% vs ayer</div>
+                  </div>
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+                    <div style="background:#fff;border-radius:5px;padding:5px;border:0.5px solid rgba(0,0,0,0.07);">
+                      <div style="font-size:8px;color:#9ca3af;">REVENUE</div>
+                      <div style="font-size:11px;font-weight:600;color:#111827;">$4.6M</div>
+                    </div>
+                    <div style="background:#fff;border-radius:5px;padding:5px;border:0.5px solid rgba(0,0,0,0.07);">
+                      <div style="font-size:8px;color:#9ca3af;">LIVE</div>
+                      <div style="font-size:9px;font-weight:600;color:#059669;">● Conectado</div>
+                    </div>
+                  </div>
+                </div>
+                <div style="padding:8px 10px;background:#f4f6f9;border-top:0.5px solid rgba(0,0,0,0.06);display:flex;align-items:center;justify-content:space-between;">
+                  <span style="font-size:11px;font-weight:600;color:#111827;">Pro Claro</span>
+                  <span id="tema-check-pro" style="font-size:11px;color:#2563eb;font-weight:600;display:none;">✓ Activo</span>
+                </div>
+              </div>
+
+              <!-- OSCURO -->
+              <div id="tema-card-dark" onclick="aplicarTema('dark')" style="border:2px solid transparent;border-radius:12px;overflow:hidden;cursor:pointer;transition:all .2s;">
+                <div style="background:#010409;padding:8px 10px;display:flex;align-items:center;gap:6px;">
+                  <div style="width:20px;height:20px;background:#2563eb;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#fff;">LS</div>
+                  <span style="font-size:10px;color:rgba(255,255,255,0.5);font-weight:500;">Lusync</span>
+                </div>
+                <div style="background:#0d1117;padding:10px;">
+                  <div style="background:#161b22;border-radius:6px;padding:8px;margin-bottom:6px;border:0.5px solid rgba(255,255,255,0.07);">
+                    <div style="font-size:9px;color:rgba(255,255,255,0.3);margin-bottom:3px;">VENTAS HOY</div>
+                    <div style="font-size:16px;font-weight:700;color:rgba(255,255,255,0.87);">60</div>
+                    <div style="font-size:8px;color:#34d399;">+12% vs ayer</div>
+                  </div>
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+                    <div style="background:#161b22;border-radius:5px;padding:5px;border:0.5px solid rgba(255,255,255,0.07);">
+                      <div style="font-size:8px;color:rgba(255,255,255,0.3);">REVENUE</div>
+                      <div style="font-size:11px;font-weight:600;color:rgba(255,255,255,0.87);">$4.6M</div>
+                    </div>
+                    <div style="background:#161b22;border-radius:5px;padding:5px;border:0.5px solid rgba(255,255,255,0.07);">
+                      <div style="font-size:8px;color:rgba(255,255,255,0.3);">LIVE</div>
+                      <div style="font-size:9px;font-weight:600;color:#34d399;">● Conectado</div>
+                    </div>
+                  </div>
+                </div>
+                <div style="padding:8px 10px;background:#0d1117;border-top:0.5px solid rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:space-between;">
+                  <span style="font-size:11px;font-weight:600;color:rgba(255,255,255,0.7);">Oscuro</span>
+                  <span id="tema-check-dark" style="font-size:11px;color:#34d399;font-weight:600;display:none;">✓ Activo</span>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+
+
   <!-- ── SECCIÓN MAPEO SKUs ── -->
   <div id="sec-skumapeo" class="main" style="display:none;">
     <div class="page-header" style="margin-bottom:18px;">
@@ -1851,6 +2024,7 @@ tbody td {
         <button class="cfg-tab" onclick="showCfgTab('bodegas',this)">Bodegas</button>
         <button class="cfg-tab" onclick="showCfgTab('integraciones',this)">Integraciones</button>
         <button class="cfg-tab" onclick="showCfgTab('usuarios',this)">Usuarios</button>
+        <button class="cfg-tab" onclick="showCfgTab('personalizar',this)" style="margin-top:8px;border-top:0.5px solid var(--border);border-radius:0;padding-top:12px;">🎨 Personalización</button>
       </div>
 
       <!-- Contenido configuración -->
@@ -4040,7 +4214,80 @@ function imprimirEtiquetaDev(){
         size: 60mm 40mm;
         margin: 0;
       }
-      * { box-sizing: border-box; margin: 0; padding: 0; }
+      
+/* ══ TEMA PRO CLARO ══ */
+body.tema-pro {
+  --bg: #f4f6f9;
+  --white: #ffffff;
+  --border: rgba(0,0,0,0.07);
+  --text: #111827;
+  --muted: #6b7280;
+  --hint: #9ca3af;
+  --navy: #1a1f2e;
+  --navy-light: #252c3d;
+  --shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+body.tema-pro .card {
+  border: 0.5px solid rgba(0,0,0,0.07);
+  box-shadow: none;
+}
+body.tema-pro .navbar {
+  background: #1a1f2e;
+  border-bottom: none;
+}
+body.tema-pro .main {
+  padding: 20px 24px;
+}
+body.tema-pro .page-title {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+/* ══ TEMA OSCURO ══ */
+body.tema-dark {
+  --bg: #0d1117;
+  --white: #161b22;
+  --border: rgba(255,255,255,0.07);
+  --text: rgba(255,255,255,0.87);
+  --muted: rgba(255,255,255,0.4);
+  --hint: rgba(255,255,255,0.2);
+  --navy: #010409;
+  --navy-light: #0d1117;
+  --success: #34d399;
+  --success-bg: rgba(52,211,153,0.12);
+  --danger: #f87171;
+  --danger-bg: rgba(248,113,113,0.12);
+  --warn: #fbbf24;
+  --warn-bg: rgba(251,191,36,0.12);
+  --info-bg: rgba(99,102,241,0.12);
+  --shadow: none;
+}
+body.tema-dark .card {
+  border: 0.5px solid rgba(255,255,255,0.07);
+  box-shadow: none;
+}
+body.tema-dark .navbar {
+  background: #010409;
+  border-bottom: 0.5px solid rgba(255,255,255,0.06);
+}
+body.tema-dark input, body.tema-dark select, body.tema-dark textarea {
+  background: #0d1117;
+  color: rgba(255,255,255,0.87);
+  border-color: rgba(255,255,255,0.1);
+}
+body.tema-dark .nav-btn { color: rgba(255,255,255,0.4); }
+body.tema-dark .nav-btn:hover { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.8); }
+body.tema-dark .nav-btn.active { background: rgba(255,255,255,0.1); color: white; }
+body.tema-dark .cfg-tab { color: rgba(255,255,255,0.4); }
+body.tema-dark .cfg-tab:hover { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.7); }
+body.tema-dark .cfg-tab.active { background: rgba(255,255,255,0.08); color: white; }
+body.tema-dark label { color: rgba(255,255,255,0.5); }
+body.tema-dark .card-tag { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.4); }
+body.tema-dark .page-date { color: rgba(255,255,255,0.3); }
+body.tema-dark .btn-secondary { border-color: rgba(255,255,255,0.12); color: rgba(255,255,255,0.6); }
+body.tema-dark .btn-secondary:hover { background: rgba(255,255,255,0.06); }
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
       body {
         width: 60mm;
         height: 40mm;
@@ -4407,6 +4654,54 @@ function importarExcelMapeo(input){
       input.value = '';
     });
 }
+
+
+// ════════════════════════════════════════════
+// SISTEMA DE TEMAS
+// ════════════════════════════════════════════
+
+function aplicarTema(tema) {
+  // Quitar temas anteriores
+  document.body.classList.remove('tema-pro', 'tema-dark');
+  
+  // Aplicar nuevo tema
+  if (tema === 'pro') document.body.classList.add('tema-pro');
+  if (tema === 'dark') document.body.classList.add('tema-dark');
+  
+  // Guardar en localStorage
+  localStorage.setItem('lusync_tema', tema);
+  
+  // Actualizar UI de selección
+  _actualizarTemaCards(tema);
+  
+  toast(`Tema ${tema === 'clasico' ? 'Clásico' : tema === 'pro' ? 'Pro Claro' : 'Oscuro'} aplicado ✓`);
+}
+
+function _actualizarTemaCards(tema) {
+  const temas = ['clasico', 'pro', 'dark'];
+  const colores = { clasico: '#2563eb', pro: '#2563eb', dark: '#34d399' };
+  temas.forEach(t => {
+    const card = document.getElementById('tema-card-' + t);
+    const check = document.getElementById('tema-check-' + t);
+    if (!card || !check) return;
+    const activo = t === tema;
+    card.style.border = activo ? `2px solid ${colores[t]}` : '2px solid transparent';
+    check.style.display = activo ? '' : 'none';
+  });
+}
+
+function _cargarTemaGuardado() {
+  const tema = localStorage.getItem('lusync_tema') || 'clasico';
+  document.body.classList.remove('tema-pro', 'tema-dark');
+  if (tema === 'pro') document.body.classList.add('tema-pro');
+  if (tema === 'dark') document.body.classList.add('tema-dark');
+  _actualizarTemaCards(tema);
+}
+
+// Aplicar tema al cargar la página
+document.addEventListener('DOMContentLoaded', _cargarTemaGuardado);
+// También intentar aplicar inmediatamente (por si DOMContentLoaded ya pasó)
+_cargarTemaGuardado();
 
 // [DESARROLLO] Borrar todos los movimientos
 function borrarTodosMovimientos(){
