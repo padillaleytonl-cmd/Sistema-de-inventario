@@ -549,3 +549,149 @@ def borrar_movimientos_marketplace(desde_fecha):
     cur.close()
     conn.close()
     return mov_borrados, op_borradas
+
+
+# ══════════════════════════════════════════════════
+# MAPEO DE SKUs POR CANAL — Tabla matriz
+# Columnas: SKU LUSYNC (mandante) + WEB + 6 marketplaces
+# Plataforma web configurable (WC/Shopify/VTEX/etc) para SaaS multi-tenant
+# ══════════════════════════════════════════════════
+
+CANALES_LISTA = ["web", "walmart", "paris", "falabella", "ripley", "mercadolibre", "hites"]
+
+CANAL_DISPLAY = {
+    "web": "Web Propia",
+    "walmart": "Walmart",
+    "paris": "París",
+    "falabella": "Falabella",
+    "ripley": "Ripley",
+    "mercadolibre": "Mercado Libre",
+    "hites": "Hites",
+}
+
+def init_sku_mapeo():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS sku_mapeo (
+            id SERIAL PRIMARY KEY,
+            sku_lusync TEXT UNIQUE NOT NULL,
+            sku_web TEXT,
+            sku_walmart TEXT,
+            sku_paris TEXT,
+            sku_falabella TEXT,
+            sku_ripley TEXT,
+            sku_mercadolibre TEXT,
+            sku_hites TEXT,
+            actualizado TIMESTAMP DEFAULT NOW()
+        )
+    """)
+    for col in ["sku_web", "sku_walmart", "sku_paris", "sku_falabella",
+                "sku_ripley", "sku_mercadolibre", "sku_hites"]:
+        try:
+            cur.execute(f"ALTER TABLE sku_mapeo ADD COLUMN IF NOT EXISTS {col} TEXT")
+        except:
+            pass
+    # Setting de plataforma web del tenant (default WooCommerce)
+    cur.execute("INSERT INTO configuracion (clave, valor) VALUES ('plataforma_web', 'WooCommerce') ON CONFLICT (clave) DO NOTHING")
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def listar_sku_mapeo():
+    """Matriz: cada producto con su SKU Lusync + columnas de canal."""
+    init_sku_mapeo()
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT p.sku, p.nombre,
+               COALESCE(m.sku_web, ''),
+               COALESCE(m.sku_walmart, ''),
+               COALESCE(m.sku_paris, ''),
+               COALESCE(m.sku_falabella, ''),
+               COALESCE(m.sku_ripley, ''),
+               COALESCE(m.sku_mercadolibre, ''),
+               COALESCE(m.sku_hites, '')
+        FROM productos p
+        LEFT JOIN sku_mapeo m ON m.sku_lusync = p.sku
+        ORDER BY p.nombre
+    """)
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [{
+        "sku_lusync": r[0], "nombre": r[1],
+        "sku_web": r[2], "sku_walmart": r[3], "sku_paris": r[4],
+        "sku_falabella": r[5], "sku_ripley": r[6],
+        "sku_mercadolibre": r[7], "sku_hites": r[8]
+    } for r in rows]
+
+def guardar_sku_mapeo_fila(sku_lusync, skus):
+    """skus = dict con keys: web, walmart, paris, falabella, ripley, mercadolibre, hites."""
+    init_sku_mapeo()
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO sku_mapeo (sku_lusync, sku_web, sku_walmart, sku_paris, sku_falabella,
+                               sku_ripley, sku_mercadolibre, sku_hites, actualizado)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        ON CONFLICT (sku_lusync) DO UPDATE SET
+            sku_web = EXCLUDED.sku_web,
+            sku_walmart = EXCLUDED.sku_walmart,
+            sku_paris = EXCLUDED.sku_paris,
+            sku_falabella = EXCLUDED.sku_falabella,
+            sku_ripley = EXCLUDED.sku_ripley,
+            sku_mercadolibre = EXCLUDED.sku_mercadolibre,
+            sku_hites = EXCLUDED.sku_hites,
+            actualizado = NOW()
+    """, (
+        sku_lusync,
+        (skus.get("web") or "").strip() or None,
+        (skus.get("walmart") or "").strip() or None,
+        (skus.get("paris") or "").strip() or None,
+        (skus.get("falabella") or "").strip() or None,
+        (skus.get("ripley") or "").strip() or None,
+        (skus.get("mercadolibre") or "").strip() or None,
+        (skus.get("hites") or "").strip() or None,
+    ))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def get_sku_canal(sku_lusync, canal):
+    """
+    Retorna el SKU del canal para un SKU Lusync.
+    Si no hay mapeo o el campo está vacío, retorna el mismo SKU Lusync (Opción A).
+    canal: 'web', 'walmart', 'paris', 'falabella', 'ripley', 'mercadolibre', 'hites'
+           o también acepta 'WooCommerce', 'Shopify', etc → mapean a 'web'
+    """
+    init_sku_mapeo()
+    # Normalizar nombre de canal
+    canal_lower = canal.lower()
+    plataformas_web = ["woocommerce", "shopify", "vtex", "prestashop", "jumpseller", "web"]
+    if canal_lower in plataformas_web:
+        col = "sku_web"
+    elif canal_lower == "mercadolibre" or canal_lower == "mercado libre":
+        col = "sku_mercadolibre"
+    elif canal_lower in ["walmart", "paris", "falabella", "ripley", "hites"]:
+        col = f"sku_{canal_lower}"
+    else:
+        return sku_lusync  # canal desconocido → fallback
+
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(f"SELECT {col} FROM sku_mapeo WHERE sku_lusync = %s", (sku_lusync,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    if row and row[0] and row[0].strip():
+        return row[0].strip()
+    return sku_lusync  # Opción A: fallback al SKU Lusync
+
+def get_plataforma_web():
+    """Retorna la plataforma web configurada (WooCommerce, Shopify, etc.)."""
+    valor = get_configuracion("plataforma_web")
+    return valor or "WooCommerce"
+
+def set_plataforma_web(plataforma):
+    set_configuracion("plataforma_web", plataforma)

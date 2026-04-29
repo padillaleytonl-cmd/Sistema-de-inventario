@@ -12,7 +12,9 @@ from paris import (verificar_conexion_paris, obtener_ordenes_paris_todas,
                    actualizar_precio_paris, obtener_orden_paris,
                    get_seller_id as get_paris_seller_id)
 from woo import actualizar_stock_woo
-from inventario import (cargar_productos, limpiar_movimientos_duplicados, borrar_movimientos_marketplace, guardar_productos, guardar_producto,
+from inventario import (cargar_productos, limpiar_movimientos_duplicados, borrar_movimientos_marketplace,
+                        listar_sku_mapeo, guardar_sku_mapeo_fila, get_sku_canal,
+                        get_plataforma_web, set_plataforma_web, init_sku_mapeo, CANAL_DISPLAY, guardar_productos, guardar_producto,
                         registrar_movimiento, cargar_movimientos, cargar_movimientos_hoy,
                         init_db, orden_ya_procesada, marcar_orden_procesada, actualizar_precios,
                         get_configuracion, set_configuracion, set_lead_time, eliminar_producto,
@@ -28,6 +30,30 @@ app.secret_key = "clave_super_segura"
 init_db()
 init_devoluciones()
 init_audit()
+
+try:
+    init_sku_mapeo()
+except Exception as e:
+    print(f"[Init] sku_mapeo: {e}")
+
+def _sync_stock_canal(sku_lusync, stock):
+    """Sincroniza stock en TODOS los canales usando el mapeo correcto."""
+    try:
+        from inventario import get_sku_canal
+        actualizar_stock_woo(get_sku_canal(sku_lusync, "web"), stock)
+    except Exception as e:
+        print(f"[Sync] Error WC: {e}")
+    try:
+        from inventario import get_sku_canal
+        actualizar_stock_walmart(get_sku_canal(sku_lusync, "walmart"), stock)
+    except Exception as e:
+        print(f"[Sync] Error WM: {e}")
+    try:
+        from inventario import get_sku_canal
+        actualizar_stock_paris(get_sku_canal(sku_lusync, "paris"), stock)
+    except Exception as e:
+        print(f"[Sync] Error PA: {e}")
+
 
 # ── SYNC AUTOMÁTICO WALMART CADA 5 MINUTOS ──
 def _sync_walmart_automatico():
@@ -1557,6 +1583,30 @@ def audit_view():
         return {"error": "no autorizado"}, 401
     # Asegurar tabla existe (por si el deploy no la creó)
     init_audit()
+
+try:
+    init_sku_mapeo()
+except Exception as e:
+    print(f"[Init] sku_mapeo: {e}")
+
+def _sync_stock_canal(sku_lusync, stock):
+    """Sincroniza stock en TODOS los canales usando el mapeo correcto."""
+    try:
+        from inventario import get_sku_canal
+        actualizar_stock_woo(get_sku_canal(sku_lusync, "web"), stock)
+    except Exception as e:
+        print(f"[Sync] Error WC: {e}")
+    try:
+        from inventario import get_sku_canal
+        actualizar_stock_walmart(get_sku_canal(sku_lusync, "walmart"), stock)
+    except Exception as e:
+        print(f"[Sync] Error WM: {e}")
+    try:
+        from inventario import get_sku_canal
+        actualizar_stock_paris(get_sku_canal(sku_lusync, "paris"), stock)
+    except Exception as e:
+        print(f"[Sync] Error PA: {e}")
+
     # Registrar que el admin consultó el log
     registrar_audit(
         session.get("usuario", "admin"),
@@ -1577,6 +1627,30 @@ def audit_test():
     if not session.get("logged"):
         return {"error": "no autorizado"}, 401
     init_audit()
+
+try:
+    init_sku_mapeo()
+except Exception as e:
+    print(f"[Init] sku_mapeo: {e}")
+
+def _sync_stock_canal(sku_lusync, stock):
+    """Sincroniza stock en TODOS los canales usando el mapeo correcto."""
+    try:
+        from inventario import get_sku_canal
+        actualizar_stock_woo(get_sku_canal(sku_lusync, "web"), stock)
+    except Exception as e:
+        print(f"[Sync] Error WC: {e}")
+    try:
+        from inventario import get_sku_canal
+        actualizar_stock_walmart(get_sku_canal(sku_lusync, "walmart"), stock)
+    except Exception as e:
+        print(f"[Sync] Error WM: {e}")
+    try:
+        from inventario import get_sku_canal
+        actualizar_stock_paris(get_sku_canal(sku_lusync, "paris"), stock)
+    except Exception as e:
+        print(f"[Sync] Error PA: {e}")
+
     registrar_audit(
         session.get("usuario", "admin"),
         request.remote_addr,
@@ -1805,6 +1879,179 @@ def fix_reset_desde_domingo():
             "walmart_reimportados": walmart_importados,
             "woo_reimportados": woo_importados,
             "errores": walmart_errores[:20]}
+
+
+# ════════════════════════════════════════════
+# MAPEO DE SKUs por canal
+# ════════════════════════════════════════════
+
+@app.route("/sku_mapeo")
+def sku_mapeo_listar():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    return {
+        "mapeos": listar_sku_mapeo(),
+        "plataforma_web": get_plataforma_web(),
+        "canales": list(CANAL_DISPLAY.items())
+    }
+
+@app.route("/sku_mapeo/guardar", methods=["POST"])
+def sku_mapeo_guardar():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    data = request.json or {}
+    sku_lusync = (data.get("sku_lusync") or "").strip()
+    if not sku_lusync:
+        return {"error": "sku_lusync requerido"}, 400
+    skus = {
+        "web": data.get("sku_web", ""),
+        "walmart": data.get("sku_walmart", ""),
+        "paris": data.get("sku_paris", ""),
+        "falabella": data.get("sku_falabella", ""),
+        "ripley": data.get("sku_ripley", ""),
+        "mercadolibre": data.get("sku_mercadolibre", ""),
+        "hites": data.get("sku_hites", ""),
+    }
+    guardar_sku_mapeo_fila(sku_lusync, skus)
+    try:
+        registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
+                        "sku_mapeo_guardar", detalle=f"SKU:{sku_lusync}")
+    except:
+        pass
+    return {"ok": True}
+
+@app.route("/sku_mapeo/plataforma_web", methods=["POST"])
+def sku_mapeo_plataforma():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    data = request.json or {}
+    plataforma = (data.get("plataforma") or "").strip()
+    permitidas = ["WooCommerce", "Shopify", "VTEX", "Prestashop", "Jumpseller"]
+    if plataforma not in permitidas:
+        return {"error": f"Plataforma debe ser una de: {permitidas}"}, 400
+    set_plataforma_web(plataforma)
+    return {"ok": True, "plataforma_web": plataforma}
+
+@app.route("/sku_mapeo/exportar_excel")
+def sku_mapeo_exportar_excel():
+    """Descarga un Excel con la matriz actual O un template vacío para llenar."""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from io import BytesIO
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from flask import send_file
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Mapeo SKUs"
+
+    # Encabezados
+    headers = ["SKU LUSYNC", "NOMBRE PRODUCTO", "SKU WEB PROPIA",
+               "SKU WALMART", "SKU PARIS", "SKU FALABELLA",
+               "SKU RIPLEY", "SKU MERCADO LIBRE", "SKU HITES"]
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font = Font(bold=True, color="FFFFFF", size=11)
+        cell.fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    # Datos: traer todos los productos con su mapeo actual (vacíos si no hay)
+    mapeos = listar_sku_mapeo()
+    for i, m in enumerate(mapeos, 2):
+        ws.cell(row=i, column=1, value=m["sku_lusync"])
+        ws.cell(row=i, column=2, value=m["nombre"])
+        ws.cell(row=i, column=3, value=m["sku_web"])
+        ws.cell(row=i, column=4, value=m["sku_walmart"])
+        ws.cell(row=i, column=5, value=m["sku_paris"])
+        ws.cell(row=i, column=6, value=m["sku_falabella"])
+        ws.cell(row=i, column=7, value=m["sku_ripley"])
+        ws.cell(row=i, column=8, value=m["sku_mercadolibre"])
+        ws.cell(row=i, column=9, value=m["sku_hites"])
+
+    # Anchos de columna
+    anchos = [18, 40, 20, 20, 20, 20, 20, 22, 20]
+    for i, w in enumerate(anchos, 1):
+        ws.column_dimensions[chr(64+i)].width = w
+
+    # Congelar primera fila
+    ws.freeze_panes = "A2"
+
+    # Hoja de instrucciones
+    ws2 = wb.create_sheet("INSTRUCCIONES")
+    instrucciones = [
+        ["LUSYNC — Importación de mapeo de SKUs"],
+        [""],
+        ["Cómo llenar este archivo:"],
+        ["1. La columna SKU LUSYNC es OBLIGATORIA — debe coincidir con un producto existente."],
+        ["2. La columna NOMBRE PRODUCTO es solo informativa, no se importa."],
+        ["3. Las columnas de SKU por canal son OPCIONALES."],
+        ["4. Si dejas una celda vacía, se usará el SKU LUSYNC para ese canal."],
+        ["5. Solo llena las celdas donde el SKU del marketplace difiera del SKU LUSYNC."],
+        [""],
+        ["Ejemplo:"],
+        ["   SKU LUSYNC: SDCMR001"],
+        ["   SKU WALMART: (vacío) → usa SDCMR001"],
+        ["   SKU PARIS: SDCR2021-1 → usa SDCR2021-1 al sincronizar con París"],
+        [""],
+        ["Para importar: ve a Mapeo SKUs → botón 'Importar Excel'"],
+    ]
+    for i, fila in enumerate(instrucciones, 1):
+        c = ws2.cell(row=i, column=1, value=fila[0] if fila else "")
+        if i == 1:
+            c.font = Font(bold=True, size=14)
+        elif i == 3 or i == 10:
+            c.font = Font(bold=True)
+    ws2.column_dimensions['A'].width = 100
+
+    # Guardar a buffer
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(buf, as_attachment=True, download_name="mapeo_skus_lusync.xlsx",
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+@app.route("/sku_mapeo/importar_excel", methods=["POST"])
+def sku_mapeo_importar_excel():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    if "archivo" not in request.files:
+        return {"error": "Falta archivo"}, 400
+    from openpyxl import load_workbook
+    try:
+        wb = load_workbook(request.files["archivo"], data_only=True)
+        ws = wb.active
+        importados = 0
+        errores = []
+        # Saltar primera fila (encabezados)
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), 2):
+            if not row or not row[0]:
+                continue
+            try:
+                sku_lusync = str(row[0]).strip()
+                if not sku_lusync:
+                    continue
+                skus = {
+                    "web":          str(row[2]).strip() if len(row) > 2 and row[2] else "",
+                    "walmart":      str(row[3]).strip() if len(row) > 3 and row[3] else "",
+                    "paris":        str(row[4]).strip() if len(row) > 4 and row[4] else "",
+                    "falabella":    str(row[5]).strip() if len(row) > 5 and row[5] else "",
+                    "ripley":       str(row[6]).strip() if len(row) > 6 and row[6] else "",
+                    "mercadolibre": str(row[7]).strip() if len(row) > 7 and row[7] else "",
+                    "hites":        str(row[8]).strip() if len(row) > 8 and row[8] else "",
+                }
+                guardar_sku_mapeo_fila(sku_lusync, skus)
+                importados += 1
+            except Exception as e:
+                errores.append(f"Fila {row_idx}: {e}")
+        try:
+            registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
+                            "sku_mapeo_importar", detalle=f"Importados: {importados}")
+        except:
+            pass
+        return {"ok": True, "importados": importados, "errores": errores[:10]}
+    except Exception as e:
+        return {"error": str(e)}, 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

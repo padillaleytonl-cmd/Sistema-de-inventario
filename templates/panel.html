@@ -1146,6 +1146,7 @@ tbody td {
       <button class="nav-btn" onclick="showSection('inventario', this)">Inventario</button>
       <button class="nav-btn" onclick="showSection('movimientos', this)">Movimientos</button>
       <button class="nav-btn" onclick="showSection('devoluciones', this)">Devoluciones</button>
+      <button class="nav-btn" onclick="showSection('skumapeo', this)">Mapeo SKUs</button>
 
     </div>
     <div class="navbar-right">
@@ -1472,11 +1473,10 @@ tbody td {
       </div>
     </div>
     <div class="card" style="padding:0;overflow:hidden;display:flex;flex-direction:column;height:calc(100vh - 180px);">
-      <div style="display:grid;grid-template-columns:20px minmax(0,1fr) 130px 110px 96px 44px;align-items:center;gap:8px;padding:7px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);flex-shrink:0;">
+      <div style="display:grid;grid-template-columns:20px minmax(0,1fr) 110px 96px 44px;align-items:center;gap:8px;padding:7px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);flex-shrink:0;">
         <div></div>
         <div style="font-size:10px;font-weight:500;color:var(--muted);">Producto · OC</div>
-        <div style="font-size:10px;font-weight:500;color:var(--muted);">Fecha compra · Canal</div>
-        <div style="font-size:10px;font-weight:500;color:var(--muted);">Importado</div>
+        <div style="font-size:10px;font-weight:500;color:var(--muted);">Fecha · Canal</div>
         <div style="font-size:10px;font-weight:500;color:var(--muted);">Origen</div>
         <div style="font-size:10px;font-weight:500;color:var(--muted);text-align:right;">Cant.</div>
       </div>
@@ -1486,6 +1486,53 @@ tbody td {
       <div id="movimientosFooter" style="padding:6px 14px;border-top:0.5px solid var(--border);background:var(--bg2);flex-shrink:0;display:flex;align-items:center;justify-content:space-between;">
         <span style="font-size:11px;color:var(--muted);">— movimientos</span>
         <span style="font-size:11px;color:var(--muted);">↓ scroll para ver más</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SECCIÓN MAPEO SKUs ── -->
+  <div id="sec-skumapeo" class="main" style="display:none;">
+    <div class="page-header" style="margin-bottom:18px;">
+      <div>
+        <div class="page-title">Mapeo de SKUs por canal</div>
+        <div class="page-date" style="margin-top:2px;">SKU LUSYNC es el mandante. Si la celda de un canal está vacía, se usa el SKU LUSYNC.</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <select id="selPlataformaWeb" onchange="cambiarPlataformaWeb()" style="padding:7px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg);color:var(--text);">
+          <option value="WooCommerce">WooCommerce</option>
+          <option value="Shopify">Shopify</option>
+          <option value="VTEX">VTEX</option>
+          <option value="Prestashop">Prestashop</option>
+          <option value="Jumpseller">Jumpseller</option>
+        </select>
+        <button onclick="descargarExcelMapeo()" style="padding:7px 12px;border:0.5px solid var(--border);background:var(--bg);color:var(--text);border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">↓ Descargar Excel</button>
+        <label style="padding:7px 12px;border:0.5px solid var(--border);background:var(--bg);color:var(--text);border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">
+          ↑ Importar Excel
+          <input type="file" accept=".xlsx" onchange="importarExcelMapeo(this)" style="display:none;">
+        </label>
+      </div>
+    </div>
+
+    <div class="card" style="padding:0;overflow:hidden;">
+      <div style="overflow-x:auto;max-height:calc(100vh - 220px);">
+        <table id="tablaSkuMapeo" style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead style="position:sticky;top:0;background:var(--bg2);z-index:10;">
+            <tr style="border-bottom:0.5px solid var(--border);">
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;min-width:130px;">SKU LUSYNC</th>
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;min-width:240px;">Producto</th>
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;min-width:140px;" id="thWeb">SKU Web</th>
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;min-width:140px;">SKU Walmart</th>
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;min-width:140px;">SKU París</th>
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;min-width:140px;">SKU Falabella</th>
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;min-width:140px;">SKU Ripley</th>
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;min-width:160px;">SKU Mercado Libre</th>
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;min-width:140px;">SKU Hites</th>
+            </tr>
+          </thead>
+          <tbody id="bodySkuMapeo">
+            <tr><td colspan="9" style="padding:40px;text-align:center;color:var(--hint);font-size:12px;">Cargando...</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -2198,7 +2245,7 @@ function doLogout(){
 
 // ── NAVEGACIÓN
 function showSection(sec, btn){
-  ['dashboard','inventario','movimientos','devoluciones','audit','configuracion'].forEach(s => {
+  ['dashboard','inventario','movimientos','devoluciones','audit','configuracion','skumapeo'].forEach(s => {
     const el = document.getElementById('sec-' + s);
     if(el) el.style.display = s === sec ? '' : 'none';
   });
@@ -2209,6 +2256,7 @@ function showSection(sec, btn){
   if(sec === 'movimientos') cargarMovimientosFull();
   if(sec === 'devoluciones') cargarDevoluciones('todas');
   if(sec === 'audit') cargarAudit();
+  if(sec === 'skumapeo') cargarSkuMapeo();
   if(sec === 'configuracion'){
     if(gear) gear.classList.add('active');
     cargarConfiguracion();
@@ -2806,8 +2854,7 @@ function cargarMovimientosFull(){
         : `<span style="font-size:10px;font-family:monospace;color:var(--muted);background:var(--bg2);padding:1px 5px;border-radius:4px;border:0.5px solid var(--border);">—</span>`;
       const divider = i < movs.length - 1 ? '<div style="height:0.5px;background:var(--border);flex-shrink:0;"></div>' : '';
 
-      const importadoTxt = m.importado || '—';
-      return `<div style="display:grid;grid-template-columns:20px minmax(0,1fr) 130px 110px 96px 44px;align-items:center;gap:8px;padding:5px 14px;">
+      return `<div style="display:grid;grid-template-columns:20px minmax(0,1fr) 110px 96px 44px;align-items:center;gap:8px;padding:5px 14px;">
         <div style="width:16px;height:16px;border-radius:50%;background:${dotBg};display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:500;color:${dotColor};flex-shrink:0;">${dotLetter}</div>
         <div style="min-width:0;">
           <div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${m.nombre}</div>
@@ -2817,7 +2864,6 @@ function cargarMovimientosFull(){
           <div style="font-size:11px;color:var(--text);">${m.fecha} ${m.hora}</div>
           ${getBadge(m.canal)}
         </div>
-        <div style="font-size:10px;color:var(--muted);font-family:'DM Mono',monospace;">${importadoTxt}</div>
         ${getOrigenDot(m.usuario)}
         <div style="text-align:right;">${qty}</div>
       </div>${divider}`;
@@ -4231,6 +4277,131 @@ function confirmarNuevaDevolucion(){
       toast('Error al crear devolución');
     }
   });
+}
+
+// ════════════════════════════════════════════
+// MAPEO DE SKUs
+// ════════════════════════════════════════════
+
+let _mapeoCache = [];
+let _mapeoEditando = {}; // {sku_lusync: {campo: valor}}
+
+function cargarSkuMapeo(){
+  fetch('/sku_mapeo').then(r=>r.json()).then(d=>{
+    _mapeoCache = d.mapeos || [];
+    // Setear plataforma web
+    const sel = document.getElementById('selPlataformaWeb');
+    if(sel && d.plataforma_web) sel.value = d.plataforma_web;
+    const thWeb = document.getElementById('thWeb');
+    if(thWeb && d.plataforma_web) thWeb.textContent = `SKU ${d.plataforma_web}`;
+    renderTablaSkuMapeo();
+  });
+}
+
+function renderTablaSkuMapeo(){
+  const body = document.getElementById('bodySkuMapeo');
+  if(!_mapeoCache.length){
+    body.innerHTML = '<tr><td colspan="9" style="padding:40px;text-align:center;color:var(--hint);font-size:12px;">No hay productos. Crea productos primero en Inventario.</td></tr>';
+    return;
+  }
+  body.innerHTML = _mapeoCache.map(m => `
+    <tr style="border-bottom:0.5px solid var(--border);">
+      <td style="padding:8px 12px;font-family:'DM Mono',monospace;font-size:11px;color:var(--text);font-weight:500;">${m.sku_lusync}</td>
+      <td style="padding:8px 12px;color:var(--text);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px;" title="${m.nombre}">${m.nombre}</td>
+      ${renderCeldaSku(m.sku_lusync, 'sku_web', m.sku_web)}
+      ${renderCeldaSku(m.sku_lusync, 'sku_walmart', m.sku_walmart)}
+      ${renderCeldaSku(m.sku_lusync, 'sku_paris', m.sku_paris)}
+      ${renderCeldaSku(m.sku_lusync, 'sku_falabella', m.sku_falabella)}
+      ${renderCeldaSku(m.sku_lusync, 'sku_ripley', m.sku_ripley)}
+      ${renderCeldaSku(m.sku_lusync, 'sku_mercadolibre', m.sku_mercadolibre)}
+      ${renderCeldaSku(m.sku_lusync, 'sku_hites', m.sku_hites)}
+    </tr>
+  `).join('');
+}
+
+function renderCeldaSku(skuLusync, campo, valor){
+  const id = `mp_${skuLusync}_${campo}`.replace(/[^a-zA-Z0-9_]/g,'_');
+  return `<td style="padding:6px 10px;">
+    <input id="${id}" type="text" value="${valor||''}" placeholder="—"
+      onchange="onChangeSkuMapeo('${skuLusync}', '${campo}', this.value)"
+      onblur="guardarFilaSkuMapeo('${skuLusync}')"
+      style="width:100%;padding:5px 8px;border:0.5px solid transparent;border-radius:6px;font-size:11px;font-family:'DM Mono',monospace;background:transparent;color:var(--text);min-width:120px;"
+      onfocus="this.style.border='0.5px solid var(--text)';this.style.background='var(--white)';"
+      onmouseover="if(document.activeElement!==this)this.style.background='var(--bg2)';"
+      onmouseout="if(document.activeElement!==this)this.style.background='transparent';">
+  </td>`;
+}
+
+function onChangeSkuMapeo(skuLusync, campo, valor){
+  if(!_mapeoEditando[skuLusync]) _mapeoEditando[skuLusync] = {};
+  _mapeoEditando[skuLusync][campo] = valor;
+}
+
+function guardarFilaSkuMapeo(skuLusync){
+  if(!_mapeoEditando[skuLusync]) return;
+  const fila = _mapeoCache.find(m => m.sku_lusync === skuLusync);
+  if(!fila) return;
+  // Mergear cambios al objeto
+  Object.assign(fila, _mapeoEditando[skuLusync]);
+  delete _mapeoEditando[skuLusync];
+  // Enviar al servidor
+  const payload = {
+    sku_lusync: fila.sku_lusync,
+    sku_web: fila.sku_web || '',
+    sku_walmart: fila.sku_walmart || '',
+    sku_paris: fila.sku_paris || '',
+    sku_falabella: fila.sku_falabella || '',
+    sku_ripley: fila.sku_ripley || '',
+    sku_mercadolibre: fila.sku_mercadolibre || '',
+    sku_hites: fila.sku_hites || '',
+  };
+  fetch('/sku_mapeo/guardar', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  }).then(r=>r.json()).then(d=>{
+    if(d.ok){ toast(`✓ ${skuLusync}`); }
+    else { toast('Error al guardar'); }
+  });
+}
+
+function cambiarPlataformaWeb(){
+  const plat = document.getElementById('selPlataformaWeb').value;
+  fetch('/sku_mapeo/plataforma_web', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({plataforma: plat})
+  }).then(r=>r.json()).then(d=>{
+    if(d.ok){
+      toast(`Plataforma cambiada a ${plat}`);
+      const thWeb = document.getElementById('thWeb');
+      if(thWeb) thWeb.textContent = `SKU ${plat}`;
+    }
+  });
+}
+
+function descargarExcelMapeo(){
+  toast('Generando Excel...');
+  window.location.href = '/sku_mapeo/exportar_excel';
+}
+
+function importarExcelMapeo(input){
+  const file = input.files[0];
+  if(!file) return;
+  const fd = new FormData();
+  fd.append('archivo', file);
+  toast('Importando...');
+  fetch('/sku_mapeo/importar_excel', {method:'POST', body: fd})
+    .then(r=>r.json()).then(d=>{
+      if(d.ok){
+        toast(`✓ ${d.importados} productos importados`);
+        if(d.errores && d.errores.length) console.warn('Errores:', d.errores);
+        cargarSkuMapeo();
+      } else {
+        toast('Error: ' + (d.error || 'desconocido'));
+      }
+      input.value = ''; // resetear
+    });
 }
 </script>
 </body>

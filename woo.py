@@ -3,14 +3,20 @@ from config import WC_KEY, WC_SECRET
 
 # 🔥 ACTUALIZAR STOCK
 def actualizar_stock_woo(sku, stock):
-
+    """Actualiza stock en WooCommerce. Si hay mapeo de SKU, lo usa (Opción A)."""
     try:
+        # Intentar usar SKU mapeado de la web
+        try:
+            from inventario import get_sku_canal
+            sku_web = get_sku_canal(sku, "web")
+        except Exception:
+            sku_web = sku
         res = requests.get(
             "https://www.babymine.cl/wp-json/wc/v3/products",
             params={
                 "consumer_key": WC_KEY,
                 "consumer_secret": WC_SECRET,
-                "sku": sku
+                "sku": sku_web
             }
         )
 
