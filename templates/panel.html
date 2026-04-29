@@ -58,6 +58,22 @@ body.tema-pro .page-title {
   font-weight: 600;
 }
 
+/* ══ DENSIDAD COMPACTA ══ */
+body.dens-compacto .card { padding: 12px; }
+body.dens-compacto .card-header { margin-bottom: 10px; }
+body.dens-compacto .main { padding: 12px 16px; }
+body.dens-compacto .page-header { margin-bottom: 12px; }
+body.dens-compacto .page-title { font-size: 16px; }
+body.dens-compacto .form-group { margin-bottom: 6px; }
+
+/* ══ DENSIDAD ESPACIOSA ══ */
+body.dens-espacioso .card { padding: 28px; }
+body.dens-espacioso .card-header { margin-bottom: 22px; }
+body.dens-espacioso .main { padding: 28px 32px; }
+body.dens-espacioso .page-header { margin-bottom: 28px; }
+body.dens-espacioso .page-title { font-size: 26px; }
+body.dens-espacioso .form-group { margin-bottom: 16px; }
+
 /* ══ TEMA OSCURO ══ */
 body.tema-dark {
   --bg: #0d1117;
@@ -1569,105 +1585,6 @@ tbody td {
     </div>
   </div>
 
-  
-        <!-- PERSONALIZACIÓN -->
-        <div id="cfg-personalizar" style="display:none;">
-          <div class="card" style="margin-bottom:14px;">
-            <div class="card-title" style="margin-bottom:4px;">Tema de interfaz</div>
-            <div class="page-date" style="margin-bottom:20px;">Elige cómo se ve Lusync. El tema se guarda en este dispositivo.</div>
-
-            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
-
-              <!-- CLÁSICO -->
-              <div id="tema-card-clasico" onclick="aplicarTema('clasico')" style="border:2px solid var(--violet);border-radius:12px;overflow:hidden;cursor:pointer;transition:all .2s;">
-                <div style="background:#0d1f3c;padding:8px 10px;display:flex;align-items:center;gap:6px;">
-                  <div style="width:20px;height:20px;background:#2563eb;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#fff;">LS</div>
-                  <span style="font-size:10px;color:rgba(255,255,255,0.7);font-weight:500;">Lusync</span>
-                </div>
-                <div style="background:#f0f1fa;padding:10px;">
-                  <div style="background:#fff;border-radius:6px;padding:8px;margin-bottom:6px;border:0.5px solid rgba(0,0,0,0.08);">
-                    <div style="font-size:9px;color:#9ca3af;margin-bottom:3px;">VENTAS HOY</div>
-                    <div style="font-size:16px;font-weight:700;color:#1a1a2e;">60</div>
-                  </div>
-                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
-                    <div style="background:#fff;border-radius:5px;padding:5px;border:0.5px solid rgba(0,0,0,0.08);">
-                      <div style="font-size:8px;color:#9ca3af;">STOCK</div>
-                      <div style="font-size:11px;font-weight:600;color:#1a1a2e;">82</div>
-                    </div>
-                    <div style="background:#fff;border-radius:5px;padding:5px;border:0.5px solid rgba(0,0,0,0.08);">
-                      <div style="font-size:8px;color:#9ca3af;">CANALES</div>
-                      <div style="font-size:11px;font-weight:600;color:#1a1a2e;">3</div>
-                    </div>
-                  </div>
-                </div>
-                <div style="padding:8px 10px;background:#f0f1fa;border-top:0.5px solid rgba(0,0,0,0.06);display:flex;align-items:center;justify-content:space-between;">
-                  <span style="font-size:11px;font-weight:600;color:#1a1a2e;">Clásico</span>
-                  <span id="tema-check-clasico" style="font-size:11px;color:#2563eb;font-weight:600;">✓ Activo</span>
-                </div>
-              </div>
-
-              <!-- PRO CLARO -->
-              <div id="tema-card-pro" onclick="aplicarTema('pro')" style="border:2px solid transparent;border-radius:12px;overflow:hidden;cursor:pointer;transition:all .2s;">
-                <div style="background:#1a1f2e;padding:8px 10px;display:flex;align-items:center;gap:6px;">
-                  <div style="width:20px;height:20px;background:#2563eb;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#fff;">LS</div>
-                  <span style="font-size:10px;color:rgba(255,255,255,0.7);font-weight:500;">Lusync</span>
-                </div>
-                <div style="background:#f4f6f9;padding:10px;">
-                  <div style="background:#fff;border-radius:6px;padding:8px;margin-bottom:6px;border:0.5px solid rgba(0,0,0,0.07);">
-                    <div style="font-size:9px;color:#9ca3af;margin-bottom:3px;">VENTAS HOY</div>
-                    <div style="font-size:16px;font-weight:700;color:#111827;">60</div>
-                    <div style="font-size:8px;color:#059669;">+12% vs ayer</div>
-                  </div>
-                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
-                    <div style="background:#fff;border-radius:5px;padding:5px;border:0.5px solid rgba(0,0,0,0.07);">
-                      <div style="font-size:8px;color:#9ca3af;">REVENUE</div>
-                      <div style="font-size:11px;font-weight:600;color:#111827;">$4.6M</div>
-                    </div>
-                    <div style="background:#fff;border-radius:5px;padding:5px;border:0.5px solid rgba(0,0,0,0.07);">
-                      <div style="font-size:8px;color:#9ca3af;">LIVE</div>
-                      <div style="font-size:9px;font-weight:600;color:#059669;">● Conectado</div>
-                    </div>
-                  </div>
-                </div>
-                <div style="padding:8px 10px;background:#f4f6f9;border-top:0.5px solid rgba(0,0,0,0.06);display:flex;align-items:center;justify-content:space-between;">
-                  <span style="font-size:11px;font-weight:600;color:#111827;">Pro Claro</span>
-                  <span id="tema-check-pro" style="font-size:11px;color:#2563eb;font-weight:600;display:none;">✓ Activo</span>
-                </div>
-              </div>
-
-              <!-- OSCURO -->
-              <div id="tema-card-dark" onclick="aplicarTema('dark')" style="border:2px solid transparent;border-radius:12px;overflow:hidden;cursor:pointer;transition:all .2s;">
-                <div style="background:#010409;padding:8px 10px;display:flex;align-items:center;gap:6px;">
-                  <div style="width:20px;height:20px;background:#2563eb;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#fff;">LS</div>
-                  <span style="font-size:10px;color:rgba(255,255,255,0.5);font-weight:500;">Lusync</span>
-                </div>
-                <div style="background:#0d1117;padding:10px;">
-                  <div style="background:#161b22;border-radius:6px;padding:8px;margin-bottom:6px;border:0.5px solid rgba(255,255,255,0.07);">
-                    <div style="font-size:9px;color:rgba(255,255,255,0.3);margin-bottom:3px;">VENTAS HOY</div>
-                    <div style="font-size:16px;font-weight:700;color:rgba(255,255,255,0.87);">60</div>
-                    <div style="font-size:8px;color:#34d399;">+12% vs ayer</div>
-                  </div>
-                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
-                    <div style="background:#161b22;border-radius:5px;padding:5px;border:0.5px solid rgba(255,255,255,0.07);">
-                      <div style="font-size:8px;color:rgba(255,255,255,0.3);">REVENUE</div>
-                      <div style="font-size:11px;font-weight:600;color:rgba(255,255,255,0.87);">$4.6M</div>
-                    </div>
-                    <div style="background:#161b22;border-radius:5px;padding:5px;border:0.5px solid rgba(255,255,255,0.07);">
-                      <div style="font-size:8px;color:rgba(255,255,255,0.3);">LIVE</div>
-                      <div style="font-size:9px;font-weight:600;color:#34d399;">● Conectado</div>
-                    </div>
-                  </div>
-                </div>
-                <div style="padding:8px 10px;background:#0d1117;border-top:0.5px solid rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:space-between;">
-                  <span style="font-size:11px;font-weight:600;color:rgba(255,255,255,0.7);">Oscuro</span>
-                  <span id="tema-check-dark" style="font-size:11px;color:#34d399;font-weight:600;display:none;">✓ Activo</span>
-                </div>
-              </div>
-
-            </div>
-          </div>
-        </div>
-
 
   <!-- ── SECCIÓN MAPEO SKUs ── -->
   <div id="sec-skumapeo" class="main" style="display:none;">
@@ -2284,6 +2201,161 @@ tbody td {
             </div>
             <button class="btn-primary" onclick="toast('Funcionalidad de invitación próximamente', 'warn')">Enviar invitación</button>
           </div>
+        </div>
+
+        <!-- PERSONALIZACIÓN -->
+        <div id="cfg-personalizar" style="display:none;">
+
+          <!-- TEMA -->
+          <div class="card" style="margin-bottom:14px;">
+            <div class="card-title" style="margin-bottom:4px;">Tema de interfaz</div>
+            <div class="page-date" style="margin-bottom:20px;">Selecciona un tema y haz click en "Aplicar cambios".</div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;" id="tema-grid">
+
+              <!-- CLÁSICO -->
+              <div id="tema-card-clasico" onclick="seleccionarTema('clasico')" style="border:2px solid var(--violet);border-radius:12px;overflow:hidden;cursor:pointer;transition:all .2s;">
+                <div style="background:#0d1f3c;padding:8px 10px;display:flex;align-items:center;gap:6px;">
+                  <div style="width:20px;height:20px;background:#2563eb;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#fff;">LS</div>
+                  <span style="font-size:10px;color:rgba(255,255,255,0.7);font-weight:500;">Lusync</span>
+                </div>
+                <div style="background:#f0f1fa;padding:10px;">
+                  <div style="background:#fff;border-radius:6px;padding:8px;margin-bottom:6px;border:0.5px solid rgba(0,0,0,0.08);">
+                    <div style="font-size:9px;color:#9ca3af;margin-bottom:3px;">VENTAS HOY</div>
+                    <div style="font-size:16px;font-weight:700;color:#1a1a2e;">60</div>
+                  </div>
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+                    <div style="background:#fff;border-radius:5px;padding:5px;border:0.5px solid rgba(0,0,0,0.08);">
+                      <div style="font-size:8px;color:#9ca3af;">STOCK</div>
+                      <div style="font-size:11px;font-weight:600;color:#1a1a2e;">82</div>
+                    </div>
+                    <div style="background:#fff;border-radius:5px;padding:5px;border:0.5px solid rgba(0,0,0,0.08);">
+                      <div style="font-size:8px;color:#9ca3af;">CANALES</div>
+                      <div style="font-size:11px;font-weight:600;color:#1a1a2e;">3</div>
+                    </div>
+                  </div>
+                </div>
+                <div style="padding:8px 10px;background:#f0f1fa;border-top:0.5px solid rgba(0,0,0,0.06);display:flex;align-items:center;justify-content:space-between;">
+                  <span style="font-size:11px;font-weight:600;color:#1a1a2e;">Clásico</span>
+                  <span id="tema-check-clasico" style="font-size:11px;color:#2563eb;font-weight:600;">✓ Seleccionado</span>
+                </div>
+              </div>
+
+              <!-- PRO CLARO -->
+              <div id="tema-card-pro" onclick="seleccionarTema('pro')" style="border:2px solid transparent;border-radius:12px;overflow:hidden;cursor:pointer;transition:all .2s;">
+                <div style="background:#1a1f2e;padding:8px 10px;display:flex;align-items:center;gap:6px;">
+                  <div style="width:20px;height:20px;background:#2563eb;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#fff;">LS</div>
+                  <span style="font-size:10px;color:rgba(255,255,255,0.7);font-weight:500;">Lusync</span>
+                </div>
+                <div style="background:#f4f6f9;padding:10px;">
+                  <div style="background:#fff;border-radius:6px;padding:8px;margin-bottom:6px;border:0.5px solid rgba(0,0,0,0.07);">
+                    <div style="font-size:9px;color:#9ca3af;margin-bottom:3px;">VENTAS HOY</div>
+                    <div style="font-size:16px;font-weight:700;color:#111827;">60</div>
+                    <div style="font-size:8px;color:#059669;">+12% vs ayer</div>
+                  </div>
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+                    <div style="background:#fff;border-radius:5px;padding:5px;border:0.5px solid rgba(0,0,0,0.07);">
+                      <div style="font-size:8px;color:#9ca3af;">REVENUE</div>
+                      <div style="font-size:11px;font-weight:600;color:#111827;">$4.6M</div>
+                    </div>
+                    <div style="background:#fff;border-radius:5px;padding:5px;border:0.5px solid rgba(0,0,0,0.07);">
+                      <div style="font-size:8px;color:#9ca3af;">LIVE</div>
+                      <div style="font-size:9px;font-weight:600;color:#059669;">● Conectado</div>
+                    </div>
+                  </div>
+                </div>
+                <div style="padding:8px 10px;background:#f4f6f9;border-top:0.5px solid rgba(0,0,0,0.06);display:flex;align-items:center;justify-content:space-between;">
+                  <span style="font-size:11px;font-weight:600;color:#111827;">Pro Claro</span>
+                  <span id="tema-check-pro" style="font-size:11px;color:#2563eb;font-weight:600;display:none;">✓ Seleccionado</span>
+                </div>
+              </div>
+
+              <!-- OSCURO -->
+              <div id="tema-card-dark" onclick="seleccionarTema('dark')" style="border:2px solid transparent;border-radius:12px;overflow:hidden;cursor:pointer;transition:all .2s;">
+                <div style="background:#010409;padding:8px 10px;display:flex;align-items:center;gap:6px;">
+                  <div style="width:20px;height:20px;background:#2563eb;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#fff;">LS</div>
+                  <span style="font-size:10px;color:rgba(255,255,255,0.5);font-weight:500;">Lusync</span>
+                </div>
+                <div style="background:#0d1117;padding:10px;">
+                  <div style="background:#161b22;border-radius:6px;padding:8px;margin-bottom:6px;border:0.5px solid rgba(255,255,255,0.07);">
+                    <div style="font-size:9px;color:rgba(255,255,255,0.3);margin-bottom:3px;">VENTAS HOY</div>
+                    <div style="font-size:16px;font-weight:700;color:rgba(255,255,255,0.87);">60</div>
+                    <div style="font-size:8px;color:#34d399;">+12% vs ayer</div>
+                  </div>
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+                    <div style="background:#161b22;border-radius:5px;padding:5px;border:0.5px solid rgba(255,255,255,0.07);">
+                      <div style="font-size:8px;color:rgba(255,255,255,0.3);">REVENUE</div>
+                      <div style="font-size:11px;font-weight:600;color:rgba(255,255,255,0.87);">$4.6M</div>
+                    </div>
+                    <div style="background:#161b22;border-radius:5px;padding:5px;border:0.5px solid rgba(255,255,255,0.07);">
+                      <div style="font-size:8px;color:rgba(255,255,255,0.3);">LIVE</div>
+                      <div style="font-size:9px;font-weight:600;color:#34d399;">● Conectado</div>
+                    </div>
+                  </div>
+                </div>
+                <div style="padding:8px 10px;background:#0d1117;border-top:0.5px solid rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:space-between;">
+                  <span style="font-size:11px;font-weight:600;color:rgba(255,255,255,0.7);">Oscuro</span>
+                  <span id="tema-check-dark" style="font-size:11px;color:#34d399;font-weight:600;display:none;">✓ Seleccionado</span>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          <!-- DENSIDAD -->
+          <div class="card" style="margin-bottom:14px;">
+            <div class="card-title" style="margin-bottom:4px;">Densidad de información</div>
+            <div class="page-date" style="margin-bottom:16px;">Controla cuánta información se muestra en pantalla.</div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">
+
+              <div id="dens-card-normal" onclick="seleccionarDensidad('normal')" style="border:2px solid var(--violet);border-radius:10px;padding:12px;cursor:pointer;transition:all .2s;background:var(--white);">
+                <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px;">
+                  <div style="height:6px;background:var(--border);border-radius:3px;width:100%;"></div>
+                  <div style="height:6px;background:var(--border);border-radius:3px;width:80%;"></div>
+                  <div style="height:16px;background:var(--border);border-radius:4px;margin-top:4px;"></div>
+                  <div style="height:6px;background:var(--border);border-radius:3px;width:60%;"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <span style="font-size:12px;font-weight:600;color:var(--text);">Normal</span>
+                  <span id="dens-check-normal" style="font-size:11px;color:#2563eb;font-weight:600;">✓</span>
+                </div>
+              </div>
+
+              <div id="dens-card-compacto" onclick="seleccionarDensidad('compacto')" style="border:2px solid transparent;border-radius:10px;padding:12px;cursor:pointer;transition:all .2s;background:var(--white);">
+                <div style="display:flex;flex-direction:column;gap:3px;margin-bottom:10px;">
+                  <div style="height:4px;background:var(--border);border-radius:3px;width:100%;"></div>
+                  <div style="height:4px;background:var(--border);border-radius:3px;width:80%;"></div>
+                  <div style="height:4px;background:var(--border);border-radius:3px;width:90%;"></div>
+                  <div style="height:12px;background:var(--border);border-radius:4px;margin-top:2px;"></div>
+                  <div style="height:4px;background:var(--border);border-radius:3px;width:60%;"></div>
+                  <div style="height:4px;background:var(--border);border-radius:3px;width:70%;"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <span style="font-size:12px;font-weight:600;color:var(--text);">Compacto</span>
+                  <span id="dens-check-compacto" style="font-size:11px;color:#2563eb;font-weight:600;display:none;">✓</span>
+                </div>
+              </div>
+
+              <div id="dens-card-espacioso" onclick="seleccionarDensidad('espacioso')" style="border:2px solid transparent;border-radius:10px;padding:12px;cursor:pointer;transition:all .2s;background:var(--white);">
+                <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px;">
+                  <div style="height:8px;background:var(--border);border-radius:3px;width:100%;"></div>
+                  <div style="height:20px;background:var(--border);border-radius:4px;"></div>
+                  <div style="height:8px;background:var(--border);border-radius:3px;width:70%;"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <span style="font-size:12px;font-weight:600;color:var(--text);">Espacioso</span>
+                  <span id="dens-check-espacioso" style="font-size:11px;color:#2563eb;font-weight:600;display:none;">✓</span>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          <!-- BOTÓN APLICAR -->
+          <div style="display:flex;align-items:center;gap:12px;">
+            <button onclick="aplicarPersonalizacion()" class="btn-primary" style="padding:10px 28px;font-size:13px;">Aplicar cambios</button>
+            <span id="personalizar-status" style="font-size:12px;color:var(--muted);"></span>
+          </div>
+
         </div>
 
       </div>
@@ -3061,7 +3133,7 @@ function cargarMovimientosFull(){
 
 // ── CONFIGURACIÓN
 function showCfgTab(tab, el){
-  ['negocio','restock','bodegas','integraciones','usuarios'].forEach(t => {
+  ['negocio','restock','bodegas','integraciones','usuarios','personalizar'].forEach(t => {
     const el2 = document.getElementById('cfg-'+t);
     if(el2) el2.style.display = t===tab ? '' : 'none';
   });
@@ -3069,6 +3141,7 @@ function showCfgTab(tab, el){
   if(el) el.classList.add('active');
   if(tab === 'restock') cargarLeadTimes();
   if(tab === 'usuarios') cargarUsuarios();
+  if(tab === 'personalizar') _actualizarTemaCards(localStorage.getItem('lusync_tema') || 'clasico');
 }
 
 function cargarConfiguracion(){
@@ -4657,30 +4730,16 @@ function importarExcelMapeo(input){
 
 
 // ════════════════════════════════════════════
-// SISTEMA DE TEMAS
+// SISTEMA DE TEMAS Y PERSONALIZACIÓN
 // ════════════════════════════════════════════
 
-function aplicarTema(tema) {
-  // Quitar temas anteriores
-  document.body.classList.remove('tema-pro', 'tema-dark');
-  
-  // Aplicar nuevo tema
-  if (tema === 'pro') document.body.classList.add('tema-pro');
-  if (tema === 'dark') document.body.classList.add('tema-dark');
-  
-  // Guardar en localStorage
-  localStorage.setItem('lusync_tema', tema);
-  
-  // Actualizar UI de selección
-  _actualizarTemaCards(tema);
-  
-  toast(`Tema ${tema === 'clasico' ? 'Clásico' : tema === 'pro' ? 'Pro Claro' : 'Oscuro'} aplicado ✓`);
-}
+let _temaSeleccionado = 'clasico';
+let _densidadSeleccionada = 'normal';
 
-function _actualizarTemaCards(tema) {
-  const temas = ['clasico', 'pro', 'dark'];
+function seleccionarTema(tema) {
+  _temaSeleccionado = tema;
   const colores = { clasico: '#2563eb', pro: '#2563eb', dark: '#34d399' };
-  temas.forEach(t => {
+  ['clasico','pro','dark'].forEach(t => {
     const card = document.getElementById('tema-card-' + t);
     const check = document.getElementById('tema-check-' + t);
     if (!card || !check) return;
@@ -4690,17 +4749,57 @@ function _actualizarTemaCards(tema) {
   });
 }
 
-function _cargarTemaGuardado() {
-  const tema = localStorage.getItem('lusync_tema') || 'clasico';
-  document.body.classList.remove('tema-pro', 'tema-dark');
-  if (tema === 'pro') document.body.classList.add('tema-pro');
-  if (tema === 'dark') document.body.classList.add('tema-dark');
-  _actualizarTemaCards(tema);
+function seleccionarDensidad(dens) {
+  _densidadSeleccionada = dens;
+  ['normal','compacto','espacioso'].forEach(d => {
+    const card = document.getElementById('dens-card-' + d);
+    const check = document.getElementById('dens-check-' + d);
+    if (!card || !check) return;
+    card.style.border = d === dens ? '2px solid var(--violet)' : '2px solid transparent';
+    check.style.display = d === dens ? '' : 'none';
+  });
 }
 
-// Aplicar tema al cargar la página
+function aplicarPersonalizacion() {
+  // Aplicar tema
+  document.body.classList.remove('tema-pro', 'tema-dark', 'dens-compacto', 'dens-espacioso');
+  if (_temaSeleccionado === 'pro') document.body.classList.add('tema-pro');
+  if (_temaSeleccionado === 'dark') document.body.classList.add('tema-dark');
+  if (_densidadSeleccionada === 'compacto') document.body.classList.add('dens-compacto');
+  if (_densidadSeleccionada === 'espacioso') document.body.classList.add('dens-espacioso');
+
+  localStorage.setItem('lusync_tema', _temaSeleccionado);
+  localStorage.setItem('lusync_densidad', _densidadSeleccionada);
+
+  const status = document.getElementById('personalizar-status');
+  if (status) {
+    status.textContent = '✓ Cambios aplicados';
+    setTimeout(() => { status.textContent = ''; }, 3000);
+  }
+  toast('Personalización aplicada ✓');
+}
+
+function _actualizarTemaCards(tema) {
+  seleccionarTema(tema);
+}
+
+function _cargarTemaGuardado() {
+  const tema = localStorage.getItem('lusync_tema') || 'clasico';
+  const densidad = localStorage.getItem('lusync_densidad') || 'normal';
+  _temaSeleccionado = tema;
+  _densidadSeleccionada = densidad;
+
+  document.body.classList.remove('tema-pro', 'tema-dark', 'dens-compacto', 'dens-espacioso');
+  if (tema === 'pro') document.body.classList.add('tema-pro');
+  if (tema === 'dark') document.body.classList.add('tema-dark');
+  if (densidad === 'compacto') document.body.classList.add('dens-compacto');
+  if (densidad === 'espacioso') document.body.classList.add('dens-espacioso');
+
+  seleccionarTema(tema);
+  seleccionarDensidad(densidad);
+}
+
 document.addEventListener('DOMContentLoaded', _cargarTemaGuardado);
-// También intentar aplicar inmediatamente (por si DOMContentLoaded ya pasó)
 _cargarTemaGuardado();
 
 // [DESARROLLO] Borrar todos los movimientos
