@@ -1661,13 +1661,13 @@ def ruta_sku_mapeo_guardar():
     ok = guardar_sku_mapeo_fila(
         data.get("sku_lusync", "").strip(),
         {
-            "sku_web":         data.get("sku_web", ""),
-            "sku_walmart":     data.get("sku_walmart", ""),
-            "sku_paris":       data.get("sku_paris", ""),
-            "sku_falabella":   data.get("sku_falabella", ""),
-            "sku_ripley":      data.get("sku_ripley", ""),
-            "sku_mercadolibre":data.get("sku_mercadolibre", ""),
-            "sku_hites":       data.get("sku_hites", "")
+            "web":         data.get("sku_web", ""),
+            "walmart":     data.get("sku_walmart", ""),
+            "paris":       data.get("sku_paris", ""),
+            "falabella":   data.get("sku_falabella", ""),
+            "ripley":      data.get("sku_ripley", ""),
+            "mercadolibre":data.get("sku_mercadolibre", ""),
+            "hites":       data.get("sku_hites", "")
         }
     )
     return jsonify({"ok": ok})
@@ -1727,22 +1727,19 @@ def ruta_importar_excel():
                 if not sku_lusync or sku_lusync == "None":
                     continue
                 skus = {
-                    "sku_web":          str(row[2]).strip() if len(row)>2 and row[2] else "",
-                    "sku_walmart":      str(row[3]).strip() if len(row)>3 and row[3] else "",
-                    "sku_paris":        str(row[4]).strip() if len(row)>4 and row[4] else "",
-                    "sku_falabella":    str(row[5]).strip() if len(row)>5 and row[5] else "",
-                    "sku_ripley":       str(row[6]).strip() if len(row)>6 and row[6] else "",
-                    "sku_mercadolibre": str(row[7]).strip() if len(row)>7 and row[7] else "",
-                    "sku_hites":        str(row[8]).strip() if len(row)>8 and row[8] else "",
+                    "web":          str(row[2]).strip() if len(row)>2 and row[2] else "",
+                    "walmart":      str(row[3]).strip() if len(row)>3 and row[3] else "",
+                    "paris":        str(row[4]).strip() if len(row)>4 and row[4] else "",
+                    "falabella":    str(row[5]).strip() if len(row)>5 and row[5] else "",
+                    "ripley":       str(row[6]).strip() if len(row)>6 and row[6] else "",
+                    "mercadolibre": str(row[7]).strip() if len(row)>7 and row[7] else "",
+                    "hites":        str(row[8]).strip() if len(row)>8 and row[8] else "",
                 }
-                ok = guardar_sku_mapeo_fila(sku_lusync, skus)
-                if ok:
-                    importados += 1
-                else:
-                    errores.append(f"Fila {i}: SKU '{sku_lusync}' no existe en inventario")
+                guardar_sku_mapeo_fila(sku_lusync, skus)
+                importados += 1
             except Exception as e:
                 errores.append(f"Fila {i}: {str(e)}")
-        registrar_importacion_mapeo(session.get("usuario","Sistema"), archivo.filename, importados, len(errores))
+        registrar_importacion_mapeo(session.get("usuario","Sistema"), archivo.filename, importados, [{"fila": i, "error": e} for i, e in enumerate(errores)])
         return jsonify({"ok": True, "importados": importados, "errores": errores})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
