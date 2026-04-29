@@ -2053,5 +2053,105 @@ def sku_mapeo_importar_excel():
     except Exception as e:
         return {"error": str(e)}, 500
 
+
+@app.route("/debug/walmart_orden_raw")
+def debug_walmart_orden_raw():
+    """Muestra el JSON crudo de UNA orden de Walmart para identificar el campo de fecha."""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    try:
+        ordenes = obtener_ordenes_walmart("Created", fecha_desde="2026-04-27T00:00:00.000Z")
+        if not ordenes:
+            ordenes = obtener_ordenes_walmart("Acknowledged", fecha_desde="2026-04-27T00:00:00.000Z")
+        if not ordenes:
+            return {"error": "No hay órdenes recientes"}
+        # Devolver la primera orden completa
+        return {
+            "ok": True,
+            "primera_orden": ordenes[0],
+            "campos_disponibles": list(ordenes[0].keys()) if isinstance(ordenes[0], dict) else []
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.route("/fix/corregir_fechas_walmart_v2")
+def fix_corregir_fechas_walmart_v2():
+    """
+    Re-importa las fechas reales de las órdenes Walmart probando múltiples campos.
+    """
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from inventario import get_conn
+    from datetime import datetime
+    import pytz
+    chile_tz = pytz.timezone("America/Santiago")
+
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT orden_id FROM movimientos WHERE canal='Walmart' AND orden_id IS NOT NULL AND orden_id != ''")
+    orden_ids_db = set(r[0] for r in cur.fetchall())
+    cur.close(); conn.close()
+
+    corregidos = 0
+    no_encontrados = []
+    campos_fecha_probados = ["orderDate", "purchaseOrderDate", "orderTimestamp", "createdDate", "createTime"]
+
+    for estado in ["Created", "Acknowledged", "Shipped", "Delivered", "Cancelled"]:
+        try:
+            ordenes = obtener_ordenes_walmart(estado, fecha_desde="2026-04-27T00:00:00.000Z")
+            for o in ordenes:
+                coid = str(o.get("customerOrderId", o.get("purchaseOrderId", "")))
+                if coid not in orden_ids_db:
+                    continue
+
+                # Probar varios campos hasta encontrar la fecha
+                fecha_str = None
+                for campo in campos_fecha_probados:
+                    valor = o.get(campo)
+                    if valor:
+                        fecha_str = str(valor)
+                        break
+
+                # Si es timestamp en ms (entero), convertir
+                if fecha_str and fecha_str.isdigit():
+                    try:
+                        ts = int(fecha_str)
+                        if ts > 9999999999:  # milisegundos
+                            ts = ts / 1000
+                        fecha_chile = datetime.fromtimestamp(ts, tz=chile_tz)
+                    except:
+                        fecha_chile = None
+                elif fecha_str:
+                    try:
+                        if "Z" in fecha_str:
+                            fecha_str = fecha_str.replace("Z", "+00:00")
+                        fecha_utc = datetime.fromisoformat(fecha_str)
+                        fecha_chile = fecha_utc.astimezone(chile_tz)
+                    except:
+                        fecha_chile = None
+                else:
+                    fecha_chile = None
+
+                if not fecha_chile:
+                    no_encontrados.append({"orden": coid, "campos": list(o.keys())[:10]})
+                    continue
+
+                conn = get_conn()
+                cur = conn.cursor()
+                cur.execute("UPDATE movimientos SET fecha = %s WHERE orden_id = %s AND canal = 'Walmart'",
+                            (fecha_chile, coid))
+                if cur.rowcount > 0:
+                    corregidos += cur.rowcount
+                conn.commit(); cur.close(); conn.close()
+        except Exception as e:
+            print(f"Error estado {estado}: {e}")
+
+    return {
+        "ok": True,
+        "movimientos_corregidos": corregidos,
+        "ordenes_sin_fecha": len(no_encontrados),
+        "ejemplos_sin_fecha": no_encontrados[:5]
+    }
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
