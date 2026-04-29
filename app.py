@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template, session, redirect
+from flask import Flask, request, render_template, session, redirect, jsonify, send_file
 import requests
 import os
 from config import *
@@ -1686,7 +1686,6 @@ def ruta_exportar_excel():
     if not session.get("logged"): return redirect("/")
     try:
         import io, openpyxl
-        from flask import send_file
         filas = listar_sku_mapeo()
         wb = openpyxl.Workbook()
         ws = wb.active
