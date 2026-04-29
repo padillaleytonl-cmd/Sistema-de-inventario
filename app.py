@@ -1735,5 +1735,39 @@ def sku_mapeo_importar_excel():
     except Exception as e:
         return {"error": str(e)}, 500
 
+
+@app.route("/fix/reparar_tabla_sku_mapeo")
+def fix_reparar_tabla_sku_mapeo():
+    """Migra la tabla sku_mapeo al nuevo esquema (una fila por producto, no por canal)."""
+    if not session.get("logged"): return {"error": "no autorizado"}, 401
+    from inventario import get_conn
+    conn = get_conn()
+    cur = conn.cursor()
+    pasos = []
+    try:
+        # 1. Eliminar columna canal si existe (esquema viejo)
+        cur.execute("ALTER TABLE sku_mapeo DROP COLUMN IF EXISTS canal")
+        pasos.append("columna 'canal' eliminada")
+        # 2. Eliminar columna notas si existe (esquema viejo)
+        cur.execute("ALTER TABLE sku_mapeo DROP COLUMN IF EXISTS notas")
+        pasos.append("columna 'notas' eliminada")
+        # 3. Eliminar columna sku_canal si existe (esquema viejo)
+        cur.execute("ALTER TABLE sku_mapeo DROP COLUMN IF EXISTS sku_canal")
+        pasos.append("columna 'sku_canal' eliminada")
+        # 4. Agregar columnas del nuevo esquema
+        for col in ["sku_web","sku_walmart","sku_paris","sku_falabella","sku_ripley","sku_mercadolibre","sku_hites"]:
+            cur.execute(f"ALTER TABLE sku_mapeo ADD COLUMN IF NOT EXISTS {col} TEXT")
+        pasos.append("columnas nuevas agregadas")
+        # 5. Asegurar unique index en sku_lusync
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_sku_mapeo_lusync ON sku_mapeo(sku_lusync)")
+        pasos.append("índice UNIQUE confirmado")
+        conn.commit()
+        cur.close(); conn.close()
+        return {"ok": True, "pasos": pasos}
+    except Exception as e:
+        conn.rollback()
+        cur.close(); conn.close()
+        return {"error": str(e), "pasos_completados": pasos}, 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
