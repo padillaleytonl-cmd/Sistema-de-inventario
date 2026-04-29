@@ -81,21 +81,26 @@ def paris_headers():
 
 def actualizar_stock_paris(sku_seller, cantidad):
     """Actualiza stock en París. Busca mapeo sku_lusync→paris antes de enviar."""
+    # Buscar SKU mapeado para París (Opción A: si no hay mapeo usa el mismo SKU)
+    sku_paris = None
     try:
-        # Buscar SKU mapeado para París (Opción A: si no hay mapeo usa el mismo SKU)
-        try:
-            from inventario import get_sku_canal
-            sku_paris = get_sku_canal(sku_seller, "paris")
-            if sku_paris != sku_seller:
-                print(f"[Paris] Mapeo: {sku_seller} → {sku_paris}")
-        except Exception:
-            sku_paris = sku_seller
+        from inventario import get_sku_canal
+        sku_paris = get_sku_canal(sku_seller, "paris")
+        if sku_paris and sku_paris != sku_seller:
+            print(f"[Paris] Mapeo: {sku_seller} → {sku_paris}")
     except Exception:
+        pass
+
+    # Fallback: usar sku_seller original si mapeo está vacío o es None
+    if not sku_paris or str(sku_paris).strip() == "":
         sku_paris = sku_seller
+
+    print(f"[Paris Stock] Enviando skuSeller='{sku_paris}' qty={cantidad}")
+
     try:
         payload = {
             "skus": [{
-                "skuSeller": sku_paris,
+                "skuSeller": str(sku_paris).strip(),
                 "quantity": int(cantidad)
             }]
         }
@@ -105,7 +110,7 @@ def actualizar_stock_paris(sku_seller, cantidad):
             json=payload,
             timeout=15
         )
-        print(f"[Paris Stock] SKU:{sku_seller} Qty:{cantidad} Status:{res.status_code}")
+        print(f"[Paris Stock] SKU:{sku_paris} Qty:{cantidad} Status:{res.status_code} Body:{res.text[:200]}")
         return res.status_code in [200, 201]
     except Exception as e:
         print(f"[Paris] Error stock {sku_seller}: {e}")
