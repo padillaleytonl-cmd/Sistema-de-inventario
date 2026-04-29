@@ -1608,51 +1608,52 @@ def debug_estado_bd():
     }
 
 
-@app.route("/debug/paris_stock")
-def debug_paris_stock():
-    """Diagnóstico completo de sincronización de stock con París."""
+@app.route("/debug/paris_stock_raw")
+def debug_paris_stock_raw():
+    """Test París con respuesta cruda de la API para cada producto mapeado."""
     if not session.get("logged"): return {"error": "no autorizado"}, 401
+    import requests as req
+    from paris import paris_headers, PARIS_BASE_URL, get_paris_token
     from inventario import get_sku_canal
-    from paris import verificar_conexion_paris, actualizar_stock_paris
 
-    # 1. Verificar conexión
-    conexion = verificar_conexion_paris()
+    # Verificar token primero
+    try:
+        token = get_paris_token()
+        token_ok = bool(token)
+    except Exception as e:
+        return {"error_token": str(e)}
 
-    # 2. Ver mapeos configurados para París
     productos = cargar_productos()
-    mapeos = []
-    sin_mapeo = []
+    resultados = []
+
     for p in productos:
         sku_paris = get_sku_canal(p["sku"], "paris")
-        if sku_paris != p["sku"]:
-            mapeos.append({"sku_lusync": p["sku"], "sku_paris": sku_paris,
-                          "stock_actual": p["stock"]})
-        else:
-            sin_mapeo.append({"sku_lusync": p["sku"], "stock": p["stock"]})
+        if sku_paris == p["sku"]:
+            continue  # Sin mapeo, saltar
 
-    # 3. Test real: intentar actualizar el primer producto mapeado
-    test_resultado = None
-    if mapeos:
-        p_test = mapeos[0]
         try:
-            ok = actualizar_stock_paris(p_test["sku_lusync"], p_test["stock_actual"])
-            test_resultado = {
-                "sku_lusync": p_test["sku_lusync"],
-                "sku_paris": p_test["sku_paris"],
-                "stock": p_test["stock_actual"],
-                "exito": ok
-            }
+            payload = {"skus": [{"skuSeller": sku_paris, "quantity": int(p["stock"])}]}
+            res = req.post(
+                f"{PARIS_BASE_URL}/v1/stock/sku-seller",
+                headers=paris_headers(),
+                json=payload,
+                timeout=15
+            )
+            resultados.append({
+                "sku_lusync": p["sku"],
+                "sku_paris": sku_paris,
+                "stock": p["stock"],
+                "status": res.status_code,
+                "respuesta": res.text[:300]
+            })
         except Exception as e:
-            test_resultado = {"error": str(e)}
+            resultados.append({
+                "sku_lusync": p["sku"],
+                "sku_paris": sku_paris,
+                "error": str(e)
+            })
 
-    return {
-        "conexion_paris": conexion,
-        "productos_con_mapeo": len(mapeos),
-        "productos_sin_mapeo": len(sin_mapeo),
-        "mapeos": mapeos,
-        "sin_mapeo_ejemplos": sin_mapeo[:5],
-        "test_update": test_resultado
-    }
+    return {"token_ok": token_ok, "resultados": resultados}
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
