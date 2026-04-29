@@ -136,8 +136,17 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
         conn.commit()
     except:
         conn.rollback()
-    ahora = now_chile()
-    fecha = fecha_override if fecha_override else ahora
+    # IMPORTANTE: guardar como naive datetime en hora Chile.
+    # Si el datetime tiene tz info, psycopg2 lo convierte a UTC al insertar.
+    ahora = now_chile().replace(tzinfo=None)
+    if fecha_override:
+        # Si viene con tz info, convertir a Chile y luego quitar tz
+        if fecha_override.tzinfo:
+            fecha = fecha_override.astimezone(TZ_CHILE).replace(tzinfo=None)
+        else:
+            fecha = fecha_override
+    else:
+        fecha = ahora
     fecha_importacion = ahora
     cur.execute("""
         INSERT INTO movimientos (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id, fecha_importacion)
