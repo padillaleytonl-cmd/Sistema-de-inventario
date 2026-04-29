@@ -1616,6 +1616,8 @@ def panel():
         return redirect("/")
     return render_template("panel.html")
 
+
+
 @app.route("/debug/estado_bd")
 def debug_estado_bd():
     if not session.get("logged"):
@@ -1625,121 +1627,79 @@ def debug_estado_bd():
     cur = conn.cursor()
     cur.execute("""
         SELECT
-          (SELECT COUNT(*) FROM ordenes_procesadas) as total_op,
-          (SELECT COUNT(*) FROM ordenes_procesadas WHERE order_id_texto IS NOT NULL) as con_texto,
-          (SELECT COUNT(DISTINCT order_id_texto) FROM ordenes_procesadas
-           WHERE order_id_texto IS NOT NULL) as unicos,
-          (SELECT COUNT(*) FROM movimientos
-           WHERE canal='Walmart') as mov_walmart_total,
-          (SELECT COUNT(*) FROM movimientos
-           WHERE canal='Walmart' AND orden_id IN (
-             SELECT orden_id FROM movimientos
-             WHERE canal='Walmart' AND orden_id IS NOT NULL AND orden_id != ''
-             GROUP BY orden_id HAVING COUNT(*) > 1
-           )) as mov_con_orden_duplicada
+          (SELECT COUNT(*) FROM ordenes_procesadas),
+          (SELECT COUNT(*) FROM ordenes_procesadas WHERE order_id_texto IS NOT NULL),
+          (SELECT COUNT(DISTINCT order_id_texto) FROM ordenes_procesadas WHERE order_id_texto IS NOT NULL),
+          (SELECT COUNT(*) FROM movimientos WHERE canal='Walmart')
     """)
     r = cur.fetchone()
-
     cur.execute("""
         SELECT orden_id, sku, COUNT(*) as veces,
                MIN(TO_CHAR(fecha, 'DD/MM HH24:MI')) as primera,
                MAX(TO_CHAR(fecha, 'DD/MM HH24:MI')) as ultima
         FROM movimientos
         WHERE canal='Walmart' AND orden_id IS NOT NULL AND orden_id != ''
-        GROUP BY orden_id, sku
-        HAVING COUNT(*) > 1
-        ORDER BY veces DESC
-        LIMIT 20
+        GROUP BY orden_id, sku HAVING COUNT(*) > 1
+        ORDER BY veces DESC LIMIT 20
     """)
-    dupes = [{"orden_id": x[0], "sku": x[1], "veces": x[2],
-              "primera": x[3], "ultima": x[4]} for x in cur.fetchall()]
-
-    cur.execute("""
-        SELECT orden_id, order_id_texto,
-               TO_CHAR(fecha, 'DD/MM HH24:MI') as fecha
-        FROM ordenes_procesadas
-        ORDER BY fecha DESC LIMIT 10
-    """)
-    ultimas_op = [{"orden_id": x[0], "texto": x[1], "fecha": x[2]}
-                  for x in cur.fetchall()]
-
+    dupes = [{"orden_id": x[0], "sku": x[1], "veces": x[2], "primera": x[3], "ultima": x[4]} for x in cur.fetchall()]
     cur.close(); conn.close()
-    return {
-        "ordenes_procesadas_total": r[0],
-        "con_order_id_texto": r[1],
-        "unicos": r[2],
-        "movimientos_walmart_total": r[3],
-        "movimientos_con_orden_duplicada": r[4],
-        "duplicados_detalle": dupes,
-        "ultimas_ordenes_procesadas": ultimas_op
-    }
+    return {"ordenes_procesadas_total": r[0], "con_order_id_texto": r[1], "unicos": r[2],
+            "movimientos_walmart_total": r[3], "movimientos_con_orden_duplicada": len(dupes), "duplicados_detalle": dupes}
 
-
+@app.route("/fix/crear_indice_unico")
+def fix_crear_indice_unico():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from inventario import get_conn
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        DELETE FROM ordenes_procesadas WHERE id IN (
+            SELECT id FROM (
+                SELECT id, ROW_NUMBER() OVER (
+                    PARTITION BY order_id_texto ORDER BY fecha DESC, id DESC
+                ) AS rn FROM ordenes_procesadas
+                WHERE order_id_texto IS NOT NULL
+            ) t WHERE rn > 1
+        )
+    """)
+    dupes = cur.rowcount
+    conn.commit()
+    cur.close(); conn.close()
+    # Crear el índice en transacción separada
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_op_order_id_texto
+            ON ordenes_procesadas(order_id_texto) WHERE order_id_texto IS NOT NULL""")
+        conn.commit()
+        cur.close(); conn.close()
+        indice_ok = True
+    except Exception as e:
+        indice_ok = False
+        print(f"Error creando índice: {e}")
+    return {"ok": True, "duplicados_limpiados": dupes, "indice_creado": indice_ok}
 
 @app.route("/fix/limpiar_duplicados")
 def fix_limpiar_duplicados():
     if not session.get("logged"):
         return {"error": "no autorizado"}, 401
-    from inventario import limpiar_movimientos_duplicados
     eliminados = limpiar_movimientos_duplicados()
     return {"ok": True, "duplicados_eliminados": eliminados}
 
-@app.route("/fix/corregir_fechas_walmart")
-def fix_corregir_fechas_walmart():
-    if not session.get("logged"):
-        return {"error": "no autorizado"}, 401
-    from inventario import get_conn
-    from datetime import datetime
-    import pytz
-    chile_tz = pytz.timezone("America/Santiago")
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT DISTINCT orden_id FROM movimientos WHERE canal='Walmart' AND orden_id IS NOT NULL AND orden_id != ''")
-    orden_ids = [r[0] for r in cur.fetchall()]
-    cur.close(); conn.close()
-    corregidos = 0
-    for estado in ["Created", "Acknowledged", "Shipped", "Delivered", "Cancelled"]:
-        try:
-            ordenes = obtener_ordenes_walmart(estado)
-            for o in ordenes:
-                coid = str(o.get("customerOrderId", o.get("purchaseOrderId", "")))
-                if coid not in orden_ids:
-                    continue
-                order_date_str = o.get("orderDate", "")
-                if not order_date_str:
-                    continue
-                try:
-                    order_date_str = order_date_str.replace("Z", "+00:00")
-                    fecha_utc = datetime.fromisoformat(order_date_str)
-                    fecha_chile = fecha_utc.astimezone(chile_tz)
-                    conn = get_conn()
-                    cur = conn.cursor()
-                    cur.execute("UPDATE movimientos SET fecha = %s WHERE orden_id = %s AND canal = 'Walmart'", (fecha_chile, coid))
-                    if cur.rowcount > 0:
-                        corregidos += cur.rowcount
-                    conn.commit(); cur.close(); conn.close()
-                except:
-                    pass
-        except:
-            pass
-    return {"ok": True, "movimientos_corregidos": corregidos}
-
 @app.route("/fix/reset_desde_domingo")
 def fix_reset_desde_domingo():
-    """Borra movimientos de marketplaces desde el domingo 27/04 y reimporta con fechas reales."""
     if not session.get("logged"):
         return {"error": "no autorizado"}, 401
     from datetime import datetime
     import pytz
     chile_tz = pytz.timezone("America/Santiago")
-
-    # Domingo 27 de abril 2026 a las 00:00 hora Chile
     desde = chile_tz.localize(datetime(2026, 4, 27, 0, 0, 0))
     desde_walmart = "2026-04-27T00:00:00.000Z"
 
     mov_borrados, op_borradas = borrar_movimientos_marketplace(desde)
 
-    # Reimportar Walmart — SOLO desde el domingo, no 30 días
     walmart_importados = 0
     walmart_errores = []
     productos = cargar_productos()
@@ -1751,8 +1711,6 @@ def fix_reset_desde_domingo():
                 if not order_id:
                     continue
                 customer_order_id = str(o.get("customerOrderId", order_id))
-
-                # Fecha real del pedido
                 fecha_orden = None
                 try:
                     _od = o.get("orderDate", "")
@@ -1761,19 +1719,14 @@ def fix_reset_desde_domingo():
                         fecha_orden = datetime.fromisoformat(_od).astimezone(chile_tz)
                 except:
                     pass
-
-                # Solo importar si la fecha es >= domingo 27
                 if fecha_orden and fecha_orden < desde:
                     continue
-
                 if orden_ya_procesada_texto(customer_order_id):
                     continue
                 marcar_orden_procesada_texto(customer_order_id)
-
                 lineas = o.get("orderLines", {}).get("orderLine", [])
                 if isinstance(lineas, dict):
                     lineas = [lineas]
-
                 for linea in lineas:
                     try:
                         sku = linea.get("item", {}).get("sku")
@@ -1800,7 +1753,6 @@ def fix_reset_desde_domingo():
         except Exception as e:
             walmart_errores.append(f"Estado {estado}: {e}")
 
-    # Reimportar WooCommerce
     woo_importados = 0
     try:
         fecha_desde_woo = "2026-04-27T00:00:00"
@@ -1848,47 +1800,11 @@ def fix_reset_desde_domingo():
     except Exception as e:
         walmart_errores.append(f"WooCommerce: {e}")
 
-    return {
-        "ok": True,
-        "movimientos_borrados": mov_borrados,
-        "ordenes_procesadas_borradas": op_borradas,
-        "walmart_reimportados": walmart_importados,
-        "woo_reimportados": woo_importados,
-        "errores": walmart_errores[:20]
-    }
-
-
-@app.route("/fix/crear_indice_unico")
-def fix_crear_indice_unico():
-    """Limpia duplicados en ordenes_procesadas y crea índice UNIQUE."""
-    if not session.get("logged"):
-        return {"error": "no autorizado"}, 401
-    from inventario import get_conn
-    conn = get_conn()
-    cur = conn.cursor()
-    # Limpiar duplicados dejando solo el más reciente
-    cur.execute("""
-        DELETE FROM ordenes_procesadas WHERE id IN (
-            SELECT id FROM (
-                SELECT id, ROW_NUMBER() OVER (
-                    PARTITION BY order_id_texto ORDER BY fecha DESC, id DESC
-                ) AS rn FROM ordenes_procesadas
-                WHERE order_id_texto IS NOT NULL
-            ) t WHERE rn > 1
-        )
-    """)
-    dupes = cur.rowcount
-    # Ahora crear el índice
-    try:
-        cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_op_order_id_texto
-            ON ordenes_procesadas(order_id_texto) WHERE order_id_texto IS NOT NULL""")
-    except:
-        conn.rollback()
-        conn = get_conn()
-        cur = conn.cursor()
-    conn.commit()
-    cur.close(); conn.close()
-    return {"ok": True, "duplicados_limpiados": dupes, "indice_creado": True}
+    return {"ok": True, "movimientos_borrados": mov_borrados,
+            "ordenes_procesadas_borradas": op_borradas,
+            "walmart_reimportados": walmart_importados,
+            "woo_reimportados": woo_importados,
+            "errores": walmart_errores[:20]}
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

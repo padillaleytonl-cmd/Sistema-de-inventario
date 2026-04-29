@@ -136,13 +136,8 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
         conn.commit()
     except:
         conn.rollback()
-    # fecha = fecha real del pedido (o ahora si es manual)
-    # fecha_importacion = siempre la hora actual de importacion
     ahora = now_chile()
-    if fecha_override:
-        fecha = fecha_override
-    else:
-        fecha = ahora
+    fecha = fecha_override if fecha_override else ahora
     fecha_importacion = ahora
     cur.execute("""
         INSERT INTO movimientos (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id, fecha_importacion)
@@ -169,7 +164,7 @@ def cargar_movimientos(limite=20):
                COALESCE(usuario, 'Sistema') as usuario,
                COALESCE(canal, 'Sistema') as canal,
                COALESCE(orden_id, '') as orden_id,
-               TO_CHAR(fecha_importacion, 'DD/MM/YYYY HH24:MI') as importado
+               TO_CHAR(fecha_importacion, 'DD/MM HH24:MI') as importado
         FROM movimientos
         ORDER BY fecha DESC
         LIMIT %s
@@ -179,17 +174,10 @@ def cargar_movimientos(limite=20):
     conn.close()
     return [
         {
-            "tipo": r[0],
-            "sku": r[1],
-            "nombre": r[2],
-            "cantidad": r[3],
-            "motivo": r[4],
-            "fecha": r[5],
-            "hora": r[6],
-            "usuario": r[7],
-            "canal": r[8],
-            "orden_id": r[9],
-            "importado": r[10] or ""
+            "tipo": r[0], "sku": r[1], "nombre": r[2],
+            "cantidad": r[3], "motivo": r[4], "fecha": r[5],
+            "hora": r[6], "usuario": r[7], "canal": r[8],
+            "orden_id": r[9], "importado": r[10] or ""
         }
         for r in rows
     ]
@@ -481,21 +469,26 @@ def orden_ya_procesada_texto(order_id_texto):
     return existe
 
 def marcar_orden_procesada_texto(order_id_texto):
-    """UNIQUE en order_id_texto — nunca se duplica."""
+    """UNIQUE en order_id_texto. Si el INSERT falla, el ON CONFLICT lo ignora."""
     conn = get_conn()
     cur = conn.cursor()
     try:
         cur.execute("ALTER TABLE ordenes_procesadas ADD COLUMN IF NOT EXISTS order_id_texto TEXT")
-        cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_op_order_id_texto
-            ON ordenes_procesadas(order_id_texto) WHERE order_id_texto IS NOT NULL""")
         conn.commit()
     except Exception:
         conn.rollback()
     try:
         import random
-        cur.execute("""INSERT INTO ordenes_procesadas (orden_id, order_id_texto)
-            VALUES (%s, %s) ON CONFLICT (order_id_texto) DO NOTHING""",
-            (random.randint(1, 9007199254740991), str(order_id_texto)))
+        # Verificar primero si ya existe (más seguro que ON CONFLICT cuando no hay índice)
+        cur.execute("SELECT 1 FROM ordenes_procesadas WHERE order_id_texto = %s LIMIT 1", (str(order_id_texto),))
+        if cur.fetchone():
+            cur.close()
+            conn.close()
+            return
+        cur.execute(
+            "INSERT INTO ordenes_procesadas (orden_id, order_id_texto) VALUES (%s, %s)",
+            (random.randint(1, 9007199254740991), str(order_id_texto))
+        )
         conn.commit()
     except Exception as e:
         print(f"[Marcado orden] Error: {e}")
@@ -525,7 +518,6 @@ def marcar_orden_procesada(orden_id):
 
 
 def limpiar_movimientos_duplicados():
-    """Elimina duplicados: misma orden_id + sku + canal + tipo, deja el mas antiguo."""
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -544,24 +536,14 @@ def limpiar_movimientos_duplicados():
     return eliminados
 
 def borrar_movimientos_marketplace(desde_fecha):
-    """Borra movimientos de marketplaces desde una fecha y limpia ordenes_procesadas correspondientes."""
     conn = get_conn()
     cur = conn.cursor()
-    # Borrar movimientos de canales marketplace desde la fecha
     cur.execute("""
         DELETE FROM movimientos
         WHERE canal IN ('Walmart', 'WooCommerce', 'Paris')
-        AND fecha >= %s
-    """, (desde_fecha,))
+    """)
     mov_borrados = cur.rowcount
-    # Limpiar ordenes_procesadas para que se reimporteen
-    cur.execute("""
-        DELETE FROM ordenes_procesadas
-        WHERE order_id_texto IN (
-            SELECT DISTINCT orden_id FROM movimientos
-            WHERE canal IN ('Walmart', 'WooCommerce', 'Paris')
-        ) OR fecha >= %s
-    """, (desde_fecha,))
+    cur.execute("DELETE FROM ordenes_procesadas")
     op_borradas = cur.rowcount
     conn.commit()
     cur.close()
