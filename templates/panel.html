@@ -29,95 +29,6 @@
   --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
 }
 
-
-/* ══ TEMA PRO CLARO ══ */
-body.tema-pro {
-  --bg: #f4f6f9;
-  --white: #ffffff;
-  --border: rgba(0,0,0,0.07);
-  --text: #111827;
-  --muted: #6b7280;
-  --hint: #9ca3af;
-  --navy: #1a1f2e;
-  --navy-light: #252c3d;
-  --shadow: 0 1px 3px rgba(0,0,0,0.06);
-}
-body.tema-pro .card {
-  border: 0.5px solid rgba(0,0,0,0.07);
-  box-shadow: none;
-}
-body.tema-pro .navbar {
-  background: #1a1f2e;
-  border-bottom: none;
-}
-body.tema-pro .main {
-  padding: 20px 24px;
-}
-body.tema-pro .page-title {
-  font-size: 20px;
-  font-weight: 600;
-}
-
-/* ══ DENSIDAD COMPACTA ══ */
-body.dens-compacto .card { padding: 12px; }
-body.dens-compacto .card-header { margin-bottom: 10px; }
-body.dens-compacto .main { padding: 12px 16px; }
-body.dens-compacto .page-header { margin-bottom: 12px; }
-body.dens-compacto .page-title { font-size: 16px; }
-body.dens-compacto .form-group { margin-bottom: 6px; }
-
-/* ══ DENSIDAD ESPACIOSA ══ */
-body.dens-espacioso .card { padding: 28px; }
-body.dens-espacioso .card-header { margin-bottom: 22px; }
-body.dens-espacioso .main { padding: 28px 32px; }
-body.dens-espacioso .page-header { margin-bottom: 28px; }
-body.dens-espacioso .page-title { font-size: 26px; }
-body.dens-espacioso .form-group { margin-bottom: 16px; }
-
-/* ══ TEMA OSCURO ══ */
-body.tema-dark {
-  --bg: #0d1117;
-  --white: #161b22;
-  --border: rgba(255,255,255,0.07);
-  --text: rgba(255,255,255,0.87);
-  --muted: rgba(255,255,255,0.4);
-  --hint: rgba(255,255,255,0.2);
-  --navy: #010409;
-  --navy-light: #0d1117;
-  --success: #34d399;
-  --success-bg: rgba(52,211,153,0.12);
-  --danger: #f87171;
-  --danger-bg: rgba(248,113,113,0.12);
-  --warn: #fbbf24;
-  --warn-bg: rgba(251,191,36,0.12);
-  --info-bg: rgba(99,102,241,0.12);
-  --shadow: none;
-}
-body.tema-dark .card {
-  border: 0.5px solid rgba(255,255,255,0.07);
-  box-shadow: none;
-}
-body.tema-dark .navbar {
-  background: #010409;
-  border-bottom: 0.5px solid rgba(255,255,255,0.06);
-}
-body.tema-dark input, body.tema-dark select, body.tema-dark textarea {
-  background: #0d1117;
-  color: rgba(255,255,255,0.87);
-  border-color: rgba(255,255,255,0.1);
-}
-body.tema-dark .nav-btn { color: rgba(255,255,255,0.4); }
-body.tema-dark .nav-btn:hover { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.8); }
-body.tema-dark .nav-btn.active { background: rgba(255,255,255,0.1); color: white; }
-body.tema-dark .cfg-tab { color: rgba(255,255,255,0.4); }
-body.tema-dark .cfg-tab:hover { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.7); }
-body.tema-dark .cfg-tab.active { background: rgba(255,255,255,0.08); color: white; }
-body.tema-dark label { color: rgba(255,255,255,0.5); }
-body.tema-dark .card-tag { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.4); }
-body.tema-dark .page-date { color: rgba(255,255,255,0.3); }
-body.tema-dark .btn-secondary { border-color: rgba(255,255,255,0.12); color: rgba(255,255,255,0.6); }
-body.tema-dark .btn-secondary:hover { background: rgba(255,255,255,0.06); }
-
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
@@ -1585,7 +1496,6 @@ tbody td {
     </div>
   </div>
 
-
   <!-- ── SECCIÓN MAPEO SKUs ── -->
   <div id="sec-skumapeo" class="main" style="display:none;">
     <div class="page-header" style="margin-bottom:18px;">
@@ -1629,6 +1539,24 @@ tbody td {
             <tr><td colspan="9" style="padding:40px;text-align:center;color:var(--hint);font-size:12px;">Cargando...</td></tr>
           </tbody>
         </table>
+      </div>
+    </div>
+
+    <!-- Historial de importaciones -->
+    <div class="card" style="margin-top:14px;padding:0;overflow:hidden;">
+      <div style="padding:12px 16px;border-bottom:0.5px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-size:12px;font-weight:600;color:var(--text);">Historial de importaciones</span>
+        <span style="font-size:11px;color:var(--muted);">Últimas 10 cargas</span>
+      </div>
+      <div style="display:grid;grid-template-columns:130px 1fr 90px 80px 80px;gap:8px;padding:7px 14px;background:var(--bg);border-bottom:0.5px solid var(--border);">
+        <span style="font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;">Fecha</span>
+        <span style="font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;">Archivo</span>
+        <span style="font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;">Usuario</span>
+        <span style="font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;">Importados</span>
+        <span style="font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;">Errores</span>
+      </div>
+      <div id="historialMapeo">
+        <div style="text-align:center;padding:20px;color:var(--hint);font-size:12px;">Sin importaciones previas</div>
       </div>
     </div>
   </div>
@@ -1941,7 +1869,6 @@ tbody td {
         <button class="cfg-tab" onclick="showCfgTab('bodegas',this)">Bodegas</button>
         <button class="cfg-tab" onclick="showCfgTab('integraciones',this)">Integraciones</button>
         <button class="cfg-tab" onclick="showCfgTab('usuarios',this)">Usuarios</button>
-        <button class="cfg-tab" onclick="showCfgTab('personalizar',this)" style="margin-top:8px;border-top:0.5px solid var(--border);border-radius:0;padding-top:12px;">🎨 Personalización</button>
       </div>
 
       <!-- Contenido configuración -->
@@ -2203,161 +2130,6 @@ tbody td {
           </div>
         </div>
 
-        <!-- PERSONALIZACIÓN -->
-        <div id="cfg-personalizar" style="display:none;">
-
-          <!-- TEMA -->
-          <div class="card" style="margin-bottom:14px;">
-            <div class="card-title" style="margin-bottom:4px;">Tema de interfaz</div>
-            <div class="page-date" style="margin-bottom:20px;">Selecciona un tema y haz click en "Aplicar cambios".</div>
-            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;" id="tema-grid">
-
-              <!-- CLÁSICO -->
-              <div id="tema-card-clasico" onclick="seleccionarTema('clasico')" style="border:2px solid var(--violet);border-radius:12px;overflow:hidden;cursor:pointer;transition:all .2s;">
-                <div style="background:#0d1f3c;padding:8px 10px;display:flex;align-items:center;gap:6px;">
-                  <div style="width:20px;height:20px;background:#2563eb;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#fff;">LS</div>
-                  <span style="font-size:10px;color:rgba(255,255,255,0.7);font-weight:500;">Lusync</span>
-                </div>
-                <div style="background:#f0f1fa;padding:10px;">
-                  <div style="background:#fff;border-radius:6px;padding:8px;margin-bottom:6px;border:0.5px solid rgba(0,0,0,0.08);">
-                    <div style="font-size:9px;color:#9ca3af;margin-bottom:3px;">VENTAS HOY</div>
-                    <div style="font-size:16px;font-weight:700;color:#1a1a2e;">60</div>
-                  </div>
-                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
-                    <div style="background:#fff;border-radius:5px;padding:5px;border:0.5px solid rgba(0,0,0,0.08);">
-                      <div style="font-size:8px;color:#9ca3af;">STOCK</div>
-                      <div style="font-size:11px;font-weight:600;color:#1a1a2e;">82</div>
-                    </div>
-                    <div style="background:#fff;border-radius:5px;padding:5px;border:0.5px solid rgba(0,0,0,0.08);">
-                      <div style="font-size:8px;color:#9ca3af;">CANALES</div>
-                      <div style="font-size:11px;font-weight:600;color:#1a1a2e;">3</div>
-                    </div>
-                  </div>
-                </div>
-                <div style="padding:8px 10px;background:#f0f1fa;border-top:0.5px solid rgba(0,0,0,0.06);display:flex;align-items:center;justify-content:space-between;">
-                  <span style="font-size:11px;font-weight:600;color:#1a1a2e;">Clásico</span>
-                  <span id="tema-check-clasico" style="font-size:11px;color:#2563eb;font-weight:600;">✓ Seleccionado</span>
-                </div>
-              </div>
-
-              <!-- PRO CLARO -->
-              <div id="tema-card-pro" onclick="seleccionarTema('pro')" style="border:2px solid transparent;border-radius:12px;overflow:hidden;cursor:pointer;transition:all .2s;">
-                <div style="background:#1a1f2e;padding:8px 10px;display:flex;align-items:center;gap:6px;">
-                  <div style="width:20px;height:20px;background:#2563eb;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#fff;">LS</div>
-                  <span style="font-size:10px;color:rgba(255,255,255,0.7);font-weight:500;">Lusync</span>
-                </div>
-                <div style="background:#f4f6f9;padding:10px;">
-                  <div style="background:#fff;border-radius:6px;padding:8px;margin-bottom:6px;border:0.5px solid rgba(0,0,0,0.07);">
-                    <div style="font-size:9px;color:#9ca3af;margin-bottom:3px;">VENTAS HOY</div>
-                    <div style="font-size:16px;font-weight:700;color:#111827;">60</div>
-                    <div style="font-size:8px;color:#059669;">+12% vs ayer</div>
-                  </div>
-                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
-                    <div style="background:#fff;border-radius:5px;padding:5px;border:0.5px solid rgba(0,0,0,0.07);">
-                      <div style="font-size:8px;color:#9ca3af;">REVENUE</div>
-                      <div style="font-size:11px;font-weight:600;color:#111827;">$4.6M</div>
-                    </div>
-                    <div style="background:#fff;border-radius:5px;padding:5px;border:0.5px solid rgba(0,0,0,0.07);">
-                      <div style="font-size:8px;color:#9ca3af;">LIVE</div>
-                      <div style="font-size:9px;font-weight:600;color:#059669;">● Conectado</div>
-                    </div>
-                  </div>
-                </div>
-                <div style="padding:8px 10px;background:#f4f6f9;border-top:0.5px solid rgba(0,0,0,0.06);display:flex;align-items:center;justify-content:space-between;">
-                  <span style="font-size:11px;font-weight:600;color:#111827;">Pro Claro</span>
-                  <span id="tema-check-pro" style="font-size:11px;color:#2563eb;font-weight:600;display:none;">✓ Seleccionado</span>
-                </div>
-              </div>
-
-              <!-- OSCURO -->
-              <div id="tema-card-dark" onclick="seleccionarTema('dark')" style="border:2px solid transparent;border-radius:12px;overflow:hidden;cursor:pointer;transition:all .2s;">
-                <div style="background:#010409;padding:8px 10px;display:flex;align-items:center;gap:6px;">
-                  <div style="width:20px;height:20px;background:#2563eb;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#fff;">LS</div>
-                  <span style="font-size:10px;color:rgba(255,255,255,0.5);font-weight:500;">Lusync</span>
-                </div>
-                <div style="background:#0d1117;padding:10px;">
-                  <div style="background:#161b22;border-radius:6px;padding:8px;margin-bottom:6px;border:0.5px solid rgba(255,255,255,0.07);">
-                    <div style="font-size:9px;color:rgba(255,255,255,0.3);margin-bottom:3px;">VENTAS HOY</div>
-                    <div style="font-size:16px;font-weight:700;color:rgba(255,255,255,0.87);">60</div>
-                    <div style="font-size:8px;color:#34d399;">+12% vs ayer</div>
-                  </div>
-                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
-                    <div style="background:#161b22;border-radius:5px;padding:5px;border:0.5px solid rgba(255,255,255,0.07);">
-                      <div style="font-size:8px;color:rgba(255,255,255,0.3);">REVENUE</div>
-                      <div style="font-size:11px;font-weight:600;color:rgba(255,255,255,0.87);">$4.6M</div>
-                    </div>
-                    <div style="background:#161b22;border-radius:5px;padding:5px;border:0.5px solid rgba(255,255,255,0.07);">
-                      <div style="font-size:8px;color:rgba(255,255,255,0.3);">LIVE</div>
-                      <div style="font-size:9px;font-weight:600;color:#34d399;">● Conectado</div>
-                    </div>
-                  </div>
-                </div>
-                <div style="padding:8px 10px;background:#0d1117;border-top:0.5px solid rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:space-between;">
-                  <span style="font-size:11px;font-weight:600;color:rgba(255,255,255,0.7);">Oscuro</span>
-                  <span id="tema-check-dark" style="font-size:11px;color:#34d399;font-weight:600;display:none;">✓ Seleccionado</span>
-                </div>
-              </div>
-
-            </div>
-          </div>
-
-          <!-- DENSIDAD -->
-          <div class="card" style="margin-bottom:14px;">
-            <div class="card-title" style="margin-bottom:4px;">Densidad de información</div>
-            <div class="page-date" style="margin-bottom:16px;">Controla cuánta información se muestra en pantalla.</div>
-            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">
-
-              <div id="dens-card-normal" onclick="seleccionarDensidad('normal')" style="border:2px solid var(--violet);border-radius:10px;padding:12px;cursor:pointer;transition:all .2s;background:var(--white);">
-                <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px;">
-                  <div style="height:6px;background:var(--border);border-radius:3px;width:100%;"></div>
-                  <div style="height:6px;background:var(--border);border-radius:3px;width:80%;"></div>
-                  <div style="height:16px;background:var(--border);border-radius:4px;margin-top:4px;"></div>
-                  <div style="height:6px;background:var(--border);border-radius:3px;width:60%;"></div>
-                </div>
-                <div style="display:flex;justify-content:space-between;align-items:center;">
-                  <span style="font-size:12px;font-weight:600;color:var(--text);">Normal</span>
-                  <span id="dens-check-normal" style="font-size:11px;color:#2563eb;font-weight:600;">✓</span>
-                </div>
-              </div>
-
-              <div id="dens-card-compacto" onclick="seleccionarDensidad('compacto')" style="border:2px solid transparent;border-radius:10px;padding:12px;cursor:pointer;transition:all .2s;background:var(--white);">
-                <div style="display:flex;flex-direction:column;gap:3px;margin-bottom:10px;">
-                  <div style="height:4px;background:var(--border);border-radius:3px;width:100%;"></div>
-                  <div style="height:4px;background:var(--border);border-radius:3px;width:80%;"></div>
-                  <div style="height:4px;background:var(--border);border-radius:3px;width:90%;"></div>
-                  <div style="height:12px;background:var(--border);border-radius:4px;margin-top:2px;"></div>
-                  <div style="height:4px;background:var(--border);border-radius:3px;width:60%;"></div>
-                  <div style="height:4px;background:var(--border);border-radius:3px;width:70%;"></div>
-                </div>
-                <div style="display:flex;justify-content:space-between;align-items:center;">
-                  <span style="font-size:12px;font-weight:600;color:var(--text);">Compacto</span>
-                  <span id="dens-check-compacto" style="font-size:11px;color:#2563eb;font-weight:600;display:none;">✓</span>
-                </div>
-              </div>
-
-              <div id="dens-card-espacioso" onclick="seleccionarDensidad('espacioso')" style="border:2px solid transparent;border-radius:10px;padding:12px;cursor:pointer;transition:all .2s;background:var(--white);">
-                <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px;">
-                  <div style="height:8px;background:var(--border);border-radius:3px;width:100%;"></div>
-                  <div style="height:20px;background:var(--border);border-radius:4px;"></div>
-                  <div style="height:8px;background:var(--border);border-radius:3px;width:70%;"></div>
-                </div>
-                <div style="display:flex;justify-content:space-between;align-items:center;">
-                  <span style="font-size:12px;font-weight:600;color:var(--text);">Espacioso</span>
-                  <span id="dens-check-espacioso" style="font-size:11px;color:#2563eb;font-weight:600;display:none;">✓</span>
-                </div>
-              </div>
-
-            </div>
-          </div>
-
-          <!-- BOTÓN APLICAR -->
-          <div style="display:flex;align-items:center;gap:12px;">
-            <button onclick="aplicarPersonalizacion()" class="btn-primary" style="padding:10px 28px;font-size:13px;">Aplicar cambios</button>
-            <span id="personalizar-status" style="font-size:12px;color:var(--muted);"></span>
-          </div>
-
-        </div>
-
       </div>
     </div>
   </div>
@@ -2508,7 +2280,7 @@ function showSection(sec, btn){
   if(sec === 'movimientos') cargarMovimientosFull();
   if(sec === 'devoluciones') cargarDevoluciones('todas');
   if(sec === 'audit') cargarAudit();
-  if(sec === 'skumapeo') cargarSkuMapeo();
+  if(sec === 'skumapeo') { cargarSkuMapeo(); cargarHistorialMapeo(); }
   if(sec === 'configuracion'){
     if(gear) gear.classList.add('active');
     cargarConfiguracion();
@@ -3133,7 +2905,7 @@ function cargarMovimientosFull(){
 
 // ── CONFIGURACIÓN
 function showCfgTab(tab, el){
-  ['negocio','restock','bodegas','integraciones','usuarios','personalizar'].forEach(t => {
+  ['negocio','restock','bodegas','integraciones','usuarios'].forEach(t => {
     const el2 = document.getElementById('cfg-'+t);
     if(el2) el2.style.display = t===tab ? '' : 'none';
   });
@@ -3141,7 +2913,6 @@ function showCfgTab(tab, el){
   if(el) el.classList.add('active');
   if(tab === 'restock') cargarLeadTimes();
   if(tab === 'usuarios') cargarUsuarios();
-  if(tab === 'personalizar') _actualizarTemaCards(localStorage.getItem('lusync_tema') || 'clasico');
 }
 
 function cargarConfiguracion(){
@@ -4287,80 +4058,7 @@ function imprimirEtiquetaDev(){
         size: 60mm 40mm;
         margin: 0;
       }
-      
-/* ══ TEMA PRO CLARO ══ */
-body.tema-pro {
-  --bg: #f4f6f9;
-  --white: #ffffff;
-  --border: rgba(0,0,0,0.07);
-  --text: #111827;
-  --muted: #6b7280;
-  --hint: #9ca3af;
-  --navy: #1a1f2e;
-  --navy-light: #252c3d;
-  --shadow: 0 1px 3px rgba(0,0,0,0.06);
-}
-body.tema-pro .card {
-  border: 0.5px solid rgba(0,0,0,0.07);
-  box-shadow: none;
-}
-body.tema-pro .navbar {
-  background: #1a1f2e;
-  border-bottom: none;
-}
-body.tema-pro .main {
-  padding: 20px 24px;
-}
-body.tema-pro .page-title {
-  font-size: 20px;
-  font-weight: 600;
-}
-
-/* ══ TEMA OSCURO ══ */
-body.tema-dark {
-  --bg: #0d1117;
-  --white: #161b22;
-  --border: rgba(255,255,255,0.07);
-  --text: rgba(255,255,255,0.87);
-  --muted: rgba(255,255,255,0.4);
-  --hint: rgba(255,255,255,0.2);
-  --navy: #010409;
-  --navy-light: #0d1117;
-  --success: #34d399;
-  --success-bg: rgba(52,211,153,0.12);
-  --danger: #f87171;
-  --danger-bg: rgba(248,113,113,0.12);
-  --warn: #fbbf24;
-  --warn-bg: rgba(251,191,36,0.12);
-  --info-bg: rgba(99,102,241,0.12);
-  --shadow: none;
-}
-body.tema-dark .card {
-  border: 0.5px solid rgba(255,255,255,0.07);
-  box-shadow: none;
-}
-body.tema-dark .navbar {
-  background: #010409;
-  border-bottom: 0.5px solid rgba(255,255,255,0.06);
-}
-body.tema-dark input, body.tema-dark select, body.tema-dark textarea {
-  background: #0d1117;
-  color: rgba(255,255,255,0.87);
-  border-color: rgba(255,255,255,0.1);
-}
-body.tema-dark .nav-btn { color: rgba(255,255,255,0.4); }
-body.tema-dark .nav-btn:hover { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.8); }
-body.tema-dark .nav-btn.active { background: rgba(255,255,255,0.1); color: white; }
-body.tema-dark .cfg-tab { color: rgba(255,255,255,0.4); }
-body.tema-dark .cfg-tab:hover { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.7); }
-body.tema-dark .cfg-tab.active { background: rgba(255,255,255,0.08); color: white; }
-body.tema-dark label { color: rgba(255,255,255,0.5); }
-body.tema-dark .card-tag { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.4); }
-body.tema-dark .page-date { color: rgba(255,255,255,0.3); }
-body.tema-dark .btn-secondary { border-color: rgba(255,255,255,0.12); color: rgba(255,255,255,0.6); }
-body.tema-dark .btn-secondary:hover { background: rgba(255,255,255,0.06); }
-
-* { box-sizing: border-box; margin: 0; padding: 0; }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
       body {
         width: 60mm;
         height: 40mm;
@@ -4712,95 +4410,82 @@ function descargarExcelMapeo(){
 function importarExcelMapeo(input){
   const file = input.files[0];
   if(!file) return;
+
+  // Mostrar modal de carga
+  _mostrarModalImport(`Importando <strong>${file.name}</strong>...`);
+
   const fd = new FormData();
   fd.append('archivo', file);
-  toast('Importando...');
   fetch('/sku_mapeo/importar_excel', {method:'POST', body: fd})
     .then(r=>r.json()).then(d=>{
-      if(d.ok){
-        toast(`✓ ${d.importados} productos importados`);
-        if(d.errores && d.errores.length) console.warn('Errores:', d.errores);
-        cargarSkuMapeo();
-      } else {
-        toast('Error: ' + (d.error || 'desconocido'));
-      }
       input.value = '';
+      if(d.ok){
+        const errCount = d.errores ? d.errores.length : 0;
+        let msg = `<strong>✓ ${d.importados} productos importados</strong>`;
+        if(errCount > 0){
+          msg += `<br><span style="color:#d97706;">⚠ ${errCount} filas con error:</span><ul style="margin:6px 0 0 16px;font-size:11px;">`;
+          d.errores.forEach(e => {
+            msg += `<li>Fila ${e.fila}: ${e.error} <span style="color:var(--muted);">(${e.valor})</span></li>`;
+          });
+          msg += '</ul>';
+        }
+        _mostrarModalImport(msg, true);
+        cargarSkuMapeo();
+        cargarHistorialMapeo();
+      } else {
+        _mostrarModalImport(`<span style="color:#dc2626;">✗ Error: ${d.error || 'desconocido'}</span>`, true);
+      }
+    }).catch(err => {
+      input.value = '';
+      _mostrarModalImport(`<span style="color:#dc2626;">✗ Error de conexión</span>`, true);
     });
 }
 
-
-// ════════════════════════════════════════════
-// SISTEMA DE TEMAS Y PERSONALIZACIÓN
-// ════════════════════════════════════════════
-
-let _temaSeleccionado = 'clasico';
-let _densidadSeleccionada = 'normal';
-
-function seleccionarTema(tema) {
-  _temaSeleccionado = tema;
-  const colores = { clasico: '#2563eb', pro: '#2563eb', dark: '#34d399' };
-  ['clasico','pro','dark'].forEach(t => {
-    const card = document.getElementById('tema-card-' + t);
-    const check = document.getElementById('tema-check-' + t);
-    if (!card || !check) return;
-    const activo = t === tema;
-    card.style.border = activo ? `2px solid ${colores[t]}` : '2px solid transparent';
-    check.style.display = activo ? '' : 'none';
-  });
-}
-
-function seleccionarDensidad(dens) {
-  _densidadSeleccionada = dens;
-  ['normal','compacto','espacioso'].forEach(d => {
-    const card = document.getElementById('dens-card-' + d);
-    const check = document.getElementById('dens-check-' + d);
-    if (!card || !check) return;
-    card.style.border = d === dens ? '2px solid var(--violet)' : '2px solid transparent';
-    check.style.display = d === dens ? '' : 'none';
-  });
-}
-
-function aplicarPersonalizacion() {
-  // Aplicar tema
-  document.body.classList.remove('tema-pro', 'tema-dark', 'dens-compacto', 'dens-espacioso');
-  if (_temaSeleccionado === 'pro') document.body.classList.add('tema-pro');
-  if (_temaSeleccionado === 'dark') document.body.classList.add('tema-dark');
-  if (_densidadSeleccionada === 'compacto') document.body.classList.add('dens-compacto');
-  if (_densidadSeleccionada === 'espacioso') document.body.classList.add('dens-espacioso');
-
-  localStorage.setItem('lusync_tema', _temaSeleccionado);
-  localStorage.setItem('lusync_densidad', _densidadSeleccionada);
-
-  const status = document.getElementById('personalizar-status');
-  if (status) {
-    status.textContent = '✓ Cambios aplicados';
-    setTimeout(() => { status.textContent = ''; }, 3000);
+function _mostrarModalImport(html, listo=false){
+  let modal = document.getElementById('modalImportMapeo');
+  if(!modal){
+    modal = document.createElement('div');
+    modal.id = 'modalImportMapeo';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;z-index:9999;';
+    document.body.appendChild(modal);
   }
-  toast('Personalización aplicada ✓');
+  modal.innerHTML = `
+    <div style="background:var(--white);border-radius:14px;padding:28px;max-width:440px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.15);">
+      <div style="font-size:14px;font-weight:500;color:var(--text);margin-bottom:12px;">${listo ? 'Resultado importación' : 'Importando Excel'}</div>
+      <div style="font-size:13px;color:var(--muted);line-height:1.6;">${html}</div>
+      ${listo ? `<button onclick="document.getElementById('modalImportMapeo').remove()" style="margin-top:18px;background:var(--text);color:var(--bg);border:none;border-radius:8px;padding:8px 20px;font-size:13px;cursor:pointer;font-weight:500;">Cerrar</button>` : `<div style="margin-top:16px;display:flex;align-items:center;gap:8px;"><div style="width:18px;height:18px;border:2px solid var(--text);border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;"></div><span style="font-size:12px;color:var(--muted);">Por favor espera...</span></div>`}
+    </div>`;
+  if(!document.getElementById('spinStyle')){
+    const s = document.createElement('style');
+    s.id = 'spinStyle';
+    s.textContent = '@keyframes spin{to{transform:rotate(360deg)}}';
+    document.head.appendChild(s);
+  }
 }
 
-function _actualizarTemaCards(tema) {
-  seleccionarTema(tema);
+function cargarHistorialMapeo(){
+  fetch('/sku_mapeo/historial').then(r=>r.json()).then(d=>{
+    const el = document.getElementById('historialMapeo');
+    if(!el) return;
+    const hist = d.historial || [];
+    if(!hist.length){
+      el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--hint);font-size:12px;">Sin importaciones previas</div>';
+      return;
+    }
+    el.innerHTML = hist.map(h => {
+      const tieneErrores = h.errores > 0;
+      return `<div style="display:grid;grid-template-columns:130px 1fr 90px 80px 80px;align-items:center;gap:8px;padding:8px 14px;border-bottom:0.5px solid var(--border);">
+        <span style="font-size:11px;font-family:'DM Mono',monospace;color:var(--muted);">${h.fecha}</span>
+        <span style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${h.archivo}">${h.archivo}</span>
+        <span style="font-size:11px;color:var(--muted);">${h.usuario}</span>
+        <span style="font-size:11px;color:#059669;font-weight:500;">✓ ${h.importados}</span>
+        ${tieneErrores
+          ? `<span style="font-size:11px;color:#d97706;cursor:pointer;" title="${h.detalle}">⚠ ${h.errores} errores</span>`
+          : `<span style="font-size:11px;color:var(--hint);">—</span>`}
+      </div>`;
+    }).join('');
+  });
 }
-
-function _cargarTemaGuardado() {
-  const tema = localStorage.getItem('lusync_tema') || 'clasico';
-  const densidad = localStorage.getItem('lusync_densidad') || 'normal';
-  _temaSeleccionado = tema;
-  _densidadSeleccionada = densidad;
-
-  document.body.classList.remove('tema-pro', 'tema-dark', 'dens-compacto', 'dens-espacioso');
-  if (tema === 'pro') document.body.classList.add('tema-pro');
-  if (tema === 'dark') document.body.classList.add('tema-dark');
-  if (densidad === 'compacto') document.body.classList.add('dens-compacto');
-  if (densidad === 'espacioso') document.body.classList.add('dens-espacioso');
-
-  seleccionarTema(tema);
-  seleccionarDensidad(densidad);
-}
-
-document.addEventListener('DOMContentLoaded', _cargarTemaGuardado);
-_cargarTemaGuardado();
 
 // [DESARROLLO] Borrar todos los movimientos
 function borrarTodosMovimientos(){

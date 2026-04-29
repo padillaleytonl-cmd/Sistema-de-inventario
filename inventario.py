@@ -136,12 +136,9 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
         conn.commit()
     except:
         conn.rollback()
-    # IMPORTANTE: guardar como naive datetime en hora Chile.
-    # Si el datetime tiene tz info, psycopg2 lo convierte a UTC al insertar.
     ahora = now_chile().replace(tzinfo=None)
     if fecha_override:
-        # Si viene con tz info, convertir a Chile y luego quitar tz
-        if fecha_override.tzinfo:
+        if hasattr(fecha_override, 'tzinfo') and fecha_override.tzinfo:
             fecha = fecha_override.astimezone(TZ_CHILE).replace(tzinfo=None)
         else:
             fecha = fecha_override
@@ -478,7 +475,7 @@ def orden_ya_procesada_texto(order_id_texto):
     return existe
 
 def marcar_orden_procesada_texto(order_id_texto):
-    """UNIQUE en order_id_texto. Si el INSERT falla, el ON CONFLICT lo ignora."""
+    """Marca orden como procesada usando verificación previa para evitar duplicados."""
     conn = get_conn()
     cur = conn.cursor()
     try:
@@ -487,13 +484,10 @@ def marcar_orden_procesada_texto(order_id_texto):
     except Exception:
         conn.rollback()
     try:
-        import random
-        # Verificar primero si ya existe (más seguro que ON CONFLICT cuando no hay índice)
         cur.execute("SELECT 1 FROM ordenes_procesadas WHERE order_id_texto = %s LIMIT 1", (str(order_id_texto),))
         if cur.fetchone():
-            cur.close()
-            conn.close()
-            return
+            cur.close(); conn.close(); return
+        import random
         cur.execute(
             "INSERT INTO ordenes_procesadas (orden_id, order_id_texto) VALUES (%s, %s)",
             (random.randint(1, 9007199254740991), str(order_id_texto))
@@ -527,6 +521,7 @@ def marcar_orden_procesada(orden_id):
 
 
 def limpiar_movimientos_duplicados():
+    """Elimina duplicados: misma orden_id + sku + canal + tipo, deja el más antiguo."""
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -540,42 +535,28 @@ def limpiar_movimientos_duplicados():
     """)
     eliminados = cur.rowcount
     conn.commit()
-    cur.close()
-    conn.close()
+    cur.close(); conn.close()
     return eliminados
 
-def borrar_movimientos_marketplace(desde_fecha):
+def borrar_movimientos_marketplace(desde_fecha=None):
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("""
-        DELETE FROM movimientos
-        WHERE canal IN ('Walmart', 'WooCommerce', 'Paris')
-    """)
+    cur.execute("DELETE FROM movimientos WHERE canal IN ('Walmart', 'WooCommerce', 'Paris')")
     mov_borrados = cur.rowcount
     cur.execute("DELETE FROM ordenes_procesadas")
     op_borradas = cur.rowcount
     conn.commit()
-    cur.close()
-    conn.close()
+    cur.close(); conn.close()
     return mov_borrados, op_borradas
 
-
 # ══════════════════════════════════════════════════
-# MAPEO DE SKUs POR CANAL — Tabla matriz
-# Columnas: SKU LUSYNC (mandante) + WEB + 6 marketplaces
-# Plataforma web configurable (WC/Shopify/VTEX/etc) para SaaS multi-tenant
+# MAPEO DE SKUs POR CANAL
 # ══════════════════════════════════════════════════
-
-CANALES_LISTA = ["web", "walmart", "paris", "falabella", "ripley", "mercadolibre", "hites"]
 
 CANAL_DISPLAY = {
-    "web": "Web Propia",
-    "walmart": "Walmart",
-    "paris": "París",
-    "falabella": "Falabella",
-    "ripley": "Ripley",
-    "mercadolibre": "Mercado Libre",
-    "hites": "Hites",
+    "web": "Web Propia", "walmart": "Walmart", "paris": "París",
+    "falabella": "Falabella", "ripley": "Ripley",
+    "mercadolibre": "Mercado Libre", "hites": "Hites",
 }
 
 def init_sku_mapeo():
@@ -585,122 +566,131 @@ def init_sku_mapeo():
         CREATE TABLE IF NOT EXISTS sku_mapeo (
             id SERIAL PRIMARY KEY,
             sku_lusync TEXT UNIQUE NOT NULL,
-            sku_web TEXT,
-            sku_walmart TEXT,
-            sku_paris TEXT,
-            sku_falabella TEXT,
-            sku_ripley TEXT,
-            sku_mercadolibre TEXT,
-            sku_hites TEXT,
+            sku_web TEXT, sku_walmart TEXT, sku_paris TEXT,
+            sku_falabella TEXT, sku_ripley TEXT, sku_mercadolibre TEXT, sku_hites TEXT,
             actualizado TIMESTAMP DEFAULT NOW()
         )
     """)
-    for col in ["sku_web", "sku_walmart", "sku_paris", "sku_falabella",
-                "sku_ripley", "sku_mercadolibre", "sku_hites"]:
+    for col in ["sku_web","sku_walmart","sku_paris","sku_falabella","sku_ripley","sku_mercadolibre","sku_hites"]:
         try:
             cur.execute(f"ALTER TABLE sku_mapeo ADD COLUMN IF NOT EXISTS {col} TEXT")
-        except:
-            pass
-    # Setting de plataforma web del tenant (default WooCommerce)
+        except: pass
     cur.execute("INSERT INTO configuracion (clave, valor) VALUES ('plataforma_web', 'WooCommerce') ON CONFLICT (clave) DO NOTHING")
     conn.commit()
-    cur.close()
-    conn.close()
+    cur.close(); conn.close()
 
 def listar_sku_mapeo():
-    """Matriz: cada producto con su SKU Lusync + columnas de canal."""
     init_sku_mapeo()
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
         SELECT p.sku, p.nombre,
-               COALESCE(m.sku_web, ''),
-               COALESCE(m.sku_walmart, ''),
-               COALESCE(m.sku_paris, ''),
-               COALESCE(m.sku_falabella, ''),
-               COALESCE(m.sku_ripley, ''),
-               COALESCE(m.sku_mercadolibre, ''),
-               COALESCE(m.sku_hites, '')
+               COALESCE(m.sku_web,''), COALESCE(m.sku_walmart,''), COALESCE(m.sku_paris,''),
+               COALESCE(m.sku_falabella,''), COALESCE(m.sku_ripley,''),
+               COALESCE(m.sku_mercadolibre,''), COALESCE(m.sku_hites,'')
         FROM productos p
         LEFT JOIN sku_mapeo m ON m.sku_lusync = p.sku
         ORDER BY p.nombre
     """)
     rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return [{
-        "sku_lusync": r[0], "nombre": r[1],
-        "sku_web": r[2], "sku_walmart": r[3], "sku_paris": r[4],
-        "sku_falabella": r[5], "sku_ripley": r[6],
-        "sku_mercadolibre": r[7], "sku_hites": r[8]
-    } for r in rows]
+    cur.close(); conn.close()
+    return [{"sku_lusync":r[0],"nombre":r[1],"sku_web":r[2],"sku_walmart":r[3],
+             "sku_paris":r[4],"sku_falabella":r[5],"sku_ripley":r[6],
+             "sku_mercadolibre":r[7],"sku_hites":r[8]} for r in rows]
 
 def guardar_sku_mapeo_fila(sku_lusync, skus):
-    """skus = dict con keys: web, walmart, paris, falabella, ripley, mercadolibre, hites."""
     init_sku_mapeo()
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
         INSERT INTO sku_mapeo (sku_lusync, sku_web, sku_walmart, sku_paris, sku_falabella,
                                sku_ripley, sku_mercadolibre, sku_hites, actualizado)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW())
         ON CONFLICT (sku_lusync) DO UPDATE SET
-            sku_web = EXCLUDED.sku_web,
-            sku_walmart = EXCLUDED.sku_walmart,
-            sku_paris = EXCLUDED.sku_paris,
-            sku_falabella = EXCLUDED.sku_falabella,
-            sku_ripley = EXCLUDED.sku_ripley,
-            sku_mercadolibre = EXCLUDED.sku_mercadolibre,
-            sku_hites = EXCLUDED.sku_hites,
-            actualizado = NOW()
-    """, (
-        sku_lusync,
-        (skus.get("web") or "").strip() or None,
-        (skus.get("walmart") or "").strip() or None,
-        (skus.get("paris") or "").strip() or None,
-        (skus.get("falabella") or "").strip() or None,
-        (skus.get("ripley") or "").strip() or None,
-        (skus.get("mercadolibre") or "").strip() or None,
-        (skus.get("hites") or "").strip() or None,
-    ))
+            sku_web=EXCLUDED.sku_web, sku_walmart=EXCLUDED.sku_walmart,
+            sku_paris=EXCLUDED.sku_paris, sku_falabella=EXCLUDED.sku_falabella,
+            sku_ripley=EXCLUDED.sku_ripley, sku_mercadolibre=EXCLUDED.sku_mercadolibre,
+            sku_hites=EXCLUDED.sku_hites, actualizado=NOW()
+    """, (sku_lusync,
+          (skus.get("web") or "").strip() or None,
+          (skus.get("walmart") or "").strip() or None,
+          (skus.get("paris") or "").strip() or None,
+          (skus.get("falabella") or "").strip() or None,
+          (skus.get("ripley") or "").strip() or None,
+          (skus.get("mercadolibre") or "").strip() or None,
+          (skus.get("hites") or "").strip() or None))
     conn.commit()
-    cur.close()
-    conn.close()
+    cur.close(); conn.close()
 
 def get_sku_canal(sku_lusync, canal):
-    """
-    Retorna el SKU del canal para un SKU Lusync.
-    Si no hay mapeo o el campo está vacío, retorna el mismo SKU Lusync (Opción A).
-    canal: 'web', 'walmart', 'paris', 'falabella', 'ripley', 'mercadolibre', 'hites'
-           o también acepta 'WooCommerce', 'Shopify', etc → mapean a 'web'
-    """
     init_sku_mapeo()
-    # Normalizar nombre de canal
     canal_lower = canal.lower()
-    plataformas_web = ["woocommerce", "shopify", "vtex", "prestashop", "jumpseller", "web"]
-    if canal_lower in plataformas_web:
-        col = "sku_web"
-    elif canal_lower == "mercadolibre" or canal_lower == "mercado libre":
-        col = "sku_mercadolibre"
-    elif canal_lower in ["walmart", "paris", "falabella", "ripley", "hites"]:
-        col = f"sku_{canal_lower}"
-    else:
-        return sku_lusync  # canal desconocido → fallback
-
+    plataformas_web = ["woocommerce","shopify","vtex","prestashop","jumpseller","web"]
+    if canal_lower in plataformas_web: col = "sku_web"
+    elif canal_lower in ["mercadolibre","mercado libre"]: col = "sku_mercadolibre"
+    elif canal_lower in ["walmart","paris","falabella","ripley","hites"]: col = f"sku_{canal_lower}"
+    else: return sku_lusync
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(f"SELECT {col} FROM sku_mapeo WHERE sku_lusync = %s", (sku_lusync,))
     row = cur.fetchone()
-    cur.close()
-    conn.close()
-    if row and row[0] and row[0].strip():
-        return row[0].strip()
-    return sku_lusync  # Opción A: fallback al SKU Lusync
+    cur.close(); conn.close()
+    return row[0].strip() if row and row[0] and row[0].strip() else sku_lusync
 
 def get_plataforma_web():
-    """Retorna la plataforma web configurada (WooCommerce, Shopify, etc.)."""
-    valor = get_configuracion("plataforma_web")
-    return valor or "WooCommerce"
+    return get_configuracion("plataforma_web") or "WooCommerce"
 
 def set_plataforma_web(plataforma):
     set_configuracion("plataforma_web", plataforma)
+
+def registrar_importacion_mapeo(usuario, archivo, importados, errores):
+    """Registra en BD el historial de importaciones de mapeo."""
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sku_mapeo_historial (
+                id SERIAL PRIMARY KEY,
+                fecha TIMESTAMP DEFAULT NOW(),
+                usuario TEXT,
+                archivo TEXT,
+                importados INTEGER,
+                errores INTEGER,
+                detalle_errores TEXT
+            )
+        """)
+        cur.execute("""
+            INSERT INTO sku_mapeo_historial (usuario, archivo, importados, errores, detalle_errores)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (usuario, archivo, importados, len(errores), str(errores[:5]) if errores else ""))
+        conn.commit()
+    except Exception as e:
+        print(f"[Mapeo historial] Error: {e}")
+        conn.rollback()
+    cur.close(); conn.close()
+
+def listar_historial_mapeo(limite=10):
+    """Retorna el historial de importaciones de mapeo."""
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sku_mapeo_historial (
+                id SERIAL PRIMARY KEY, fecha TIMESTAMP DEFAULT NOW(),
+                usuario TEXT, archivo TEXT, importados INTEGER,
+                errores INTEGER, detalle_errores TEXT
+            )
+        """)
+        cur.execute("""
+            SELECT id, TO_CHAR(fecha, 'DD/MM/YYYY HH24:MI') as fecha,
+                   usuario, archivo, importados, errores, detalle_errores
+            FROM sku_mapeo_historial
+            ORDER BY fecha DESC LIMIT %s
+        """, (limite,))
+        rows = cur.fetchall()
+        conn.commit()
+    except:
+        rows = []
+    cur.close(); conn.close()
+    return [{"id":r[0],"fecha":r[1],"usuario":r[2],"archivo":r[3],
+             "importados":r[4],"errores":r[5],"detalle":r[6]} for r in rows]
