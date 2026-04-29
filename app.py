@@ -12,10 +12,11 @@ from paris import (verificar_conexion_paris, obtener_ordenes_paris_todas,
                    actualizar_precio_paris, obtener_orden_paris,
                    get_seller_id as get_paris_seller_id)
 from woo import actualizar_stock_woo
-from inventario import (cargar_productos, limpiar_movimientos_duplicados, borrar_movimientos_marketplace,
+from inventario import (cargar_productos, guardar_productos, guardar_producto,
+                        limpiar_movimientos_duplicados, borrar_movimientos_marketplace,
                         listar_sku_mapeo, guardar_sku_mapeo_fila, get_sku_canal,
                         get_plataforma_web, set_plataforma_web, init_sku_mapeo, CANAL_DISPLAY,
-                        registrar_importacion_mapeo, listar_historial_mapeo, guardar_productos, guardar_producto,
+                        registrar_importacion_mapeo, listar_historial_mapeo,
                         registrar_movimiento, cargar_movimientos, cargar_movimientos_hoy,
                         init_db, orden_ya_procesada, marcar_orden_procesada, actualizar_precios,
                         get_configuracion, set_configuracion, set_lead_time, eliminar_producto,
@@ -55,26 +56,6 @@ def _sync_walmart_automatico():
                 if orden_ya_procesada_texto(customer_order_id):
                     continue
 
-
-                # Marcar ANTES — evita duplicados si hay crash
-                marcar_orden_procesada_texto(customer_order_id)
-
-                # Fecha REAL del pedido Walmart (timestamp ms)
-                fecha_orden_walmart = None
-                try:
-                    from datetime import datetime
-                    import pytz
-                    _od = o.get("orderDate", "")
-                    if _od:
-                        if isinstance(_od, (int, float)):
-                            _ts = int(_od)/1000 if int(_od) > 9999999999 else int(_od)
-                            fecha_orden_walmart = datetime.fromtimestamp(_ts, tz=pytz.timezone("America/Santiago")).replace(tzinfo=None)
-                        else:
-                            _od = str(_od).replace("Z","+00:00")
-                            fecha_orden_walmart = datetime.fromisoformat(_od).astimezone(pytz.timezone("America/Santiago")).replace(tzinfo=None)
-                except Exception:
-                    pass
-
                 lineas = o.get("orderLines", {}).get("orderLine", [])
                 if isinstance(lineas, dict):
                     lineas = [lineas]
@@ -100,8 +81,7 @@ def _sync_walmart_automatico():
                                 registrar_movimiento("salida", p["sku"], p["nombre"],
                                                     cantidad, "Venta Walmart",
                                                     usuario="Sistema", canal="Walmart",
-                                                    orden_id=customer_order_id,
-                                                    fecha_override=fecha_orden_walmart)
+                                                    orden_id=customer_order_id)
                                 actualizar_stock_woo(p["sku"], p["stock"])
                                 actualizar_stock_walmart(p["sku"], p["stock"])
                                 actualizar_stock_paris(p["sku"], p["stock"])
@@ -110,6 +90,7 @@ def _sync_walmart_automatico():
                         errores.append(str(e))
                         print(f"[Scheduler] Error linea: {e}")
 
+                marcar_orden_procesada_texto(customer_order_id)
                 nuevas += 1
 
         # ── CANCELACIONES WALMART — devolver stock si se canceló una orden ya procesada
@@ -155,8 +136,7 @@ def _sync_walmart_automatico():
                                 registrar_movimiento("entrada", p["sku"], p["nombre"],
                                                     cantidad, "Cancelación Walmart",
                                                     usuario="Sistema", canal="Walmart",
-                                                    orden_id=customer_order_id,
-                                                    fecha_override=fecha_orden_walmart)
+                                                    orden_id=customer_order_id)
                                 actualizar_stock_woo(p["sku"], p["stock"])
                                 actualizar_stock_walmart(p["sku"], p["stock"])
                                 actualizar_stock_paris(p["sku"], p["stock"])
@@ -235,26 +215,6 @@ def _sync_recuperacion():
                 if orden_ya_procesada_texto(customer_order_id):
                     continue
 
-
-                # Marcar ANTES — evita duplicados si hay crash
-                marcar_orden_procesada_texto(customer_order_id)
-
-                # Fecha REAL del pedido Walmart (timestamp ms)
-                fecha_orden_walmart = None
-                try:
-                    from datetime import datetime
-                    import pytz
-                    _od = o.get("orderDate", "")
-                    if _od:
-                        if isinstance(_od, (int, float)):
-                            _ts = int(_od)/1000 if int(_od) > 9999999999 else int(_od)
-                            fecha_orden_walmart = datetime.fromtimestamp(_ts, tz=pytz.timezone("America/Santiago")).replace(tzinfo=None)
-                        else:
-                            _od = str(_od).replace("Z","+00:00")
-                            fecha_orden_walmart = datetime.fromisoformat(_od).astimezone(pytz.timezone("America/Santiago")).replace(tzinfo=None)
-                except Exception:
-                    pass
-
                 lineas = o.get("orderLines", {}).get("orderLine", [])
                 if isinstance(lineas, dict):
                     lineas = [lineas]
@@ -280,8 +240,7 @@ def _sync_recuperacion():
                                 registrar_movimiento("salida", p["sku"], p["nombre"],
                                                     cantidad, "Venta Walmart (recuperada)",
                                                     usuario="Sistema", canal="Walmart",
-                                                    orden_id=customer_order_id,
-                                                    fecha_override=fecha_orden_walmart)
+                                                    orden_id=customer_order_id)
                                 actualizar_stock_woo(p["sku"], p["stock"])
                                 actualizar_stock_walmart(p["sku"], p["stock"])
                                 actualizar_stock_paris(p["sku"], p["stock"])
@@ -289,6 +248,7 @@ def _sync_recuperacion():
                     except Exception as e:
                         print(f"[Recuperación] Error linea: {e}")
 
+                marcar_orden_procesada_texto(customer_order_id)
                 recuperadas += 1
 
         # También recuperar cancelaciones
@@ -322,8 +282,7 @@ def _sync_recuperacion():
                             registrar_movimiento("entrada", p["sku"], p["nombre"],
                                                 cantidad, "Cancelación Walmart (recuperada)",
                                                 usuario="Sistema", canal="Walmart",
-                                                orden_id=customer_order_id,
-                                                    fecha_override=fecha_orden_walmart)
+                                                orden_id=customer_order_id)
                             actualizar_stock_woo(p["sku"], p["stock"])
                             actualizar_stock_walmart(p["sku"], p["stock"])
                             actualizar_stock_paris(p["sku"], p["stock"])
@@ -760,26 +719,6 @@ def walmart_sync_ordenes():
                 print(f"[Walmart] Orden {customer_order_id} ya procesada, saltando")
                 continue
 
-
-            # Marcar ANTES — evita duplicados si hay crash
-            marcar_orden_procesada_texto(customer_order_id)
-
-            # Fecha REAL del pedido Walmart (timestamp ms)
-            fecha_orden_walmart = None
-            try:
-                from datetime import datetime
-                import pytz
-                _od = o.get("orderDate", "")
-                if _od:
-                    if isinstance(_od, (int, float)):
-                        _ts = int(_od)/1000 if int(_od) > 9999999999 else int(_od)
-                        fecha_orden_walmart = datetime.fromtimestamp(_ts, tz=pytz.timezone("America/Santiago")).replace(tzinfo=None)
-                    else:
-                        _od = str(_od).replace("Z","+00:00")
-                        fecha_orden_walmart = datetime.fromisoformat(_od).astimezone(pytz.timezone("America/Santiago")).replace(tzinfo=None)
-            except Exception:
-                pass
-
             lineas = o.get("orderLines", {}).get("orderLine", [])
             if isinstance(lineas, dict):
                 lineas = [lineas]
@@ -807,8 +746,7 @@ def walmart_sync_ordenes():
                             registrar_movimiento("salida", p["sku"], p["nombre"],
                                                 cantidad, "Venta Walmart",
                                                 usuario="Sistema", canal="Walmart",
-                                                orden_id=customer_order_id,
-                                                    fecha_override=fecha_orden_walmart)
+                                                orden_id=customer_order_id)
                             actualizar_stock_woo(p["sku"], p["stock"])
                             actualizar_stock_walmart(p["sku"], p["stock"])
                             actualizar_stock_paris(p["sku"], p["stock"])
@@ -817,6 +755,7 @@ def walmart_sync_ordenes():
                     errores.append(str(e))
                     print(f"[Walmart] Error linea: {e}")
 
+            marcar_orden_procesada_texto(customer_order_id)
             nuevas += 1
 
     return {"ok": True, "nuevas_ordenes": nuevas, "errores": errores[:5]}
@@ -1195,26 +1134,6 @@ def walmart_sync_debug():
             if ya:
                 continue
 
-
-            # Marcar ANTES — evita duplicados si hay crash
-            marcar_orden_procesada_texto(customer_order_id)
-
-            # Fecha REAL del pedido Walmart (timestamp ms)
-            fecha_orden_walmart = None
-            try:
-                from datetime import datetime
-                import pytz
-                _od = o.get("orderDate", "")
-                if _od:
-                    if isinstance(_od, (int, float)):
-                        _ts = int(_od)/1000 if int(_od) > 9999999999 else int(_od)
-                        fecha_orden_walmart = datetime.fromtimestamp(_ts, tz=pytz.timezone("America/Santiago")).replace(tzinfo=None)
-                    else:
-                        _od = str(_od).replace("Z","+00:00")
-                        fecha_orden_walmart = datetime.fromisoformat(_od).astimezone(pytz.timezone("America/Santiago")).replace(tzinfo=None)
-            except Exception:
-                pass
-
             lineas = o.get("orderLines", {}).get("orderLine", [])
             if isinstance(lineas, dict):
                 lineas = [lineas]
@@ -1244,8 +1163,7 @@ def walmart_sync_debug():
                         registrar_movimiento("salida", p["sku"], p["nombre"],
                                             cantidad, "Venta Walmart",
                                             usuario="Sistema", canal="Walmart",
-                                            orden_id=customer_order_id,
-                                                    fecha_override=fecha_orden_walmart)
+                                            orden_id=customer_order_id)
                         actualizar_stock_woo(p["sku"], p["stock"])
                         actualizar_stock_walmart(p["sku"], p["stock"])
                         actualizar_stock_paris(p["sku"], p["stock"])
@@ -1254,6 +1172,7 @@ def walmart_sync_debug():
                 if not encontrado:
                     log.append(f"  SKU {sku} no encontrado en Lusync")
 
+            marcar_orden_procesada_texto(customer_order_id)
             nuevas += 1
 
     # ── CANCELACIONES en sync manual
@@ -1287,8 +1206,7 @@ def walmart_sync_debug():
                         registrar_movimiento("entrada", p["sku"], p["nombre"],
                                             cantidad, "Cancelación Walmart",
                                             usuario="Sistema", canal="Walmart",
-                                            orden_id=customer_order_id,
-                                                    fecha_override=fecha_orden_walmart)
+                                            orden_id=customer_order_id)
                         actualizar_stock_woo(p["sku"], p["stock"])
                         actualizar_stock_walmart(p["sku"], p["stock"])
                         actualizar_stock_paris(p["sku"], p["stock"])
@@ -1639,6 +1557,140 @@ def panel():
         return redirect("/")
     return render_template("panel.html")
 
+
+@app.route("/fix/crear_indice_sku_mapeo")
+def fix_crear_indice_sku_mapeo():
+    """Crea el índice UNIQUE en sku_mapeo.sku_lusync — necesario para importación."""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from inventario import get_conn
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("ALTER TABLE sku_mapeo ADD COLUMN IF NOT EXISTS sku_lusync TEXT")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_sku_mapeo_lusync ON sku_mapeo(sku_lusync)")
+        conn.commit()
+        cur.close(); conn.close()
+        return {"ok": True, "mensaje": "Índice UNIQUE creado en sku_mapeo.sku_lusync"}
+    except Exception as e:
+        conn.rollback(); cur.close(); conn.close()
+        return {"error": str(e)}, 500
+
+
+# ════════════════════════════════════
+# MAPEO DE SKUs
+# ════════════════════════════════════
+
+_ERRORES_ES = {
+    'there is no unique or exclusion constraint': 'Índice ÚNICO faltante — ir a /fix/crear_indice_sku_mapeo',
+    'duplicate key value': 'SKU duplicado en el archivo',
+    'null value in column': 'Campo obligatorio vacío',
+    'invalid input syntax': 'Formato de dato inválido',
+    'column': 'Error en columna de BD',
+    'does not exist': 'Columna o tabla no existe en BD',
+}
+
+def _traducir_error_sql(msg):
+    for en, es in _ERRORES_ES.items():
+        if en.lower() in msg.lower():
+            return es
+    return msg[:100]
+
+@app.route("/sku_mapeo")
+def sku_mapeo_listar():
+    if not session.get("logged"): return {"error": "no autorizado"}, 401
+    try:
+        return {"mapeos": listar_sku_mapeo(), "plataforma_web": get_plataforma_web(),
+                "canales": list(CANAL_DISPLAY.items())}
+    except Exception as e:
+        return {"error": str(e), "mapeos": [], "plataforma_web": "WooCommerce", "canales": []}, 200
+
+@app.route("/sku_mapeo/historial")
+def sku_mapeo_historial():
+    if not session.get("logged"): return {"error": "no autorizado"}, 401
+    return {"historial": listar_historial_mapeo()}
+
+@app.route("/sku_mapeo/guardar", methods=["POST"])
+def sku_mapeo_guardar():
+    if not session.get("logged"): return {"error": "no autorizado"}, 401
+    data = request.json or {}
+    sku_lusync = (data.get("sku_lusync") or "").strip()
+    if not sku_lusync: return {"error": "sku_lusync requerido"}, 400
+    skus = {k: data.get(f"sku_{k}", "") for k in ["web","walmart","paris","falabella","ripley","mercadolibre","hites"]}
+    guardar_sku_mapeo_fila(sku_lusync, skus)
+    return {"ok": True}
+
+@app.route("/sku_mapeo/plataforma_web", methods=["POST"])
+def sku_mapeo_plataforma():
+    if not session.get("logged"): return {"error": "no autorizado"}, 401
+    data = request.json or {}
+    plataforma = (data.get("plataforma") or "").strip()
+    if plataforma not in ["WooCommerce","Shopify","VTEX","Prestashop","Jumpseller"]:
+        return {"error": "Plataforma inválida"}, 400
+    set_plataforma_web(plataforma)
+    return {"ok": True, "plataforma_web": plataforma}
+
+@app.route("/sku_mapeo/exportar_excel")
+def sku_mapeo_exportar_excel():
+    if not session.get("logged"): return {"error": "no autorizado"}, 401
+    from io import BytesIO
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from flask import send_file
+    wb = Workbook(); ws = wb.active; ws.title = "Mapeo SKUs"
+    headers = ["SKU LUSYNC","NOMBRE PRODUCTO","SKU WEB PROPIA","SKU WALMART",
+               "SKU PARIS","SKU FALABELLA","SKU RIPLEY","SKU MERCADO LIBRE","SKU HITES"]
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font = Font(bold=True, color="FFFFFF", size=11)
+        cell.fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    for i, m in enumerate(listar_sku_mapeo(), 2):
+        for j, k in enumerate(["sku_lusync","nombre","sku_web","sku_walmart","sku_paris",
+                                "sku_falabella","sku_ripley","sku_mercadolibre","sku_hites"], 1):
+            ws.cell(row=i, column=j, value=m.get(k,""))
+    for i, w in enumerate([18,40,20,20,20,20,20,22,20], 1):
+        ws.column_dimensions[chr(64+i)].width = w
+    ws.freeze_panes = "A2"
+    buf = BytesIO(); wb.save(buf); buf.seek(0)
+    return send_file(buf, as_attachment=True, download_name="mapeo_skus_lusync.xlsx",
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+@app.route("/sku_mapeo/importar_excel", methods=["POST"])
+def sku_mapeo_importar_excel():
+    if not session.get("logged"): return {"error": "no autorizado"}, 401
+    if "archivo" not in request.files: return {"error": "Falta archivo"}, 400
+    archivo = request.files["archivo"]
+    from openpyxl import load_workbook
+    try:
+        wb = load_workbook(archivo, data_only=True)
+        ws = wb.active
+        importados = 0; errores = []
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), 2):
+            if not row or not row[0]: continue
+            try:
+                sku_lusync = str(row[0]).strip()
+                if not sku_lusync: continue
+                skus = {
+                    "web":          str(row[2]).strip() if len(row)>2 and row[2] else "",
+                    "walmart":      str(row[3]).strip() if len(row)>3 and row[3] else "",
+                    "paris":        str(row[4]).strip() if len(row)>4 and row[4] else "",
+                    "falabella":    str(row[5]).strip() if len(row)>5 and row[5] else "",
+                    "ripley":       str(row[6]).strip() if len(row)>6 and row[6] else "",
+                    "mercadolibre": str(row[7]).strip() if len(row)>7 and row[7] else "",
+                    "hites":        str(row[8]).strip() if len(row)>8 and row[8] else "",
+                }
+                guardar_sku_mapeo_fila(sku_lusync, skus)
+                importados += 1
+            except Exception as e:
+                errores.append({"fila": row_idx, "error": _traducir_error_sql(str(e)),
+                                "valor": str(row[0]) if row else ""})
+        registrar_importacion_mapeo(session.get("usuario","Sistema"),
+                                    archivo.filename, importados, errores)
+        return {"ok": True, "importados": importados, "errores": errores}
+    except Exception as e:
+        return {"error": _traducir_error_sql(str(e))}, 500
+
 @app.route("/debug/estado_bd")
 def debug_estado_bd():
     if not session.get("logged"):
@@ -1696,146 +1748,6 @@ def debug_estado_bd():
         "duplicados_detalle": dupes,
         "ultimas_ordenes_procesadas": ultimas_op
     }
-
-
-# ════════════════════════════════════
-# MAPEO DE SKUs
-# ════════════════════════════════════
-
-@app.route("/sku_mapeo")
-def sku_mapeo_listar():
-    if not session.get("logged"): return {"error": "no autorizado"}, 401
-    return {"mapeos": listar_sku_mapeo(), "plataforma_web": get_plataforma_web(),
-            "canales": list(CANAL_DISPLAY.items())}
-
-@app.route("/sku_mapeo/historial")
-def sku_mapeo_historial():
-    if not session.get("logged"): return {"error": "no autorizado"}, 401
-    return {"historial": listar_historial_mapeo()}
-
-@app.route("/sku_mapeo/guardar", methods=["POST"])
-def sku_mapeo_guardar():
-    if not session.get("logged"): return {"error": "no autorizado"}, 401
-    data = request.json or {}
-    sku_lusync = (data.get("sku_lusync") or "").strip()
-    if not sku_lusync: return {"error": "sku_lusync requerido"}, 400
-    skus = {k: data.get(f"sku_{k}", "") for k in ["web","walmart","paris","falabella","ripley","mercadolibre","hites"]}
-    guardar_sku_mapeo_fila(sku_lusync, skus)
-    return {"ok": True}
-
-@app.route("/sku_mapeo/plataforma_web", methods=["POST"])
-def sku_mapeo_plataforma():
-    if not session.get("logged"): return {"error": "no autorizado"}, 401
-    data = request.json or {}
-    plataforma = (data.get("plataforma") or "").strip()
-    if plataforma not in ["WooCommerce","Shopify","VTEX","Prestashop","Jumpseller"]:
-        return {"error": "Plataforma inválida"}, 400
-    set_plataforma_web(plataforma)
-    return {"ok": True, "plataforma_web": plataforma}
-
-@app.route("/sku_mapeo/exportar_excel")
-def sku_mapeo_exportar_excel():
-    if not session.get("logged"): return {"error": "no autorizado"}, 401
-    from io import BytesIO
-    from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill, Alignment
-    from flask import send_file
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Mapeo SKUs"
-    headers = ["SKU LUSYNC","NOMBRE PRODUCTO","SKU WEB PROPIA",
-               "SKU WALMART","SKU PARIS","SKU FALABELLA",
-               "SKU RIPLEY","SKU MERCADO LIBRE","SKU HITES"]
-    for col, h in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col, value=h)
-        cell.font = Font(bold=True, color="FFFFFF", size=11)
-        cell.fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-    for i, m in enumerate(listar_sku_mapeo(), 2):
-        ws.cell(row=i, column=1, value=m["sku_lusync"])
-        ws.cell(row=i, column=2, value=m["nombre"])
-        ws.cell(row=i, column=3, value=m["sku_web"])
-        ws.cell(row=i, column=4, value=m["sku_walmart"])
-        ws.cell(row=i, column=5, value=m["sku_paris"])
-        ws.cell(row=i, column=6, value=m["sku_falabella"])
-        ws.cell(row=i, column=7, value=m["sku_ripley"])
-        ws.cell(row=i, column=8, value=m["sku_mercadolibre"])
-        ws.cell(row=i, column=9, value=m["sku_hites"])
-    anchos = [18,40,20,20,20,20,20,22,20]
-    for i, w in enumerate(anchos, 1):
-        ws.column_dimensions[chr(64+i)].width = w
-    ws.freeze_panes = "A2"
-    ws2 = wb.create_sheet("INSTRUCCIONES")
-    instrs = [
-        ["LUSYNC — Importación de mapeo de SKUs"],[""],
-        ["1. SKU LUSYNC es OBLIGATORIO — debe coincidir con un producto existente."],
-        ["2. NOMBRE PRODUCTO es informativo, no se importa."],
-        ["3. Las columnas de canal son OPCIONALES."],
-        ["4. Si dejas una celda vacía, se usará el SKU LUSYNC para ese canal."],
-    ]
-    for i, f in enumerate(instrs, 1):
-        c = ws2.cell(row=i, column=1, value=f[0] if f else "")
-        if i == 1: c.font = Font(bold=True, size=14)
-    ws2.column_dimensions['A'].width = 80
-    buf = BytesIO()
-    wb.save(buf); buf.seek(0)
-    return send_file(buf, as_attachment=True, download_name="mapeo_skus_lusync.xlsx",
-                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-@app.route("/sku_mapeo/importar_excel", methods=["POST"])
-def sku_mapeo_importar_excel():
-    if not session.get("logged"): return {"error": "no autorizado"}, 401
-    if "archivo" not in request.files: return {"error": "Falta archivo"}, 400
-    archivo = request.files["archivo"]
-    nombre_archivo = archivo.filename
-    from openpyxl import load_workbook
-    try:
-        wb = load_workbook(archivo, data_only=True)
-        ws = wb.active
-        importados = 0
-        errores = []
-        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), 2):
-            if not row or not row[0]: continue
-            try:
-                sku_lusync = str(row[0]).strip()
-                if not sku_lusync: continue
-                skus = {
-                    "web":          str(row[2]).strip() if len(row) > 2 and row[2] else "",
-                    "walmart":      str(row[3]).strip() if len(row) > 3 and row[3] else "",
-                    "paris":        str(row[4]).strip() if len(row) > 4 and row[4] else "",
-                    "falabella":    str(row[5]).strip() if len(row) > 5 and row[5] else "",
-                    "ripley":       str(row[6]).strip() if len(row) > 6 and row[6] else "",
-                    "mercadolibre": str(row[7]).strip() if len(row) > 7 and row[7] else "",
-                    "hites":        str(row[8]).strip() if len(row) > 8 and row[8] else "",
-                }
-                guardar_sku_mapeo_fila(sku_lusync, skus)
-                importados += 1
-            except Exception as e:
-                errores.append({"fila": row_idx, "error": str(e), "valor": str(row[0]) if row else ""})
-        registrar_importacion_mapeo(session.get("usuario","Sistema"), nombre_archivo, importados, errores)
-        return {"ok": True, "importados": importados, "errores": errores}
-    except Exception as e:
-        return {"error": str(e)}, 500
-
-
-@app.route("/fix/limpiar_duplicados")
-def fix_limpiar_duplicados():
-    if not session.get("logged"): return {"error": "no autorizado"}, 401
-    eliminados = limpiar_movimientos_duplicados()
-    return {"ok": True, "duplicados_eliminados": eliminados}
-
-@app.route("/fix/borrar_todos_movimientos", methods=["POST"])
-def fix_borrar_todos_movimientos():
-    if not session.get("logged"): return {"error": "no autorizado"}, 401
-    from inventario import get_conn
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM movimientos")
-    mov = cur.rowcount
-    cur.execute("DELETE FROM ordenes_procesadas")
-    op = cur.rowcount
-    conn.commit(); cur.close(); conn.close()
-    return {"ok": True, "movimientos_borrados": mov, "ordenes_procesadas_borradas": op}
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
