@@ -1744,5 +1744,48 @@ def ruta_importar_excel():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+
+@app.route("/debug/paris_stock")
+def debug_paris_stock():
+    """Diagnóstico: prueba envío de stock a Paris para todos los productos mapeados."""
+    if not session.get("logged"): return redirect("/")
+    try:
+        from inventario import listar_sku_mapeo, cargar_productos
+        from paris import actualizar_stock_paris, verificar_conexion_paris
+
+        conexion = verificar_conexion_paris()
+        productos = {p["sku"]: p for p in cargar_productos()}
+        mapeo = listar_sku_mapeo()
+
+        resultados = []
+        for fila in mapeo:
+            sku_lusync = fila.get("sku_lusync", "")
+            sku_paris  = fila.get("sku_paris", "")
+            if not sku_paris:
+                continue
+            prod = productos.get(sku_lusync)
+            stock_actual = prod.get("stock", 0) if prod else 0
+
+            ok = actualizar_stock_paris(sku_lusync, stock_actual)
+            resultados.append({
+                "sku_lusync": sku_lusync,
+                "sku_paris":  sku_paris,
+                "nombre":     fila.get("nombre", ""),
+                "stock":      stock_actual,
+                "ok":         ok
+            })
+
+        return jsonify({
+            "conexion": conexion,
+            "total_mapeados": len(resultados),
+            "exitosos": sum(1 for r in resultados if r["ok"]),
+            "fallidos": sum(1 for r in resultados if not r["ok"]),
+            "detalle":  resultados
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
