@@ -20,7 +20,10 @@ from inventario import (cargar_productos, guardar_productos, guardar_producto,
                         init_devoluciones, generar_codigo_dev, crear_devolucion,
                         asignar_codigo_dev, actualizar_devolucion, listar_devoluciones,
                         get_devolucion,
-                        init_audit, registrar_audit, listar_audit)
+                        init_audit, registrar_audit, listar_audit,
+                        init_sku_mapeo, listar_sku_mapeo, guardar_sku_mapeo_fila,
+                        get_sku_canal, get_plataforma_web, set_plataforma_web,
+                        registrar_importacion_mapeo, listar_historial_mapeo)
 
 app = Flask(__name__)
 app.secret_key = "clave_super_segura"
@@ -28,6 +31,7 @@ app.secret_key = "clave_super_segura"
 init_db()
 init_devoluciones()
 init_audit()
+init_sku_mapeo()
 
 # ── SYNC AUTOMÁTICO WALMART CADA 5 MINUTOS ──
 def _sync_walmart_automatico():
@@ -1636,6 +1640,113 @@ def debug_paris_skus():
         "productos_search": prod_data,
         "stock_data": stock_data
     }
+
+
+# ── MAPEO SKUs ──────────────────────────────────────────────────────────────
+
+@app.route("/sku_mapeo")
+def ruta_sku_mapeo():
+    if not session.get("logged"): return redirect("/")
+    return jsonify(listar_sku_mapeo())
+
+@app.route("/sku_mapeo/historial")
+def ruta_sku_mapeo_historial():
+    if not session.get("logged"): return redirect("/")
+    return jsonify(listar_historial_mapeo())
+
+@app.route("/sku_mapeo/guardar", methods=["POST"])
+def ruta_sku_mapeo_guardar():
+    if not session.get("logged"): return jsonify({"ok": False}), 401
+    data = request.json or {}
+    ok = guardar_sku_mapeo_fila(
+        data.get("sku_lusync", "").strip(),
+        {
+            "sku_web":         data.get("sku_web", ""),
+            "sku_walmart":     data.get("sku_walmart", ""),
+            "sku_paris":       data.get("sku_paris", ""),
+            "sku_falabella":   data.get("sku_falabella", ""),
+            "sku_ripley":      data.get("sku_ripley", ""),
+            "sku_mercadolibre":data.get("sku_mercadolibre", ""),
+            "sku_hites":       data.get("sku_hites", "")
+        }
+    )
+    return jsonify({"ok": ok})
+
+@app.route("/sku_mapeo/plataforma_web", methods=["GET", "POST"])
+def ruta_plataforma_web():
+    if not session.get("logged"): return jsonify({}), 401
+    if request.method == "POST":
+        data = request.json or {}
+        set_plataforma_web(data.get("plataforma", "woocommerce"))
+        return jsonify({"ok": True})
+    return jsonify({"plataforma": get_plataforma_web()})
+
+@app.route("/sku_mapeo/exportar_excel")
+def ruta_exportar_excel():
+    if not session.get("logged"): return redirect("/")
+    try:
+        import io, openpyxl
+        from flask import send_file
+        filas = listar_sku_mapeo()
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Mapeo SKUs"
+        ws.append(["SKU Lusync","Producto","SKU Web","SKU Walmart","SKU Paris",
+                   "SKU Falabella","SKU Ripley","SKU MercadoLibre","SKU Hites"])
+        for f in filas:
+            ws.append([f.get("sku_lusync",""), f.get("nombre",""),
+                       f.get("sku_web",""), f.get("sku_walmart",""),
+                       f.get("sku_paris",""), f.get("sku_falabella",""),
+                       f.get("sku_ripley",""), f.get("sku_mercadolibre",""),
+                       f.get("sku_hites","")])
+        buf = io.BytesIO()
+        wb.save(buf); buf.seek(0)
+        return send_file(buf, download_name="mapeo_skus.xlsx", as_attachment=True,
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/sku_mapeo/importar_excel", methods=["POST"])
+def ruta_importar_excel():
+    if not session.get("logged"): return jsonify({"ok": False, "error": "no autorizado"}), 401
+    try:
+        import io, openpyxl
+        archivo = request.files.get("archivo")
+        if not archivo:
+            return jsonify({"ok": False, "error": "No se recibio archivo"})
+        wb = openpyxl.load_workbook(io.BytesIO(archivo.read()), data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        if len(rows) < 2:
+            return jsonify({"ok": False, "error": "Archivo vacio o sin datos"})
+        importados = 0
+        errores = []
+        for i, row in enumerate(rows[1:], start=2):
+            try:
+                sku_lusync = str(row[0]).strip() if row[0] else ""
+                if not sku_lusync or sku_lusync == "None":
+                    continue
+                skus = {
+                    "sku_web":          str(row[2]).strip() if len(row)>2 and row[2] else "",
+                    "sku_walmart":      str(row[3]).strip() if len(row)>3 and row[3] else "",
+                    "sku_paris":        str(row[4]).strip() if len(row)>4 and row[4] else "",
+                    "sku_falabella":    str(row[5]).strip() if len(row)>5 and row[5] else "",
+                    "sku_ripley":       str(row[6]).strip() if len(row)>6 and row[6] else "",
+                    "sku_mercadolibre": str(row[7]).strip() if len(row)>7 and row[7] else "",
+                    "sku_hites":        str(row[8]).strip() if len(row)>8 and row[8] else "",
+                }
+                ok = guardar_sku_mapeo_fila(sku_lusync, skus)
+                if ok:
+                    importados += 1
+                else:
+                    errores.append(f"Fila {i}: SKU '{sku_lusync}' no existe en inventario")
+            except Exception as e:
+                errores.append(f"Fila {i}: {str(e)}")
+        registrar_importacion_mapeo(session.get("usuario","Sistema"), archivo.filename, importados, len(errores))
+        return jsonify({"ok": True, "importados": importados, "errores": errores})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
