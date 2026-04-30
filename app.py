@@ -26,7 +26,8 @@ from inventario import (cargar_productos, guardar_productos, guardar_producto,
                         registrar_importacion_mapeo, listar_historial_mapeo,
                         init_alertas, crear_alerta, listar_alertas,
                         contar_alertas_no_leidas, marcar_alerta_leida,
-                        marcar_todas_leidas, get_alertas_config, set_alertas_config)
+                        marcar_todas_leidas, get_alertas_config, set_alertas_config,
+                        init_meli_auth, get_meli_auth, set_meli_auth, borrar_meli_auth)
 
 app = Flask(__name__)
 app.secret_key = "clave_super_segura"
@@ -36,6 +37,7 @@ init_devoluciones()
 init_audit()
 init_sku_mapeo()
 init_alertas()
+init_meli_auth()
 
 # ── SYNC AUTOMÁTICO WALMART CADA 5 MINUTOS ──
 def _sync_walmart_automatico():
@@ -2100,6 +2102,266 @@ def debug_paris_stock_warehouse():
             "stock_enviado": stock,
             "tests": resultados,
             "estado_actual_en_paris": sku_actual or "no encontrado en listado"
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/paris/sync_estado")
+def ruta_paris_sync_estado():
+    """Compara stock en Lusync vs stock real en Paris API. Para vista de estado de sync."""
+    if not session.get("logged"): return jsonify({"error":"no autorizado"}), 401
+    try:
+        import requests as req
+        from inventario import listar_sku_mapeo, cargar_productos
+        from paris import paris_headers, PARIS_BASE_URL, verificar_conexion_paris
+
+        conexion = verificar_conexion_paris()
+        productos = {p["sku"]: p for p in cargar_productos()}
+        mapeo = listar_sku_mapeo()
+
+        # Obtener todo el stock de Paris en una sola llamada
+        stock_paris_dict = {}
+        try:
+            res = req.get(f"{PARIS_BASE_URL}/v2/stock", headers=paris_headers(),
+                          params={"limit": 200, "offset": 0}, timeout=20)
+            if res.status_code == 200:
+                data = res.json()
+                for s in data.get("skus", []):
+                    sku_seller = s.get("sku_seller", "")
+                    if sku_seller:
+                        stock_paris_dict[sku_seller] = {
+                            "quantity": s.get("quantity", 0),
+                            "availableStock": s.get("availableStock", 0),
+                            "updatedAt": s.get("updatedAt", ""),
+                            "warehouseName": s.get("warehouseName", ""),
+                            "active": s.get("active", False),
+                            "title": s.get("title", "")
+                        }
+        except Exception as e:
+            return jsonify({"error_paris": str(e), "conexion": conexion}), 500
+
+        # Construir comparación
+        resultados = []
+        for fila in mapeo:
+            sku_paris = (fila.get("sku_paris", "") or "").strip()
+            if not sku_paris:
+                continue
+            sku_lusync = fila.get("sku_lusync", "")
+            prod = productos.get(sku_lusync)
+            stock_lusync = int(prod.get("stock", 0)) if prod else 0
+            paris_data = stock_paris_dict.get(sku_paris, {})
+            stock_paris = paris_data.get("quantity", None)
+
+            if stock_paris is None:
+                estado = "no_encontrado"
+            elif stock_paris == stock_lusync:
+                estado = "sincronizado"
+            else:
+                estado = "desincronizado"
+
+            resultados.append({
+                "sku_lusync": sku_lusync,
+                "sku_paris": sku_paris,
+                "nombre": fila.get("nombre", "") or paris_data.get("title", ""),
+                "stock_lusync": stock_lusync,
+                "stock_paris": stock_paris,
+                "diferencia": (stock_paris - stock_lusync) if stock_paris is not None else None,
+                "ultima_actualizacion_paris": paris_data.get("updatedAt", ""),
+                "warehouse_paris": paris_data.get("warehouseName", ""),
+                "activo_en_paris": paris_data.get("active", False),
+                "estado": estado
+            })
+
+        sincronizados = sum(1 for r in resultados if r["estado"] == "sincronizado")
+        return jsonify({
+            "conexion": conexion,
+            "total": len(resultados),
+            "sincronizados": sincronizados,
+            "desincronizados": sum(1 for r in resultados if r["estado"] == "desincronizado"),
+            "no_encontrados": sum(1 for r in resultados if r["estado"] == "no_encontrado"),
+            "resultados": resultados
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/paris/forzar_sync_sku", methods=["POST"])
+def ruta_paris_forzar_sync():
+    """Re-envía el stock actual de un SKU específico a Paris."""
+    if not session.get("logged"): return jsonify({"ok": False}), 401
+    try:
+        from inventario import cargar_productos
+        from paris import actualizar_stock_paris
+        data = request.json or {}
+        sku = data.get("sku_lusync", "").strip()
+        if not sku:
+            return jsonify({"ok": False, "error": "SKU no proporcionado"})
+        prod = next((p for p in cargar_productos() if p["sku"] == sku), None)
+        if not prod:
+            return jsonify({"ok": False, "error": f"SKU {sku} no existe en inventario"})
+        ok = actualizar_stock_paris(sku, prod["stock"])
+        return jsonify({"ok": ok, "sku": sku, "stock_enviado": prod["stock"]})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/paris/forzar_sync_todos", methods=["POST"])
+def ruta_paris_forzar_todos():
+    """Re-envía el stock de todos los SKUs mapeados a Paris."""
+    if not session.get("logged"): return jsonify({"ok": False}), 401
+    try:
+        from inventario import listar_sku_mapeo, cargar_productos
+        from paris import actualizar_stock_paris
+        productos = {p["sku"]: p for p in cargar_productos()}
+        mapeo = listar_sku_mapeo()
+        enviados = 0
+        fallidos = 0
+        for fila in mapeo:
+            sku_lusync = fila.get("sku_lusync", "")
+            sku_paris = (fila.get("sku_paris", "") or "").strip()
+            if not sku_paris or sku_lusync not in productos:
+                continue
+            stock = productos[sku_lusync]["stock"]
+            if actualizar_stock_paris(sku_lusync, stock):
+                enviados += 1
+            else:
+                fallidos += 1
+        return jsonify({"ok": True, "enviados": enviados, "fallidos": fallidos})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+
+# ── MERCADOLIBRE ─────────────────────────────────────────────────────────────
+
+@app.route("/mercadolibre/conectar")
+def ruta_meli_conectar():
+    """Inicia el flujo OAuth2 redirigiendo al usuario al login de MercadoLibre."""
+    if not session.get("logged"): return redirect("/")
+    try:
+        from mercadolibre import construir_url_autorizacion
+        url = construir_url_autorizacion(state=session.get("usuario", "lusync"))
+        return redirect(url)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/mercadolibre/callback")
+def ruta_meli_callback():
+    """Recibe el code de MercadoLibre tras autorización del usuario."""
+    code = request.args.get("code")
+    error = request.args.get("error")
+    if error:
+        return f"<h2>Error de MercadoLibre</h2><p>{error}: {request.args.get('error_description','')}</p>", 400
+    if not code:
+        return "<h2>Falta el parámetro code</h2>", 400
+
+    try:
+        from mercadolibre import intercambiar_codigo_por_token
+        import time
+        data = intercambiar_codigo_por_token(code)
+        set_meli_auth({
+            "access_token":  data["access_token"],
+            "refresh_token": data.get("refresh_token", ""),
+            "user_id":       data.get("user_id"),
+            "expires_at":    int(time.time()) + int(data.get("expires_in", 21600))
+        })
+        # Redirigir al panel con confirmación
+        return redirect("/panel?meli=ok")
+    except Exception as e:
+        import traceback
+        return f"<h2>Error conectando MercadoLibre</h2><pre>{str(e)}\n\n{traceback.format_exc()}</pre>", 500
+
+
+@app.route("/mercadolibre/desconectar", methods=["POST"])
+def ruta_meli_desconectar():
+    """Borra el token guardado."""
+    if not session.get("logged"): return jsonify({"ok": False}), 401
+    borrar_meli_auth()
+    return jsonify({"ok": True})
+
+
+@app.route("/mercadolibre/estado")
+def ruta_meli_estado():
+    """Devuelve el estado de la conexión (para mostrar en el panel)."""
+    if not session.get("logged"): return jsonify({}), 401
+    try:
+        from mercadolibre import verificar_conexion_meli
+        return jsonify(verificar_conexion_meli())
+    except Exception as e:
+        return jsonify({"conectado": False, "error": str(e)})
+
+
+@app.route("/mercadolibre/publicaciones")
+def ruta_meli_publicaciones():
+    """Lista las publicaciones del seller (para mapeo de SKUs)."""
+    if not session.get("logged"): return jsonify({}), 401
+    try:
+        from mercadolibre import obtener_publicaciones_meli
+        offset = int(request.args.get("offset", 0))
+        return jsonify(obtener_publicaciones_meli(limite=50, offset=offset) or {"items":[],"total":0})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/mercadolibre/forzar_sync_todos", methods=["POST"])
+def ruta_meli_forzar_todos():
+    """Re-envía el stock de todos los SKUs mapeados a MercadoLibre."""
+    if not session.get("logged"): return jsonify({"ok": False}), 401
+    try:
+        from mercadolibre import actualizar_stock_meli
+        productos = {p["sku"]: p for p in cargar_productos()}
+        mapeo = listar_sku_mapeo()
+        enviados = 0
+        fallidos = 0
+        for fila in mapeo:
+            sku_lusync = fila.get("sku_lusync", "")
+            sku_meli = (fila.get("sku_mercadolibre", "") or "").strip()
+            if not sku_meli or sku_lusync not in productos:
+                continue
+            stock = productos[sku_lusync]["stock"]
+            if actualizar_stock_meli(sku_lusync, stock):
+                enviados += 1
+            else:
+                fallidos += 1
+        return jsonify({"ok": True, "enviados": enviados, "fallidos": fallidos})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/mercadolibre/webhook", methods=["GET", "POST"])
+def ruta_meli_webhook():
+    """Endpoint para que MercadoLibre envíe notificaciones automáticas (sin auth)."""
+    # GET solo para que MELI valide que la URL responde
+    if request.method == "GET":
+        return jsonify({"status": "ok"}), 200
+    try:
+        from mercadolibre import procesar_webhook_meli
+        payload = request.json or {}
+        ok = procesar_webhook_meli(payload)
+        # MELI espera 200 rápido; si tarda mucho reintenta
+        return jsonify({"ok": ok}), 200
+    except Exception as e:
+        print(f"[MELI Webhook] Error: {e}")
+        # Importante: devolver 200 igual para que MELI no reintente infinito
+        return jsonify({"ok": False, "error": str(e)}), 200
+
+
+@app.route("/debug/meli_test_conexion")
+def debug_meli_test():
+    """Diagnóstico de conexión con MercadoLibre."""
+    if not session.get("logged"): return redirect("/")
+    try:
+        from mercadolibre import verificar_conexion_meli
+        import os
+        return jsonify({
+            "app_id_configurado": bool(os.environ.get("MERCADOLIBRE_APP_ID")),
+            "secret_configurado": bool(os.environ.get("MERCADOLIBRE_CLIENT_SECRET")),
+            "redirect_uri": os.environ.get("MERCADOLIBRE_REDIRECT_URI", "(default)"),
+            "estado": verificar_conexion_meli()
         })
     except Exception as e:
         import traceback

@@ -804,3 +804,67 @@ def set_alertas_config(data):
     except Exception as e:
         print(f"[Alertas] set config: {e}"); conn.rollback()
     cur.close(); conn.close()
+
+
+# ── MERCADOLIBRE AUTH ──────────────────────────────────────────────────────
+
+def init_meli_auth():
+    """Crea tabla mercadolibre_auth para guardar tokens OAuth2."""
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("""CREATE TABLE IF NOT EXISTS mercadolibre_auth (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT,
+            access_token TEXT,
+            refresh_token TEXT,
+            expires_at BIGINT,
+            connected_at TIMESTAMP DEFAULT NOW()
+        )""")
+        conn.commit()
+    except Exception as e:
+        print(f"[MELI] init_meli_auth error: {e}"); conn.rollback()
+    cur.close(); conn.close()
+
+
+def get_meli_auth():
+    """Retorna el token guardado más reciente."""
+    conn = get_conn(); cur = conn.cursor()
+    auth = None
+    try:
+        cur.execute("""SELECT user_id, access_token, refresh_token, expires_at
+                       FROM mercadolibre_auth ORDER BY id DESC LIMIT 1""")
+        row = cur.fetchone()
+        if row:
+            auth = {"user_id": row[0], "access_token": row[1],
+                    "refresh_token": row[2], "expires_at": row[3]}
+    except Exception as e:
+        print(f"[MELI] get_meli_auth error: {e}")
+    cur.close(); conn.close()
+    return auth
+
+
+def set_meli_auth(data):
+    """Guarda/actualiza el token. Si hay registros previos, los reemplaza con uno nuevo."""
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        # Limpiar registros viejos para mantener solo el más reciente
+        cur.execute("DELETE FROM mercadolibre_auth")
+        cur.execute("""INSERT INTO mercadolibre_auth (user_id, access_token, refresh_token, expires_at)
+                       VALUES (%s, %s, %s, %s)""",
+                    (data.get("user_id"), data.get("access_token"),
+                     data.get("refresh_token"), data.get("expires_at")))
+        conn.commit()
+    except Exception as e:
+        print(f"[MELI] set_meli_auth error: {e}"); conn.rollback()
+    cur.close(); conn.close()
+
+
+def borrar_meli_auth():
+    """Borra el token guardado (desconectar)."""
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM mercadolibre_auth")
+        conn.commit()
+    except Exception as e:
+        print(f"[MELI] borrar_meli_auth error: {e}"); conn.rollback()
+    cur.close(); conn.close()
