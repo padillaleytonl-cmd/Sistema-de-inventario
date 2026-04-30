@@ -476,6 +476,47 @@ body {
   margin-bottom: 20px;
 }
 
+.dash-period {
+  font-size: 11px;
+  padding: 6px 12px;
+  border: 0.5px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: all .15s;
+}
+.dash-period:hover { background: var(--bg2); }
+.dash-period.active { background: var(--navy); color: white; border-color: var(--navy); }
+
+.canal-card {
+  background: var(--bg);
+  border: 0.5px solid var(--border);
+  border-radius: 14px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: box-shadow .15s, transform .15s;
+}
+.canal-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,.06); }
+.canal-card.disabled { opacity: 0.55; border-style: dashed; }
+.canal-card-header { display: flex; align-items: center; gap: 12px; }
+.canal-icon-lg { width:42px; height:42px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px; flex-shrink:0; }
+.canal-name-lg { font-size:15px; font-weight:600; color:var(--text); }
+.canal-status-lg { font-size:11px; margin-top:1px; }
+.canal-stats { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.canal-stat { background:var(--bg2); border-radius:8px; padding:8px 10px; }
+.canal-stat-label { font-size:10px; color:var(--muted); }
+.canal-stat-value { font-size:16px; font-weight:600; color:var(--text); margin-top:2px; }
+.canal-actions { display:flex; gap:6px; flex-wrap:wrap; }
+.canal-btn { font-size:11px; padding:7px 10px; flex:1; border:0.5px solid var(--border); background:transparent; color:var(--text); border-radius:7px; cursor:pointer; font-weight:500; transition:background .15s; }
+.canal-btn:hover { background:var(--bg2); }
+.canal-btn.primary { background:var(--navy); color:white; border-color:var(--navy); }
+.canal-btn.primary:hover { background:var(--navy-hover, #1e3a5f); }
+.canal-btn.icon { flex:0 0 32px; max-width:32px; padding:7px; color:var(--muted); }
+
 .metric-card {
   background: var(--white);
   border: 1px solid var(--border);
@@ -1128,6 +1169,7 @@ tbody td {
 .dev-chip.sel[data-val="reembolsado"]{background:#F1EFE8;color:#444441;}
 .dev-row:hover{background:var(--bg2);}
 </style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -1147,59 +1189,38 @@ tbody td {
       <button class="nav-btn" onclick="showSection('movimientos', this)">Movimientos</button>
       <button class="nav-btn" onclick="showSection('devoluciones', this)">Devoluciones</button>
       <button class="nav-btn" onclick="showSection('skumapeo', this)">Mapeo SKUs</button>
+      <button class="nav-btn" onclick="showSection('canales', this)">Canales</button>
 
     </div>
     <div class="navbar-right">
-      <!-- Selector de canales -->
-      <div class="chan-selector" id="chanSelector">
-        <button class="chan-pill activo" id="chanWC" onclick="toggleChanDropdown()" title="WooCommerce">
-          <div class="chan-dot" style="background:#2563eb;"></div>
-          WC
+      <!-- Indicador Live Status (todo-en-uno) -->
+      <div style="position:relative;" id="liveStatusWrap">
+        <button id="liveStatusBtn" onclick="toggleLiveStatus()" style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.06);padding:7px 12px;border-radius:20px;cursor:pointer;border:0.5px solid rgba(255,255,255,0.1);transition:background .15s;color:white;font-size:12px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='rgba(255,255,255,0.06)'" title="Estado de canales">
+          <svg width="14" height="14" viewBox="0 0 80 80" style="flex-shrink:0;">
+            <polygon points="40,12 64,28 64,52 40,68 16,52 16,28" fill="#a78bfa"/>
+            <circle cx="40" cy="12" r="4" fill="#67e8f9"/>
+            <circle cx="64" cy="28" r="4" fill="#67e8f9"/>
+            <circle cx="64" cy="52" r="4" fill="#67e8f9"/>
+            <circle cx="40" cy="68" r="4" fill="#67e8f9"/>
+            <circle cx="16" cy="52" r="4" fill="#67e8f9"/>
+            <circle cx="16" cy="28" r="4" fill="#67e8f9"/>
+          </svg>
+          <div id="liveStatusDot" style="width:7px;height:7px;border-radius:50%;background:#10b981;box-shadow:0 0 8px #10b981;"></div>
+          <span id="liveStatusLabel" style="font-weight:500;">Todo OK</span>
+          <span style="color:rgba(255,255,255,0.4);font-size:9px;">▾</span>
         </button>
-        <button class="chan-pill activo" id="chanWM" onclick="toggleChanDropdown()" title="Walmart">
-          <div class="chan-dot" style="background:#059669;"></div>
-          WM
-        </button>
-        <div class="chan-overlay" id="chanOverlay" onclick="cerrarChanDropdown()"></div>
-        <div class="chan-dropdown" id="chanDropdown">
-          <div class="chan-row" id="rowWC">
-            <div class="chan-icon-sm" style="background:#e6f0ff;color:#2563eb;">WC</div>
-            <div class="chan-info">
-              <div class="chan-name">WooCommerce</div>
-              <div class="chan-status" id="chanWCStatus">● Activo</div>
-            </div>
-            <div class="chan-btns">
-              <button class="chan-action-btn" onclick="sincronizarWoo();cerrarChanDropdown()">↺ Sync</button>
-              <button class="chan-action-btn" id="chanWCBtn" onclick="sincronizarWoo();cerrarChanDropdown()">↓ OC</button>
-            </div>
+
+        <!-- Dropdown -->
+        <div id="liveStatusDropdown" style="display:none;position:absolute;right:0;top:calc(100% + 8px);width:340px;background:var(--bg);border:0.5px solid var(--border);border-radius:14px;box-shadow:0 12px 32px rgba(0,0,0,0.16);z-index:1000;overflow:hidden;">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:0.5px solid var(--border);">
+            <div style="font-size:13px;color:var(--text);font-weight:600;">Estado de canales</div>
+            <div id="liveStatusUpdatedAt" style="font-size:10px;color:var(--muted);">—</div>
           </div>
-          <div class="chan-row" id="rowWM">
-            <div class="chan-icon-sm" style="background:#d1fae5;color:#059669;">WM</div>
-            <div class="chan-info">
-              <div class="chan-name">Walmart Chile</div>
-              <div class="chan-status" id="chanWMStatus">Verificando...</div>
-            </div>
-            <div class="chan-btns">
-              <button class="chan-action-btn" onclick="walmartSyncStock();cerrarChanDropdown()">↑ Stock</button>
-              <button class="chan-action-btn" id="chanWMBtn" onclick="walmartSyncOrdenes();cerrarChanDropdown()">↓ OC</button>
-            </div>
+          <div id="liveStatusList" style="padding:6px;">
+            <div style="text-align:center;font-size:11px;color:var(--muted);padding:20px;">Cargando…</div>
           </div>
-          <div style="border-top:0.5px solid var(--border);margin:6px 0;"></div>
-          <div class="chan-row" style="opacity:0.5;">
-            <div class="chan-icon-sm" style="background:#fff7e6;color:#f59e0b;">ML</div>
-            <div class="chan-info"><div class="chan-name">MercadoLibre</div><div class="chan-status">⏳ Próximamente</div></div>
-          </div>
-          <div class="chan-row" style="opacity:0.5;">
-            <div class="chan-icon-sm" style="background:#fff0f0;color:#e94560;">FA</div>
-            <div class="chan-info"><div class="chan-name">Falabella</div><div class="chan-status">⏳ Próximamente</div></div>
-          </div>
-          <div class="chan-row" style="opacity:0.5;">
-            <div class="chan-icon-sm" style="background:#f5f0ff;color:#7c3aed;">RP</div>
-            <div class="chan-info"><div class="chan-name">Ripley</div><div class="chan-status">⏳ Próximamente</div></div>
-          </div>
-          <div class="chan-row" style="opacity:0.5;">
-            <div class="chan-icon-sm" style="background:#e0f2fe;color:#0369a1;">PA</div>
-            <div class="chan-info"><div class="chan-name">París</div><div class="chan-status" style="color:#0369a1;">● Conectado</div></div>
+          <div style="border-top:0.5px solid var(--border);padding:8px;">
+            <button onclick="cerrarLiveStatus();showSection('canales',document.querySelector('.nav-btn:nth-child(6)'))" style="width:100%;padding:9px;font-size:11px;background:var(--bg2);color:var(--text);border:0.5px solid var(--border);border-radius:8px;cursor:pointer;font-weight:500;">Administrar canales →</button>
           </div>
         </div>
       </div>
@@ -1246,129 +1267,122 @@ tbody td {
     </div>
   </nav>
 
-  <!-- ── SECCIÓN DASHBOARD ── -->
+  <!-- ── SECCIÓN DASHBOARD (RENOVADO) ── -->
   <div id="sec-dashboard" class="main">
     <div class="page-header">
       <div>
         <div class="page-title">Dashboard</div>
         <div class="page-date" id="fechaHoy"></div>
-        <div style="font-size:13px;color:var(--muted);margin-top:2px;font-family:'DM Mono',monospace;" id="relojHoy"></div>
-        <div style="font-size:11px;color:var(--hint);margin-top:2px;" id="horaServidorLabel"></div>
       </div>
-      <div class="header-actions">
-  <button class="btn-secondary" onclick="sincronizarWoo()">&#8635; Sincronizar</button>
-        <button class="btn-primary" onclick="importarWoo()">&#8593; Importar Woo</button>
+      <div class="header-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <!-- Filtro de fechas -->
+        <div style="display:flex;gap:6px;align-items:center;background:var(--bg2);padding:4px 8px;border-radius:8px;">
+          <label style="font-size:11px;color:var(--muted);">Desde</label>
+          <input type="date" id="dashFechaDesde" style="font-size:12px;padding:4px 6px;border:0.5px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);">
+          <label style="font-size:11px;color:var(--muted);">Hasta</label>
+          <input type="date" id="dashFechaHasta" style="font-size:12px;padding:4px 6px;border:0.5px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);">
+        </div>
+        <!-- Atajos de período -->
+        <div style="display:flex;gap:4px;">
+          <button class="dash-period active" data-dias="7" onclick="dashPeriodo(7,this)">7d</button>
+          <button class="dash-period" data-dias="30" onclick="dashPeriodo(30,this)">30d</button>
+          <button class="dash-period" data-dias="90" onclick="dashPeriodo(90,this)">90d</button>
+        </div>
+        <button class="btn-secondary" onclick="cargarDashboardCompleto()" title="Refrescar">↻</button>
       </div>
     </div>
 
-    <!-- Métricas -->
+    <!-- KPIs -->
     <div class="metrics-grid">
       <div class="metric-card" style="border-top:3px solid #2563eb;">
-        <div class="metric-label" style="color:#2563eb;">📦 Productos en stock</div>
-        <div class="metric-value" id="metricTotal">—</div>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
-          <span class="metric-badge badge-info">Total productos</span>
-          <button class="btn-ver-mas" onclick="abrirModal('productos')">Ver más</button>
-        </div>
+        <div class="metric-label" style="color:#2563eb;">📦 Productos en inventario</div>
+        <div class="metric-value" id="kpiProductos">—</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">Stock total: <b id="kpiStockTotal">—</b> unidades</div>
       </div>
       <div class="metric-card" style="border-top:3px solid #059669;">
-        <div class="metric-label" style="color:#059669;">💰 Ventas hoy — total</div>
-        <div class="metric-value" id="metricVentas">—</div>
-        <div style="font-size:13px;font-weight:600;color:#059669;margin-bottom:6px;" id="metricIngreso">$0</div>
-        <div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
-          <span style="font-size:11px;background:#e6f0ff;color:#2563eb;padding:3px 10px;border-radius:20px;font-weight:600;border:1px solid #bfdbfe;" id="ventasWoo">WC: 0</span>
-          <span style="font-size:11px;background:#d1fae5;color:#059669;padding:3px 10px;border-radius:20px;font-weight:600;border:1px solid #6ee7b7;" id="ventasWalmart">WM: 0</span>
-          <span style="font-size:11px;background:#e0f2fe;color:#0369a1;padding:3px 10px;border-radius:20px;font-weight:600;border:1px solid #7dd3fc;" id="ventasParis">PA: 0</span>
-        </div>
-        <div style="display:flex;align-items:center;justify-content:space-between;">
-          <span class="metric-badge badge-up">Desde medianoche</span>
-          <button class="btn-ver-mas" onclick="abrirModal('ventas')">Ver más</button>
-        </div>
+        <div class="metric-label" style="color:#059669;">💰 Ventas del período</div>
+        <div class="metric-value" id="kpiVentas">—</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;"><b id="kpiOrdenes">—</b> órdenes</div>
       </div>
       <div class="metric-card" style="border-top:3px solid #f59e0b;">
-        <div class="metric-label" style="color:#f59e0b;">⚠️ Stock bajo</div>
-        <div class="metric-value" id="metricBajo">—</div>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
-          <span class="metric-badge badge-warn">Menos de 5 unidades</span>
-          <button class="btn-ver-mas" onclick="abrirModal('stockbajo')">Ver más</button>
-        </div>
+        <div class="metric-label" style="color:#f59e0b;">⚠ Stock bajo</div>
+        <div class="metric-value" id="kpiStockBajo">—</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">Productos con menos de 10 unidades</div>
       </div>
       <div class="metric-card" style="border-top:3px solid #7c3aed;">
-        <div class="metric-label" style="color:#7c3aed;">🔗 Canales activos</div>
-        <div class="metric-value" id="metricCanales">3</div>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
-          <span class="metric-badge" style="background:#f5f0ff;color:#7c3aed;" id="metricCanalesBadge">WC ● WM ● PA ●</span>
-          <button class="btn-ver-mas" onclick="abrirModal('canales')">Ver más</button>
-        </div>
+        <div class="metric-label" style="color:#7c3aed;">🔔 Alertas no leídas</div>
+        <div class="metric-value" id="kpiAlertas">—</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;cursor:pointer;" onclick="abrirAlertas()">Ver alertas →</div>
       </div>
     </div>
 
-    <!-- Gráfico + Stock bajo -->
-    <div class="dash-grid">
-      <div style="display:flex;flex-direction:column;gap:16px;">
-        <!-- Gráfico de barras -->
-        <div class="card">
-          <div class="card-header">
-            <div class="card-title">Ventas — ingresos</div>
-            <div style="display:flex;gap:4px;">
-              <button class="chart-period active" onclick="cambiarPlazo('semana',this)">Semana</button>
-              <button class="chart-period" onclick="cambiarPlazo('mes',this)">Mes</button>
-              <button class="chart-period" onclick="cambiarPlazo('anio',this)">Año</button>
-            </div>
-          </div>
-          <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
-            <div>
-              <div style="font-size:11px;color:var(--muted);">Total período</div>
-              <div style="font-size:18px;font-weight:600;color:var(--navy);" id="chartTotal">$0</div>
-            </div>
-            <div style="text-align:right;">
-              <div style="font-size:11px;color:var(--muted);">Unidades vendidas</div>
-              <div style="font-size:18px;font-weight:600;color:var(--navy);" id="chartUnidades">0</div>
-            </div>
-          </div>
-          <!-- Tooltip detalle barra -->
-          <div id="barTooltip" style="display:none;background:var(--navy);color:white;padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:10px;line-height:1.6;"></div>
-          <div class="bar-chart" id="barChart">
-            <div style="color:var(--hint); font-size:12px; margin:auto;">Cargando datos...</div>
-          </div>
-        </div>
-
-        <!-- Gráfico de torta por canal -->
-        <div class="card">
-          <div class="card-header">
-            <div class="card-title">Ventas por canal</div>
-            <button class="btn-ver-mas" onclick="abrirModal('canales_detalle')">Ver más</button>
-          </div>
-          <div style="display:flex;align-items:center;gap:20px;">
-            <canvas id="tortaCanvas" width="140" height="140" style="flex-shrink:0;cursor:pointer;" onclick="abrirModal('canales_detalle')"></canvas>
-            <div id="tortaLeyenda" style="flex:1;display:flex;flex-direction:column;gap:8px;"></div>
-          </div>
-        </div>
-      </div>
+    <!-- Gráficos -->
+    <div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-top:16px;">
       <div class="card">
         <div class="card-header">
-          <div class="card-title">Productos con stock bajo</div>
-          <span class="card-tag badge-warn" style="background:var(--warn-bg);color:var(--warn);" id="countBajo">0 productos</span>
+          <div class="card-title">Ventas por canal en el tiempo</div>
+          <span class="card-tag" id="chartVentasCanalRange">—</span>
         </div>
-        <div class="stock-list" id="stockBajoList">
-          <div style="color:var(--hint); font-size:12px;">Cargando...</div>
+        <div style="position:relative;height:260px;">
+          <canvas id="chartVentasCanal"></canvas>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Distribución stock por canal</div>
+        </div>
+        <div style="position:relative;height:260px;">
+          <canvas id="chartDistribucion"></canvas>
         </div>
       </div>
     </div>
 
-    <!-- Actividad reciente -->
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">Actividad reciente</div>
-        <span class="card-tag">Últimos movimientos</span>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Top 10 productos más vendidos</div>
+        </div>
+        <div style="position:relative;height:280px;">
+          <canvas id="chartTopProductos"></canvas>
+        </div>
       </div>
-      <div class="activity-list" id="actividadList">
-        <div style="color:var(--hint); font-size:12px;">Cargando...</div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Movimientos diarios</div>
+          <span class="card-tag">Entradas vs salidas</span>
+        </div>
+        <div style="position:relative;height:280px;">
+          <canvas id="chartMovimientos"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tablas operativas -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Stock crítico</div>
+          <span class="card-tag badge-warn" id="countStockCritico">0</span>
+        </div>
+        <div class="stock-list" id="stockCriticoList" style="max-height:280px;overflow-y:auto;">
+          <div style="color:var(--hint);font-size:12px;padding:12px;">Cargando…</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Actividad reciente</div>
+          <span class="card-tag">Últimos movimientos</span>
+        </div>
+        <div class="activity-list" id="actividadList" style="max-height:280px;overflow-y:auto;">
+          <div style="color:var(--hint);font-size:12px;padding:12px;">Cargando…</div>
+        </div>
       </div>
     </div>
   </div>
 
-  <!-- ── SECCIÓN INVENTARIO ── -->
   <div id="sec-inventario" class="main" style="display:none;">
     <div class="page-header">
       <div>
@@ -1845,6 +1859,44 @@ tbody td {
   </div>
 
   <!-- ── SECCIÓN CONFIGURACIÓN ── -->
+  <!-- ── SECCIÓN CANALES ── -->
+  <div id="sec-canales" class="main" style="display:none;">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Canales</div>
+        <div class="page-date">Estado, sincronización y configuración de tus marketplaces</div>
+      </div>
+      <div class="header-actions">
+        <button class="btn-secondary" onclick="cargarCanales()">↻ Refrescar</button>
+      </div>
+    </div>
+
+    <!-- Resumen de canales -->
+    <div class="metrics-grid" style="margin-bottom:16px;">
+      <div class="metric-card" style="border-top:3px solid #059669;">
+        <div class="metric-label">Canales activos</div>
+        <div class="metric-value" id="canalesActivos">—</div>
+      </div>
+      <div class="metric-card" style="border-top:3px solid #2563eb;">
+        <div class="metric-label">Productos sincronizados</div>
+        <div class="metric-value" id="canalesProductos">—</div>
+      </div>
+      <div class="metric-card" style="border-top:3px solid #f59e0b;">
+        <div class="metric-label">OC pendientes (24h)</div>
+        <div class="metric-value" id="canalesOcPendientes">—</div>
+      </div>
+      <div class="metric-card" style="border-top:3px solid #dc2626;">
+        <div class="metric-label">Errores (24h)</div>
+        <div class="metric-value" id="canalesErrores">0</div>
+      </div>
+    </div>
+
+    <!-- Grid de tarjetas -->
+    <div id="canalesGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;">
+      <div style="text-align:center;color:var(--hint);font-size:12px;padding:40px;grid-column:1/-1;">Cargando canales…</div>
+    </div>
+  </div>
+
   <div id="sec-configuracion" class="main" style="display:none;">
     <div class="page-header">
       <div>
@@ -4670,6 +4722,777 @@ document.getElementById('alertModal').addEventListener('click', function(e){
 document.getElementById('notifModal').addEventListener('click', function(e){
   if(e.target === this) cerrarConfigNotif();
 });
+</script>
+
+<!-- ════════════════════════════════════════════════════════════════
+     MODAL ESTADO SYNC PARÍS
+═══════════════════════════════════════════════════════════════════ -->
+<div id="syncParisModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;align-items:flex-start;justify-content:center;padding-top:40px;">
+  <div style="background:var(--bg);width:min(960px,94vw);max-height:88vh;border-radius:14px;box-shadow:0 20px 50px rgba(0,0,0,.3);display:flex;flex-direction:column;overflow:hidden;">
+    <div style="padding:16px 20px;border-bottom:0.5px solid var(--border);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:18px;">🔄</span>
+        <h3 style="margin:0;font-size:16px;font-weight:600;color:var(--text);">Estado de sincronización · París</h3>
+        <span id="syncParisResumen" style="font-size:11px;color:var(--muted);"></span>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button onclick="cargarSyncParis()" id="btnRefrescarSync" style="font-size:11px;padding:6px 10px;border:0.5px solid var(--border);background:transparent;border-radius:6px;cursor:pointer;color:var(--text);">↻ Refrescar</button>
+        <button onclick="forzarSyncTodosParis()" id="btnForzarSync" style="font-size:11px;padding:6px 10px;border:0.5px solid var(--border);background:var(--navy);border-radius:6px;cursor:pointer;color:white;font-weight:600;">↑ Forzar sync de todos</button>
+        <button onclick="cerrarSyncParis()" style="font-size:18px;background:transparent;border:none;cursor:pointer;color:var(--muted);padding:0 6px;">×</button>
+      </div>
+    </div>
+    <div id="syncParisInfo" style="padding:10px 20px;background:var(--bg2);font-size:11px;color:var(--muted);line-height:1.5;border-bottom:0.5px solid var(--border);">
+      Compara el stock de Lusync con el stock real en la API de París. Cencosud puede tardar 15min&ndash;1h en reflejar (hasta 24h en cierre de mes).
+    </div>
+    <div id="syncParisBody" style="overflow-y:auto;flex:1;padding:14px 20px;">
+      <div style="text-align:center;padding:40px;color:var(--muted);font-size:13px;">Cargando…</div>
+    </div>
+  </div>
+</div>
+
+<script>
+function abrirSyncParis(){
+  document.getElementById('syncParisModal').style.display = 'flex';
+  cargarSyncParis();
+}
+function cerrarSyncParis(){
+  document.getElementById('syncParisModal').style.display = 'none';
+}
+
+function cargarSyncParis(){
+  var body = document.getElementById('syncParisBody');
+  var resumen = document.getElementById('syncParisResumen');
+  body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted);font-size:13px;">Consultando API de París…</div>';
+  resumen.textContent = '';
+
+  fetch('/paris/sync_estado').then(r=>r.json()).then(data=>{
+    if(data.error){
+      body.innerHTML = '<div style="text-align:center;padding:40px;color:#e94560;font-size:13px;">Error: '+data.error+'</div>';
+      return;
+    }
+    var resultados = data.resultados || [];
+    resumen.textContent = '· '+data.sincronizados+'/'+data.total+' sincronizados';
+
+    if(!resultados.length){
+      body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted);font-size:13px;">No hay SKUs mapeados a París. Configúralos en Mapeo SKUs.</div>';
+      return;
+    }
+
+    var html = '<div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;">';
+    html += '<div style="flex:1;min-width:120px;background:#ecfdf5;color:#065f46;border-radius:10px;padding:10px 14px;"><div style="font-size:11px;opacity:.8;">Sincronizados</div><div style="font-size:22px;font-weight:700;">'+data.sincronizados+'</div></div>';
+    html += '<div style="flex:1;min-width:120px;background:#fef3c7;color:#92400e;border-radius:10px;padding:10px 14px;"><div style="font-size:11px;opacity:.8;">Desincronizados</div><div style="font-size:22px;font-weight:700;">'+data.desincronizados+'</div></div>';
+    html += '<div style="flex:1;min-width:120px;background:#fee2e2;color:#991b1b;border-radius:10px;padding:10px 14px;"><div style="font-size:11px;opacity:.8;">No encontrados en París</div><div style="font-size:22px;font-weight:700;">'+data.no_encontrados+'</div></div>';
+    html += '</div>';
+
+    html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+    html += '<thead><tr style="background:var(--bg2);text-align:left;color:var(--muted);font-size:11px;">';
+    html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);">SKU Lusync</th>';
+    html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);">SKU París</th>';
+    html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);">Producto</th>';
+    html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);text-align:right;">Stock Lusync</th>';
+    html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);text-align:right;">Stock París</th>';
+    html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);">Última act. París</th>';
+    html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);">Estado</th>';
+    html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);"></th>';
+    html += '</tr></thead><tbody>';
+
+    resultados.forEach(function(r){
+      var color, label;
+      if(r.estado === 'sincronizado'){ color='#059669'; label='● Sincronizado'; }
+      else if(r.estado === 'desincronizado'){ color='#d97706'; label='⚠ Desincronizado'; }
+      else { color='#dc2626'; label='✕ No existe en París'; }
+
+      var stockParis = r.stock_paris === null ? '—' : r.stock_paris;
+      var nombre = (r.nombre || '').length > 50 ? r.nombre.substring(0,50)+'…' : (r.nombre||'');
+
+      html += '<tr style="border-bottom:0.5px solid var(--border);">';
+      html += '<td style="padding:8px 10px;font-family:ui-monospace,monospace;font-size:11px;">'+r.sku_lusync+'</td>';
+      html += '<td style="padding:8px 10px;font-family:ui-monospace,monospace;font-size:11px;">'+r.sku_paris+'</td>';
+      html += '<td style="padding:8px 10px;color:var(--muted);">'+nombre+'</td>';
+      html += '<td style="padding:8px 10px;text-align:right;font-weight:600;">'+r.stock_lusync+'</td>';
+      html += '<td style="padding:8px 10px;text-align:right;font-weight:600;">'+stockParis+'</td>';
+      html += '<td style="padding:8px 10px;color:var(--muted);font-size:10px;">'+(r.ultima_actualizacion_paris||'—')+'</td>';
+      html += '<td style="padding:8px 10px;color:'+color+';font-weight:500;font-size:11px;">'+label+'</td>';
+      html += '<td style="padding:8px 10px;text-align:right;">';
+      html += '<button onclick="forzarSyncSkuParis(\''+r.sku_lusync+'\')" style="font-size:10px;padding:4px 8px;border:0.5px solid var(--border);background:transparent;border-radius:6px;cursor:pointer;color:var(--text);">↑ Reenviar</button>';
+      html += '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+
+    body.innerHTML = html;
+  }).catch(function(e){
+    body.innerHTML = '<div style="text-align:center;padding:40px;color:#e94560;font-size:13px;">Error de conexión: '+e.message+'</div>';
+  });
+}
+
+function forzarSyncSkuParis(sku){
+  fetch('/paris/forzar_sync_sku', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({sku_lusync: sku})
+  }).then(r=>r.json()).then(res=>{
+    if(res.ok){
+      alert('✓ Stock '+res.stock_enviado+' enviado a París para '+sku+'\n\nLa actualización tarda 15min–1h en reflejar.');
+      setTimeout(cargarSyncParis, 1000);
+    } else {
+      alert('Error: '+(res.error||'desconocido'));
+    }
+  }).catch(()=>alert('Error de conexión'));
+}
+
+function forzarSyncTodosParis(){
+  if(!confirm('¿Reenviar stock de TODOS los SKUs mapeados a París?')) return;
+  var btn = document.getElementById('btnForzarSync');
+  btn.disabled = true; btn.textContent = 'Enviando…';
+  fetch('/paris/forzar_sync_todos', {method:'POST'}).then(r=>r.json()).then(res=>{
+    btn.disabled = false; btn.textContent = '↑ Forzar sync de todos';
+    if(res.ok){
+      alert('✓ '+res.enviados+' SKUs enviados, '+res.fallidos+' fallidos\n\nLa actualización tarda 15min–1h en reflejar.');
+      setTimeout(cargarSyncParis, 1000);
+    } else {
+      alert('Error: '+(res.error||'desconocido'));
+    }
+  }).catch(function(){
+    btn.disabled = false; btn.textContent = '↑ Forzar sync de todos';
+    alert('Error de conexión');
+  });
+}
+
+// Atajo: el botón "↑ Stock" del dropdown de canales hace lo mismo
+function parisForzarSyncTodos(){
+  forzarSyncTodosParis();
+}
+
+document.getElementById('syncParisModal').addEventListener('click', function(e){
+  if(e.target === this) cerrarSyncParis();
+});
+</script>
+
+<script>
+// ════════════════════════════════════════════════════════════════
+// DASHBOARD NUEVO - GRÁFICOS DINÁMICOS CON CHART.JS
+// ════════════════════════════════════════════════════════════════
+
+const COLORES_CANAL = {
+  WooCommerce: '#0073aa', WC: '#0073aa',
+  Walmart: '#0071ce',     WM: '#0071ce',
+  Paris: '#0369a1',       PA: '#0369a1', 'París': '#0369a1',
+  Falabella: '#dc2626',   FA: '#dc2626',
+  Ripley: '#7c3aed',      RP: '#7c3aed',
+  MercadoLibre: '#fbbf24', ML: '#fbbf24',
+  Hites: '#ec4899',       HI: '#ec4899',
+  Sistema: '#6b7280'
+};
+
+let _charts = {};
+
+function _destruirChart(id) {
+  if (_charts[id]) { try { _charts[id].destroy(); } catch(e){} delete _charts[id]; }
+}
+
+function _ymdLocal(d) {
+  const y = d.getFullYear(); const m = String(d.getMonth()+1).padStart(2,'0'); const dd = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${dd}`;
+}
+
+function dashRangoActual() {
+  const d = document.getElementById('dashFechaDesde').value;
+  const h = document.getElementById('dashFechaHasta').value;
+  return { desde: d, hasta: h };
+}
+
+function dashPeriodo(dias, btn) {
+  document.querySelectorAll('.dash-period').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  const hoy = new Date();
+  const desde = new Date(); desde.setDate(hoy.getDate() - (dias - 1));
+  document.getElementById('dashFechaDesde').value = _ymdLocal(desde);
+  document.getElementById('dashFechaHasta').value = _ymdLocal(hoy);
+  cargarDashboardCompleto();
+}
+
+function _formatearMoneda(n) {
+  return '$' + (n || 0).toLocaleString('es-CL');
+}
+
+function _formatearFecha(yyyymmdd) {
+  if (!yyyymmdd) return '';
+  const [y, m, d] = yyyymmdd.split('-');
+  return `${d}/${m}`;
+}
+
+// ─── KPIs ──────────────────────────────────────────────────────
+async function cargarKPIs() {
+  const r = dashRangoActual();
+  try {
+    const res = await fetch(`/stats/kpis?desde=${r.desde}&hasta=${r.hasta}`);
+    const d = await res.json();
+    document.getElementById('kpiProductos').textContent = d.productos_total || 0;
+    document.getElementById('kpiStockTotal').textContent = (d.stock_total || 0).toLocaleString('es-CL');
+    document.getElementById('kpiVentas').textContent = (d.ventas_periodo || 0).toLocaleString('es-CL');
+    document.getElementById('kpiOrdenes').textContent = d.ordenes_periodo || 0;
+    document.getElementById('kpiStockBajo').textContent = d.stock_bajo || 0;
+    document.getElementById('kpiAlertas').textContent = d.alertas_no_leidas || 0;
+  } catch(e) { console.error('KPIs error:', e); }
+}
+
+// ─── CHART: Ventas por canal en el tiempo (línea apilada) ──────
+async function cargarChartVentasCanal() {
+  const r = dashRangoActual();
+  document.getElementById('chartVentasCanalRange').textContent = `${_formatearFecha(r.desde)} – ${_formatearFecha(r.hasta)}`;
+  try {
+    const res = await fetch(`/stats/ventas_por_canal?desde=${r.desde}&hasta=${r.hasta}`);
+    const data = await res.json();
+
+    // Pivotar: días en X, canales en series
+    const dias = [...new Set(data.map(d => d.dia))].sort();
+    const canales = [...new Set(data.map(d => d.canal))];
+    const datasets = canales.map(c => ({
+      label: c,
+      data: dias.map(dia => {
+        const found = data.find(x => x.dia === dia && x.canal === c);
+        return found ? found.total : 0;
+      }),
+      backgroundColor: (COLORES_CANAL[c] || '#94a3b8') + '60',
+      borderColor:     COLORES_CANAL[c] || '#94a3b8',
+      borderWidth: 2,
+      tension: 0.3,
+      fill: true
+    }));
+
+    _destruirChart('chartVentasCanal');
+    const ctx = document.getElementById('chartVentasCanal').getContext('2d');
+    _charts['chartVentasCanal'] = new Chart(ctx, {
+      type: 'line',
+      data: { labels: dias.map(_formatearFecha), datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } } },
+        scales: {
+          y: { beginAtZero: true, stacked: true, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { font: { size: 10 } } },
+          x: { stacked: true, grid: { display: false }, ticks: { font: { size: 10 } } }
+        }
+      }
+    });
+  } catch(e) { console.error('Chart ventas error:', e); }
+}
+
+// ─── CHART: Top 10 productos vendidos (barras) ─────────────────
+async function cargarChartTopProductos() {
+  const r = dashRangoActual();
+  try {
+    const res = await fetch(`/stats/top_productos?desde=${r.desde}&hasta=${r.hasta}&limite=10`);
+    const data = await res.json();
+
+    const labels = data.map(d => (d.nombre || d.sku).substring(0, 35));
+    const valores = data.map(d => d.total);
+
+    _destruirChart('chartTopProductos');
+    const ctx = document.getElementById('chartTopProductos').getContext('2d');
+    _charts['chartTopProductos'] = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Unidades vendidas',
+          data: valores,
+          backgroundColor: '#7c3aed',
+          borderRadius: 6
+        }]
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { font: { size: 10 } } },
+          y: { grid: { display: false }, ticks: { font: { size: 10 }, autoSkip: false } }
+        }
+      }
+    });
+  } catch(e) { console.error('Top productos error:', e); }
+}
+
+// ─── CHART: Movimientos diarios (líneas) ───────────────────────
+async function cargarChartMovimientos() {
+  const r = dashRangoActual();
+  try {
+    const res = await fetch(`/stats/movimientos_dia?desde=${r.desde}&hasta=${r.hasta}`);
+    const data = await res.json();
+
+    const dias = [...new Set(data.map(d => d.dia))].sort();
+    const entradas = dias.map(dia => {
+      const f = data.find(x => x.dia === dia && x.tipo === 'entrada');
+      return f ? f.total : 0;
+    });
+    const salidas = dias.map(dia => {
+      const f = data.find(x => x.dia === dia && x.tipo === 'salida');
+      return f ? f.total : 0;
+    });
+
+    _destruirChart('chartMovimientos');
+    const ctx = document.getElementById('chartMovimientos').getContext('2d');
+    _charts['chartMovimientos'] = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: dias.map(_formatearFecha),
+        datasets: [
+          { label: 'Entradas', data: entradas, borderColor: '#059669', backgroundColor: '#05966920', tension: 0.3, fill: false, borderWidth: 2 },
+          { label: 'Salidas',  data: salidas,  borderColor: '#dc2626', backgroundColor: '#dc262620', tension: 0.3, fill: false, borderWidth: 2 }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } } },
+        scales: {
+          y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { font: { size: 10 } } },
+          x: { grid: { display: false }, ticks: { font: { size: 10 } } }
+        }
+      }
+    });
+  } catch(e) { console.error('Movs error:', e); }
+}
+
+// ─── CHART: Distribución stock por canal (donut) ───────────────
+async function cargarChartDistribucion() {
+  try {
+    const res = await fetch('/stats/distribucion_stock');
+    const data = await res.json();
+
+    const labels = data.map(d => d.canal);
+    const valores = data.map(d => d.stock);
+    const colores = data.map(d => COLORES_CANAL[d.canal] || '#94a3b8');
+
+    _destruirChart('chartDistribucion');
+    const ctx = document.getElementById('chartDistribucion').getContext('2d');
+    _charts['chartDistribucion'] = new Chart(ctx, {
+      type: 'doughnut',
+      data: { labels, datasets: [{ data: valores, backgroundColor: colores, borderWidth: 2, borderColor: '#fff' }] },
+      options: {
+        responsive: true, maintainAspectRatio: false, cutout: '60%',
+        plugins: {
+          legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 }, padding: 8 } },
+          tooltip: {
+            callbacks: {
+              label: function(ctx) {
+                const total = ctx.dataset.data.reduce((a,b)=>a+b, 0);
+                const pct = total ? ((ctx.parsed/total)*100).toFixed(1) : 0;
+                return `${ctx.label}: ${ctx.parsed.toLocaleString('es-CL')} (${pct}%)`;
+              }
+            }
+          }
+        }
+      }
+    });
+  } catch(e) { console.error('Distribución error:', e); }
+}
+
+// ─── Stock crítico ─────────────────────────────────────────────
+async function cargarStockCritico() {
+  try {
+    const res = await fetch('/productos');
+    const productos = await res.json();
+    const criticos = productos.filter(p => (p.stock || 0) > 0 && (p.stock || 0) < 10).sort((a,b) => a.stock - b.stock);
+    document.getElementById('countStockCritico').textContent = criticos.length + ' productos';
+
+    const lista = document.getElementById('stockCriticoList');
+    if (!criticos.length) {
+      lista.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:12px;padding:30px;">✓ Todo el stock está en niveles saludables</div>';
+      return;
+    }
+    let html = '';
+    criticos.slice(0, 20).forEach(p => {
+      const color = p.stock < 3 ? '#dc2626' : (p.stock < 6 ? '#f59e0b' : '#fbbf24');
+      html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:0.5px solid var(--border);">
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:12px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.nombre || p.sku}</div>
+          <div style="font-size:10px;color:var(--muted);font-family:ui-monospace,monospace;">${p.sku}</div>
+        </div>
+        <div style="font-size:14px;font-weight:700;color:${color};margin-left:8px;">${p.stock}</div>
+      </div>`;
+    });
+    lista.innerHTML = html;
+  } catch(e) { console.error('Stock crítico error:', e); }
+}
+
+// ─── Actividad reciente ────────────────────────────────────────
+async function cargarActividad() {
+  try {
+    const res = await fetch('/movimientos?limite=15');
+    const movs = await res.json();
+    const lista = document.getElementById('actividadList');
+    if (!movs.length) {
+      lista.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:12px;padding:30px;">Sin actividad reciente</div>';
+      return;
+    }
+    let html = '';
+    movs.forEach(m => {
+      const isEntrada = m.tipo === 'entrada';
+      const icon = isEntrada ? '↑' : '↓';
+      const color = isEntrada ? '#059669' : '#dc2626';
+      const canalColor = COLORES_CANAL[m.canal] || '#6b7280';
+      html += `<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:0.5px solid var(--border);">
+        <div style="font-size:14px;font-weight:700;color:${color};width:18px;text-align:center;">${icon}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:12px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${m.nombre || m.sku}</div>
+          <div style="font-size:10px;color:var(--muted);">
+            <span style="color:${canalColor};font-weight:600;">${m.canal}</span> · ${m.fecha} ${m.hora}
+          </div>
+        </div>
+        <div style="font-size:13px;font-weight:600;color:${color};">${isEntrada?'+':'-'}${m.cantidad}</div>
+      </div>`;
+    });
+    lista.innerHTML = html;
+  } catch(e) { console.error('Actividad error:', e); }
+}
+
+async function cargarDashboardCompleto() {
+  await Promise.all([
+    cargarKPIs(),
+    cargarChartVentasCanal(),
+    cargarChartTopProductos(),
+    cargarChartMovimientos(),
+    cargarChartDistribucion(),
+    cargarStockCritico(),
+    cargarActividad()
+  ]);
+}
+
+// Auto-init cuando se entra al dashboard
+window.addEventListener('DOMContentLoaded', function() {
+  // Default: últimos 7 días
+  const hoy = new Date();
+  const desde = new Date(); desde.setDate(hoy.getDate() - 6);
+  const f1 = document.getElementById('dashFechaDesde');
+  const f2 = document.getElementById('dashFechaHasta');
+  if (f1 && f2) {
+    f1.value = _ymdLocal(desde);
+    f2.value = _ymdLocal(hoy);
+    f1.addEventListener('change', cargarDashboardCompleto);
+    f2.addEventListener('change', cargarDashboardCompleto);
+    setTimeout(cargarDashboardCompleto, 300);
+  }
+});
+
+// ════════════════════════════════════════════════════════════════
+// SECCIÓN CANALES
+// ════════════════════════════════════════════════════════════════
+
+const CANALES_DEF = [
+  { id:'woocommerce', code:'WC', nombre:'WooCommerce', tipo:'self-service',
+    color:'#0073aa', bg:'#cfe7f5', estado_endpoint: null },
+  { id:'walmart',     code:'WM', nombre:'Walmart Chile', tipo:'gestionado',
+    color:'#0071ce', bg:'#cfe2f5', estado_endpoint: null },
+  { id:'paris',       code:'PA', nombre:'París (Cencosud)', tipo:'gestionado',
+    color:'#0369a1', bg:'#e0f2fe', estado_endpoint: null },
+  { id:'mercadolibre',code:'ML', nombre:'MercadoLibre', tipo:'self-service',
+    color:'#fbbf24', bg:'#fef3c7', estado_endpoint: '/mercadolibre/estado',
+    accion_conectar:'/mercadolibre/conectar', accion_desconectar:'/mercadolibre/desconectar',
+    accion_sync:'/mercadolibre/forzar_sync_todos' },
+  { id:'falabella',   code:'FA', nombre:'Falabella', tipo:'proximamente',
+    color:'#dc2626', bg:'#fee2e2' },
+  { id:'ripley',      code:'RP', nombre:'Ripley', tipo:'proximamente',
+    color:'#7c3aed', bg:'#ede9fe' },
+  { id:'hites',       code:'HI', nombre:'Hites', tipo:'proximamente',
+    color:'#ec4899', bg:'#fce7f3' }
+];
+
+async function cargarCanales() {
+  const grid = document.getElementById('canalesGrid');
+  grid.innerHTML = '<div style="text-align:center;color:var(--hint);font-size:12px;padding:40px;grid-column:1/-1;">Cargando…</div>';
+
+  let activos = 0;
+  let html = '';
+
+  for (const c of CANALES_DEF) {
+    const isProximo = c.tipo === 'proximamente';
+    let estado = { conectado: !isProximo };  // gestionado y self-service: asumir conectado por ahora
+    let info = '';
+
+    if (c.estado_endpoint) {
+      try {
+        const res = await fetch(c.estado_endpoint);
+        estado = await res.json();
+      } catch(e) { estado = { conectado: false }; }
+    }
+
+    if (estado.conectado && !isProximo) activos++;
+
+    if (c.id === 'mercadolibre' && estado.nickname) {
+      info = `<div style="font-size:10px;color:var(--muted);margin-top:2px;">${estado.nickname}</div>`;
+    }
+
+    const cardClass = isProximo ? 'canal-card disabled' : 'canal-card';
+    const statusColor = isProximo ? '#94a3b8' : (estado.conectado ? '#059669' : '#dc2626');
+    const statusText = isProximo ? '⌛ Próximamente' : (estado.conectado ? '● Conectado' : '✕ No conectado');
+
+    html += `<div class="${cardClass}">
+      <div class="canal-card-header">
+        <div class="canal-icon-lg" style="background:${c.bg};color:${c.color};">${c.code}</div>
+        <div style="flex:1;">
+          <div class="canal-name-lg">${c.nombre}</div>
+          <div class="canal-status-lg" style="color:${statusColor};">${statusText}</div>
+          ${info}
+        </div>
+      </div>`;
+
+    if (isProximo) {
+      html += `<div style="font-size:11px;color:var(--muted);">Disponible próximamente</div>
+        <div class="canal-actions"><button class="canal-btn" disabled>Conectar</button></div>`;
+    } else if (c.id === 'mercadolibre' && !estado.conectado) {
+      html += `<div style="font-size:11px;color:var(--muted);line-height:1.5;">OAuth2 · Conexión en 1 clic</div>
+        <div class="canal-actions">
+          <button class="canal-btn primary" onclick="window.location='${c.accion_conectar}'">Conectar con MercadoLibre</button>
+        </div>`;
+    } else {
+      // Estadísticas placeholder (luego pueden conectarse a endpoints reales)
+      html += `<div class="canal-stats">
+        <div class="canal-stat">
+          <div class="canal-stat-label">Productos conectados</div>
+          <div class="canal-stat-value" id="canalProd_${c.id}">—</div>
+        </div>
+        <div class="canal-stat">
+          <div class="canal-stat-label">OC hoy</div>
+          <div class="canal-stat-value" id="canalOc_${c.id}">—</div>
+        </div>
+      </div>
+      <div class="canal-actions">
+        <button class="canal-btn" onclick="canalSync('${c.id}')">↑ Stock</button>
+        <button class="canal-btn" onclick="canalOrdenes('${c.id}')">↓ Órdenes</button>
+        <button class="canal-btn" onclick="canalEstado('${c.id}')">⚊ Estado</button>
+        <button class="canal-btn icon" onclick="canalConfig('${c.id}')" title="Configuración">⚙</button>
+      </div>`;
+    }
+
+    html += '</div>';
+  }
+
+  grid.innerHTML = html;
+  document.getElementById('canalesActivos').textContent = activos;
+
+  // Cargar stats de productos por canal
+  cargarStatsCanales();
+}
+
+async function cargarStatsCanales() {
+  try {
+    const res = await fetch('/sku_mapeo');
+    const mapeo = await res.json();
+    const counts = { woocommerce: 0, walmart: 0, paris: 0, mercadolibre: 0, falabella: 0, ripley: 0, hites: 0 };
+    mapeo.forEach(m => {
+      if (m.sku_web)          counts.woocommerce++;
+      if (m.sku_walmart)      counts.walmart++;
+      if (m.sku_paris)        counts.paris++;
+      if (m.sku_mercadolibre) counts.mercadolibre++;
+      if (m.sku_falabella)    counts.falabella++;
+      if (m.sku_ripley)       counts.ripley++;
+      if (m.sku_hites)        counts.hites++;
+    });
+    Object.keys(counts).forEach(k => {
+      const el = document.getElementById('canalProd_' + k);
+      if (el) el.textContent = counts[k];
+    });
+    const total = Object.values(counts).reduce((a,b) => a+b, 0);
+    document.getElementById('canalesProductos').textContent = total;
+  } catch(e) { console.error('Stats canales:', e); }
+}
+
+function canalSync(id) {
+  if (id === 'paris') {
+    if (typeof forzarSyncTodosParis === 'function') forzarSyncTodosParis();
+    else alert('Sincronización de París no disponible');
+  } else if (id === 'mercadolibre') {
+    if (!confirm('¿Reenviar stock de todos los SKUs mapeados a MercadoLibre?')) return;
+    fetch('/mercadolibre/forzar_sync_todos', {method:'POST'})
+      .then(r=>r.json()).then(res=>{
+        if (res.ok) alert(`✓ ${res.enviados} enviados, ${res.fallidos} fallidos`);
+        else alert('Error: ' + (res.error || 'desconocido'));
+      });
+  } else if (id === 'walmart') {
+    fetch('/walmart/sync', {method:'POST'}).then(()=>alert('✓ Sync Walmart iniciado'));
+  } else if (id === 'woocommerce') {
+    if (typeof sincronizarWoo === 'function') sincronizarWoo();
+  } else {
+    alert('Canal sin sync configurado todavía');
+  }
+}
+
+function canalOrdenes(id) {
+  if (id === 'walmart') {
+    if (typeof walmartSync === 'function') walmartSync();
+    else alert('Descarga de órdenes Walmart no disponible');
+  } else if (id === 'woocommerce') {
+    if (typeof importarWoo === 'function') importarWoo();
+  } else {
+    alert('Descarga de órdenes para ' + id + ' próximamente');
+  }
+}
+
+function canalEstado(id) {
+  if (id === 'paris' && typeof abrirSyncParis === 'function') {
+    abrirSyncParis();
+  } else {
+    alert('Vista de estado para ' + id + ' próximamente');
+  }
+}
+
+function canalConfig(id) {
+  if (id === 'mercadolibre') {
+    if (confirm('¿Desconectar MercadoLibre?\n\nDeberás autorizar nuevamente para sincronizar.')) {
+      fetch('/mercadolibre/desconectar', {method:'POST'}).then(()=>{
+        alert('Desconectado');
+        cargarCanales();
+      });
+    }
+  } else {
+    alert('Configuración de ' + id + ' próximamente');
+  }
+}
+
+// Hook al sistema de showSection existente
+const _showSectionOriginal = window.showSection;
+window.showSection = function(secId, btn) {
+  if (typeof _showSectionOriginal === 'function') _showSectionOriginal(secId, btn);
+  if (secId === 'canales') {
+    setTimeout(cargarCanales, 100);
+  } else if (secId === 'dashboard') {
+    setTimeout(cargarDashboardCompleto, 100);
+  }
+};
+
+// Verificar si volvemos de OAuth de MercadoLibre con éxito
+if (window.location.search.indexOf('meli=ok') !== -1) {
+  setTimeout(()=>alert('✓ MercadoLibre conectado exitosamente'), 500);
+  // Limpiar query string
+  history.replaceState(null, '', window.location.pathname);
+}
+
+// ════════════════════════════════════════════════════════════════
+// LIVE STATUS INDICATOR (top-right)
+// ════════════════════════════════════════════════════════════════
+
+const LIVE_CHANNELS = [
+  { id:'woocommerce', code:'WC', nombre:'WooCommerce',   bg:'#cfe7f5', color:'#0073aa', tipo:'self-service' },
+  { id:'walmart',     code:'WM', nombre:'Walmart Chile', bg:'#cfe2f5', color:'#0071ce', tipo:'gestionado' },
+  { id:'paris',       code:'PA', nombre:'París',         bg:'#e0f2fe', color:'#0369a1', tipo:'gestionado' },
+  { id:'mercadolibre',code:'ML', nombre:'MercadoLibre',  bg:'#fef3c7', color:'#fbbf24', tipo:'self-service',
+    estado_endpoint:'/mercadolibre/estado' },
+  { id:'falabella',   code:'FA', nombre:'Falabella',     bg:'#fee2e2', color:'#dc2626', tipo:'proximamente' },
+  { id:'ripley',      code:'RP', nombre:'Ripley',        bg:'#ede9fe', color:'#7c3aed', tipo:'proximamente' },
+  { id:'hites',       code:'HI', nombre:'Hites',         bg:'#fce7f3', color:'#ec4899', tipo:'proximamente' }
+];
+
+function toggleLiveStatus(){
+  const dd = document.getElementById('liveStatusDropdown');
+  if (!dd) return;
+  if (dd.style.display === 'block') {
+    dd.style.display = 'none';
+  } else {
+    dd.style.display = 'block';
+    cargarLiveStatus();
+  }
+}
+function cerrarLiveStatus(){
+  const dd = document.getElementById('liveStatusDropdown');
+  if (dd) dd.style.display = 'none';
+}
+
+// Cerrar al hacer clic fuera
+document.addEventListener('click', function(e) {
+  const wrap = document.getElementById('liveStatusWrap');
+  if (wrap && !wrap.contains(e.target)) cerrarLiveStatus();
+});
+
+async function cargarLiveStatus(){
+  const list = document.getElementById('liveStatusList');
+  if (!list) return;
+
+  let html = '';
+  let totalActivos = 0;
+  let conError = 0;
+
+  for (const c of LIVE_CHANNELS) {
+    let conectado = c.tipo !== 'proximamente';  // gestionados activos por defecto
+    let detalle = '';
+
+    if (c.estado_endpoint) {
+      try {
+        const r = await fetch(c.estado_endpoint);
+        const d = await r.json();
+        conectado = !!d.conectado;
+        if (conectado && d.nickname) detalle = d.nickname;
+      } catch(e) { conectado = false; }
+    }
+
+    if (c.tipo === 'gestionado' && conectado) detalle = 'API operativa';
+    if (c.tipo === 'self-service' && conectado && !detalle) detalle = 'Sincronizando';
+
+    let dotColor, status, statusColor;
+    if (c.tipo === 'proximamente') {
+      dotColor = '#94a3b8'; status = '—'; statusColor = 'var(--muted)';
+    } else if (conectado) {
+      dotColor = '#10b981'; status = 'OK'; statusColor = '#10b981';
+      totalActivos++;
+    } else {
+      dotColor = '#ef4444'; status = 'Error'; statusColor = '#ef4444';
+      conError++;
+    }
+
+    const opacity = c.tipo === 'proximamente' ? '0.5' : '1';
+    html += `<div style="display:flex;align-items:center;gap:10px;padding:8px 8px;border-radius:8px;opacity:${opacity};" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'">
+      <div style="width:24px;height:24px;border-radius:6px;background:${c.bg};color:${c.color};display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;flex-shrink:0;">${c.code}</div>
+      <div style="width:7px;height:7px;border-radius:50%;background:${dotColor};${dotColor !== '#94a3b8' ? 'box-shadow:0 0 6px '+dotColor+';' : ''}"></div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:12px;color:var(--text);font-weight:500;">${c.nombre}</div>
+        <div style="font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${c.tipo === 'proximamente' ? 'Próximamente' : (conectado ? '● Conectado · ' + detalle : '✕ No conectado')}</div>
+      </div>
+      <div style="font-size:10px;color:${statusColor};font-weight:600;flex-shrink:0;">${status}</div>
+    </div>`;
+  }
+
+  list.innerHTML = html;
+
+  // Actualizar globals
+  const dot = document.getElementById('liveStatusDot');
+  const label = document.getElementById('liveStatusLabel');
+  const updatedAt = document.getElementById('liveStatusUpdatedAt');
+  const btn = document.getElementById('liveStatusBtn');
+
+  if (conError > 0) {
+    dot.style.background = '#ef4444';
+    dot.style.boxShadow = '0 0 8px #ef4444';
+    dot.style.animation = 'pulse 1.5s infinite';
+    label.textContent = conError === 1 ? '1 canal con error' : conError + ' canales con error';
+    btn.style.background = 'rgba(239,68,68,0.15)';
+    btn.style.borderColor = 'rgba(239,68,68,0.3)';
+  } else {
+    dot.style.background = '#10b981';
+    dot.style.boxShadow = '0 0 8px #10b981';
+    dot.style.animation = '';
+    label.textContent = totalActivos > 0 ? 'Todo OK' : 'Sin canales activos';
+    btn.style.background = 'rgba(255,255,255,0.06)';
+    btn.style.borderColor = 'rgba(255,255,255,0.1)';
+  }
+
+  if (updatedAt) {
+    const now = new Date();
+    updatedAt.textContent = 'Actualizado ' + now.toLocaleTimeString('es-CL', {hour:'2-digit',minute:'2-digit'});
+  }
+}
+
+// Auto-actualizar cada 60 segundos
+setInterval(cargarLiveStatus, 60000);
+// Carga inicial
+setTimeout(cargarLiveStatus, 800);
+
+// CSS para la animación pulse
+const _styleLive = document.createElement('style');
+_styleLive.textContent = '@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }';
+document.head.appendChild(_styleLive);
+
 </script>
 
 </body>

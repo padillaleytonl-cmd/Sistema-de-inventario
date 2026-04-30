@@ -868,3 +868,144 @@ def borrar_meli_auth():
     except Exception as e:
         print(f"[MELI] borrar_meli_auth error: {e}"); conn.rollback()
     cur.close(); conn.close()
+
+
+# ── DASHBOARD STATS (para gráficos del dashboard) ───────────────────────────
+
+def stats_ventas_por_canal_dia(fecha_desde, fecha_hasta):
+    """Ventas (salidas) agrupadas por día y canal. Para gráfico línea apilada."""
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT TO_CHAR(DATE(fecha), 'YYYY-MM-DD') AS dia,
+                   COALESCE(canal, 'Sistema') AS canal,
+                   COALESCE(SUM(cantidad), 0) AS total
+            FROM movimientos
+            WHERE tipo = 'salida'
+              AND DATE(fecha) BETWEEN %s AND %s
+            GROUP BY dia, canal
+            ORDER BY dia ASC
+        """, (fecha_desde, fecha_hasta))
+        rows = cur.fetchall()
+    except Exception as e:
+        print(f"[Stats] ventas_por_canal_dia: {e}"); rows = []
+    cur.close(); conn.close()
+    return [{"dia": r[0], "canal": r[1], "total": int(r[2])} for r in rows]
+
+
+def stats_top_productos_vendidos(fecha_desde, fecha_hasta, limite=10):
+    """Top N productos más vendidos en un rango. Para gráfico barras."""
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT sku, nombre, COALESCE(SUM(cantidad), 0) AS total
+            FROM movimientos
+            WHERE tipo = 'salida'
+              AND DATE(fecha) BETWEEN %s AND %s
+            GROUP BY sku, nombre
+            ORDER BY total DESC
+            LIMIT %s
+        """, (fecha_desde, fecha_hasta, limite))
+        rows = cur.fetchall()
+    except Exception as e:
+        print(f"[Stats] top_productos: {e}"); rows = []
+    cur.close(); conn.close()
+    return [{"sku": r[0], "nombre": r[1], "total": int(r[2])} for r in rows]
+
+
+def stats_movimientos_dia(fecha_desde, fecha_hasta):
+    """Entradas vs salidas por día. Para gráfico líneas."""
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT TO_CHAR(DATE(fecha), 'YYYY-MM-DD') AS dia,
+                   tipo,
+                   COALESCE(SUM(cantidad), 0) AS total
+            FROM movimientos
+            WHERE DATE(fecha) BETWEEN %s AND %s
+            GROUP BY dia, tipo
+            ORDER BY dia ASC
+        """, (fecha_desde, fecha_hasta))
+        rows = cur.fetchall()
+    except Exception as e:
+        print(f"[Stats] movimientos_dia: {e}"); rows = []
+    cur.close(); conn.close()
+    return [{"dia": r[0], "tipo": r[1], "total": int(r[2])} for r in rows]
+
+
+def stats_distribucion_stock_canal():
+    """Distribución de stock total por canal mapeado. Para gráfico donut."""
+    conn = get_conn(); cur = conn.cursor()
+    distribucion = {"WooCommerce": 0, "Walmart": 0, "Paris": 0,
+                    "Falabella": 0, "Ripley": 0, "MercadoLibre": 0, "Hites": 0}
+    try:
+        # Productos con stock
+        cur.execute("""
+            SELECT p.sku, p.stock,
+                   m.sku_web, m.sku_walmart, m.sku_paris, m.sku_falabella,
+                   m.sku_ripley, m.sku_mercadolibre, m.sku_hites
+            FROM productos p
+            LEFT JOIN sku_mapeo m ON m.sku_lusync = p.sku
+        """)
+        rows = cur.fetchall()
+        for r in rows:
+            stock = int(r[1] or 0)
+            if stock <= 0:
+                continue
+            if r[2]: distribucion["WooCommerce"]   += stock
+            if r[3]: distribucion["Walmart"]       += stock
+            if r[4]: distribucion["Paris"]         += stock
+            if r[5]: distribucion["Falabella"]     += stock
+            if r[6]: distribucion["Ripley"]        += stock
+            if r[7]: distribucion["MercadoLibre"]  += stock
+            if r[8]: distribucion["Hites"]         += stock
+    except Exception as e:
+        print(f"[Stats] distribucion_stock: {e}")
+    cur.close(); conn.close()
+    return [{"canal": k, "stock": v} for k, v in distribucion.items() if v > 0]
+
+
+def stats_kpis_dashboard(fecha_desde, fecha_hasta):
+    """KPIs para tarjetas superiores del dashboard."""
+    conn = get_conn(); cur = conn.cursor()
+    kpis = {
+        "ventas_periodo": 0,
+        "ordenes_periodo": 0,
+        "productos_total": 0,
+        "stock_total": 0,
+        "stock_bajo": 0,
+        "alertas_no_leidas": 0
+    }
+    try:
+        # Ventas en el período
+        cur.execute("""
+            SELECT COALESCE(SUM(cantidad), 0), COUNT(DISTINCT orden_id)
+            FROM movimientos
+            WHERE tipo = 'salida'
+              AND DATE(fecha) BETWEEN %s AND %s
+        """, (fecha_desde, fecha_hasta))
+        r = cur.fetchone()
+        kpis["ventas_periodo"]  = int(r[0] or 0)
+        kpis["ordenes_periodo"] = int(r[1] or 0)
+
+        # Productos / stock total
+        cur.execute("SELECT COUNT(*), COALESCE(SUM(stock), 0) FROM productos")
+        r = cur.fetchone()
+        kpis["productos_total"] = int(r[0] or 0)
+        kpis["stock_total"]     = int(r[1] or 0)
+
+        # Stock bajo (umbral 10)
+        cur.execute("SELECT COUNT(*) FROM productos WHERE stock < 10 AND stock > 0")
+        r = cur.fetchone()
+        kpis["stock_bajo"] = int(r[0] or 0)
+
+        # Alertas
+        try:
+            cur.execute("SELECT COUNT(*) FROM alertas WHERE leida=FALSE")
+            r = cur.fetchone()
+            kpis["alertas_no_leidas"] = int(r[0] or 0)
+        except: pass
+    except Exception as e:
+        print(f"[Stats] kpis: {e}")
+    cur.close(); conn.close()
+    return kpis

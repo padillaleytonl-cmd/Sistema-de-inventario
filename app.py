@@ -27,7 +27,10 @@ from inventario import (cargar_productos, guardar_productos, guardar_producto,
                         init_alertas, crear_alerta, listar_alertas,
                         contar_alertas_no_leidas, marcar_alerta_leida,
                         marcar_todas_leidas, get_alertas_config, set_alertas_config,
-                        init_meli_auth, get_meli_auth, set_meli_auth, borrar_meli_auth)
+                        init_meli_auth, get_meli_auth, set_meli_auth, borrar_meli_auth,
+                        stats_ventas_por_canal_dia, stats_top_productos_vendidos,
+                        stats_movimientos_dia, stats_distribucion_stock_canal,
+                        stats_kpis_dashboard)
 
 app = Flask(__name__)
 app.secret_key = "clave_super_segura"
@@ -2233,6 +2236,59 @@ def ruta_paris_forzar_todos():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
+
+
+
+# ── DASHBOARD STATS ─────────────────────────────────────────────────────────
+
+def _parse_rango_fechas():
+    """Lee desde/hasta de query params, default últimos 7 días."""
+    from datetime import datetime, timedelta
+    hoy = datetime.now().date()
+    desde_str = request.args.get("desde", "").strip()
+    hasta_str = request.args.get("hasta", "").strip()
+    try:
+        hasta = datetime.strptime(hasta_str, "%Y-%m-%d").date() if hasta_str else hoy
+    except: hasta = hoy
+    try:
+        desde = datetime.strptime(desde_str, "%Y-%m-%d").date() if desde_str else (hoy - timedelta(days=6))
+    except: desde = hoy - timedelta(days=6)
+    return desde, hasta
+
+
+@app.route("/stats/kpis")
+def ruta_stats_kpis():
+    if not session.get("logged"): return jsonify({}), 401
+    desde, hasta = _parse_rango_fechas()
+    return jsonify(stats_kpis_dashboard(desde, hasta))
+
+
+@app.route("/stats/ventas_por_canal")
+def ruta_stats_ventas_canal():
+    if not session.get("logged"): return jsonify([]), 401
+    desde, hasta = _parse_rango_fechas()
+    return jsonify(stats_ventas_por_canal_dia(desde, hasta))
+
+
+@app.route("/stats/top_productos")
+def ruta_stats_top():
+    if not session.get("logged"): return jsonify([]), 401
+    desde, hasta = _parse_rango_fechas()
+    limite = int(request.args.get("limite", 10))
+    return jsonify(stats_top_productos_vendidos(desde, hasta, limite))
+
+
+@app.route("/stats/movimientos_dia")
+def ruta_stats_movs():
+    if not session.get("logged"): return jsonify([]), 401
+    desde, hasta = _parse_rango_fechas()
+    return jsonify(stats_movimientos_dia(desde, hasta))
+
+
+@app.route("/stats/distribucion_stock")
+def ruta_stats_distribucion():
+    if not session.get("logged"): return jsonify([]), 401
+    return jsonify(stats_distribucion_stock_canal())
 
 
 # ── MERCADOLIBRE ─────────────────────────────────────────────────────────────
