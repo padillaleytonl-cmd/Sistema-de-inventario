@@ -1379,15 +1379,36 @@ tbody td {
 
       <div class="card">
         <div class="card-header">
-          <div class="card-title">Distribución stock por canal</div>
+          <div class="card-title">Ventas por canal</div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <select id="donutPeriodo" onchange="cargarChartVentasPorCanalDonut()" style="font-size:11px;padding:4px 8px;border:0.5px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);">
+              <option value="hoy">Hoy</option>
+              <option value="7" selected>Últimos 7 días</option>
+              <option value="30">Últimos 30 días</option>
+              <option value="90">Últimos 90 días</option>
+              <option value="rango">Usar filtro arriba</option>
+            </select>
+            <button class="btn-ver-mas" onclick="abrirModalKpi('ventas_canal_donut')">Ver más</button>
+          </div>
         </div>
-        <div style="position:relative;height:260px;">
-          <canvas id="chartDistribucion"></canvas>
+        <div style="position:relative;height:240px;">
+          <canvas id="chartVentasCanalDonut"></canvas>
         </div>
       </div>
     </div>
 
+    <!-- Distribución stock + Top productos -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Distribución stock por canal</div>
+          <span class="card-tag">Stock disponible mapeado</span>
+        </div>
+        <div style="position:relative;height:280px;">
+          <canvas id="chartDistribucion"></canvas>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-header">
           <div class="card-title">Top 10 productos más vendidos</div>
@@ -1396,7 +1417,10 @@ tbody td {
           <canvas id="chartTopProductos"></canvas>
         </div>
       </div>
+    </div>
 
+    <!-- Movimientos diarios -->
+    <div style="margin-top:14px;">
       <div class="card">
         <div class="card-header">
           <div class="card-title">Movimientos diarios</div>
@@ -5017,9 +5041,13 @@ async function cargarKPIs() {
       fetch('/productos').then(x=>x.json())
     ]);
 
-    // Mapa SKU → precio
+    // Mapa SKU → precio (oferta si existe, si no normal)
     const precios = {};
-    resProductos.forEach(p => { precios[p.sku] = p.precio || 0; });
+    resProductos.forEach(p => {
+      const ofer = parseFloat(p.precio_oferta || 0);
+      const norm = parseFloat(p.precio_normal || 0);
+      precios[p.sku] = ofer > 0 ? ofer : norm;
+    });
 
     // Para ingreso $ necesitamos saber qué SKUs se vendieron por canal
     // Como /stats/ventas_por_canal no trae detalle por SKU, usamos top_productos
@@ -5215,6 +5243,80 @@ async function cargarChartMovimientos() {
   } catch(e) { console.error('Movs error:', e); }
 }
 
+// ─── CHART: Ventas por canal (donut con filtro propio) ────────
+async function cargarChartVentasPorCanalDonut() {
+  const sel = document.getElementById('donutPeriodo');
+  let desde, hasta;
+  const hoy = new Date();
+
+  if (!sel || sel.value === 'rango') {
+    const r = dashRangoActual();
+    desde = r.desde; hasta = r.hasta;
+  } else if (sel.value === 'hoy') {
+    desde = hasta = _ymdLocal(hoy);
+  } else {
+    const dias = parseInt(sel.value);
+    const d = new Date(); d.setDate(hoy.getDate() - (dias - 1));
+    desde = _ymdLocal(d);
+    hasta = _ymdLocal(hoy);
+  }
+
+  try {
+    const res = await fetch(`/stats/ventas_por_canal?desde=${desde}&hasta=${hasta}`);
+    const data = await res.json();
+
+    // Sumar por canal
+    const totales = {};
+    data.forEach(d => { totales[d.canal] = (totales[d.canal] || 0) + d.total; });
+
+    const labels = Object.keys(totales);
+    const valores = labels.map(c => totales[c]);
+    const colores = labels.map(c => COLORES_CANAL[c] || '#94a3b8');
+
+    _destruirChart('chartVentasCanalDonut');
+    const ctx = document.getElementById('chartVentasCanalDonut').getContext('2d');
+
+    if (!labels.length || valores.every(v => v === 0)) {
+      // Mensaje de "sin ventas"
+      _charts['chartVentasCanalDonut'] = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+          labels: ['Sin ventas en el período'],
+          datasets: [{ data: [1], backgroundColor: ['#e5e7eb'], borderWidth: 0 }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, cutout: '60%',
+          plugins: {
+            legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 } } },
+            tooltip: { enabled: false }
+          }
+        }
+      });
+      return;
+    }
+
+    _charts['chartVentasCanalDonut'] = new Chart(ctx, {
+      type: 'doughnut',
+      data: { labels, datasets: [{ data: valores, backgroundColor: colores, borderWidth: 2, borderColor: '#fff' }] },
+      options: {
+        responsive: true, maintainAspectRatio: false, cutout: '60%',
+        plugins: {
+          legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 }, padding: 8 } },
+          tooltip: {
+            callbacks: {
+              label: function(ctx) {
+                const total = ctx.dataset.data.reduce((a,b)=>a+b, 0);
+                const pct = total ? ((ctx.parsed/total)*100).toFixed(1) : 0;
+                return `${ctx.label}: ${ctx.parsed.toLocaleString('es-CL')} unidades (${pct}%)`;
+              }
+            }
+          }
+        }
+      }
+    });
+  } catch(e) { console.error('Donut ventas error:', e); }
+}
+
 // ─── CHART: Distribución stock por canal (donut) ───────────────
 async function cargarChartDistribucion() {
   try {
@@ -5312,6 +5414,7 @@ async function cargarDashboardCompleto() {
   await Promise.all([
     cargarKPIs(),
     cargarChartVentasCanal(),
+    cargarChartVentasPorCanalDonut(),
     cargarChartTopProductos(),
     cargarChartMovimientos(),
     cargarChartDistribucion(),
@@ -5533,6 +5636,9 @@ function abrirModalKpi(tipo) {
   } else if (tipo === 'canales') {
     titulo.textContent = '🔗 Estado de canales';
     cargarModalCanales(body);
+  } else if (tipo === 'ventas_canal_donut') {
+    titulo.textContent = '🍩 Ventas por canal — análisis detallado';
+    cargarModalVentasCanal(body);
   }
 }
 
@@ -5557,7 +5663,8 @@ async function cargarModalProductos(body) {
     html += '<thead><tr style="background:var(--bg2);"><th style="padding:8px 10px;text-align:left;border-bottom:0.5px solid var(--border);font-weight:500;font-size:11px;color:var(--muted);">SKU</th><th style="padding:8px 10px;text-align:left;border-bottom:0.5px solid var(--border);font-weight:500;font-size:11px;color:var(--muted);">Nombre</th><th style="padding:8px 10px;text-align:right;border-bottom:0.5px solid var(--border);font-weight:500;font-size:11px;color:var(--muted);">Stock</th><th style="padding:8px 10px;text-align:right;border-bottom:0.5px solid var(--border);font-weight:500;font-size:11px;color:var(--muted);">Precio</th></tr></thead><tbody>';
     data.sort((a,b) => (a.nombre||'').localeCompare(b.nombre||'')).forEach(p => {
       const stockColor = p.stock < 10 ? '#dc2626' : (p.stock < 30 ? '#f59e0b' : '#059669');
-      html += `<tr style="border-bottom:0.5px solid var(--border);"><td style="padding:8px 10px;font-family:ui-monospace,monospace;font-size:11px;">${p.sku}</td><td style="padding:8px 10px;">${p.nombre || ''}</td><td style="padding:8px 10px;text-align:right;font-weight:600;color:${stockColor};">${p.stock || 0}</td><td style="padding:8px 10px;text-align:right;color:var(--muted);">$${(p.precio || 0).toLocaleString('es-CL')}</td></tr>`;
+      const _pr = (p.precio_oferta > 0 ? p.precio_oferta : (p.precio_normal || 0));
+      html += `<tr style="border-bottom:0.5px solid var(--border);"><td style="padding:8px 10px;font-family:ui-monospace,monospace;font-size:11px;">${p.sku}</td><td style="padding:8px 10px;">${p.nombre || ''}</td><td style="padding:8px 10px;text-align:right;font-weight:600;color:${stockColor};">${p.stock || 0}</td><td style="padding:8px 10px;text-align:right;color:var(--muted);">$${_pr.toLocaleString('es-CL')}</td></tr>`;
     });
     html += '</tbody></table>';
     body.innerHTML = html;
@@ -5667,6 +5774,114 @@ async function cargarModalCanales(body) {
     }
     document.getElementById('kpiCanalesList').innerHTML = lista;
   } catch(e) { body.innerHTML = '<div style="color:#dc2626;padding:30px;">Error: ' + e.message + '</div>'; }
+}
+
+async function cargarModalVentasCanal(body) {
+  // Usar el mismo período del donut
+  const sel = document.getElementById('donutPeriodo');
+  let desde, hasta, label;
+  const hoy = new Date();
+  if (!sel || sel.value === 'rango') {
+    const r = dashRangoActual();
+    desde = r.desde; hasta = r.hasta;
+    label = `${_formatearFecha(desde)} – ${_formatearFecha(hasta)}`;
+  } else if (sel.value === 'hoy') {
+    desde = hasta = _ymdLocal(hoy);
+    label = 'Hoy';
+  } else {
+    const dias = parseInt(sel.value);
+    const d = new Date(); d.setDate(hoy.getDate() - (dias - 1));
+    desde = _ymdLocal(d);
+    hasta = _ymdLocal(hoy);
+    label = `Últimos ${dias} días`;
+  }
+
+  body.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:13px;padding:30px;">Cargando…</div>';
+
+  try {
+    const [resVentas, resTop, resProductos] = await Promise.all([
+      fetch(`/stats/ventas_por_canal?desde=${desde}&hasta=${hasta}`).then(x=>x.json()),
+      fetch(`/stats/top_productos?desde=${desde}&hasta=${hasta}&limite=200`).then(x=>x.json()),
+      fetch('/productos').then(x=>x.json())
+    ]);
+
+    // Mapa precios
+    const precios = {};
+    resProductos.forEach(p => {
+      const ofer = parseFloat(p.precio_oferta || 0);
+      const norm = parseFloat(p.precio_normal || 0);
+      precios[p.sku] = ofer > 0 ? ofer : norm;
+    });
+
+    // Sumar unidades por canal y por día
+    const totalesCanal = {};
+    resVentas.forEach(v => { totalesCanal[v.canal] = (totalesCanal[v.canal] || 0) + v.total; });
+    const totalUnidades = Object.values(totalesCanal).reduce((a,b)=>a+b, 0);
+
+    // Calcular ingreso $ aproximado (por SKU vendido en período × precio actual)
+    let ingresoTotal = 0;
+    resTop.forEach(p => { ingresoTotal += (precios[p.sku] || 0) * p.total; });
+
+    let html = `<div style="font-size:12px;color:var(--muted);margin-bottom:12px;">Período: <b style="color:var(--text);">${label}</b></div>`;
+
+    // Cards superiores
+    html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:18px;">
+      <div style="background:#ecfdf5;color:#065f46;border-radius:10px;padding:12px;">
+        <div style="font-size:10px;opacity:.8;">Ingresos totales</div>
+        <div style="font-size:22px;font-weight:700;">$${Math.round(ingresoTotal).toLocaleString('es-CL')}</div>
+      </div>
+      <div style="background:#dbeafe;color:#1e3a8a;border-radius:10px;padding:12px;">
+        <div style="font-size:10px;opacity:.8;">Unidades vendidas</div>
+        <div style="font-size:22px;font-weight:700;">${totalUnidades.toLocaleString('es-CL')}</div>
+      </div>
+      <div style="background:#f3e8ff;color:#6b21a8;border-radius:10px;padding:12px;">
+        <div style="font-size:10px;opacity:.8;">Canales con ventas</div>
+        <div style="font-size:22px;font-weight:700;">${Object.keys(totalesCanal).length}</div>
+      </div>
+    </div>`;
+
+    if (Object.keys(totalesCanal).length === 0) {
+      html += '<div style="text-align:center;color:var(--muted);font-size:13px;padding:40px;">Sin ventas en el período seleccionado</div>';
+      body.innerHTML = html;
+      return;
+    }
+
+    // Tabla de canales
+    html += '<div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px;">Desglose por canal</div>';
+    html += '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:18px;">';
+    html += '<thead><tr style="background:var(--bg2);"><th style="padding:8px 10px;text-align:left;font-size:11px;color:var(--muted);font-weight:500;">Canal</th><th style="padding:8px 10px;text-align:right;font-size:11px;color:var(--muted);font-weight:500;">Unidades</th><th style="padding:8px 10px;text-align:right;font-size:11px;color:var(--muted);font-weight:500;">% del total</th><th style="padding:8px 10px;text-align:right;font-size:11px;color:var(--muted);font-weight:500;">Barra</th></tr></thead><tbody>';
+    Object.entries(totalesCanal).sort((a,b)=>b[1]-a[1]).forEach(([canal, total]) => {
+      const color = COLORES_CANAL[canal] || '#94a3b8';
+      const pct = totalUnidades ? (total/totalUnidades)*100 : 0;
+      html += `<tr style="border-bottom:0.5px solid var(--border);">
+        <td style="padding:8px 10px;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px;"></span><b>${canal}</b></td>
+        <td style="padding:8px 10px;text-align:right;font-weight:600;">${total.toLocaleString('es-CL')}</td>
+        <td style="padding:8px 10px;text-align:right;color:var(--muted);">${pct.toFixed(1)}%</td>
+        <td style="padding:8px 10px;width:200px;">
+          <div style="background:var(--bg2);height:8px;border-radius:4px;overflow:hidden;">
+            <div style="background:${color};height:100%;width:${pct.toFixed(1)}%;"></div>
+          </div>
+        </td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+
+    // Top productos
+    if (resTop.length) {
+      html += '<div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px;">Top productos del período</div>';
+      html += '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="background:var(--bg2);"><th style="padding:8px 10px;text-align:left;font-size:11px;color:var(--muted);font-weight:500;">SKU</th><th style="padding:8px 10px;text-align:left;font-size:11px;color:var(--muted);font-weight:500;">Producto</th><th style="padding:8px 10px;text-align:right;font-size:11px;color:var(--muted);font-weight:500;">Unidades</th><th style="padding:8px 10px;text-align:right;font-size:11px;color:var(--muted);font-weight:500;">Ingreso est.</th></tr></thead><tbody>';
+      resTop.slice(0, 20).forEach(p => {
+        const precio = precios[p.sku] || 0;
+        const ingreso = precio * p.total;
+        html += `<tr style="border-bottom:0.5px solid var(--border);"><td style="padding:8px 10px;font-family:ui-monospace,monospace;font-size:11px;">${p.sku}</td><td style="padding:8px 10px;">${p.nombre || ''}</td><td style="padding:8px 10px;text-align:right;font-weight:600;">${p.total}</td><td style="padding:8px 10px;text-align:right;color:#059669;font-weight:600;">$${Math.round(ingreso).toLocaleString('es-CL')}</td></tr>`;
+      });
+      html += '</tbody></table>';
+    }
+
+    body.innerHTML = html;
+  } catch(e) {
+    body.innerHTML = '<div style="color:#dc2626;padding:30px;">Error: ' + e.message + '</div>';
+  }
 }
 
 function filtrarTabla(input, tablaId) {
