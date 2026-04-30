@@ -1954,6 +1954,49 @@ def debug_paris_stock_v2():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/debug/paris_stock_consultar")
+def debug_paris_stock_consultar():
+    """Consulta el stock actual desde la API de Paris para los SKUs mapeados."""
+    if not session.get("logged"): return redirect("/")
+    try:
+        import requests as req
+        from inventario import listar_sku_mapeo
+        from paris import paris_headers, PARIS_BASE_URL
+
+        mapeo = listar_sku_mapeo()
+        resultados = []
+
+        for fila in mapeo:
+            sku_paris = (fila.get("sku_paris", "") or "").strip()
+            if not sku_paris:
+                continue
+
+            # Endpoint v1: stock por sku_seller
+            try:
+                res = req.get(
+                    f"{PARIS_BASE_URL}/v1/stock/sku-seller/{sku_paris}",
+                    headers=paris_headers(),
+                    timeout=15
+                )
+                resultados.append({
+                    "sku_paris": sku_paris,
+                    "sku_lusync": fila.get("sku_lusync"),
+                    "endpoint": "v1/stock/sku-seller/{sku}",
+                    "status": res.status_code,
+                    "response": res.text[:600]
+                })
+            except Exception as e:
+                resultados.append({
+                    "sku_paris": sku_paris,
+                    "error": str(e)
+                })
+
+        return jsonify({"resultados": resultados})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 # ── ALERTAS ─────────────────────────────────────────────────────────────────
 
 @app.route("/alertas")
