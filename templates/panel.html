@@ -1207,6 +1207,14 @@ tbody td {
       <button class="btn-gear" id="gearBtn" onclick="showSection('configuracion', null)" title="Configuración">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
+      <!-- Campanita de alertas -->
+      <div style="position:relative;">
+        <button onclick="abrirAlertas()" id="bellBtn" style="position:relative;background:transparent;border:none;cursor:pointer;padding:6px 8px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,0.85);transition:background .15s;" onmouseover="this.style.background='rgba(255,255,255,0.08)'" onmouseout="this.style.background='transparent'" title="Alertas">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          <span id="alertBadge" style="display:none;position:absolute;top:0;right:0;background:#e94560;color:white;font-size:10px;font-weight:700;border-radius:10px;min-width:16px;height:16px;display:none;align-items:center;justify-content:center;padding:0 4px;border:2px solid var(--navy);"></span>
+        </button>
+      </div>
+
       <div style="position:relative;">
         <div style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:4px 8px;border-radius:8px;transition:background .15s;" onclick="toggleUserMenu()" id="userMenuTrigger">
           <div class="navbar-avatar">LP</div>
@@ -1221,6 +1229,9 @@ tbody td {
           <div style="padding:6px;">
             <button onclick="showSection('configuracion',null);cerrarUserMenu();" style="width:100%;text-align:left;padding:8px 10px;border:none;background:transparent;border-radius:6px;font-size:12px;color:var(--text);cursor:pointer;display:flex;align-items:center;gap:8px;" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'">
               ⚙ Configuración
+            </button>
+            <button onclick="abrirConfigNotif();cerrarUserMenu();" style="width:100%;text-align:left;padding:8px 10px;border:none;background:transparent;border-radius:6px;font-size:12px;color:var(--text);cursor:pointer;display:flex;align-items:center;gap:8px;" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'">
+              🔔 Notificaciones
             </button>
             <button id="auditMenuBtn" onclick="showSection('audit',null);cerrarUserMenu();" style="width:100%;text-align:left;padding:8px 10px;border:none;background:transparent;border-radius:6px;font-size:12px;color:var(--text);cursor:pointer;display:flex;align-items:center;gap:8px;" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'">
               📋 Audit Log
@@ -1539,24 +1550,6 @@ tbody td {
             <tr><td colspan="9" style="padding:40px;text-align:center;color:var(--hint);font-size:12px;">Cargando...</td></tr>
           </tbody>
         </table>
-      </div>
-    </div>
-
-    <!-- Historial de importaciones -->
-    <div class="card" style="margin-top:14px;padding:0;overflow:hidden;">
-      <div style="padding:12px 16px;border-bottom:0.5px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
-        <span style="font-size:12px;font-weight:600;color:var(--text);">Historial de importaciones</span>
-        <span style="font-size:11px;color:var(--muted);">Últimas 10 cargas</span>
-      </div>
-      <div style="display:grid;grid-template-columns:130px 1fr 90px 80px 80px;gap:8px;padding:7px 14px;background:var(--bg);border-bottom:0.5px solid var(--border);">
-        <span style="font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;">Fecha</span>
-        <span style="font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;">Archivo</span>
-        <span style="font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;">Usuario</span>
-        <span style="font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;">Importados</span>
-        <span style="font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;">Errores</span>
-      </div>
-      <div id="historialMapeo">
-        <div style="text-align:center;padding:20px;color:var(--hint);font-size:12px;">Sin importaciones previas</div>
       </div>
     </div>
   </div>
@@ -2280,7 +2273,7 @@ function showSection(sec, btn){
   if(sec === 'movimientos') cargarMovimientosFull();
   if(sec === 'devoluciones') cargarDevoluciones('todas');
   if(sec === 'audit') cargarAudit();
-  if(sec === 'skumapeo') { cargarSkuMapeo(); cargarHistorialMapeo(); }
+  if(sec === 'skumapeo') cargarSkuMapeo();
   if(sec === 'configuracion'){
     if(gear) gear.classList.add('active');
     cargarConfiguracion();
@@ -4410,87 +4403,20 @@ function descargarExcelMapeo(){
 function importarExcelMapeo(input){
   const file = input.files[0];
   if(!file) return;
-  _mostrarModalImport(`Importando <strong>${file.name}</strong>...`, false);
   const fd = new FormData();
   fd.append('archivo', file);
+  toast('Importando...');
   fetch('/sku_mapeo/importar_excel', {method:'POST', body: fd})
     .then(r=>r.json()).then(d=>{
-      input.value = '';
       if(d.ok){
-        const errCount = d.errores ? d.errores.length : 0;
-        let msg = `<strong style="color:#059669;">✓ ${d.importados} productos importados correctamente</strong>`;
-        if(errCount > 0){
-          msg += `<br><br><span style="color:#d97706;font-weight:500;">⚠ ${errCount} filas con error:</span><ul style="margin:8px 0 0 16px;font-size:12px;color:var(--muted);">`;
-          d.errores.slice(0,20).forEach(e => {
-            msg += `<li style="margin-bottom:4px;">Fila ${e.fila}: <span style="color:var(--danger);">${e.error.split('LINE')[0].trim()}</span> <span style="color:var(--hint);">(${e.valor})</span></li>`;
-          });
-          if(errCount > 20) msg += `<li style="color:var(--hint);">...y ${errCount-20} más</li>`;
-          msg += '</ul>';
-        }
-        _mostrarModalImport(msg, true);
+        toast(`✓ ${d.importados} productos importados`);
+        if(d.errores && d.errores.length) console.warn('Errores:', d.errores);
         cargarSkuMapeo();
-        cargarHistorialMapeo();
       } else {
-        _mostrarModalImport(`<span style="color:var(--danger);">✗ Error: ${d.error || 'desconocido'}</span>`, true);
+        toast('Error: ' + (d.error || 'desconocido'));
       }
-    }).catch(() => {
       input.value = '';
-      _mostrarModalImport('<span style="color:var(--danger);">✗ Error de conexión</span>', true);
     });
-}
-
-function _mostrarModalImport(html, listo){
-  let modal = document.getElementById('modalImportMapeo');
-  if(!modal){
-    modal = document.createElement('div');
-    modal.id = 'modalImportMapeo';
-    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:9999;';
-    document.body.appendChild(modal);
-  }
-  modal.innerHTML = `
-    <div style="background:var(--white);border-radius:14px;padding:24px 28px;max-width:520px;width:92%;max-height:75vh;display:flex;flex-direction:column;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-shrink:0;">
-        <span style="font-size:14px;font-weight:600;color:var(--text);">${listo ? 'Resultado importación' : 'Importando Excel...'}</span>
-        <button onclick="document.getElementById('modalImportMapeo').remove()" style="background:transparent;border:none;font-size:18px;color:var(--muted);cursor:pointer;line-height:1;padding:0 4px;">×</button>
-      </div>
-      <div style="font-size:13px;color:var(--muted);line-height:1.7;overflow-y:auto;flex:1;">${html}</div>
-      <div style="margin-top:16px;flex-shrink:0;display:flex;align-items:center;gap:10px;">
-        ${listo
-          ? `<button onclick="document.getElementById('modalImportMapeo').remove()" style="background:var(--text);color:var(--bg);border:none;border-radius:8px;padding:8px 22px;font-size:13px;cursor:pointer;font-weight:500;">Cerrar</button>`
-          : `<div style="width:16px;height:16px;border:2px solid var(--text);border-top-color:transparent;border-radius:50%;animation:lusync-spin .7s linear infinite;flex-shrink:0;"></div>
-             <span style="font-size:12px;color:var(--muted);">Por favor espera...</span>
-             <button onclick="document.getElementById('modalImportMapeo').remove()" style="margin-left:auto;background:transparent;border:0.5px solid var(--border);color:var(--muted);border-radius:8px;padding:5px 14px;font-size:12px;cursor:pointer;">Cancelar</button>`
-        }
-      </div>
-    </div>`;
-  if(!document.getElementById('lusyncSpinStyle')){
-    const s = document.createElement('style');
-    s.id = 'lusyncSpinStyle';
-    s.textContent = '@keyframes lusync-spin{to{transform:rotate(360deg)}}';
-    document.head.appendChild(s);
-  }
-}
-
-function cargarHistorialMapeo(){
-  fetch('/sku_mapeo/historial').then(r=>r.json()).then(d=>{
-    const el = document.getElementById('historialMapeo');
-    if(!el) return;
-    const hist = d.historial || [];
-    if(!hist.length){
-      el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--hint);font-size:12px;">Sin importaciones previas</div>';
-      return;
-    }
-    el.innerHTML = hist.map(h => `
-      <div style="display:grid;grid-template-columns:130px 1fr 90px 80px 80px;align-items:center;gap:8px;padding:8px 14px;border-bottom:0.5px solid var(--border);">
-        <span style="font-size:11px;font-family:'DM Mono',monospace;color:var(--muted);">${h.fecha}</span>
-        <span style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${h.archivo}">${h.archivo}</span>
-        <span style="font-size:11px;color:var(--muted);">${h.usuario}</span>
-        <span style="font-size:11px;color:#059669;font-weight:500;">✓ ${h.importados}</span>
-        ${h.errores > 0
-          ? `<span style="font-size:11px;color:#d97706;cursor:pointer;" title="${h.detalle||''}">⚠ ${h.errores}</span>`
-          : `<span style="font-size:11px;color:var(--hint);">—</span>`}
-      </div>`).join('');
-  }).catch(()=>{});
 }
 
 // [DESARROLLO] Borrar todos los movimientos
@@ -4508,5 +4434,243 @@ function borrarTodosMovimientos(){
     });
 }
 </script>
+<!-- ════════════════════════════════════════════════════════════════
+     MODAL DE ALERTAS
+═══════════════════════════════════════════════════════════════════ -->
+<div id="alertModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;align-items:flex-start;justify-content:center;padding-top:60px;">
+  <div style="background:var(--bg);width:min(640px,92vw);max-height:80vh;border-radius:14px;box-shadow:0 20px 50px rgba(0,0,0,.3);display:flex;flex-direction:column;overflow:hidden;">
+    <div style="padding:16px 20px;border-bottom:0.5px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:18px;">🔔</span>
+        <h3 style="margin:0;font-size:16px;font-weight:600;color:var(--text);">Alertas</h3>
+        <span id="alertCountLabel" style="font-size:11px;color:var(--muted);"></span>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button onclick="marcarTodasAlertasLeidas()" style="font-size:11px;padding:6px 10px;border:0.5px solid var(--border);background:transparent;border-radius:6px;cursor:pointer;color:var(--text);">Marcar todas leídas</button>
+        <button onclick="cerrarAlertas()" style="font-size:18px;background:transparent;border:none;cursor:pointer;color:var(--muted);padding:0 6px;">×</button>
+      </div>
+    </div>
+    <div id="alertList" style="overflow-y:auto;flex:1;padding:8px;">
+      <div style="text-align:center;padding:40px;color:var(--muted);font-size:13px;">Cargando…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════
+     MODAL DE CONFIG NOTIFICACIONES (SMTP + destinatarios)
+═══════════════════════════════════════════════════════════════════ -->
+<div id="notifModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;align-items:flex-start;justify-content:center;padding-top:50px;">
+  <div style="background:var(--bg);width:min(640px,92vw);max-height:88vh;border-radius:14px;box-shadow:0 20px 50px rgba(0,0,0,.3);display:flex;flex-direction:column;overflow:hidden;">
+    <div style="padding:16px 20px;border-bottom:0.5px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+      <h3 style="margin:0;font-size:16px;font-weight:600;color:var(--text);">🔔 Configuración de notificaciones</h3>
+      <button onclick="cerrarConfigNotif()" style="font-size:18px;background:transparent;border:none;cursor:pointer;color:var(--muted);padding:0 6px;">×</button>
+    </div>
+    <div style="overflow-y:auto;flex:1;padding:20px;">
+      <div style="background:var(--bg2);border-radius:10px;padding:14px;margin-bottom:16px;font-size:12px;color:var(--muted);line-height:1.5;">
+        Cuando un cliente cancele una orden y se reintegre stock automáticamente, recibirás una alerta en el panel y un email a los destinatarios configurados.
+      </div>
+
+      <h4 style="margin:0 0 10px 0;font-size:13px;color:var(--text);font-weight:600;">Destinatarios</h4>
+      <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px;">Correos separados por coma</label>
+      <input id="notifDestinatarios" type="text" placeholder="luis@ejemplo.com, otro@ejemplo.com" style="width:100%;padding:9px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);box-sizing:border-box;margin-bottom:18px;">
+
+      <h4 style="margin:0 0 10px 0;font-size:13px;color:var(--text);font-weight:600;">Servidor SMTP</h4>
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:10px;">
+        <div>
+          <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px;">Host</label>
+          <input id="notifHost" type="text" placeholder="smtp.gmail.com" style="width:100%;padding:9px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);box-sizing:border-box;">
+        </div>
+        <div>
+          <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px;">Puerto</label>
+          <input id="notifPort" type="text" placeholder="587" style="width:100%;padding:9px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);box-sizing:border-box;">
+        </div>
+      </div>
+      <div style="margin-bottom:10px;">
+        <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px;">Usuario (correo de envío)</label>
+        <input id="notifUser" type="text" placeholder="alertas@miempresa.com" style="width:100%;padding:9px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);box-sizing:border-box;">
+      </div>
+      <div style="margin-bottom:10px;">
+        <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px;">Contraseña SMTP / contraseña de aplicación</label>
+        <input id="notifPassword" type="password" placeholder="••••••••" style="width:100%;padding:9px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);box-sizing:border-box;">
+        <div style="font-size:10px;color:var(--hint);margin-top:4px;">Para Gmail usa <a href="https://myaccount.google.com/apppasswords" target="_blank" style="color:var(--accent);">contraseña de aplicación</a>, no tu contraseña normal.</div>
+      </div>
+      <div style="margin-bottom:18px;">
+        <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px;">Remitente "From" (opcional)</label>
+        <input id="notifFrom" type="text" placeholder="(usa el correo de usuario si está vacío)" style="width:100%;padding:9px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);box-sizing:border-box;">
+      </div>
+
+      <h4 style="margin:0 0 10px 0;font-size:13px;color:var(--text);font-weight:600;">Tipos de notificación</h4>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);margin-bottom:8px;cursor:pointer;">
+        <input id="notifCancelaciones" type="checkbox" checked> Cancelaciones de clientes (reintegro automático de stock)
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);margin-bottom:18px;cursor:pointer;">
+        <input id="notifErroresApi" type="checkbox"> Errores de APIs (Walmart, París, WooCommerce)
+      </label>
+
+      <div style="display:flex;gap:8px;justify-content:flex-end;border-top:0.5px solid var(--border);padding-top:14px;">
+        <button onclick="enviarTestEmail()" style="padding:9px 14px;border:0.5px solid var(--border);background:transparent;border-radius:8px;font-size:12px;cursor:pointer;color:var(--text);">📤 Enviar prueba</button>
+        <button onclick="guardarConfigNotif()" style="padding:9px 18px;border:none;background:var(--navy);color:white;border-radius:8px;font-size:12px;cursor:pointer;font-weight:600;">Guardar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── ALERTAS ────────────────────────────────────────────────────
+function actualizarBadgeAlertas(){
+  fetch('/alertas/contador').then(r=>r.json()).then(data=>{
+    var n = data.count || 0;
+    var b = document.getElementById('alertBadge');
+    if(!b) return;
+    if(n > 0){
+      b.textContent = n > 99 ? '99+' : n;
+      b.style.display = 'flex';
+    } else {
+      b.style.display = 'none';
+    }
+  }).catch(function(){});
+}
+
+function abrirAlertas(){
+  document.getElementById('alertModal').style.display = 'flex';
+  cargarAlertas();
+}
+
+function cerrarAlertas(){
+  document.getElementById('alertModal').style.display = 'none';
+}
+
+function cargarAlertas(){
+  var lista = document.getElementById('alertList');
+  lista.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted);font-size:13px;">Cargando…</div>';
+  fetch('/alertas').then(r=>r.json()).then(data=>{
+    var label = document.getElementById('alertCountLabel');
+    if(label) label.textContent = data.length ? '('+data.length+')' : '';
+    if(!data.length){
+      lista.innerHTML = '<div style="text-align:center;padding:50px;color:var(--muted);font-size:13px;">No hay alertas</div>';
+      return;
+    }
+    var html = '';
+    data.forEach(function(a){
+      var leida = a.leida;
+      var bg = leida ? 'transparent' : 'var(--bg2)';
+      var borderColor = leida ? 'var(--border)' : '#e94560';
+      var iconoColor = leida ? 'var(--muted)' : '#e94560';
+      var icono = a.tipo === 'cancelacion' ? '⚠️' : (a.tipo === 'test' ? '✉️' : '🔔');
+      html += '<div style="background:'+bg+';border:0.5px solid var(--border);border-left:3px solid '+borderColor+';border-radius:10px;padding:12px 14px;margin-bottom:8px;">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:6px;">';
+      html += '<div style="display:flex;align-items:center;gap:8px;flex:1;">';
+      html += '<span style="font-size:16px;color:'+iconoColor+';">'+icono+'</span>';
+      html += '<div style="font-size:13px;font-weight:600;color:var(--text);">'+(a.titulo||'')+'</div>';
+      html += '</div>';
+      html += '<div style="font-size:10px;color:var(--muted);white-space:nowrap;">'+(a.fecha||'')+'</div>';
+      html += '</div>';
+      if(a.mensaje){
+        html += '<div style="font-size:12px;color:var(--muted);line-height:1.5;margin-left:24px;">'+a.mensaje+'</div>';
+      }
+      if(!leida){
+        html += '<div style="margin-top:8px;margin-left:24px;"><button onclick="marcarAlertaLeida('+a.id+')" style="font-size:11px;padding:4px 10px;border:0.5px solid var(--border);background:transparent;border-radius:6px;cursor:pointer;color:var(--text);">Marcar leída</button></div>';
+      }
+      html += '</div>';
+    });
+    lista.innerHTML = html;
+  }).catch(function(e){
+    lista.innerHTML = '<div style="text-align:center;padding:40px;color:#e94560;font-size:13px;">Error cargando alertas</div>';
+  });
+}
+
+function marcarAlertaLeida(id){
+  fetch('/alertas/leer/'+id, {method:'POST'}).then(()=>{
+    cargarAlertas();
+    actualizarBadgeAlertas();
+  });
+}
+
+function marcarTodasAlertasLeidas(){
+  fetch('/alertas/leer_todas', {method:'POST'}).then(()=>{
+    cargarAlertas();
+    actualizarBadgeAlertas();
+  });
+}
+
+// ─── CONFIG NOTIFICACIONES ──────────────────────────────────────
+function abrirConfigNotif(){
+  document.getElementById('notifModal').style.display = 'flex';
+  fetch('/alertas/config').then(r=>r.json()).then(cfg=>{
+    document.getElementById('notifDestinatarios').value = cfg.destinatarios || '';
+    document.getElementById('notifHost').value = cfg.smtp_host || '';
+    document.getElementById('notifPort').value = cfg.smtp_port || '587';
+    document.getElementById('notifUser').value = cfg.smtp_user || '';
+    document.getElementById('notifPassword').value = '';
+    document.getElementById('notifPassword').placeholder = cfg.smtp_password === '********' ? '(configurada — déjalo vacío para mantenerla)' : '••••••••';
+    document.getElementById('notifFrom').value = cfg.smtp_from || '';
+    document.getElementById('notifCancelaciones').checked = (cfg.notif_cancelaciones || 'true') === 'true';
+    document.getElementById('notifErroresApi').checked = (cfg.notif_errores_api || 'false') === 'true';
+  });
+}
+
+function cerrarConfigNotif(){
+  document.getElementById('notifModal').style.display = 'none';
+}
+
+function _recopilarConfigNotif(){
+  var data = {
+    destinatarios: document.getElementById('notifDestinatarios').value.trim(),
+    smtp_host: document.getElementById('notifHost').value.trim(),
+    smtp_port: document.getElementById('notifPort').value.trim() || '587',
+    smtp_user: document.getElementById('notifUser').value.trim(),
+    smtp_from: document.getElementById('notifFrom').value.trim(),
+    notif_cancelaciones: document.getElementById('notifCancelaciones').checked ? 'true' : 'false',
+    notif_errores_api: document.getElementById('notifErroresApi').checked ? 'true' : 'false'
+  };
+  var pwd = document.getElementById('notifPassword').value;
+  if(pwd) data.smtp_password = pwd;
+  return data;
+}
+
+function guardarConfigNotif(){
+  fetch('/alertas/config', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(_recopilarConfigNotif())
+  }).then(r=>r.json()).then(res=>{
+    if(res.ok){
+      alert('✓ Configuración guardada');
+      cerrarConfigNotif();
+    } else {
+      alert('Error guardando configuración');
+    }
+  }).catch(()=>alert('Error de conexión'));
+}
+
+function enviarTestEmail(){
+  fetch('/alertas/config', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(_recopilarConfigNotif())
+  }).then(()=>{
+    return fetch('/alertas/test_email', {method:'POST'});
+  }).then(r=>r.json()).then(res=>{
+    if(res.ok){
+      alert('✓ ' + (res.mensaje || 'Email de prueba enviado'));
+      actualizarBadgeAlertas();
+    } else {
+      alert('Error: ' + (res.error || 'desconocido'));
+    }
+  }).catch(()=>alert('Error de conexión'));
+}
+
+// ─── INICIALIZAR ────────────────────────────────────────────────
+actualizarBadgeAlertas();
+setInterval(actualizarBadgeAlertas, 60000);
+
+document.getElementById('alertModal').addEventListener('click', function(e){
+  if(e.target === this) cerrarAlertas();
+});
+document.getElementById('notifModal').addEventListener('click', function(e){
+  if(e.target === this) cerrarConfigNotif();
+});
+</script>
+
 </body>
 </html>
