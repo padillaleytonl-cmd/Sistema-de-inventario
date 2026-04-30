@@ -1849,6 +1849,58 @@ def debug_paris_stock():
 
 
 
+@app.route("/debug/paris_stock_raw")
+def debug_paris_stock_raw():
+    """Envía stock a Paris uno por uno y muestra status + body crudo de cada respuesta."""
+    if not session.get("logged"): return redirect("/")
+    try:
+        import requests as req
+        from inventario import listar_sku_mapeo, cargar_productos
+        from paris import paris_headers, PARIS_BASE_URL
+
+        productos = {p["sku"]: p for p in cargar_productos()}
+        mapeo = listar_sku_mapeo()
+
+        resultados = []
+        for fila in mapeo:
+            sku_lusync = fila.get("sku_lusync", "")
+            sku_paris  = (fila.get("sku_paris", "") or "").strip()
+            if not sku_paris:
+                continue
+            prod = productos.get(sku_lusync)
+            stock_actual = int(prod.get("stock", 0)) if prod else 0
+
+            payload = {"skus": [{"skuSeller": sku_paris, "quantity": stock_actual}]}
+            try:
+                res = req.post(
+                    f"{PARIS_BASE_URL}/v1/stock/sku-seller",
+                    headers=paris_headers(),
+                    json=payload,
+                    timeout=15
+                )
+                resultados.append({
+                    "sku_lusync": sku_lusync,
+                    "sku_paris": sku_paris,
+                    "stock": stock_actual,
+                    "status": res.status_code,
+                    "request_body": payload,
+                    "response_body": res.text[:500]
+                })
+            except Exception as e:
+                resultados.append({
+                    "sku_lusync": sku_lusync,
+                    "sku_paris": sku_paris,
+                    "stock": stock_actual,
+                    "error": str(e),
+                    "request_body": payload
+                })
+
+        return jsonify({"resultados": resultados})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 # ── ALERTAS ─────────────────────────────────────────────────────────────────
 
 @app.route("/alertas")
