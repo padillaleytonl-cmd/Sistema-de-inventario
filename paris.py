@@ -95,12 +95,12 @@ def actualizar_stock_paris(sku_seller, cantidad):
     if not sku_paris or str(sku_paris).strip() == "":
         sku_paris = sku_seller
 
-    print(f"[Paris Stock] Enviando skuSeller='{sku_paris}' qty={cantidad}")
+    print(f"[Paris Stock] Enviando sku_seller='{sku_paris}' qty={cantidad}")
 
     try:
         payload = {
             "skus": [{
-                "skuSeller": str(sku_paris).strip(),
+                "sku_seller": str(sku_paris).strip(),
                 "quantity": int(cantidad)
             }]
         }
