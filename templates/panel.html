@@ -5053,7 +5053,18 @@ async function cargarKPIs() {
     // Como /stats/ventas_por_canal no trae detalle por SKU, usamos top_productos
     const resTop = await fetch(`/stats/top_productos?desde=${r.desde}&hasta=${r.hasta}&limite=200`).then(x=>x.json());
     let totalIngreso = 0;
-    resTop.forEach(p => { totalIngreso += (precios[p.sku] || 0) * p.total; });
+    resTop.forEach(p => {
+      const precio = precios[p.sku] || 0;
+      totalIngreso += precio * p.total;
+    });
+
+    // Debug en consola para verificar qué está pasando
+    console.log('[Dashboard KPIs]', {
+      productos_con_precio: Object.keys(precios).length,
+      muestra_precios: Object.entries(precios).slice(0, 3),
+      ventas_top_sample: resTop.slice(0, 3),
+      ingreso_calculado: totalIngreso
+    });
 
     // Calcular ventas totales por canal (en unidades)
     const ventasPorCanal = {};
