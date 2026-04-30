@@ -5038,7 +5038,7 @@ async function cargarKPIs() {
     // Ingresos $ y desglose por canal: necesitamos consultar productos para obtener precios
     const [resVentas, resProductos] = await Promise.all([
       fetch(`/stats/ventas_por_canal?desde=${r.desde}&hasta=${r.hasta}`).then(x=>x.json()),
-      fetch('/productos').then(x=>x.json())
+      fetch('/productos').then(x=>x.json()).then(d => d.productos || d)
     ]);
 
     // Mapa SKU → precio (oferta si existe, si no normal)
@@ -5366,7 +5366,8 @@ async function cargarChartDistribucion() {
 async function cargarStockCritico() {
   try {
     const res = await fetch('/productos');
-    const productos = await res.json();
+    const data = await res.json();
+    const productos = data.productos || data;
     const criticos = productos.filter(p => (p.stock || 0) > 0 && (p.stock || 0) < 10).sort((a,b) => a.stock - b.stock);
     document.getElementById('countStockCritico').textContent = criticos.length + ' productos';
 
@@ -5394,7 +5395,8 @@ async function cargarStockCritico() {
 async function cargarActividad() {
   try {
     const res = await fetch('/movimientos?limite=15');
-    const movs = await res.json();
+    const data = await res.json();
+    const movs = data.movimientos || data;
     const lista = document.getElementById('actividadList');
     if (!movs.length) {
       lista.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:12px;padding:30px;">Sin actividad reciente</div>';
@@ -5664,7 +5666,8 @@ document.getElementById('kpiModal').addEventListener('click', function(e){
 async function cargarModalProductos(body) {
   try {
     const res = await fetch('/productos');
-    const data = await res.json();
+    const respuesta = await res.json();
+    const data = respuesta.productos || respuesta;
     if (!data.length) {
       body.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:13px;padding:30px;">Sin productos</div>';
       return;
@@ -5728,7 +5731,8 @@ async function cargarModalVentas(body) {
 async function cargarModalStockBajo(body) {
   try {
     const res = await fetch('/productos');
-    const data = await res.json();
+    const respuesta = await res.json();
+    const data = respuesta.productos || respuesta;
     const criticos = data.filter(p => (p.stock || 0) < 10).sort((a,b) => (a.stock||0) - (b.stock||0));
     if (!criticos.length) {
       body.innerHTML = '<div style="text-align:center;color:#059669;font-size:13px;padding:50px;">✓ Todo el stock está en niveles saludables</div>';
@@ -5813,7 +5817,7 @@ async function cargarModalVentasCanal(body) {
     const [resVentas, resTop, resProductos] = await Promise.all([
       fetch(`/stats/ventas_por_canal?desde=${desde}&hasta=${hasta}`).then(x=>x.json()),
       fetch(`/stats/top_productos?desde=${desde}&hasta=${hasta}&limite=200`).then(x=>x.json()),
-      fetch('/productos').then(x=>x.json())
+      fetch('/productos').then(x=>x.json()).then(d => d.productos || d)
     ]);
 
     // Mapa precios
