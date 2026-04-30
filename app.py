@@ -2034,6 +2034,78 @@ def debug_paris_stock_listar():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/debug/paris_stock_warehouse")
+def debug_paris_stock_warehouse():
+    """Probar enviando stock con campo warehouse explícito en distintos formatos."""
+    if not session.get("logged"): return redirect("/")
+    try:
+        import requests as req
+        from paris import paris_headers, PARIS_BASE_URL
+
+        sku_test = "RHR2022-1"  # tiene stock real 25, voy a enviar 99 y ver si actualiza
+        stock = 99
+
+        variantes = [
+            {"nombre": "sin warehouse",
+             "payload": {"skus": [{"sku_seller": sku_test, "quantity": stock}]}},
+            {"nombre": "warehouse=Dropshipping (nombre real)",
+             "payload": {"skus": [{"sku_seller": sku_test, "quantity": stock, "warehouse": "Dropshipping"}]}},
+            {"nombre": "warehouse=dropship (lo que retornó la API)",
+             "payload": {"skus": [{"sku_seller": sku_test, "quantity": stock, "warehouse": "dropship"}]}},
+            {"nombre": "warehouseName=Dropshipping",
+             "payload": {"skus": [{"sku_seller": sku_test, "quantity": stock, "warehouseName": "Dropshipping"}]}},
+        ]
+
+        resultados = []
+        for v in variantes:
+            try:
+                res = req.post(
+                    f"{PARIS_BASE_URL}/v1/stock/sku-seller",
+                    headers=paris_headers(),
+                    json=v["payload"],
+                    timeout=15
+                )
+                resultados.append({
+                    "variante": v["nombre"],
+                    "request": v["payload"],
+                    "status": res.status_code,
+                    "response": res.text[:600]
+                })
+            except Exception as e:
+                resultados.append({"variante": v["nombre"], "error": str(e)})
+
+        # Esperar 2 segundos y consultar el listado para ver si se reflejó
+        import time
+        time.sleep(2)
+        listado = req.get(f"{PARIS_BASE_URL}/v2/stock", headers=paris_headers(),
+                          params={"limit": 200}, timeout=20)
+
+        # Buscar el SKU de prueba en el listado
+        sku_actual = None
+        if listado.status_code == 200:
+            data = listado.json()
+            for s in data.get("skus", []):
+                if s.get("sku_seller") == sku_test:
+                    sku_actual = {
+                        "sku_seller": s.get("sku_seller"),
+                        "quantity": s.get("quantity"),
+                        "availableStock": s.get("availableStock"),
+                        "warehouseName": s.get("warehouseName"),
+                        "updatedAt": s.get("updatedAt")
+                    }
+                    break
+
+        return jsonify({
+            "sku_probado": sku_test,
+            "stock_enviado": stock,
+            "tests": resultados,
+            "estado_actual_en_paris": sku_actual or "no encontrado en listado"
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 # ── ALERTAS ─────────────────────────────────────────────────────────────────
 
 @app.route("/alertas")
