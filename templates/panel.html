@@ -1273,8 +1273,11 @@ tbody td {
       <div>
         <div class="page-title">Dashboard</div>
         <div class="page-date" id="fechaHoy"></div>
+        <div style="font-size:13px;color:var(--muted);margin-top:2px;font-family:'DM Mono',monospace;" id="relojHoy"></div>
       </div>
       <div class="header-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <button class="btn-secondary" onclick="sincronizarWoo()" title="Sincronizar productos desde WooCommerce">↻ Sincronizar</button>
+        <button class="btn-primary" onclick="importarWoo()" title="Importar órdenes desde WooCommerce">↑ Importar Woo</button>
         <!-- Filtro de fechas -->
         <div style="display:flex;gap:6px;align-items:center;background:var(--bg2);padding:4px 8px;border-radius:8px;">
           <label style="font-size:11px;color:var(--muted);">Desde</label>
@@ -1284,7 +1287,8 @@ tbody td {
         </div>
         <!-- Atajos de período -->
         <div style="display:flex;gap:4px;">
-          <button class="dash-period active" data-dias="7" onclick="dashPeriodo(7,this)">7d</button>
+          <button class="dash-period active" data-dias="0" onclick="dashPeriodo(0,this)">Hoy</button>
+          <button class="dash-period" data-dias="7" onclick="dashPeriodo(7,this)">7d</button>
           <button class="dash-period" data-dias="30" onclick="dashPeriodo(30,this)">30d</button>
           <button class="dash-period" data-dias="90" onclick="dashPeriodo(90,this)">90d</button>
         </div>
@@ -1297,22 +1301,67 @@ tbody td {
       <div class="metric-card" style="border-top:3px solid #2563eb;">
         <div class="metric-label" style="color:#2563eb;">📦 Productos en inventario</div>
         <div class="metric-value" id="kpiProductos">—</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:4px;">Stock total: <b id="kpiStockTotal">—</b> unidades</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
+          <span style="font-size:11px;color:var(--muted);">Stock total: <b id="kpiStockTotal">—</b></span>
+          <button class="btn-ver-mas" onclick="abrirModalKpi('productos')">Ver más</button>
+        </div>
       </div>
       <div class="metric-card" style="border-top:3px solid #059669;">
         <div class="metric-label" style="color:#059669;">💰 Ventas del período</div>
-        <div class="metric-value" id="kpiVentas">—</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:4px;"><b id="kpiOrdenes">—</b> órdenes</div>
+        <div class="metric-value" id="kpiIngreso" style="color:#059669;">$0</div>
+        <div style="font-size:13px;color:var(--muted);margin-top:2px;"><b id="kpiVentas">—</b> unidades · <b id="kpiOrdenes">—</b> órdenes</div>
+        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;" id="kpiVentasCanalBadges"></div>
+        <div style="display:flex;align-items:center;justify-content:flex-end;margin-top:8px;">
+          <button class="btn-ver-mas" onclick="abrirModalKpi('ventas')">Ver más</button>
+        </div>
       </div>
       <div class="metric-card" style="border-top:3px solid #f59e0b;">
         <div class="metric-label" style="color:#f59e0b;">⚠ Stock bajo</div>
         <div class="metric-value" id="kpiStockBajo">—</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:4px;">Productos con menos de 10 unidades</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
+          <span style="font-size:11px;color:var(--muted);">Menos de 10 unidades</span>
+          <button class="btn-ver-mas" onclick="abrirModalKpi('stockbajo')">Ver más</button>
+        </div>
       </div>
       <div class="metric-card" style="border-top:3px solid #7c3aed;">
         <div class="metric-label" style="color:#7c3aed;">🔔 Alertas no leídas</div>
         <div class="metric-value" id="kpiAlertas">—</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:4px;cursor:pointer;" onclick="abrirAlertas()">Ver alertas →</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
+          <span style="font-size:11px;color:var(--muted);cursor:pointer;" onclick="abrirAlertas()">Ver alertas →</span>
+          <button class="btn-ver-mas" onclick="abrirModalKpi('canales')">Canales</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Card resumen de ingresos del período -->
+    <div class="card" style="margin-top:16px;">
+      <div class="card-header">
+        <div class="card-title">Ventas — ingresos del período</div>
+        <span class="card-tag" id="cardIngresoRange">—</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;">
+        <div>
+          <div style="font-size:11px;color:var(--muted);">Total ingresos</div>
+          <div style="font-size:28px;font-weight:700;color:#059669;" id="cardIngresoTotal">$0</div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--muted);">Unidades vendidas</div>
+          <div style="font-size:24px;font-weight:600;color:var(--text);" id="cardIngresoUnidades">0</div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--muted);">Órdenes</div>
+          <div style="font-size:24px;font-weight:600;color:var(--text);" id="cardIngresoOrdenes">0</div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--muted);">Ticket promedio</div>
+          <div style="font-size:24px;font-weight:600;color:var(--text);" id="cardIngresoTicket">$0</div>
+        </div>
+      </div>
+      <div style="margin-top:14px;padding-top:14px;border-top:0.5px solid var(--border);">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px;">Desglose por canal</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;" id="cardIngresoDesglose">
+          <div style="font-size:11px;color:var(--hint);">Cargando…</div>
+        </div>
       </div>
     </div>
 
@@ -2314,7 +2363,7 @@ function doLogout(){
 
 // ── NAVEGACIÓN
 function showSection(sec, btn){
-  ['dashboard','inventario','movimientos','devoluciones','audit','configuracion','skumapeo'].forEach(s => {
+  ['dashboard','inventario','movimientos','devoluciones','audit','configuracion','skumapeo','canales'].forEach(s => {
     const el = document.getElementById('sec-' + s);
     if(el) el.style.display = s === sec ? '' : 'none';
   });
@@ -2326,6 +2375,8 @@ function showSection(sec, btn){
   if(sec === 'devoluciones') cargarDevoluciones('todas');
   if(sec === 'audit') cargarAudit();
   if(sec === 'skumapeo') cargarSkuMapeo();
+  if(sec === 'canales' && typeof cargarCanales === 'function') cargarCanales();
+  if(sec === 'dashboard' && typeof cargarDashboardCompleto === 'function') cargarDashboardCompleto();
   if(sec === 'configuracion'){
     if(gear) gear.classList.add('active');
     cargarConfiguracion();
@@ -4489,6 +4540,21 @@ function borrarTodosMovimientos(){
 <!-- ════════════════════════════════════════════════════════════════
      MODAL DE ALERTAS
 ═══════════════════════════════════════════════════════════════════ -->
+<!-- ════════════════════════════════════════════════════════════════
+     MODAL GENÉRICO KPI (Ver más en cards del Dashboard)
+═══════════════════════════════════════════════════════════════════ -->
+<div id="kpiModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;align-items:flex-start;justify-content:center;padding-top:50px;">
+  <div style="background:var(--bg);width:min(900px,94vw);max-height:85vh;border-radius:14px;box-shadow:0 20px 50px rgba(0,0,0,.3);display:flex;flex-direction:column;overflow:hidden;">
+    <div style="padding:16px 20px;border-bottom:0.5px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+      <h3 id="kpiModalTitulo" style="margin:0;font-size:16px;font-weight:600;color:var(--text);">—</h3>
+      <button onclick="cerrarModalKpi()" style="font-size:20px;background:transparent;border:none;cursor:pointer;color:var(--muted);padding:0 6px;">×</button>
+    </div>
+    <div id="kpiModalBody" style="overflow-y:auto;flex:1;padding:20px;">
+      <div style="text-align:center;color:var(--muted);font-size:13px;padding:30px;">Cargando…</div>
+    </div>
+  </div>
+</div>
+
 <div id="alertModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;align-items:flex-start;justify-content:center;padding-top:60px;">
   <div style="background:var(--bg);width:min(640px,92vw);max-height:80vh;border-radius:14px;box-shadow:0 20px 50px rgba(0,0,0,.3);display:flex;flex-direction:column;overflow:hidden;">
     <div style="padding:16px 20px;border-bottom:0.5px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
@@ -4875,15 +4941,20 @@ document.getElementById('syncParisModal').addEventListener('click', function(e){
 // ════════════════════════════════════════════════════════════════
 
 const COLORES_CANAL = {
-  WooCommerce: '#0073aa', WC: '#0073aa',
-  Walmart: '#0071ce',     WM: '#0071ce',
-  Paris: '#0369a1',       PA: '#0369a1', 'París': '#0369a1',
-  Falabella: '#dc2626',   FA: '#dc2626',
-  Ripley: '#7c3aed',      RP: '#7c3aed',
-  MercadoLibre: '#fbbf24', ML: '#fbbf24',
-  Hites: '#ec4899',       HI: '#ec4899',
+  // Colores oficiales de cada marketplace
+  WooCommerce: '#7F54B3', WC: '#7F54B3',  // morado oficial WooCommerce
+  Walmart: '#0071CE',     WM: '#0071CE',  // azul oficial Walmart
+  Paris: '#0F265C',       PA: '#0F265C', 'París': '#0F265C',  // azul oscuro París
+  Falabella: '#00B25E',   FA: '#00B25E',  // verde oficial Falabella
+  Ripley: '#A01B7A',      RP: '#A01B7A',  // rosa/púrpura oficial Ripley
+  MercadoLibre: '#FFE600', ML: '#FFE600', // amarillo oficial MercadoLibre
+  Hites: '#E30613',       HI: '#E30613',  // rojo oficial Hites
+  Manual: '#6b7280',
   Sistema: '#6b7280'
 };
+
+// Lista de canales que SIEMPRE deben aparecer en el gráfico de ventas
+const TODOS_LOS_CANALES = ['WooCommerce', 'Walmart', 'Paris', 'MercadoLibre', 'Falabella', 'Ripley', 'Hites'];
 
 let _charts = {};
 
@@ -4906,7 +4977,11 @@ function dashPeriodo(dias, btn) {
   document.querySelectorAll('.dash-period').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
   const hoy = new Date();
-  const desde = new Date(); desde.setDate(hoy.getDate() - (dias - 1));
+  const desde = new Date();
+  if (dias > 0) {
+    desde.setDate(hoy.getDate() - (dias - 1));
+  }
+  // Si dias===0, desde y hoy son el mismo día (filtro Hoy)
   document.getElementById('dashFechaDesde').value = _ymdLocal(desde);
   document.getElementById('dashFechaHasta').value = _ymdLocal(hoy);
   cargarDashboardCompleto();
@@ -4926,14 +5001,81 @@ function _formatearFecha(yyyymmdd) {
 async function cargarKPIs() {
   const r = dashRangoActual();
   try {
-    const res = await fetch(`/stats/kpis?desde=${r.desde}&hasta=${r.hasta}`);
-    const d = await res.json();
+    // KPIs base
+    const resKpis = await fetch(`/stats/kpis?desde=${r.desde}&hasta=${r.hasta}`);
+    const d = await resKpis.json();
     document.getElementById('kpiProductos').textContent = d.productos_total || 0;
     document.getElementById('kpiStockTotal').textContent = (d.stock_total || 0).toLocaleString('es-CL');
     document.getElementById('kpiVentas').textContent = (d.ventas_periodo || 0).toLocaleString('es-CL');
     document.getElementById('kpiOrdenes').textContent = d.ordenes_periodo || 0;
     document.getElementById('kpiStockBajo').textContent = d.stock_bajo || 0;
     document.getElementById('kpiAlertas').textContent = d.alertas_no_leidas || 0;
+
+    // Ingresos $ y desglose por canal: necesitamos consultar productos para obtener precios
+    const [resVentas, resProductos] = await Promise.all([
+      fetch(`/stats/ventas_por_canal?desde=${r.desde}&hasta=${r.hasta}`).then(x=>x.json()),
+      fetch('/productos').then(x=>x.json())
+    ]);
+
+    // Mapa SKU → precio
+    const precios = {};
+    resProductos.forEach(p => { precios[p.sku] = p.precio || 0; });
+
+    // Para ingreso $ necesitamos saber qué SKUs se vendieron por canal
+    // Como /stats/ventas_por_canal no trae detalle por SKU, usamos top_productos
+    const resTop = await fetch(`/stats/top_productos?desde=${r.desde}&hasta=${r.hasta}&limite=200`).then(x=>x.json());
+    let totalIngreso = 0;
+    resTop.forEach(p => { totalIngreso += (precios[p.sku] || 0) * p.total; });
+
+    // Calcular ventas totales por canal (en unidades)
+    const ventasPorCanal = {};
+    resVentas.forEach(v => {
+      ventasPorCanal[v.canal] = (ventasPorCanal[v.canal] || 0) + v.total;
+    });
+
+    // Pintar KPI Ventas: monto + badges
+    const ingresoStr = '$' + Math.round(totalIngreso).toLocaleString('es-CL');
+    document.getElementById('kpiIngreso').textContent = ingresoStr;
+
+    const badgesEl = document.getElementById('kpiVentasCanalBadges');
+    const totalUnidades = d.ventas_periodo || 0;
+    if (Object.keys(ventasPorCanal).length === 0 || totalUnidades === 0) {
+      badgesEl.innerHTML = '<span style="font-size:11px;color:var(--muted);">Sin ventas en el período</span>';
+    } else {
+      let bh = '';
+      Object.entries(ventasPorCanal).sort((a,b)=>b[1]-a[1]).forEach(([canal, total]) => {
+        const color = COLORES_CANAL[canal] || '#94a3b8';
+        bh += `<span style="font-size:11px;background:${color}20;color:${color};padding:3px 9px;border-radius:14px;font-weight:600;border:0.5px solid ${color}40;">${canal}: ${total}</span>`;
+      });
+      badgesEl.innerHTML = bh;
+    }
+
+    // Pintar card de ingresos (resumen grande)
+    const rangeStr = `${_formatearFecha(r.desde)} – ${_formatearFecha(r.hasta)}`;
+    document.getElementById('cardIngresoRange').textContent = rangeStr;
+    document.getElementById('cardIngresoTotal').textContent = ingresoStr;
+    document.getElementById('cardIngresoUnidades').textContent = totalUnidades.toLocaleString('es-CL');
+    document.getElementById('cardIngresoOrdenes').textContent = d.ordenes_periodo || 0;
+    const ticket = (d.ordenes_periodo > 0) ? Math.round(totalIngreso / d.ordenes_periodo) : 0;
+    document.getElementById('cardIngresoTicket').textContent = '$' + ticket.toLocaleString('es-CL');
+
+    // Desglose por canal en card
+    const desgloseEl = document.getElementById('cardIngresoDesglose');
+    if (Object.keys(ventasPorCanal).length === 0) {
+      desgloseEl.innerHTML = '<span style="font-size:12px;color:var(--muted);">Sin ventas en el período</span>';
+    } else {
+      let dh = '';
+      Object.entries(ventasPorCanal).sort((a,b)=>b[1]-a[1]).forEach(([canal, total]) => {
+        const color = COLORES_CANAL[canal] || '#94a3b8';
+        const pct = totalUnidades ? ((total/totalUnidades)*100).toFixed(1) : 0;
+        dh += `<div style="background:${color}15;border:0.5px solid ${color}40;border-radius:10px;padding:8px 12px;flex:1;min-width:140px;">
+          <div style="font-size:11px;color:${color};font-weight:600;">${canal}</div>
+          <div style="font-size:18px;font-weight:700;color:var(--text);margin-top:2px;">${total} <span style="font-size:11px;color:var(--muted);font-weight:500;">unidades</span></div>
+          <div style="font-size:10px;color:var(--muted);">${pct}% del total</div>
+        </div>`;
+      });
+      desgloseEl.innerHTML = dh;
+    }
   } catch(e) { console.error('KPIs error:', e); }
 }
 
@@ -4945,20 +5087,37 @@ async function cargarChartVentasCanal() {
     const res = await fetch(`/stats/ventas_por_canal?desde=${r.desde}&hasta=${r.hasta}`);
     const data = await res.json();
 
-    // Pivotar: días en X, canales en series
-    const dias = [...new Set(data.map(d => d.dia))].sort();
-    const canales = [...new Set(data.map(d => d.canal))];
+    // Generar lista de días del rango (incluyendo días sin ventas)
+    const dias = [];
+    const dDesde = new Date(r.desde + 'T00:00:00');
+    const dHasta = new Date(r.hasta + 'T00:00:00');
+    for (let d = new Date(dDesde); d <= dHasta; d.setDate(d.getDate()+1)) {
+      dias.push(_ymdLocal(d));
+    }
+
+    // Si solo hay 1 día (filtro Hoy), forzar al menos 2 puntos para que el gráfico se vea
+    if (dias.length === 1) {
+      const dAyer = new Date(dDesde); dAyer.setDate(dDesde.getDate()-1);
+      dias.unshift(_ymdLocal(dAyer));
+    }
+
+    // Forzar TODOS los canales aunque tengan 0 ventas
+    const canalesEnDatos = [...new Set(data.map(d => d.canal))];
+    const canales = [...new Set([...TODOS_LOS_CANALES, ...canalesEnDatos])];
+
     const datasets = canales.map(c => ({
       label: c,
       data: dias.map(dia => {
         const found = data.find(x => x.dia === dia && x.canal === c);
         return found ? found.total : 0;
       }),
-      backgroundColor: (COLORES_CANAL[c] || '#94a3b8') + '60',
+      backgroundColor: (COLORES_CANAL[c] || '#94a3b8') + '40',
       borderColor:     COLORES_CANAL[c] || '#94a3b8',
       borderWidth: 2,
       tension: 0.3,
-      fill: true
+      fill: true,
+      pointRadius: 3,
+      pointHoverRadius: 5
     }));
 
     _destruirChart('chartVentasCanal');
@@ -4969,7 +5128,7 @@ async function cargarChartVentasCanal() {
       options: {
         responsive: true, maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
-        plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } } },
+        plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 }, padding: 10 } } },
         scales: {
           y: { beginAtZero: true, stacked: true, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { font: { size: 10 } } },
           x: { stacked: true, grid: { display: false }, ticks: { font: { size: 10 } } }
@@ -5163,13 +5322,12 @@ async function cargarDashboardCompleto() {
 
 // Auto-init cuando se entra al dashboard
 window.addEventListener('DOMContentLoaded', function() {
-  // Default: últimos 7 días
+  // Default: Hoy
   const hoy = new Date();
-  const desde = new Date(); desde.setDate(hoy.getDate() - 6);
   const f1 = document.getElementById('dashFechaDesde');
   const f2 = document.getElementById('dashFechaHasta');
   if (f1 && f2) {
-    f1.value = _ymdLocal(desde);
+    f1.value = _ymdLocal(hoy);
     f2.value = _ymdLocal(hoy);
     f1.addEventListener('change', cargarDashboardCompleto);
     f2.addEventListener('change', cargarDashboardCompleto);
@@ -5352,16 +5510,173 @@ function canalConfig(id) {
   }
 }
 
-// Hook al sistema de showSection existente
-const _showSectionOriginal = window.showSection;
-window.showSection = function(secId, btn) {
-  if (typeof _showSectionOriginal === 'function') _showSectionOriginal(secId, btn);
-  if (secId === 'canales') {
-    setTimeout(cargarCanales, 100);
-  } else if (secId === 'dashboard') {
-    setTimeout(cargarDashboardCompleto, 100);
+// ════════════════════════════════════════════════════════════════
+// MODAL "VER MÁS" DE KPIs DEL DASHBOARD
+// ════════════════════════════════════════════════════════════════
+
+function abrirModalKpi(tipo) {
+  const m = document.getElementById('kpiModal');
+  m.style.display = 'flex';
+  const titulo = document.getElementById('kpiModalTitulo');
+  const body = document.getElementById('kpiModalBody');
+  body.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:13px;padding:30px;">Cargando…</div>';
+
+  if (tipo === 'productos') {
+    titulo.textContent = '📦 Todos los productos';
+    cargarModalProductos(body);
+  } else if (tipo === 'ventas') {
+    titulo.textContent = '💰 Ventas del período';
+    cargarModalVentas(body);
+  } else if (tipo === 'stockbajo') {
+    titulo.textContent = '⚠ Productos con stock bajo';
+    cargarModalStockBajo(body);
+  } else if (tipo === 'canales') {
+    titulo.textContent = '🔗 Estado de canales';
+    cargarModalCanales(body);
   }
-};
+}
+
+function cerrarModalKpi() {
+  document.getElementById('kpiModal').style.display = 'none';
+}
+
+document.getElementById('kpiModal').addEventListener('click', function(e){
+  if (e.target === this) cerrarModalKpi();
+});
+
+async function cargarModalProductos(body) {
+  try {
+    const res = await fetch('/productos');
+    const data = await res.json();
+    if (!data.length) {
+      body.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:13px;padding:30px;">Sin productos</div>';
+      return;
+    }
+    let html = '<input type="text" placeholder="Buscar por SKU o nombre…" oninput="filtrarTabla(this,\'tblModalProductos\')" style="width:100%;padding:9px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;margin-bottom:12px;background:var(--bg);color:var(--text);">';
+    html += '<table id="tblModalProductos" style="width:100%;border-collapse:collapse;font-size:12px;">';
+    html += '<thead><tr style="background:var(--bg2);"><th style="padding:8px 10px;text-align:left;border-bottom:0.5px solid var(--border);font-weight:500;font-size:11px;color:var(--muted);">SKU</th><th style="padding:8px 10px;text-align:left;border-bottom:0.5px solid var(--border);font-weight:500;font-size:11px;color:var(--muted);">Nombre</th><th style="padding:8px 10px;text-align:right;border-bottom:0.5px solid var(--border);font-weight:500;font-size:11px;color:var(--muted);">Stock</th><th style="padding:8px 10px;text-align:right;border-bottom:0.5px solid var(--border);font-weight:500;font-size:11px;color:var(--muted);">Precio</th></tr></thead><tbody>';
+    data.sort((a,b) => (a.nombre||'').localeCompare(b.nombre||'')).forEach(p => {
+      const stockColor = p.stock < 10 ? '#dc2626' : (p.stock < 30 ? '#f59e0b' : '#059669');
+      html += `<tr style="border-bottom:0.5px solid var(--border);"><td style="padding:8px 10px;font-family:ui-monospace,monospace;font-size:11px;">${p.sku}</td><td style="padding:8px 10px;">${p.nombre || ''}</td><td style="padding:8px 10px;text-align:right;font-weight:600;color:${stockColor};">${p.stock || 0}</td><td style="padding:8px 10px;text-align:right;color:var(--muted);">$${(p.precio || 0).toLocaleString('es-CL')}</td></tr>`;
+    });
+    html += '</tbody></table>';
+    body.innerHTML = html;
+  } catch(e) { body.innerHTML = '<div style="color:#dc2626;padding:30px;">Error: ' + e.message + '</div>'; }
+}
+
+async function cargarModalVentas(body) {
+  const r = dashRangoActual();
+  try {
+    const [resKpis, resTop, resCanal] = await Promise.all([
+      fetch(`/stats/kpis?desde=${r.desde}&hasta=${r.hasta}`).then(x=>x.json()),
+      fetch(`/stats/top_productos?desde=${r.desde}&hasta=${r.hasta}&limite=20`).then(x=>x.json()),
+      fetch(`/stats/ventas_por_canal?desde=${r.desde}&hasta=${r.hasta}`).then(x=>x.json())
+    ]);
+
+    let html = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px;">
+      <div style="background:var(--bg2);border-radius:10px;padding:12px;"><div style="font-size:10px;color:var(--muted);">Período</div><div style="font-size:13px;font-weight:600;">${_formatearFecha(r.desde)} – ${_formatearFecha(r.hasta)}</div></div>
+      <div style="background:#ecfdf5;color:#065f46;border-radius:10px;padding:12px;"><div style="font-size:10px;opacity:.8;">Unidades vendidas</div><div style="font-size:20px;font-weight:700;">${(resKpis.ventas_periodo||0).toLocaleString('es-CL')}</div></div>
+      <div style="background:#dbeafe;color:#1e3a8a;border-radius:10px;padding:12px;"><div style="font-size:10px;opacity:.8;">Órdenes</div><div style="font-size:20px;font-weight:700;">${resKpis.ordenes_periodo||0}</div></div>
+    </div>`;
+
+    // Resumen por canal
+    const porCanal = {};
+    resCanal.forEach(d => { porCanal[d.canal] = (porCanal[d.canal] || 0) + d.total; });
+    if (Object.keys(porCanal).length) {
+      html += '<div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px;">Ventas por canal</div>';
+      html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;">';
+      Object.entries(porCanal).sort((a,b)=>b[1]-a[1]).forEach(([canal, total]) => {
+        const color = COLORES_CANAL[canal] || '#94a3b8';
+        html += `<div style="background:${color}20;border:0.5px solid ${color}50;border-radius:8px;padding:6px 12px;"><span style="font-size:11px;color:${color};font-weight:600;">${canal}</span> <span style="font-size:11px;color:var(--text);">${total} u.</span></div>`;
+      });
+      html += '</div>';
+    }
+
+    // Top productos
+    if (resTop.length) {
+      html += '<div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px;">Top productos vendidos</div>';
+      html += '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="background:var(--bg2);"><th style="padding:8px 10px;text-align:left;font-weight:500;font-size:11px;color:var(--muted);">SKU</th><th style="padding:8px 10px;text-align:left;font-weight:500;font-size:11px;color:var(--muted);">Producto</th><th style="padding:8px 10px;text-align:right;font-weight:500;font-size:11px;color:var(--muted);">Unidades</th></tr></thead><tbody>';
+      resTop.forEach(p => {
+        html += `<tr style="border-bottom:0.5px solid var(--border);"><td style="padding:8px 10px;font-family:ui-monospace,monospace;font-size:11px;">${p.sku}</td><td style="padding:8px 10px;">${p.nombre || ''}</td><td style="padding:8px 10px;text-align:right;font-weight:600;">${p.total}</td></tr>`;
+      });
+      html += '</tbody></table>';
+    } else {
+      html += '<div style="text-align:center;color:var(--muted);font-size:13px;padding:30px;">Sin ventas en este período</div>';
+    }
+    body.innerHTML = html;
+  } catch(e) { body.innerHTML = '<div style="color:#dc2626;padding:30px;">Error: ' + e.message + '</div>'; }
+}
+
+async function cargarModalStockBajo(body) {
+  try {
+    const res = await fetch('/productos');
+    const data = await res.json();
+    const criticos = data.filter(p => (p.stock || 0) < 10).sort((a,b) => (a.stock||0) - (b.stock||0));
+    if (!criticos.length) {
+      body.innerHTML = '<div style="text-align:center;color:#059669;font-size:13px;padding:50px;">✓ Todo el stock está en niveles saludables</div>';
+      return;
+    }
+    let html = '<div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Productos con menos de 10 unidades, ordenados de menor a mayor stock</div>';
+    html += '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="background:var(--bg2);"><th style="padding:8px 10px;text-align:left;font-weight:500;font-size:11px;color:var(--muted);">SKU</th><th style="padding:8px 10px;text-align:left;font-weight:500;font-size:11px;color:var(--muted);">Producto</th><th style="padding:8px 10px;text-align:right;font-weight:500;font-size:11px;color:var(--muted);">Stock</th><th style="padding:8px 10px;text-align:right;font-weight:500;font-size:11px;color:var(--muted);">Estado</th></tr></thead><tbody>';
+    criticos.forEach(p => {
+      const stock = p.stock || 0;
+      let color, label;
+      if (stock === 0) { color = '#dc2626'; label = 'AGOTADO'; }
+      else if (stock < 3) { color = '#dc2626'; label = 'CRÍTICO'; }
+      else if (stock < 6) { color = '#f59e0b'; label = 'BAJO'; }
+      else { color = '#fbbf24'; label = 'POR REPONER'; }
+      html += `<tr style="border-bottom:0.5px solid var(--border);"><td style="padding:8px 10px;font-family:ui-monospace,monospace;font-size:11px;">${p.sku}</td><td style="padding:8px 10px;">${p.nombre || ''}</td><td style="padding:8px 10px;text-align:right;font-weight:700;color:${color};">${stock}</td><td style="padding:8px 10px;text-align:right;"><span style="background:${color}20;color:${color};font-size:10px;padding:3px 8px;border-radius:4px;font-weight:600;">${label}</span></td></tr>`;
+    });
+    html += '</tbody></table>';
+    body.innerHTML = html;
+  } catch(e) { body.innerHTML = '<div style="color:#dc2626;padding:30px;">Error: ' + e.message + '</div>'; }
+}
+
+async function cargarModalCanales(body) {
+  let html = '<div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Resumen del estado de tus marketplaces. Para gestión completa ve a <a href="#" onclick="cerrarModalKpi();showSection(\'canales\',document.querySelector(\'.nav-btn:nth-child(6)\'));return false;" style="color:var(--accent,#7c3aed);">Canales</a>.</div>';
+  html += '<div id="kpiCanalesList" style="display:flex;flex-direction:column;gap:8px;"><div style="text-align:center;color:var(--muted);font-size:12px;padding:20px;">Cargando…</div></div>';
+  body.innerHTML = html;
+
+  try {
+    let lista = '';
+    for (const c of LIVE_CHANNELS) {
+      let conectado = c.tipo !== 'proximamente';
+      let detalle = '';
+      if (c.estado_endpoint) {
+        try {
+          const r = await fetch(c.estado_endpoint);
+          const d = await r.json();
+          conectado = !!d.conectado;
+          if (conectado && d.nickname) detalle = d.nickname;
+        } catch(e) { conectado = false; }
+      }
+
+      let statusBadge;
+      if (c.tipo === 'proximamente') statusBadge = '<span style="background:#94a3b820;color:#64748b;font-size:10px;padding:3px 8px;border-radius:4px;font-weight:600;">PRÓXIMAMENTE</span>';
+      else if (conectado) statusBadge = '<span style="background:#10b98120;color:#10b981;font-size:10px;padding:3px 8px;border-radius:4px;font-weight:600;">● CONECTADO</span>';
+      else statusBadge = '<span style="background:#ef444420;color:#ef4444;font-size:10px;padding:3px 8px;border-radius:4px;font-weight:600;">✕ NO CONECTADO</span>';
+
+      lista += `<div style="display:flex;align-items:center;gap:12px;padding:10px 12px;border:0.5px solid var(--border);border-radius:10px;${c.tipo === 'proximamente' ? 'opacity:.6;' : ''}">
+        <div style="width:32px;height:32px;border-radius:8px;background:${c.bg};color:${c.color};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;">${c.code}</div>
+        <div style="flex:1;">
+          <div style="font-size:13px;font-weight:600;color:var(--text);">${c.nombre}</div>
+          <div style="font-size:11px;color:var(--muted);">${detalle || (c.tipo === 'proximamente' ? 'Disponible próximamente' : (conectado ? 'API operativa' : 'Sin credenciales'))}</div>
+        </div>
+        ${statusBadge}
+      </div>`;
+    }
+    document.getElementById('kpiCanalesList').innerHTML = lista;
+  } catch(e) { body.innerHTML = '<div style="color:#dc2626;padding:30px;">Error: ' + e.message + '</div>'; }
+}
+
+function filtrarTabla(input, tablaId) {
+  const filtro = input.value.toLowerCase();
+  const filas = document.querySelectorAll('#' + tablaId + ' tbody tr');
+  filas.forEach(f => {
+    f.style.display = f.textContent.toLowerCase().indexOf(filtro) > -1 ? '' : 'none';
+  });
+}
+
 
 // Verificar si volvemos de OAuth de MercadoLibre con éxito
 if (window.location.search.indexOf('meli=ok') !== -1) {
