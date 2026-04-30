@@ -873,16 +873,19 @@ def borrar_meli_auth():
 # ── DASHBOARD STATS (para gráficos del dashboard) ───────────────────────────
 
 def stats_ventas_por_canal_dia(fecha_desde, fecha_hasta):
-    """Ventas (salidas) agrupadas por día y canal. Para gráfico línea apilada."""
+    """Ventas (salidas) agrupadas por día y canal. Para gráfico línea apilada.
+    Solo cuenta canales reales de marketplace, excluye 'Manual', 'Sistema', NULL."""
     conn = get_conn(); cur = conn.cursor()
     try:
         cur.execute("""
             SELECT TO_CHAR(DATE(fecha), 'YYYY-MM-DD') AS dia,
-                   COALESCE(canal, 'Sistema') AS canal,
+                   canal,
                    COALESCE(SUM(cantidad), 0) AS total
             FROM movimientos
             WHERE tipo = 'salida'
               AND DATE(fecha) BETWEEN %s AND %s
+              AND canal IS NOT NULL
+              AND canal NOT IN ('Manual', 'Sistema', 'manual', 'sistema', '')
             GROUP BY dia, canal
             ORDER BY dia ASC
         """, (fecha_desde, fecha_hasta))
@@ -894,7 +897,8 @@ def stats_ventas_por_canal_dia(fecha_desde, fecha_hasta):
 
 
 def stats_top_productos_vendidos(fecha_desde, fecha_hasta, limite=10):
-    """Top N productos más vendidos en un rango. Para gráfico barras."""
+    """Top N productos más vendidos en un rango. Para gráfico barras.
+    Solo cuenta canales reales de marketplace, excluye Manual/Sistema."""
     conn = get_conn(); cur = conn.cursor()
     try:
         cur.execute("""
@@ -902,6 +906,8 @@ def stats_top_productos_vendidos(fecha_desde, fecha_hasta, limite=10):
             FROM movimientos
             WHERE tipo = 'salida'
               AND DATE(fecha) BETWEEN %s AND %s
+              AND canal IS NOT NULL
+              AND canal NOT IN ('Manual', 'Sistema', 'manual', 'sistema', '')
             GROUP BY sku, nombre
             ORDER BY total DESC
             LIMIT %s
@@ -977,12 +983,14 @@ def stats_kpis_dashboard(fecha_desde, fecha_hasta):
         "alertas_no_leidas": 0
     }
     try:
-        # Ventas en el período
+        # Ventas en el período (excluye Manual/Sistema, solo canales marketplace)
         cur.execute("""
             SELECT COALESCE(SUM(cantidad), 0), COUNT(DISTINCT orden_id)
             FROM movimientos
             WHERE tipo = 'salida'
               AND DATE(fecha) BETWEEN %s AND %s
+              AND canal IS NOT NULL
+              AND canal NOT IN ('Manual', 'Sistema', 'manual', 'sistema', '')
         """, (fecha_desde, fecha_hasta))
         r = cur.fetchone()
         kpis["ventas_periodo"]  = int(r[0] or 0)

@@ -2239,6 +2239,50 @@ def ruta_paris_forzar_todos():
 
 
 
+@app.route("/debug/precios_productos")
+def debug_precios_productos():
+    """Diagnóstico: muestra los precios cargados en BD para los productos vendidos."""
+    if not session.get("logged"): return redirect("/")
+    try:
+        from datetime import datetime, timedelta
+        productos = cargar_productos()
+        skus_vendidos_top = stats_top_productos_vendidos(
+            (datetime.now().date() - timedelta(days=30)),
+            datetime.now().date(),
+            limite=20
+        )
+        skus_set = {p["sku"] for p in skus_vendidos_top}
+        relevantes = [p for p in productos if p["sku"] in skus_set]
+        return jsonify({
+            "total_productos_bd": len(productos),
+            "productos_con_precio_normal": sum(1 for p in productos if (p.get("precio_normal") or 0) > 0),
+            "productos_con_precio_oferta": sum(1 for p in productos if (p.get("precio_oferta") or 0) > 0),
+            "productos_sin_precio": sum(1 for p in productos if (p.get("precio_normal") or 0) <= 0 and (p.get("precio_oferta") or 0) <= 0),
+            "skus_vendidos_recientemente_y_sus_precios": [
+                {
+                    "sku": p["sku"],
+                    "nombre": p["nombre"],
+                    "precio_normal": p.get("precio_normal", 0),
+                    "precio_oferta": p.get("precio_oferta", 0),
+                    "stock": p.get("stock", 0)
+                }
+                for p in relevantes
+            ],
+            "muestra_5_productos": [
+                {
+                    "sku": p["sku"],
+                    "nombre": p["nombre"][:40],
+                    "precio_normal": p.get("precio_normal", 0),
+                    "precio_oferta": p.get("precio_oferta", 0)
+                }
+                for p in productos[:5]
+            ]
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 # ── DASHBOARD STATS ─────────────────────────────────────────────────────────
 
 def _parse_rango_fechas():
