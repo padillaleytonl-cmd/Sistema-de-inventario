@@ -1901,6 +1901,59 @@ def debug_paris_stock_raw():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/debug/paris_stock_v2")
+def debug_paris_stock_v2():
+    """Prueba 3 variantes de payload para identificar el formato correcto."""
+    if not session.get("logged"): return redirect("/")
+    try:
+        import requests as req
+        from paris import paris_headers, PARIS_BASE_URL
+
+        # Probar con un SKU conocido del catálogo
+        sku_test = "CDPPASN001"
+        stock = 99
+
+        variantes = [
+            {"nombre": "skuSeller (camelCase, actual)",
+             "payload": {"skus": [{"skuSeller": sku_test, "quantity": stock}]}},
+            {"nombre": "sku_seller (snake_case)",
+             "payload": {"skus": [{"sku_seller": sku_test, "quantity": stock}]}},
+            {"nombre": "sku (campo simple)",
+             "payload": {"skus": [{"sku": sku_test, "quantity": stock}]}},
+            {"nombre": "objeto plano sin skus[]",
+             "payload": {"skuSeller": sku_test, "quantity": stock}},
+            {"nombre": "snake_case plano",
+             "payload": {"sku_seller": sku_test, "quantity": stock}},
+        ]
+
+        resultados = []
+        for v in variantes:
+            try:
+                res = req.post(
+                    f"{PARIS_BASE_URL}/v1/stock/sku-seller",
+                    headers=paris_headers(),
+                    json=v["payload"],
+                    timeout=15
+                )
+                resultados.append({
+                    "variante": v["nombre"],
+                    "payload_enviado": v["payload"],
+                    "status": res.status_code,
+                    "response": res.text[:400]
+                })
+            except Exception as e:
+                resultados.append({
+                    "variante": v["nombre"],
+                    "payload_enviado": v["payload"],
+                    "error": str(e)
+                })
+
+        return jsonify({"sku_probado": sku_test, "stock": stock, "resultados": resultados})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 # ── ALERTAS ─────────────────────────────────────────────────────────────────
 
 @app.route("/alertas")
