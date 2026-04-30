@@ -612,3 +612,195 @@ def listar_historial_mapeo(limite=10):
     cur.close(); conn.close()
     return [{"id":r[0],"fecha":r[1],"usuario":r[2],"archivo":r[3],
              "importados":r[4],"errores":r[5],"detalle":r[6]} for r in rows]
+
+# ── ALERTAS ────────────────────────────────────────────────────────────────
+
+def init_alertas():
+    """Crea tablas de alertas y configuración de notificaciones."""
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("""CREATE TABLE IF NOT EXISTS alertas (
+            id SERIAL PRIMARY KEY,
+            fecha TIMESTAMP DEFAULT NOW(),
+            tipo TEXT NOT NULL,
+            canal TEXT,
+            titulo TEXT NOT NULL,
+            mensaje TEXT,
+            orden_id TEXT,
+            sku TEXT,
+            leida BOOLEAN DEFAULT FALSE
+        )""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS alertas_config (
+            id SERIAL PRIMARY KEY,
+            clave TEXT UNIQUE NOT NULL,
+            valor TEXT
+        )""")
+        # Defaults de configuración SMTP (vacíos hasta que el usuario los configure)
+        for clave, valor in [
+            ("smtp_host", ""),
+            ("smtp_port", "587"),
+            ("smtp_user", ""),
+            ("smtp_password", ""),
+            ("smtp_from", ""),
+            ("destinatarios", ""),  # CSV: "luis@x.com, otro@y.com"
+            ("notif_cancelaciones", "true"),
+            ("notif_errores_api", "false")
+        ]:
+            cur.execute("INSERT INTO alertas_config (clave, valor) VALUES (%s, %s) ON CONFLICT (clave) DO NOTHING",
+                        (clave, valor))
+        conn.commit()
+    except Exception as e:
+        print(f"[Alertas] init error: {e}"); conn.rollback()
+    cur.close(); conn.close()
+
+
+def crear_alerta(tipo, titulo, mensaje="", canal=None, orden_id=None, sku=None, enviar_email=True):
+    """Registra una alerta en BD y opcionalmente envía email a destinatarios configurados."""
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("""INSERT INTO alertas (tipo, canal, titulo, mensaje, orden_id, sku)
+                       VALUES (%s, %s, %s, %s, %s, %s)""",
+                    (tipo, canal, titulo, mensaje, orden_id, sku))
+        conn.commit()
+    except Exception as e:
+        print(f"[Alertas] crear error: {e}"); conn.rollback()
+    cur.close(); conn.close()
+
+    if enviar_email:
+        try:
+            _enviar_email_alerta(titulo, mensaje, canal, orden_id, sku)
+        except Exception as e:
+            print(f"[Alertas] email error: {e}")
+
+
+def _enviar_email_alerta(titulo, mensaje, canal, orden_id, sku):
+    """Envía email usando SMTP configurado. Si no hay config, solo loguea."""
+    cfg = get_alertas_config()
+    host = cfg.get("smtp_host", "").strip()
+    user = cfg.get("smtp_user", "").strip()
+    password = cfg.get("smtp_password", "").strip()
+    from_addr = cfg.get("smtp_from", user).strip()
+    destinatarios_raw = cfg.get("destinatarios", "").strip()
+
+    if not host or not user or not password or not destinatarios_raw:
+        print(f"[Alertas] SMTP no configurado, omitiendo email: {titulo}")
+        return
+
+    destinatarios = [d.strip() for d in destinatarios_raw.split(",") if d.strip()]
+    if not destinatarios:
+        return
+
+    try:
+        port = int(cfg.get("smtp_port", "587"))
+    except:
+        port = 587
+
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+
+    body = f"""
+    <html><body style="font-family:Arial,sans-serif;color:#222">
+    <h2 style="color:#c0392b">⚠️ {titulo}</h2>
+    <p>{mensaje}</p>
+    <hr>
+    <table style="border-collapse:collapse">
+    {"<tr><td><b>Canal:</b></td><td>%s</td></tr>" % canal if canal else ""}
+    {"<tr><td><b>Orden:</b></td><td>%s</td></tr>" % orden_id if orden_id else ""}
+    {"<tr><td><b>SKU:</b></td><td>%s</td></tr>" % sku if sku else ""}
+    </table>
+    <p style="color:#888;font-size:12px;margin-top:20px">
+    Enviado automáticamente por Lusync ERP
+    </p>
+    </body></html>
+    """
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"[Lusync] {titulo}"
+    msg["From"] = from_addr
+    msg["To"] = ", ".join(destinatarios)
+    msg.attach(MIMEText(body, "html"))
+
+    try:
+        if port == 465:
+            server = smtplib.SMTP_SSL(host, port, timeout=15)
+        else:
+            server = smtplib.SMTP(host, port, timeout=15)
+            server.starttls()
+        server.login(user, password)
+        server.sendmail(from_addr, destinatarios, msg.as_string())
+        server.quit()
+        print(f"[Alertas] Email enviado a {len(destinatarios)} destinatarios: {titulo}")
+    except Exception as e:
+        print(f"[Alertas] Error SMTP: {e}")
+
+
+def listar_alertas(limite=50, solo_no_leidas=False):
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        if solo_no_leidas:
+            cur.execute("""SELECT id, TO_CHAR(fecha,'DD/MM/YYYY HH24:MI'), tipo, canal,
+                           titulo, mensaje, orden_id, sku, leida
+                           FROM alertas WHERE leida=FALSE ORDER BY fecha DESC LIMIT %s""", (limite,))
+        else:
+            cur.execute("""SELECT id, TO_CHAR(fecha,'DD/MM/YYYY HH24:MI'), tipo, canal,
+                           titulo, mensaje, orden_id, sku, leida
+                           FROM alertas ORDER BY fecha DESC LIMIT %s""", (limite,))
+        rows = cur.fetchall()
+    except Exception as e:
+        print(f"[Alertas] listar error: {e}"); rows = []
+    cur.close(); conn.close()
+    return [{"id":r[0],"fecha":r[1],"tipo":r[2],"canal":r[3],"titulo":r[4],
+             "mensaje":r[5],"orden_id":r[6],"sku":r[7],"leida":r[8]} for r in rows]
+
+
+def contar_alertas_no_leidas():
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT COUNT(*) FROM alertas WHERE leida=FALSE")
+        n = cur.fetchone()[0]
+    except: n = 0
+    cur.close(); conn.close()
+    return n
+
+
+def marcar_alerta_leida(alerta_id):
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("UPDATE alertas SET leida=TRUE WHERE id=%s", (alerta_id,))
+        conn.commit()
+    except Exception as e:
+        print(f"[Alertas] marcar leida: {e}"); conn.rollback()
+    cur.close(); conn.close()
+
+
+def marcar_todas_leidas():
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("UPDATE alertas SET leida=TRUE WHERE leida=FALSE")
+        conn.commit()
+    except Exception as e:
+        print(f"[Alertas] marcar todas: {e}"); conn.rollback()
+    cur.close(); conn.close()
+
+
+def get_alertas_config():
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT clave, valor FROM alertas_config")
+        rows = cur.fetchall()
+    except: rows = []
+    cur.close(); conn.close()
+    return {r[0]: (r[1] or "") for r in rows}
+
+
+def set_alertas_config(data):
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        for clave, valor in data.items():
+            cur.execute("""INSERT INTO alertas_config (clave, valor) VALUES (%s, %s)
+                           ON CONFLICT (clave) DO UPDATE SET valor=EXCLUDED.valor""",
+                        (clave, str(valor) if valor is not None else ""))
+        conn.commit()
+    except Exception as e:
+        print(f"[Alertas] set config: {e}"); conn.rollback()
+    cur.close(); conn.close()

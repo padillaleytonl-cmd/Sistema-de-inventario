@@ -23,7 +23,10 @@ from inventario import (cargar_productos, guardar_productos, guardar_producto,
                         init_audit, registrar_audit, listar_audit,
                         init_sku_mapeo, listar_sku_mapeo, guardar_sku_mapeo_fila,
                         get_sku_canal, get_plataforma_web, set_plataforma_web,
-                        registrar_importacion_mapeo, listar_historial_mapeo)
+                        registrar_importacion_mapeo, listar_historial_mapeo,
+                        init_alertas, crear_alerta, listar_alertas,
+                        contar_alertas_no_leidas, marcar_alerta_leida,
+                        marcar_todas_leidas, get_alertas_config, set_alertas_config)
 
 app = Flask(__name__)
 app.secret_key = "clave_super_segura"
@@ -32,6 +35,7 @@ init_db()
 init_devoluciones()
 init_audit()
 init_sku_mapeo()
+init_alertas()
 
 # ── SYNC AUTOMÁTICO WALMART CADA 5 MINUTOS ──
 def _sync_walmart_automatico():
@@ -42,6 +46,8 @@ def _sync_walmart_automatico():
         nuevas = 0
         errores = []
 
+        # Descuenta apenas Walmart crea la orden (Created) para evitar sobreventa en otros canales.
+        # Si el cliente cancela, el bloque de cancelaciones (más abajo) reintegra el stock automáticamente.
         for estado in ["Created", "Acknowledged", "Shipped", "Delivered"]:
             ordenes = obtener_ordenes_walmart(estado)
             for o in ordenes:
@@ -51,6 +57,10 @@ def _sync_walmart_automatico():
                 customer_order_id = str(o.get("customerOrderId", order_id))
                 if orden_ya_procesada_texto(customer_order_id):
                     continue
+
+                # Marcar ANTES de procesar para evitar dobles descuentos si una API externa
+                # (Paris/Woo/Walmart) timeout-ea en medio del loop
+                marcar_orden_procesada_texto(customer_order_id)
 
                 lineas = o.get("orderLines", {}).get("orderLine", [])
                 if isinstance(lineas, dict):
@@ -111,6 +121,7 @@ def _sync_walmart_automatico():
                     lineas = [lineas]
 
                 productos = cargar_productos()
+                items_cancelados = []  # para alerta consolidada
                 for linea in lineas:
                     try:
                         sku = linea.get("item", {}).get("sku")
@@ -136,9 +147,25 @@ def _sync_walmart_automatico():
                                 actualizar_stock_woo(p["sku"], p["stock"])
                                 actualizar_stock_walmart(p["sku"], p["stock"])
                                 actualizar_stock_paris(p["sku"], p["stock"])
+                                items_cancelados.append(f"{p['nombre']} (SKU: {sku}) x{cantidad}")
                                 print(f"[Scheduler] CANCELACIÓN SKU:{sku} +{cantidad} Stock:{p['stock']}")
                     except Exception as e:
                         print(f"[Scheduler] Error cancelación linea: {e}")
+
+                # Crear alerta consolidada por orden cancelada
+                if items_cancelados:
+                    try:
+                        crear_alerta(
+                            tipo="cancelacion",
+                            canal="Walmart",
+                            titulo=f"Orden cancelada en Walmart: {customer_order_id}",
+                            mensaje="El cliente canceló la orden. Stock reintegrado automáticamente:<br><br>" +
+                                    "<br>".join(f"• {it}" for it in items_cancelados),
+                            orden_id=customer_order_id,
+                            sku=items_cancelados[0].split("SKU: ")[1].split(")")[0] if items_cancelados else None
+                        )
+                    except Exception as e:
+                        print(f"[Scheduler] Error creando alerta: {e}")
 
                 marcar_orden_procesada_texto(cancel_key)
                 reingresadas += 1
@@ -211,6 +238,9 @@ def _sync_recuperacion():
                 if orden_ya_procesada_texto(customer_order_id):
                     continue
 
+                # Marcar ANTES de procesar para evitar dobles descuentos
+                marcar_orden_procesada_texto(customer_order_id)
+
                 lineas = o.get("orderLines", {}).get("orderLine", [])
                 if isinstance(lineas, dict):
                     lineas = [lineas]
@@ -263,6 +293,7 @@ def _sync_recuperacion():
                 lineas = o.get("orderLines", {}).get("orderLine", [])
                 if isinstance(lineas, dict):
                     lineas = [lineas]
+                items_cancel_rec = []
                 for linea in lineas:
                     sku = linea.get("item", {}).get("sku")
                     if not sku:
@@ -282,6 +313,19 @@ def _sync_recuperacion():
                             actualizar_stock_woo(p["sku"], p["stock"])
                             actualizar_stock_walmart(p["sku"], p["stock"])
                             actualizar_stock_paris(p["sku"], p["stock"])
+                            items_cancel_rec.append(f"{p['nombre']} (SKU: {sku}) x{cantidad}")
+                if items_cancel_rec:
+                    try:
+                        crear_alerta(
+                            tipo="cancelacion",
+                            canal="Walmart",
+                            titulo=f"Orden cancelada en Walmart: {customer_order_id}",
+                            mensaje="El cliente canceló la orden. Stock reintegrado automáticamente:<br><br>" +
+                                    "<br>".join(f"• {it}" for it in items_cancel_rec),
+                            orden_id=customer_order_id
+                        )
+                    except Exception as e:
+                        print(f"[Recuperación] Error creando alerta: {e}")
                 marcar_orden_procesada_texto(cancel_key)
         except Exception as e:
             print(f"[Recuperación] Error cancelaciones: {e}")
@@ -714,6 +758,9 @@ def walmart_sync_ordenes():
             if orden_ya_procesada_texto(customer_order_id):
                 print(f"[Walmart] Orden {customer_order_id} ya procesada, saltando")
                 continue
+
+            # ⚠️ FIX: Marcar ANTES de procesar para evitar dobles descuentos
+            marcar_orden_procesada_texto(customer_order_id)
 
             lineas = o.get("orderLines", {}).get("orderLine", [])
             if isinstance(lineas, dict):
@@ -1187,6 +1234,7 @@ def walmart_sync_debug():
             lineas = o.get("orderLines", {}).get("orderLine", [])
             if isinstance(lineas, dict):
                 lineas = [lineas]
+            items_cancel_man = []
             for linea in lineas:
                 sku = linea.get("item", {}).get("sku")
                 if not sku:
@@ -1206,7 +1254,20 @@ def walmart_sync_debug():
                         actualizar_stock_woo(p["sku"], p["stock"])
                         actualizar_stock_walmart(p["sku"], p["stock"])
                         actualizar_stock_paris(p["sku"], p["stock"])
+                        items_cancel_man.append(f"{p['nombre']} (SKU: {sku}) x{cantidad}")
                         log.append(f"CANCELACION SKU:{sku} +{cantidad} Stock:{p['stock']}")
+            if items_cancel_man:
+                try:
+                    crear_alerta(
+                        tipo="cancelacion",
+                        canal="Walmart",
+                        titulo=f"Orden cancelada en Walmart: {customer_order_id}",
+                        mensaje="El cliente canceló la orden. Stock reintegrado automáticamente:<br><br>" +
+                                "<br>".join(f"• {it}" for it in items_cancel_man),
+                        orden_id=customer_order_id
+                    )
+                except Exception as e:
+                    log.append(f"Error creando alerta: {e}")
             marcar_orden_procesada_texto(cancel_key)
     except Exception as e:
         log.append(f"Error cancelaciones: {e}")
@@ -1785,6 +1846,65 @@ def debug_paris_stock():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+
+# ── ALERTAS ─────────────────────────────────────────────────────────────────
+
+@app.route("/alertas")
+def ruta_alertas():
+    if not session.get("logged"): return redirect("/")
+    solo_no = request.args.get("solo_no_leidas", "false").lower() == "true"
+    return jsonify(listar_alertas(limite=100, solo_no_leidas=solo_no))
+
+@app.route("/alertas/contador")
+def ruta_alertas_contador():
+    if not session.get("logged"): return jsonify({"count": 0})
+    return jsonify({"count": contar_alertas_no_leidas()})
+
+@app.route("/alertas/leer/<int:alerta_id>", methods=["POST"])
+def ruta_alerta_leer(alerta_id):
+    if not session.get("logged"): return jsonify({"ok": False}), 401
+    marcar_alerta_leida(alerta_id)
+    return jsonify({"ok": True})
+
+@app.route("/alertas/leer_todas", methods=["POST"])
+def ruta_alertas_leer_todas():
+    if not session.get("logged"): return jsonify({"ok": False}), 401
+    marcar_todas_leidas()
+    return jsonify({"ok": True})
+
+@app.route("/alertas/config", methods=["GET", "POST"])
+def ruta_alertas_config():
+    if not session.get("logged"): return jsonify({}), 401
+    if request.method == "POST":
+        data = request.json or {}
+        # Filtrar solo claves válidas
+        permitidas = {"smtp_host","smtp_port","smtp_user","smtp_password",
+                      "smtp_from","destinatarios","notif_cancelaciones","notif_errores_api"}
+        filtered = {k: v for k, v in data.items() if k in permitidas}
+        set_alertas_config(filtered)
+        return jsonify({"ok": True})
+    cfg = get_alertas_config()
+    # No exponer la contraseña SMTP en GET (solo si está configurada)
+    if cfg.get("smtp_password"):
+        cfg["smtp_password"] = "********"
+    return jsonify(cfg)
+
+@app.route("/alertas/test_email", methods=["POST"])
+def ruta_alertas_test():
+    """Envía un email de prueba con la configuración actual."""
+    if not session.get("logged"): return jsonify({"ok": False}), 401
+    try:
+        crear_alerta(
+            tipo="test",
+            canal="Sistema",
+            titulo="Email de prueba Lusync",
+            mensaje="Si recibes este correo, las notificaciones por email están funcionando correctamente."
+        )
+        return jsonify({"ok": True, "mensaje": "Alerta creada y email enviado (revisa configuración SMTP en logs si no llega)"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 if __name__ == "__main__":
