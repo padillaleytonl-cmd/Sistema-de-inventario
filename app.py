@@ -1997,6 +1997,43 @@ def debug_paris_stock_consultar():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/debug/paris_stock_listar")
+def debug_paris_stock_listar():
+    """Lista todo el stock actual del seller usando el endpoint v2/stock."""
+    if not session.get("logged"): return redirect("/")
+    try:
+        import requests as req
+        from paris import paris_headers, PARIS_BASE_URL
+
+        # Probar varios endpoints para ver cuál funciona
+        endpoints = [
+            "/v2/stock",
+            "/v1/stock",
+            "/v2/stock/sku-seller",
+            "/v1/stock/sku-seller",
+        ]
+        resultados = []
+        for ep in endpoints:
+            try:
+                res = req.get(
+                    f"{PARIS_BASE_URL}{ep}",
+                    headers=paris_headers(),
+                    params={"limit": 200, "offset": 0},
+                    timeout=20
+                )
+                resultados.append({
+                    "endpoint": ep,
+                    "status": res.status_code,
+                    "response": res.text[:1500]
+                })
+            except Exception as e:
+                resultados.append({"endpoint": ep, "error": str(e)})
+        return jsonify({"resultados": resultados})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 # ── ALERTAS ─────────────────────────────────────────────────────────────────
 
 @app.route("/alertas")
