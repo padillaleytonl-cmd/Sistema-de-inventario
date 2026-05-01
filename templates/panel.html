@@ -1168,6 +1168,340 @@ tbody td {
 .dev-chip.sel[data-val="danado_baja"],.dev-chip.sel[data-val="dado_de_baja"]{background:#FCEBEB;color:#791F1F;}
 .dev-chip.sel[data-val="reembolsado"]{background:#F1EFE8;color:#444441;}
 .dev-row:hover{background:var(--bg2);}
+
+/* ═══════════ SIDEBAR LATERAL ═══════════ */
+.sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 220px;
+  height: 100vh;
+  background: var(--bg1);
+  border-right: 0.5px solid var(--border);
+  padding: 18px 0;
+  display: flex;
+  flex-direction: column;
+  z-index: 100;
+  transition: transform 0.25s ease;
+  overflow-y: auto;
+}
+.sidebar-brand {
+  padding: 0 18px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 0.5px solid var(--border);
+  margin-bottom: 12px;
+}
+.sidebar-brand-name { font-size: 15px; font-weight: 600; color: var(--text); }
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding: 0 10px;
+  gap: 2px;
+}
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  text-decoration: none;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  font-family: inherit;
+  transition: background 0.15s;
+}
+.sidebar-link:hover { background: var(--bg2); }
+.sidebar-link.active {
+  background: rgba(124,58,237,0.12);
+  color: #7c3aed;
+  font-weight: 500;
+}
+[data-theme="dark"] .sidebar-link.active {
+  background: rgba(167,139,250,0.16);
+  color: #a78bfa;
+}
+.sidebar-link svg {
+  width: 16px; height: 16px;
+  flex-shrink: 0;
+  stroke-width: 2;
+}
+.sidebar-bottom {
+  margin-top: auto;
+  padding: 12px 10px 0;
+  border-top: 0.5px solid var(--border);
+}
+.sidebar-toggle {
+  display: none;
+  position: fixed;
+  top: 14px;
+  left: 14px;
+  z-index: 101;
+  width: 38px; height: 38px;
+  border-radius: 8px;
+  background: #1a1a1a;
+  color: white;
+  border: none;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+}
+
+/* En modo desktop: la sidebar es fija y desplaza el contenido */
+@media (min-width: 901px) {
+  body.has-sidebar .navbar { display: none; }
+  body.has-sidebar .main { margin-left: 220px; }
+  body.has-sidebar .page-header,
+  body.has-sidebar .table-wrap,
+  body.has-sidebar .dash-grid,
+  body.has-sidebar .dash-row,
+  body.has-sidebar .dash-card { margin-left: 0; }
+}
+
+/* En modo mobile: la sidebar se oculta y se abre con el botón hamburguesa */
+@media (max-width: 900px) {
+  .sidebar { transform: translateX(-100%); box-shadow: 0 0 24px rgba(0,0,0,0.3); }
+  .sidebar.open { transform: translateX(0); }
+  .sidebar-toggle { display: flex; }
+  body.has-sidebar .navbar { padding-left: 60px; }
+  .sidebar-overlay {
+    display: none;
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.4); z-index: 99;
+  }
+  .sidebar.open ~ .sidebar-overlay { display: block; }
+}
+
+/* ═══════════ SECCIÓN BODEGAS ═══════════ */
+.bodegas-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.bodegas-toolbar-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.bodegas-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.bodega-kpi {
+  background: var(--bg2);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.bodega-kpi-label { font-size: 11px; color: var(--muted); }
+.bodega-kpi-value { font-size: 18px; font-weight: 500; color: var(--text); }
+.bodegas-filters {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.bodegas-filters input,
+.bodegas-filters select {
+  font-size: 13px;
+  padding: 7px 10px;
+  border: 0.5px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg1);
+  color: var(--text);
+}
+.bodegas-filters input { flex: 1; min-width: 200px; }
+.bodegas-table-wrap { overflow-x: auto; border: 0.5px solid var(--border); border-radius: 10px; background: var(--bg1); }
+.bodegas-table { width: 100%; font-size: 12px; border-collapse: collapse; min-width: 760px; }
+.bodegas-table th {
+  text-align: left;
+  padding: 9px 8px;
+  font-weight: 500;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  border-bottom: 0.5px solid var(--border);
+  background: var(--bg2);
+  position: sticky; top: 0;
+}
+.bodegas-table th.col-bodega { text-align: right; }
+.bodegas-table th.col-meli { color: #BA7517; }
+.bodegas-table th.col-paris { color: #0F265C; }
+[data-theme="dark"] .bodegas-table th.col-paris { color: #85B7EB; }
+.bodegas-table th.col-walmart { color: #0071CE; }
+.bodegas-table th.col-falabella { color: #00B25E; }
+.bodegas-table th.col-ripley { color: #A01B7A; }
+.bodegas-table th.col-hites { color: #E30613; }
+.bodegas-table th.col-woo { color: #7F54B3; }
+.bodegas-table td {
+  padding: 7px 8px;
+  border-bottom: 0.5px solid var(--border);
+}
+.bodegas-table td.cell-sku { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text); }
+.bodegas-table td.cell-name { color: var(--text); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bodegas-table td.cell-stock { text-align: right; }
+.bodegas-table td.cell-total { text-align: right; font-weight: 500; color: var(--text); }
+.bodegas-table input[type="number"] {
+  width: 56px;
+  text-align: right;
+  font-size: 12px;
+  height: 28px;
+  padding: 2px 6px;
+  border: 0.5px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg1);
+  color: var(--text);
+}
+.bodegas-table input[type="number"]:focus {
+  outline: none;
+  border-color: #7c3aed;
+  box-shadow: 0 0 0 2px rgba(124,58,237,0.15);
+}
+.bodegas-table input[type="number"].changed {
+  background: #FEF3C7;
+  border-color: #F59E0B;
+}
+[data-theme="dark"] .bodegas-table input[type="number"].changed {
+  background: #422006;
+  border-color: #FAC775;
+  color: #FAEEDA;
+}
+
+/* ═══════════ HISTORIAL DE IMPORTS ═══════════ */
+.imports-history { margin-top: 22px; }
+.imports-card {
+  background: var(--bg2);
+  border-radius: 0 8px 8px 0;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 8px;
+  border-left: 3px solid var(--muted);
+}
+.imports-card.ok { border-left-color: #1D9E75; }
+.imports-card.warn { border-left-color: #BA7517; }
+.imports-card.error { border-left-color: #E24B4A; }
+.imports-icon {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 600; font-size: 14px;
+  flex-shrink: 0;
+}
+.imports-icon.ok { background: #E1F5EE; color: #04342C; }
+.imports-icon.warn { background: #FAEEDA; color: #412402; }
+.imports-icon.error { background: #FCEBEB; color: #501313; }
+.imports-content { flex: 1; min-width: 0; }
+.imports-title-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.imports-name { font-size: 13px; font-weight: 500; color: var(--text); }
+.imports-time { font-size: 11px; color: var(--muted); }
+.imports-summary { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+/* Reporte de errores expandido */
+.imports-error-report {
+  margin-top: 14px;
+  background: #FCEBEB;
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+[data-theme="dark"] .imports-error-report { background: #401818; }
+.imports-error-header {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+  font-size: 13px; font-weight: 500; color: #501313;
+}
+[data-theme="dark"] .imports-error-header { color: #F09595; }
+.imports-error-log {
+  background: white;
+  border-radius: 6px;
+  padding: 10px;
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #501313;
+  max-height: 160px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+[data-theme="dark"] .imports-error-log { background: #1a0a0a; color: #F09595; }
+
+/* ═══════════ MODAL PROGRESO IMPORT ═══════════ */
+.modal-import-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.45);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+.modal-import-overlay.show { display: flex; }
+.modal-import {
+  background: var(--bg1);
+  border-radius: 12px;
+  padding: 22px;
+  width: 90%;
+  max-width: 520px;
+  border: 0.5px solid var(--border);
+}
+.modal-import-progress {
+  background: var(--bg2);
+  border-radius: 99px;
+  height: 8px;
+  overflow: hidden;
+  margin: 10px 0 14px;
+}
+.modal-import-progress-bar {
+  background: #7c3aed;
+  height: 100%;
+  width: 0%;
+  border-radius: 99px;
+  transition: width 0.4s ease;
+}
+.modal-import-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.modal-import-stat {
+  border-radius: 8px;
+  padding: 10px;
+  text-align: center;
+}
+.modal-import-stat-num { font-size: 18px; font-weight: 500; }
+.modal-import-stat-label { font-size: 10px; margin-top: 2px; }
+.modal-import-stat.ok { background: #E1F5EE; }
+.modal-import-stat.ok .modal-import-stat-num { color: #04342C; }
+.modal-import-stat.ok .modal-import-stat-label { color: #085041; }
+.modal-import-stat.warn { background: #FAEEDA; }
+.modal-import-stat.warn .modal-import-stat-num { color: #412402; }
+.modal-import-stat.warn .modal-import-stat-label { color: #633806; }
+.modal-import-stat.error { background: #FCEBEB; }
+.modal-import-stat.error .modal-import-stat-num { color: #501313; }
+.modal-import-stat.error .modal-import-stat-label { color: #791F1F; }
+.modal-import-log {
+  background: var(--bg2);
+  border-radius: 8px;
+  padding: 10px;
+  max-height: 180px;
+  overflow-y: auto;
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  color: var(--text);
+}
+
 </style>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
@@ -1190,6 +1524,7 @@ tbody td {
       <button class="nav-btn" onclick="showSection('devoluciones', this)">Devoluciones</button>
       <button class="nav-btn" onclick="showSection('skumapeo', this)">Mapeo SKUs</button>
       <button class="nav-btn" onclick="showSection('canales', this)">Canales</button>
+      <button class="nav-btn" onclick="showSection('bodegas', this)">Bodegas</button>
 
     </div>
     <div class="navbar-right">
@@ -1266,6 +1601,62 @@ tbody td {
       </div>
     </div>
   </nav>
+
+  <!-- ═══════════ SIDEBAR LATERAL (NUEVA) ═══════════ -->
+  <button class="sidebar-toggle" onclick="toggleSidebar()" id="sidebarToggleBtn" title="Menú">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </button>
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <svg width="24" height="24" viewBox="0 0 100 100">
+        <polygon points="50,5 92,28 92,72 50,95 8,72 8,28" fill="#7c3aed"/>
+        <circle cx="50" cy="20" r="6" fill="#06b6d4"/>
+        <circle cx="83" cy="35" r="6" fill="#06b6d4"/>
+        <circle cx="83" cy="65" r="6" fill="#06b6d4"/>
+        <circle cx="50" cy="80" r="6" fill="#06b6d4"/>
+        <circle cx="17" cy="65" r="6" fill="#06b6d4"/>
+        <circle cx="17" cy="35" r="6" fill="#06b6d4"/>
+      </svg>
+      <span class="sidebar-brand-name">Lusync</span>
+    </div>
+    <nav class="sidebar-nav">
+      <button class="sidebar-link active" data-section="dashboard" onclick="navSidebar('dashboard', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+        Dashboard
+      </button>
+      <button class="sidebar-link" data-section="inventario" onclick="navSidebar('inventario', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        Inventario
+      </button>
+      <button class="sidebar-link" data-section="bodegas" onclick="navSidebar('bodegas', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+        Bodegas
+      </button>
+      <button class="sidebar-link" data-section="movimientos" onclick="navSidebar('movimientos', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4"/></svg>
+        Movimientos
+      </button>
+      <button class="sidebar-link" data-section="devoluciones" onclick="navSidebar('devoluciones', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+        Devoluciones
+      </button>
+      <button class="sidebar-link" data-section="skumapeo" onclick="navSidebar('skumapeo', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        Mapeo SKUs
+      </button>
+      <button class="sidebar-link" data-section="canales" onclick="navSidebar('canales', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        Canales
+      </button>
+      <div class="sidebar-bottom">
+        <button class="sidebar-link" data-section="configuracion" onclick="navSidebar('configuracion', this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Configuración
+        </button>
+      </div>
+    </nav>
+  </aside>
+  <div class="sidebar-overlay" onclick="toggleSidebar()"></div>
 
   <!-- ── SECCIÓN DASHBOARD (RENOVADO) ── -->
   <div id="sec-dashboard" class="main">
@@ -1970,6 +2361,87 @@ tbody td {
     </div>
   </div>
 
+  <!-- ═══════════ SECCIÓN BODEGAS (NUEVA) ═══════════ -->
+  <div id="sec-bodegas" class="main" style="display:none;">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Bodegas e inventario</div>
+        <div class="page-date">Distribuye stock entre tu bodega central y los marketplaces con fulfillment</div>
+      </div>
+      <div class="header-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <button class="btn-secondary" onclick="bodegasDescargarPlantilla()">↓ Descargar plantilla</button>
+        <button class="btn-secondary" onclick="bodegasAbrirImporte()">↑ Importar Excel</button>
+        <button class="btn-primary" onclick="bodegasAbrirTransferir()">⇄ Transferir stock</button>
+      </div>
+    </div>
+
+    <div class="card" style="padding:14px 16px;margin-bottom:14px;background:var(--bg2);border:0.5px solid var(--border);">
+      <div style="font-size:12px;color:var(--muted);line-height:1.5;">
+        <strong style="color:var(--text);">Cómo funciona:</strong> Edita las cantidades directamente en cada celda y pulsa <em>Guardar cambios</em>, o descarga la plantilla Excel con todos tus SKUs, llénala con tus stocks reales y súbela.
+      </div>
+    </div>
+
+    <!-- KPIs por bodega -->
+    <div class="bodegas-kpis" id="bodegasKpis">
+      <div class="bodega-kpi"><div class="bodega-kpi-label">Cargando…</div><div class="bodega-kpi-value">—</div></div>
+    </div>
+
+    <!-- Filtros -->
+    <div class="bodegas-filters">
+      <input type="text" id="bodegasBuscador" placeholder="Buscar por SKU o nombre…" oninput="bodegasFiltrar()">
+      <select id="bodegasFiltro" onchange="bodegasFiltrar()">
+        <option value="todas">Ver todas</option>
+        <option value="con_stock">Con stock</option>
+        <option value="sin_stock">Sin stock</option>
+      </select>
+      <button class="btn-secondary" onclick="cargarBodegasMatriz()">↻ Refrescar</button>
+    </div>
+
+    <!-- Tabla matriz SKU × Bodega -->
+    <div class="bodegas-table-wrap">
+      <table class="bodegas-table" id="bodegasTabla">
+        <thead><tr><th colspan="10" style="padding:30px;text-align:center;color:var(--hint);font-weight:400;">Cargando matriz de stock…</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <!-- Acciones de guardado -->
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;align-items:center;">
+      <span id="bodegasCambiosLabel" style="font-size:12px;color:var(--muted);"></span>
+      <button class="btn-secondary" onclick="cargarBodegasMatriz()">Cancelar</button>
+      <button class="btn-primary" id="btnGuardarBodegas" onclick="bodegasGuardarCambios()" disabled style="opacity:0.5;">Guardar cambios</button>
+    </div>
+
+    <!-- Historial de importaciones -->
+    <div class="imports-history">
+      <div class="page-header" style="margin-bottom:14px;">
+        <div>
+          <div class="page-title" style="font-size:16px;">Historial de importaciones</div>
+          <div class="page-date">Últimas cargas masivas de stock por bodega</div>
+        </div>
+        <button class="btn-secondary" onclick="cargarHistorialImports()">↻ Refrescar</button>
+      </div>
+
+      <!-- Mini KPIs del historial -->
+      <div class="bodegas-kpis" id="historialKpis">
+        <div class="bodega-kpi"><div class="bodega-kpi-label">Total imports</div><div class="bodega-kpi-value" id="histKpiTotal">0</div></div>
+        <div class="bodega-kpi"><div class="bodega-kpi-label" style="color:#04342C;">Exitosos</div><div class="bodega-kpi-value" id="histKpiOk" style="color:#04342C;">0</div></div>
+        <div class="bodega-kpi"><div class="bodega-kpi-label" style="color:#412402;">Con advertencias</div><div class="bodega-kpi-value" id="histKpiAdv" style="color:#412402;">0</div></div>
+        <div class="bodega-kpi"><div class="bodega-kpi-label" style="color:#501313;">Con errores</div><div class="bodega-kpi-value" id="histKpiErr" style="color:#501313;">0</div></div>
+      </div>
+
+      <!-- Lista de imports -->
+      <div id="historialList">
+        <div style="text-align:center;color:var(--hint);font-size:12px;padding:30px;">No hay importaciones aún. Sube tu primera plantilla para comenzar.</div>
+      </div>
+
+      <!-- Reporte de errores expandido -->
+      <div id="reporteErrores" style="display:none;"></div>
+    </div>
+
+  </div>
+  <!-- ═══════════ FIN SECCIÓN BODEGAS ═══════════ -->
+
   <div id="sec-configuracion" class="main" style="display:none;">
     <div class="page-header">
       <div>
@@ -2387,7 +2859,7 @@ function doLogout(){
 
 // ── NAVEGACIÓN
 function showSection(sec, btn){
-  ['dashboard','inventario','movimientos','devoluciones','audit','configuracion','skumapeo','canales'].forEach(s => {
+  ['dashboard','inventario','movimientos','devoluciones','audit','configuracion','skumapeo','canales','bodegas'].forEach(s => {
     const el = document.getElementById('sec-' + s);
     if(el) el.style.display = s === sec ? '' : 'none';
   });
@@ -6038,6 +6510,498 @@ const _styleLive = document.createElement('style');
 _styleLive.textContent = '@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }';
 document.head.appendChild(_styleLive);
 
+</script>
+
+<!-- ═══════════ MODAL PROGRESO IMPORT ═══════════ -->
+<div class="modal-import-overlay" id="modalImport">
+  <div class="modal-import">
+    <div style="margin-bottom:8px;">
+      <p style="font-size:15px;font-weight:500;margin:0;color:var(--text);" id="modalImportTitulo">Importando stock</p>
+      <p style="font-size:12px;color:var(--muted);margin:2px 0 0;" id="modalImportSubtitulo">—</p>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px;">
+      <span style="color:var(--muted);" id="modalImportEstado">Procesando…</span>
+      <span style="font-weight:500;color:var(--text);" id="modalImportPct">0%</span>
+    </div>
+    <div class="modal-import-progress">
+      <div class="modal-import-progress-bar" id="modalImportBar"></div>
+    </div>
+    <div class="modal-import-stats">
+      <div class="modal-import-stat ok"><div class="modal-import-stat-num" id="modalImportOK">0</div><div class="modal-import-stat-label">Procesados</div></div>
+      <div class="modal-import-stat warn"><div class="modal-import-stat-num" id="modalImportWarn">0</div><div class="modal-import-stat-label">Advertencias</div></div>
+      <div class="modal-import-stat error"><div class="modal-import-stat-num" id="modalImportErr">0</div><div class="modal-import-stat-label">Errores</div></div>
+    </div>
+    <div class="modal-import-log" id="modalImportLog">Iniciando…</div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
+      <button class="btn-secondary" id="modalImportCerrar" onclick="cerrarModalImport()" style="display:none;">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ MODAL TRANSFERIR STOCK ═══════════ -->
+<div id="modalTransferir" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.45);z-index:9998;align-items:center;justify-content:center;">
+  <div style="background:var(--bg1);border-radius:12px;padding:22px;width:90%;max-width:440px;border:0.5px solid var(--border);">
+    <p style="font-size:15px;font-weight:500;margin:0 0 4px;color:var(--text);">Transferir stock entre bodegas</p>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 14px;">Mueve unidades de una bodega a otra sin cambiar el total</p>
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <div>
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">SKU</label>
+        <input type="text" id="transfSku" placeholder="Ej: ODJM001" style="width:100%;padding:8px 10px;font-size:13px;border:0.5px solid var(--border);border-radius:6px;background:var(--bg1);color:var(--text);">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div>
+          <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">Origen</label>
+          <select id="transfOrigen" style="width:100%;padding:8px 10px;font-size:13px;border:0.5px solid var(--border);border-radius:6px;background:var(--bg1);color:var(--text);"></select>
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">Destino</label>
+          <select id="transfDestino" style="width:100%;padding:8px 10px;font-size:13px;border:0.5px solid var(--border);border-radius:6px;background:var(--bg1);color:var(--text);"></select>
+        </div>
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">Cantidad</label>
+        <input type="number" id="transfCantidad" min="1" value="1" style="width:100%;padding:8px 10px;font-size:13px;border:0.5px solid var(--border);border-radius:6px;background:var(--bg1);color:var(--text);">
+      </div>
+      <div id="transfMsg" style="font-size:12px;color:var(--muted);"></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+      <button class="btn-secondary" onclick="document.getElementById('modalTransferir').style.display='none';">Cancelar</button>
+      <button class="btn-primary" onclick="ejecutarTransferencia()">Transferir</button>
+    </div>
+  </div>
+</div>
+
+<!-- Input file oculto para importar Excel -->
+<input type="file" id="bodegasInputExcel" accept=".xlsx,.xls" style="display:none;" onchange="bodegasProcesarExcel(this.files[0])">
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+// SIDEBAR LATERAL
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Activar sidebar al cargar (mantiene compatibilidad con navbar superior)
+document.body.classList.add('has-sidebar');
+
+function toggleSidebar(){
+  const sb = document.getElementById('sidebar');
+  if(sb) sb.classList.toggle('open');
+}
+
+function navSidebar(sec, btnElem){
+  // Marca activo en sidebar
+  document.querySelectorAll('.sidebar-link').forEach(b => b.classList.remove('active'));
+  if(btnElem) btnElem.classList.add('active');
+  // Llama a la función original showSection (mantiene comportamiento existente)
+  if(typeof showSection === 'function') showSection(sec, null);
+  // Cerrar sidebar en mobile
+  const sb = document.getElementById('sidebar');
+  if(sb && window.innerWidth <= 900) sb.classList.remove('open');
+}
+
+// Sincronizar sidebar cuando se haga click en navbar superior
+(function(){
+  document.querySelectorAll('.nav-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const onclickStr = btn.getAttribute('onclick') || '';
+      const m = onclickStr.match(/showSection\('([^']+)'/);
+      if(m){
+        const sec = m[1];
+        document.querySelectorAll('.sidebar-link').forEach(sb => {
+          sb.classList.toggle('active', sb.dataset.section === sec);
+        });
+      }
+    });
+  });
+})();
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SECCIÓN BODEGAS
+// ═══════════════════════════════════════════════════════════════════════════
+
+let _bodegasMatriz = null;
+let _bodegasCambios = {};  // { "sku|bodega_codigo": cantidad_nueva }
+
+// Hook a showSection: cuando se navega a 'bodegas', cargar la matriz
+(function(){
+  const _origShow = window.showSection;
+  if(typeof _origShow === 'function'){
+    window.showSection = function(sec, btn){
+      _origShow(sec, btn);
+      if(sec === 'bodegas'){
+        cargarBodegasMatriz();
+        cargarHistorialImports();
+      }
+    };
+  }
+})();
+
+async function cargarBodegasMatriz(){
+  const tabla = document.getElementById('bodegasTabla');
+  if(!tabla) return;
+  try {
+    const r = await fetch('/bodegas/matriz');
+    const d = await r.json();
+    if(d.error){ toast('Error: ' + d.error); return; }
+    _bodegasMatriz = d;
+    _bodegasCambios = {};
+    renderBodegasKpis(d);
+    renderBodegasTabla(d);
+    actualizarBotonGuardar();
+  } catch(e){
+    tabla.innerHTML = '<thead><tr><th style="padding:30px;text-align:center;color:#E24B4A;">Error cargando: ' + e.message + '</th></tr></thead>';
+  }
+}
+
+function renderBodegasKpis(d){
+  const cont = document.getElementById('bodegasKpis');
+  if(!cont) return;
+  // Sumar totales por bodega
+  const totales = {};
+  d.bodegas.forEach(b => totales[b.codigo] = 0);
+  d.skus.forEach(s => {
+    Object.entries(s.stocks).forEach(([k, v]) => { totales[k] = (totales[k]||0) + (v||0); });
+  });
+  cont.innerHTML = d.bodegas.map(b => `
+    <div class="bodega-kpi">
+      <div class="bodega-kpi-label">${b.nombre}</div>
+      <div class="bodega-kpi-value">${(totales[b.codigo]||0).toLocaleString('es-CL')}</div>
+    </div>
+  `).join('');
+}
+
+function colClassFor(codigo){
+  if(codigo === 'MELI_FULL') return 'col-meli';
+  if(codigo === 'PARIS_CD') return 'col-paris';
+  if(codigo === 'WALMART_FBM') return 'col-walmart';
+  if(codigo === 'FALABELLA_FBM') return 'col-falabella';
+  if(codigo === 'RIPLEY_FBM') return 'col-ripley';
+  if(codigo === 'HITES_FBM') return 'col-hites';
+  if(codigo === 'WOO_DROP') return 'col-woo';
+  return '';
+}
+
+function renderBodegasTabla(d){
+  const tabla = document.getElementById('bodegasTabla');
+  if(!tabla) return;
+  let thead = '<tr>';
+  thead += '<th>SKU</th><th>Producto</th>';
+  d.bodegas.forEach(b => {
+    thead += `<th class="col-bodega ${colClassFor(b.codigo)}" title="${b.nombre}">${b.nombre.replace('Fulfillment','').replace('Bodega ','').trim()}</th>`;
+  });
+  thead += '<th class="col-bodega">Total</th></tr>';
+
+  let tbody = '';
+  d.skus.forEach(s => {
+    let fila = '<tr data-sku="' + s.sku + '" data-name="' + (s.nombre||'').toLowerCase() + '">';
+    fila += '<td class="cell-sku">' + s.sku + '</td>';
+    fila += '<td class="cell-name" title="' + (s.nombre||'') + '">' + (s.nombre||'') + '</td>';
+    d.bodegas.forEach(b => {
+      const v = s.stocks[b.codigo] || 0;
+      fila += '<td class="cell-stock"><input type="number" min="0" value="' + v + '" data-sku="' + s.sku + '" data-bodega="' + b.codigo + '" data-original="' + v + '" onchange="onCambioStock(this)"></td>';
+    });
+    fila += '<td class="cell-total" data-sku-total="' + s.sku + '">' + s.total + '</td>';
+    fila += '</tr>';
+    tbody += fila;
+  });
+
+  tabla.innerHTML = '<thead>' + thead + '</thead><tbody>' + tbody + '</tbody>';
+}
+
+function onCambioStock(input){
+  const sku = input.dataset.sku;
+  const bodega = input.dataset.bodega;
+  const original = parseInt(input.dataset.original || 0);
+  const nuevo = parseInt(input.value || 0);
+  const key = sku + '|' + bodega;
+  if(nuevo === original){
+    delete _bodegasCambios[key];
+    input.classList.remove('changed');
+  } else {
+    _bodegasCambios[key] = nuevo;
+    input.classList.add('changed');
+  }
+  // Recalcular total de la fila
+  const tr = input.closest('tr');
+  if(tr){
+    let total = 0;
+    tr.querySelectorAll('input[type="number"]').forEach(i => total += parseInt(i.value || 0));
+    const tdTotal = tr.querySelector('[data-sku-total]');
+    if(tdTotal) tdTotal.textContent = total;
+  }
+  actualizarBotonGuardar();
+}
+
+function actualizarBotonGuardar(){
+  const btn = document.getElementById('btnGuardarBodegas');
+  const lbl = document.getElementById('bodegasCambiosLabel');
+  const n = Object.keys(_bodegasCambios).length;
+  if(btn){
+    btn.disabled = n === 0;
+    btn.style.opacity = n === 0 ? 0.5 : 1;
+  }
+  if(lbl) lbl.textContent = n > 0 ? (n + ' cambio' + (n>1?'s':'') + ' pendiente' + (n>1?'s':'')) : '';
+}
+
+async function bodegasGuardarCambios(){
+  const cambios = Object.entries(_bodegasCambios).map(([k, v]) => {
+    const [sku, bodega_codigo] = k.split('|');
+    return { sku, bodega_codigo, cantidad: v };
+  });
+  if(!cambios.length) return;
+  try {
+    const r = await fetch('/bodegas/guardar_lote', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ cambios })
+    });
+    const d = await r.json();
+    if(d.ok){
+      toast(d.guardados + ' cambios guardados');
+      cargarBodegasMatriz();
+    } else {
+      toast('Error: ' + (d.error || 'desconocido'));
+    }
+  } catch(e){ toast('Error: ' + e.message); }
+}
+
+function bodegasFiltrar(){
+  const q = (document.getElementById('bodegasBuscador').value || '').toLowerCase();
+  const f = document.getElementById('bodegasFiltro').value;
+  document.querySelectorAll('#bodegasTabla tbody tr').forEach(tr => {
+    const sku = (tr.dataset.sku || '').toLowerCase();
+    const name = (tr.dataset.name || '');
+    let ok = !q || sku.includes(q) || name.includes(q);
+    if(ok && f === 'con_stock'){
+      const total = parseInt(tr.querySelector('[data-sku-total]').textContent || 0);
+      ok = total > 0;
+    }
+    if(ok && f === 'sin_stock'){
+      const total = parseInt(tr.querySelector('[data-sku-total]').textContent || 0);
+      ok = total === 0;
+    }
+    tr.style.display = ok ? '' : 'none';
+  });
+}
+
+// ─── Descargar plantilla ───
+function bodegasDescargarPlantilla(){
+  window.location.href = '/bodegas/descargar_plantilla';
+  toast('Descargando plantilla…');
+}
+
+// ─── Importar Excel ───
+function bodegasAbrirImporte(){
+  const inp = document.getElementById('bodegasInputExcel');
+  if(inp) inp.click();
+}
+
+async function bodegasProcesarExcel(file){
+  if(!file) return;
+  // Mostrar modal con progreso simulado mientras el backend procesa
+  abrirModalImport(file.name);
+
+  // Simulación de progreso (la API es síncrona)
+  let pct = 5;
+  const interval = setInterval(() => {
+    pct = Math.min(pct + 7, 90);
+    actualizarModalImport({ pct, estado: 'Procesando archivo en el servidor…' });
+  }, 400);
+
+  const formData = new FormData();
+  formData.append('archivo', file);
+  try {
+    const r = await fetch('/bodegas/importar_excel', { method: 'POST', body: formData });
+    const d = await r.json();
+    clearInterval(interval);
+    if(!d.ok){
+      actualizarModalImport({
+        pct: 100,
+        estado: 'Error',
+        log: '× ' + (d.error || 'Error desconocido'),
+        finalizado: true,
+        tipo: 'error'
+      });
+    } else {
+      actualizarModalImport({
+        pct: 100,
+        estado: 'Completado',
+        ok_n: d.procesados,
+        warn_n: d.advertencias,
+        err_n: d.errores,
+        log: (d.ultimas_lineas || []).join('\n'),
+        finalizado: true,
+        tipo: d.estado
+      });
+      // Refrescar matriz e historial
+      setTimeout(() => {
+        cargarBodegasMatriz();
+        cargarHistorialImports();
+      }, 800);
+    }
+  } catch(e){
+    clearInterval(interval);
+    actualizarModalImport({
+      pct: 100,
+      estado: 'Error de red',
+      log: '× ' + e.message,
+      finalizado: true,
+      tipo: 'error'
+    });
+  }
+  // Limpiar input para permitir re-seleccionar el mismo archivo
+  document.getElementById('bodegasInputExcel').value = '';
+}
+
+function abrirModalImport(nombreArchivo){
+  document.getElementById('modalImport').classList.add('show');
+  document.getElementById('modalImportTitulo').textContent = 'Importando stock';
+  document.getElementById('modalImportSubtitulo').textContent = nombreArchivo;
+  document.getElementById('modalImportEstado').textContent = 'Iniciando…';
+  document.getElementById('modalImportPct').textContent = '0%';
+  document.getElementById('modalImportBar').style.width = '0%';
+  document.getElementById('modalImportOK').textContent = '0';
+  document.getElementById('modalImportWarn').textContent = '0';
+  document.getElementById('modalImportErr').textContent = '0';
+  document.getElementById('modalImportLog').textContent = 'Iniciando importación…';
+  document.getElementById('modalImportCerrar').style.display = 'none';
+}
+
+function actualizarModalImport(opts){
+  if(opts.pct !== undefined){
+    document.getElementById('modalImportPct').textContent = Math.round(opts.pct) + '%';
+    document.getElementById('modalImportBar').style.width = opts.pct + '%';
+  }
+  if(opts.estado) document.getElementById('modalImportEstado').textContent = opts.estado;
+  if(opts.ok_n !== undefined) document.getElementById('modalImportOK').textContent = opts.ok_n;
+  if(opts.warn_n !== undefined) document.getElementById('modalImportWarn').textContent = opts.warn_n;
+  if(opts.err_n !== undefined) document.getElementById('modalImportErr').textContent = opts.err_n;
+  if(opts.log) document.getElementById('modalImportLog').textContent = opts.log;
+  if(opts.finalizado){
+    document.getElementById('modalImportCerrar').style.display = '';
+    if(opts.tipo === 'ok') document.getElementById('modalImportBar').style.background = '#1D9E75';
+    else if(opts.tipo === 'advertencias') document.getElementById('modalImportBar').style.background = '#BA7517';
+    else if(opts.tipo === 'error') document.getElementById('modalImportBar').style.background = '#E24B4A';
+  }
+}
+
+function cerrarModalImport(){
+  document.getElementById('modalImport').classList.remove('show');
+  document.getElementById('modalImportBar').style.background = '#7c3aed';
+}
+
+// ─── Historial de imports ───
+async function cargarHistorialImports(){
+  try {
+    const r = await fetch('/bodegas/imports');
+    const d = await r.json();
+    const list = d.imports || [];
+    document.getElementById('histKpiTotal').textContent = list.length;
+    document.getElementById('histKpiOk').textContent = list.filter(i => i.estado === 'ok').length;
+    document.getElementById('histKpiAdv').textContent = list.filter(i => i.estado === 'advertencias').length;
+    document.getElementById('histKpiErr').textContent = list.filter(i => i.estado === 'error').length;
+
+    const cont = document.getElementById('historialList');
+    if(!list.length){
+      cont.innerHTML = '<div style="text-align:center;color:var(--hint);font-size:12px;padding:30px;">No hay importaciones aún. Sube tu primera plantilla para comenzar.</div>';
+      return;
+    }
+    cont.innerHTML = list.map(i => {
+      const tipo = i.estado === 'ok' ? 'ok' : (i.estado === 'error' ? 'error' : 'warn');
+      const icono = tipo === 'ok' ? '✓' : (tipo === 'error' ? '×' : '!');
+      const txtBoton = tipo === 'error' ? 'Ver error' : (tipo === 'warn' ? 'Ver advertencias' : 'Ver detalle');
+      const fecha = i.created_at ? new Date(i.created_at).toLocaleString('es-CL', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—';
+      let resumen;
+      if(tipo === 'error' && i.procesados === 0){
+        resumen = 'Importación fallida · ' + (i.errores || 0) + ' errores · Por ' + (i.usuario || 'Sistema');
+      } else {
+        resumen = (i.procesados || 0) + ' filas procesadas · ' + (i.advertencias || 0) + ' advertencias · ' + (i.errores || 0) + ' errores · Por ' + (i.usuario || 'Sistema');
+      }
+      return `
+        <div class="imports-card ${tipo}">
+          <div class="imports-icon ${tipo}">${icono}</div>
+          <div class="imports-content">
+            <div class="imports-title-row">
+              <span class="imports-name">${i.archivo}</span>
+              <span class="imports-time">${fecha}</span>
+            </div>
+            <div class="imports-summary">${resumen}</div>
+          </div>
+          <button class="btn-secondary" style="font-size:11px;" onclick="verDetalleImport(${i.id})">${txtBoton}</button>
+        </div>
+      `;
+    }).join('');
+  } catch(e){
+    console.error('Historial imports error:', e);
+  }
+}
+
+async function verDetalleImport(id){
+  try {
+    const r = await fetch('/bodegas/imports/' + id);
+    const d = await r.json();
+    const cont = document.getElementById('reporteErrores');
+    const tipo = d.estado === 'ok' ? 'ok' : (d.estado === 'error' ? 'error' : 'warn');
+    const titulo = tipo === 'error' ? 'Reporte de errores' : (tipo === 'warn' ? 'Reporte de advertencias' : 'Detalle de importación');
+    const fecha = d.created_at ? new Date(d.created_at).toLocaleString('es-CL') : '—';
+    cont.innerHTML = `
+      <div class="imports-error-report">
+        <div class="imports-error-header">
+          ${titulo} · ${d.archivo}
+          <span style="font-size:10px;background:white;padding:2px 8px;border-radius:99px;color:#791F1F;">${fecha}</span>
+        </div>
+        <div class="imports-error-log">${(d.log || 'Sin log disponible').replace(/</g,'&lt;')}</div>
+        <div style="display:flex;gap:6px;margin-top:8px;">
+          ${tipo === 'error' ? '<button class="btn-secondary" style="font-size:11px;" onclick="bodegasDescargarPlantilla()">Descargar plantilla correcta</button>' : ''}
+          <button class="btn-secondary" style="font-size:11px;" onclick="document.getElementById(\\'reporteErrores\\').style.display=\\'none\\';">Cerrar reporte</button>
+        </div>
+      </div>
+    `;
+    cont.style.display = '';
+    cont.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } catch(e){ toast('Error cargando detalle: ' + e.message); }
+}
+
+// ─── Modal Transferir Stock ───
+function bodegasAbrirTransferir(){
+  if(!_bodegasMatriz){ toast('Carga la matriz primero'); return; }
+  const sel1 = document.getElementById('transfOrigen');
+  const sel2 = document.getElementById('transfDestino');
+  const opciones = _bodegasMatriz.bodegas.map(b => `<option value="${b.codigo}">${b.nombre}</option>`).join('');
+  sel1.innerHTML = opciones;
+  sel2.innerHTML = opciones;
+  if(sel2.options.length > 1) sel2.selectedIndex = 1;
+  document.getElementById('transfMsg').textContent = '';
+  document.getElementById('modalTransferir').style.display = 'flex';
+}
+
+async function ejecutarTransferencia(){
+  const sku = (document.getElementById('transfSku').value || '').trim();
+  const origen = document.getElementById('transfOrigen').value;
+  const destino = document.getElementById('transfDestino').value;
+  const cantidad = parseInt(document.getElementById('transfCantidad').value || 0);
+  const msg = document.getElementById('transfMsg');
+  if(!sku){ msg.style.color='#E24B4A'; msg.textContent='SKU es obligatorio'; return; }
+  if(origen === destino){ msg.style.color='#E24B4A'; msg.textContent='Origen y destino deben ser distintos'; return; }
+  if(cantidad <= 0){ msg.style.color='#E24B4A'; msg.textContent='Cantidad debe ser mayor a 0'; return; }
+  msg.style.color='var(--muted)'; msg.textContent='Transfiriendo…';
+  try {
+    const r = await fetch('/bodegas/transferir', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ sku, origen, destino, cantidad })
+    });
+    const d = await r.json();
+    if(d.ok){
+      toast('Transferencia ejecutada');
+      document.getElementById('modalTransferir').style.display = 'none';
+      cargarBodegasMatriz();
+    } else {
+      msg.style.color='#E24B4A'; msg.textContent='Error: ' + (d.error || 'desconocido');
+    }
+  } catch(e){
+    msg.style.color='#E24B4A'; msg.textContent='Error: ' + e.message;
+  }
+}
 </script>
 
 </body>
