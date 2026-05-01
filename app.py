@@ -3056,14 +3056,19 @@ def ruta_meli_reclasificar_bodegas():
         sin_orden = 0
         errores = []
 
-        # Buscar movimientos MELI únicos por orden
+        # Buscar movimientos MELI únicos por (orden_id, sku) tomando el más reciente
         conn = get_conn(); cur = conn.cursor()
-        cur.execute("""SELECT DISTINCT orden_id, sku, cantidad, bodega_codigo
-                       FROM movimientos
-                       WHERE canal = 'MercadoLibre'
-                         AND tipo = 'salida'
-                         AND orden_id IS NOT NULL
-                         AND orden_id != ''
+        cur.execute("""SELECT orden_id, sku, cantidad, bodega_codigo
+                       FROM (
+                           SELECT orden_id, sku, cantidad, bodega_codigo, id,
+                                  ROW_NUMBER() OVER (PARTITION BY orden_id, sku ORDER BY id DESC) AS rn
+                           FROM movimientos
+                           WHERE canal = 'MercadoLibre'
+                             AND tipo = 'salida'
+                             AND orden_id IS NOT NULL
+                             AND orden_id != ''
+                       ) sub
+                       WHERE rn = 1
                        ORDER BY id DESC
                        LIMIT %s""", (max_ordenes,))
         rows = cur.fetchall()
