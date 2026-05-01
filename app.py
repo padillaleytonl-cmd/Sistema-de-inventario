@@ -34,7 +34,8 @@ from inventario import (cargar_productos, guardar_productos, guardar_producto,
                         init_bodegas, listar_bodegas, stock_por_bodega,
                         get_stock_bodega, set_stock_bodega, ajustar_stock_bodega,
                         listar_stock_completo, stock_total_por_bodega,
-                        determinar_bodega_para_canal)
+                        determinar_bodega_para_canal,
+                        actualizar_nombres_bodegas)
 
 app = Flask(__name__)
 app.secret_key = "clave_super_segura"
@@ -2414,6 +2415,21 @@ def ruta_bodegas_set_stock():
         return jsonify({"ok": True, "nuevo_total": get_stock_bodega(sku, bodega)})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/bodegas/actualizar_nombres", methods=["GET", "POST"])
+def ruta_bodegas_actualizar_nombres():
+    """Sobrescribe nombres de bodegas con los valores actuales del código.
+    Útil cuando renombramos una bodega y la BD tiene el nombre viejo."""
+    if not session.get("logged"): return jsonify({"ok": False}), 401
+    try:
+        actualizadas = actualizar_nombres_bodegas()
+        registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                        "actualizar_nombres_bodegas",
+                        detalle=f"{len(actualizadas)} bodegas refrescadas")
+        return jsonify({"ok": True, "actualizadas": actualizadas})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 
 @app.route("/bodegas/transferir", methods=["POST"])
 def ruta_bodegas_transferir():

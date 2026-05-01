@@ -1438,3 +1438,26 @@ def detectar_fulfillment_walmart(orden_data):
 
         return False
     except: return False
+
+
+def actualizar_nombres_bodegas():
+    """Sobrescribe los nombres/tipos/canales de bodegas existentes con los valores
+    actuales de BODEGAS_DEFAULT. NO toca el stock ni borra bodegas custom.
+    Útil cuando se renombra una bodega (ej: Paris CrossDocking → Paris Fulfillment)."""
+    conn = get_conn(); cur = conn.cursor()
+    actualizadas = []
+    try:
+        for i, (codigo, nombre, tipo, canal) in enumerate(BODEGAS_DEFAULT):
+            cur.execute("""UPDATE bodegas
+                          SET nombre=%s, tipo=%s, canal=%s, orden=%s
+                          WHERE codigo=%s
+                          RETURNING codigo, nombre""",
+                       (nombre, tipo, canal, i, codigo))
+            r = cur.fetchone()
+            if r:
+                actualizadas.append({"codigo": r[0], "nombre": r[1]})
+        conn.commit()
+    except Exception as e:
+        print(f"[Bodegas] actualizar_nombres error: {e}"); conn.rollback()
+    cur.close(); conn.close()
+    return actualizadas
