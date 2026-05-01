@@ -364,3 +364,217 @@ def verificar_conexion_paris():
         }
     except Exception as e:
         return {"conectado": False, "error": str(e)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# BLUEPRINT - Endpoints HTTP de París
+# ═══════════════════════════════════════════════════════════════════════════
+# Se registra desde app.py con:
+#   from paris import paris_bp
+#   app.register_blueprint(paris_bp)
+
+from flask import Blueprint, jsonify, request, session
+
+paris_bp = Blueprint('paris', __name__)
+
+
+@paris_bp.route("/paris/sync_ordenes")
+def paris_sync_ordenes():
+    """Sincroniza órdenes históricas de París, detectando CD vs Seller automáticamente
+    y descontando de la bodega correcta (CENTRAL o PARIS_CD)."""
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    from inventario import (cargar_productos, orden_ya_procesada_texto,
+                            marcar_orden_procesada_texto, registrar_audit,
+                            listar_sku_mapeo)
+    from bodegas_logic import descontar_venta, sincronizar_stock_a_marketplaces
+
+    registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                    "sync_paris", entidad="ordenes",
+                    detalle="Sync manual órdenes Paris")
+
+    dias = int(request.args.get("dias", 30))
+    productos_dict = {p["sku"]: p for p in cargar_productos()}
+    nuevas = 0
+    errores = []
+    log = []
+
+    estados = ["awaiting_fullfillment", "ready_to_ship", "shipped", "delivered"]
+    for estado in estados:
+        try:
+            ordenes = obtener_ordenes_paris_todas(dias=dias, estado=estado)
+            log.append(f"Estado {estado}: {len(ordenes)} órdenes")
+
+            for so in ordenes:
+                sub_order_num = str(so.get("subOrderNumber", ""))
+                paris_key = f"PARIS-{sub_order_num}"
+                if orden_ya_procesada_texto(paris_key):
+                    continue
+                marcar_orden_procesada_texto(paris_key)
+
+                # Detectar Fulfillment vs Seller
+                from bodegas_logic import detectar_fulfillment_paris
+                es_cd = detectar_fulfillment_paris(so)
+                tipo_str = "Fulfillment" if es_cd else "Seller"
+
+                shipments = so.get("shipments", [])
+                for ship in shipments:
+                    items = ship.get("items", [])
+                    for item in items:
+                        sku_paris = item.get("seller_sku") or item.get("sellerSku") or ""
+                        cantidad = int(item.get("quantity", 1) or 1)
+                        if not sku_paris:
+                            continue
+
+                        # Buscar SKU Lusync vía mapeo
+                        sku_lusync = sku_paris
+                        try:
+                            for fila in listar_sku_mapeo():
+                                if fila.get("sku_paris") == sku_paris:
+                                    sku_lusync = fila.get("sku_lusync")
+                                    break
+                        except: pass
+
+                        if sku_lusync not in productos_dict:
+                            log.append(f"{sub_order_num}: SKU '{sku_lusync}' no encontrado")
+                            continue
+
+                        # Descontar de bodega correcta vía bodegas_logic
+                        resultado = descontar_venta(
+                            sku=sku_lusync,
+                            cantidad=cantidad,
+                            canal="Paris",
+                            fulfillment=es_cd,
+                            orden_id=sub_order_num,
+                            motivo=f"Venta Paris {tipo_str}"
+                        )
+                        log.append(f"{sub_order_num} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado['bodega']}")
+
+                        # Sync cruzado SOLO si fue Seller (afectó Central)
+                        if not es_cd:
+                            try:
+                                sincronizar_stock_a_marketplaces(sku_lusync, excepto=["paris"])
+                            except Exception as e:
+                                log.append(f"  Sync cruzado falló: {e}")
+
+                nuevas += 1
+
+            # Liberar memoria entre estados
+            del ordenes
+            import gc
+            gc.collect()
+        except Exception as e:
+            errores.append(f"{estado}: {str(e)}")
+            log.append(f"Estado {estado}: ERROR {str(e)}")
+
+    return jsonify({
+        "ok": True,
+        "nuevas_ordenes": nuevas,
+        "errores": errores,
+        "log": log
+    })
+
+
+@paris_bp.route("/paris/forzar_sync_todos", methods=["POST"])
+def paris_forzar_sync_todos():
+    """Re-envía el stock de todos los SKUs mapeados a París (desde bodega CENTRAL)."""
+    if not session.get("logged"):
+        return jsonify({"ok": False}), 401
+    try:
+        from inventario import listar_sku_mapeo, get_stock_bodega
+        productos_mapeo = listar_sku_mapeo()
+        enviados = 0
+        fallidos = 0
+        for fila in productos_mapeo:
+            sku_lusync = fila.get("sku_lusync", "")
+            sku_paris = (fila.get("sku_paris", "") or "").strip()
+            if not sku_paris or not sku_lusync:
+                continue
+            # Usar el stock de bodega CENTRAL (el que vendemos como Seller)
+            stock_central = get_stock_bodega(sku_lusync, "CENTRAL")
+            if actualizar_stock_paris(sku_lusync, stock_central):
+                enviados += 1
+            else:
+                fallidos += 1
+        return jsonify({"ok": True, "enviados": enviados, "fallidos": fallidos})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@paris_bp.route("/paris/sync_estado")
+def paris_sync_estado():
+    """Compara stock en Lusync (bodega CENTRAL) vs stock real en Paris API."""
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        import requests as req
+        from inventario import listar_sku_mapeo, cargar_productos, get_stock_bodega
+
+        conexion = verificar_conexion_paris()
+        productos_dict = {p["sku"]: p for p in cargar_productos()}
+        mapeo = listar_sku_mapeo()
+
+        # Obtener todo el stock de Paris
+        stock_paris_dict = {}
+        try:
+            res = req.get(f"{PARIS_BASE_URL}/v2/stock", headers=paris_headers(),
+                          params={"limit": 200, "offset": 0}, timeout=20)
+            if res.status_code == 200:
+                data = res.json()
+                for s in data.get("skus", []):
+                    sku_seller = s.get("sku_seller", "")
+                    if sku_seller:
+                        stock_paris_dict[sku_seller] = {
+                            "quantity": s.get("quantity", 0),
+                            "availableStock": s.get("availableStock", 0),
+                            "updatedAt": s.get("updatedAt", ""),
+                            "warehouseName": s.get("warehouseName", ""),
+                            "active": s.get("active", False),
+                            "title": s.get("title", "")
+                        }
+        except Exception as e:
+            return jsonify({"error_paris": str(e), "conexion": conexion}), 500
+
+        # Comparar stock CENTRAL vs Paris
+        resultados = []
+        for fila in mapeo:
+            sku_paris = (fila.get("sku_paris", "") or "").strip()
+            if not sku_paris:
+                continue
+            sku_lusync = fila.get("sku_lusync", "")
+            stock_central = get_stock_bodega(sku_lusync, "CENTRAL")
+            paris_data = stock_paris_dict.get(sku_paris, {})
+            stock_paris = paris_data.get("quantity", None)
+
+            if stock_paris is None:
+                estado = "no_encontrado"
+            elif stock_paris == stock_central:
+                estado = "sincronizado"
+            else:
+                estado = "desincronizado"
+
+            resultados.append({
+                "sku_lusync": sku_lusync,
+                "sku_paris": sku_paris,
+                "nombre": fila.get("nombre", "") or paris_data.get("title", ""),
+                "stock_lusync": stock_central,
+                "stock_paris": stock_paris,
+                "diferencia": (stock_paris - stock_central) if stock_paris is not None else None,
+                "ultima_actualizacion_paris": paris_data.get("updatedAt", ""),
+                "warehouse_paris": paris_data.get("warehouseName", ""),
+                "activo_en_paris": paris_data.get("active", False),
+                "estado": estado
+            })
+
+        return jsonify({
+            "conexion": conexion,
+            "total": len(resultados),
+            "sincronizados": sum(1 for r in resultados if r["estado"] == "sincronizado"),
+            "desincronizados": sum(1 for r in resultados if r["estado"] == "desincronizado"),
+            "no_encontrados": sum(1 for r in resultados if r["estado"] == "no_encontrado"),
+            "resultados": resultados
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
