@@ -265,8 +265,10 @@ def obtener_ordenes_meli(limit=50, offset=0, estado=None):
 
 
 def obtener_orden_meli(order_id):
-    """Detalle de una orden específica."""
+    """Detalle de una orden específica.
+    Si recibe un pack_id en vez de un order_id, lo resuelve automáticamente."""
     try:
+        # Intento 1: tratar como order_id directo
         res = requests.get(
             f"{MELI_API_URL}/orders/{order_id}",
             headers=meli_headers(),
@@ -274,10 +276,53 @@ def obtener_orden_meli(order_id):
         )
         if res.status_code == 200:
             return res.json()
+
+        # Intento 2: si dió 404, puede ser un pack_id (agrupa varias órdenes)
+        if res.status_code == 404:
+            print(f"[MELI] {order_id} no es order_id, probando como pack_id...")
+            res2 = requests.get(
+                f"{MELI_API_URL}/packs/{order_id}",
+                headers=meli_headers(),
+                timeout=15
+            )
+            if res2.status_code == 200:
+                pack = res2.json()
+                # El pack contiene una lista de órdenes internas; tomamos la primera
+                ordenes = pack.get("orders", [])
+                if ordenes:
+                    primer_order_id = ordenes[0].get("id")
+                    if primer_order_id:
+                        print(f"[MELI] Pack {order_id} → orden interna {primer_order_id}")
+                        # Recursivamente traer la orden real
+                        res3 = requests.get(
+                            f"{MELI_API_URL}/orders/{primer_order_id}",
+                            headers=meli_headers(),
+                            timeout=15
+                        )
+                        if res3.status_code == 200:
+                            return res3.json()
         return None
     except Exception as e:
         print(f"[MELI] Error orden {order_id}: {e}")
         return None
+
+
+def resolver_pack_a_ordenes(pack_id):
+    """Si un webhook llega con pack_id, esta función devuelve las órdenes internas."""
+    try:
+        res = requests.get(
+            f"{MELI_API_URL}/packs/{pack_id}",
+            headers=meli_headers(),
+            timeout=15
+        )
+        if res.status_code == 200:
+            pack = res.json()
+            ordenes_ids = [str(o.get("id")) for o in pack.get("orders", []) if o.get("id")]
+            return ordenes_ids
+        return []
+    except Exception as e:
+        print(f"[MELI] Error resolviendo pack {pack_id}: {e}")
+        return []
 
 
 # ── PRECIOS ─────────────────────────────────────────────────────────────────
@@ -341,7 +386,8 @@ def procesar_webhook_meli(payload):
 
 
 def _procesar_orden_webhook(resource):
-    """Cuando llega una orden nueva o cambia de estado, descontamos stock si es venta confirmada."""
+    """Cuando llega una orden nueva o cambia de estado, descontamos stock si es venta confirmada.
+    Detecta automáticamente si es Full o Seller envía y descuenta de la bodega correcta."""
     try:
         order_id = resource.split("/")[-1]
         orden = obtener_orden_meli(order_id)
@@ -355,7 +401,8 @@ def _procesar_orden_webhook(resource):
             return True
 
         from inventario import (orden_ya_procesada_texto, marcar_orden_procesada_texto,
-                                cargar_productos, guardar_producto, registrar_movimiento)
+                                descontar_venta_inteligente, detectar_fulfillment_meli,
+                                listar_sku_mapeo, cargar_productos)
         from woo import actualizar_stock_woo
         try:
             from walmart import actualizar_stock_walmart
@@ -371,33 +418,65 @@ def _procesar_orden_webhook(resource):
 
         marcar_orden_procesada_texto(meli_key)
 
+        # ── Detectar si es venta Full o Seller ──
+        es_full = detectar_fulfillment_meli(orden)
+        tipo_str = "FULL" if es_full else "Seller"
+        print(f"[MELI Webhook] Orden {order_id} tipo: {tipo_str}")
+
         productos = cargar_productos()
+        productos_dict = {p["sku"]: p for p in productos}
+
         for item in orden.get("order_items", []):
-            sku = (item.get("item", {}).get("seller_custom_field", "")
-                   or item.get("item", {}).get("id", "")).strip()
+            sku_meli = (item.get("item", {}).get("seller_custom_field", "")
+                        or item.get("item", {}).get("id", "")).strip()
             qty = int(item.get("quantity", 1))
-            for p in productos:
-                if p["sku"] == sku:
-                    p["stock"] = max(0, p["stock"] - qty)
-                    guardar_producto(p)
-                    registrar_movimiento("salida", p["sku"], p["nombre"],
-                                        qty, f"Venta MercadoLibre",
-                                        usuario="Sistema", canal="MercadoLibre",
-                                        orden_id=order_id)
-                    # Sync cruzado a otros canales
-                    try: actualizar_stock_woo(p["sku"], p["stock"])
+
+            # Buscar SKU Lusync correspondiente vía mapeo
+            sku_lusync = sku_meli
+            try:
+                for fila in listar_sku_mapeo():
+                    if (fila.get("sku_mercadolibre") == sku_meli):
+                        sku_lusync = fila.get("sku_lusync")
+                        break
+            except: pass
+
+            if sku_lusync not in productos_dict:
+                print(f"[MELI Webhook] SKU '{sku_lusync}' no encontrado en inventario")
+                continue
+
+            # ── Descontar de la bodega correcta ──
+            resultado = descontar_venta_inteligente(
+                sku=sku_lusync,
+                cantidad=qty,
+                canal="MercadoLibre",
+                fulfillment=es_full,
+                orden_id=order_id,
+                motivo=f"Venta MercadoLibre{' Full' if es_full else ''}",
+                usuario="Sistema"
+            )
+            print(f"[MELI Webhook] {sku_lusync} -{qty} desde {resultado['bodega']} → {resultado['stock_despues']}")
+
+            # Sync stock a otros canales SOLO si fue venta Seller (Central afectada)
+            # Si fue Full, la bodega central no cambia, así que no hay que sincronizar
+            if not es_full:
+                p = productos_dict[sku_lusync]
+                # Recargar stock total después del descuento
+                from inventario import cargar_productos as _cp
+                productos_actualizados = _cp()
+                stock_total = next((pp["stock"] for pp in productos_actualizados if pp["sku"] == sku_lusync), 0)
+                try: actualizar_stock_woo(sku_lusync, stock_total)
+                except: pass
+                if actualizar_stock_walmart:
+                    try: actualizar_stock_walmart(sku_lusync, stock_total)
                     except: pass
-                    if actualizar_stock_walmart:
-                        try: actualizar_stock_walmart(p["sku"], p["stock"])
-                        except: pass
-                    if actualizar_stock_paris:
-                        try: actualizar_stock_paris(p["sku"], p["stock"])
-                        except: pass
-                    print(f"[MELI Webhook] Venta SKU:{sku} -{qty} Stock final:{p['stock']}")
-                    break
+                if actualizar_stock_paris:
+                    try: actualizar_stock_paris(sku_lusync, stock_total)
+                    except: pass
         return True
     except Exception as e:
         print(f"[MELI Webhook] Error procesando orden: {e}")
+        import traceback
+        print(traceback.format_exc())
         return False
 
 

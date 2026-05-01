@@ -400,73 +400,75 @@ def paris_sync_ordenes():
     errores = []
     log = []
 
-    estados = ["awaiting_fullfillment", "ready_to_ship", "shipped", "delivered"]
-    for estado in estados:
-        try:
-            ordenes = obtener_ordenes_paris_todas(dias=dias, estado=estado)
-            log.append(f"Estado {estado}: {len(ordenes)} órdenes")
+    # CAMBIO: NO filtramos por itemStatus porque el campo viene vacío en muchas órdenes
+    # En su lugar, traemos TODAS las órdenes y procesamos las que no estén marcadas
+    try:
+        ordenes = obtener_ordenes_paris_todas(dias=dias, estado=None)
+        log.append(f"Órdenes encontradas (sin filtro): {len(ordenes)}")
 
-            for so in ordenes:
-                sub_order_num = str(so.get("subOrderNumber", ""))
-                paris_key = f"PARIS-{sub_order_num}"
-                if orden_ya_procesada_texto(paris_key):
-                    continue
-                marcar_orden_procesada_texto(paris_key)
+        for so in ordenes:
+            sub_order_num = str(so.get("subOrderNumber", ""))
+            if not sub_order_num:
+                continue
+            paris_key = f"PARIS-{sub_order_num}"
+            if orden_ya_procesada_texto(paris_key):
+                continue
+            marcar_orden_procesada_texto(paris_key)
 
-                # Detectar Fulfillment vs Seller
-                from bodegas_logic import detectar_fulfillment_paris
-                es_cd = detectar_fulfillment_paris(so)
-                tipo_str = "Fulfillment" if es_cd else "Seller"
+            # Detectar Fulfillment vs Seller
+            from bodegas_logic import detectar_fulfillment_paris
+            es_cd = detectar_fulfillment_paris(so)
+            tipo_str = "Fulfillment" if es_cd else "Seller"
 
-                shipments = so.get("shipments", [])
-                for ship in shipments:
-                    items = ship.get("items", [])
-                    for item in items:
-                        sku_paris = item.get("seller_sku") or item.get("sellerSku") or ""
-                        cantidad = int(item.get("quantity", 1) or 1)
-                        if not sku_paris:
-                            continue
+            shipments = so.get("shipments", [])
+            for ship in shipments:
+                items = ship.get("items", [])
+                for item in items:
+                    sku_paris = item.get("seller_sku") or item.get("sellerSku") or ""
+                    cantidad = int(item.get("quantity", 1) or 1)
+                    if not sku_paris:
+                        continue
 
-                        # Buscar SKU Lusync vía mapeo
-                        sku_lusync = sku_paris
+                    # Buscar SKU Lusync vía mapeo
+                    sku_lusync = sku_paris
+                    try:
+                        for fila in listar_sku_mapeo():
+                            if fila.get("sku_paris") == sku_paris:
+                                sku_lusync = fila.get("sku_lusync")
+                                break
+                    except: pass
+
+                    if sku_lusync not in productos_dict:
+                        log.append(f"{sub_order_num}: SKU '{sku_lusync}' no encontrado")
+                        continue
+
+                    # Descontar de bodega correcta vía bodegas_logic
+                    resultado = descontar_venta(
+                        sku=sku_lusync,
+                        cantidad=cantidad,
+                        canal="Paris",
+                        fulfillment=es_cd,
+                        orden_id=sub_order_num,
+                        motivo=f"Venta Paris {tipo_str}"
+                    )
+                    log.append(f"{sub_order_num} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado['bodega']}")
+
+                    # Sync cruzado SOLO si fue Seller (afectó Central)
+                    if not es_cd:
                         try:
-                            for fila in listar_sku_mapeo():
-                                if fila.get("sku_paris") == sku_paris:
-                                    sku_lusync = fila.get("sku_lusync")
-                                    break
-                        except: pass
+                            sincronizar_stock_a_marketplaces(sku_lusync, excepto=["paris"])
+                        except Exception as e:
+                            log.append(f"  Sync cruzado falló: {e}")
 
-                        if sku_lusync not in productos_dict:
-                            log.append(f"{sub_order_num}: SKU '{sku_lusync}' no encontrado")
-                            continue
+            nuevas += 1
 
-                        # Descontar de bodega correcta vía bodegas_logic
-                        resultado = descontar_venta(
-                            sku=sku_lusync,
-                            cantidad=cantidad,
-                            canal="Paris",
-                            fulfillment=es_cd,
-                            orden_id=sub_order_num,
-                            motivo=f"Venta Paris {tipo_str}"
-                        )
-                        log.append(f"{sub_order_num} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado['bodega']}")
-
-                        # Sync cruzado SOLO si fue Seller (afectó Central)
-                        if not es_cd:
-                            try:
-                                sincronizar_stock_a_marketplaces(sku_lusync, excepto=["paris"])
-                            except Exception as e:
-                                log.append(f"  Sync cruzado falló: {e}")
-
-                nuevas += 1
-
-            # Liberar memoria entre estados
-            del ordenes
-            import gc
-            gc.collect()
-        except Exception as e:
-            errores.append(f"{estado}: {str(e)}")
-            log.append(f"Estado {estado}: ERROR {str(e)}")
+        # Liberar memoria
+        del ordenes
+        import gc
+        gc.collect()
+    except Exception as e:
+        errores.append(str(e))
+        log.append(f"ERROR general: {str(e)}")
 
     return jsonify({
         "ok": True,
