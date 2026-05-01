@@ -48,6 +48,10 @@ init_alertas()
 init_meli_auth()
 init_bodegas()
 
+# Registrar Blueprints (módulos de marketplaces)
+from walmart import walmart_bp
+app.register_blueprint(walmart_bp)
+
 # ── SYNC AUTOMÁTICO WALMART CADA 5 MINUTOS ──
 def _sync_walmart_automatico():
     """Tarea de background: sincroniza órdenes Walmart sin requerir sesión"""
@@ -776,81 +780,8 @@ def walmart_sync_precios():
             ok += 1
     return {"ok": ok}
 
-@app.route("/walmart/sync_ordenes")
-def walmart_sync_ordenes():
-    registrar_audit(session.get("usuario","Sistema"), request.remote_addr, "sync_walmart", entidad="ordenes", detalle="Sync manual órdenes Walmart")
-    if not session.get("logged"):
-        return {"error": "no autorizado"}, 401
-
-    productos = cargar_productos()
-    nuevas = 0
-    errores = []
-
-    # Walmart Chile usa Created y Acknowledged para ordenes pendientes
-    for estado in ["Created", "Acknowledged", "Shipped", "Delivered"]:
-        ordenes = obtener_ordenes_walmart(estado)
-        print(f"[Walmart Ordenes] Estado:{estado} Total:{len(ordenes)}")
-
-        for o in ordenes:
-            order_id = o.get("purchaseOrderId")
-            print(f"[Walmart] Procesando orden:{order_id}")
-            if not order_id:
-                print("[Walmart] Sin order_id, saltando")
-                continue
-
-            # Usar customerOrderId (número largo) para evitar duplicados
-            customer_order_id = str(o.get("customerOrderId", order_id))
-            if orden_ya_procesada_texto(customer_order_id):
-                print(f"[Walmart] Orden {customer_order_id} ya procesada, saltando")
-                continue
-
-            # ⚠️ FIX: Marcar ANTES de procesar para evitar dobles descuentos
-            marcar_orden_procesada_texto(customer_order_id)
-
-            lineas = o.get("orderLines", {}).get("orderLine", [])
-            if isinstance(lineas, dict):
-                lineas = [lineas]
-
-            for linea in lineas:
-                try:
-                    sku = linea.get("item", {}).get("sku")
-                    if not sku:
-                        continue
-                    # Walmart Chile: cantidad viene en orderLineQuantity o es 1
-                    cantidad = 1
-                    qty = linea.get("orderLineQuantity", {})
-                    if qty and qty.get("amount"):
-                        cantidad = int(float(qty.get("amount", 1)))
-                    # También puede venir en statusQuantity
-                    if cantidad == 1:
-                        status_qty = linea.get("statusQuantity", {})
-                        if status_qty and status_qty.get("amount"):
-                            cantidad = int(float(status_qty.get("amount", 1)))
-
-                    for p in productos:
-                        if p["sku"] == sku:
-                            p["stock"] = max(0, p["stock"] - cantidad)
-                            guardar_producto(p)
-                            registrar_movimiento("salida", p["sku"], p["nombre"],
-                                                cantidad, "Venta Walmart",
-                                                usuario="Sistema", canal="Walmart",
-                                                orden_id=customer_order_id)
-                            actualizar_stock_woo(p["sku"], p["stock"])
-                            actualizar_stock_walmart(p["sku"], p["stock"])
-                            actualizar_stock_paris(p["sku"], p["stock"])
-                            try:
-                                from inventario import sincronizar_stock_a_bodega_central
-                                sincronizar_stock_a_bodega_central(p["sku"])
-                            except: pass
-                            print(f"[Walmart] Procesado SKU:{sku} Cant:{cantidad} Stock restante:{p['stock']}")
-                except Exception as e:
-                    errores.append(str(e))
-                    print(f"[Walmart] Error linea: {e}")
-
-            marcar_orden_procesada_texto(customer_order_id)
-            nuevas += 1
-
-    return {"ok": True, "nuevas_ordenes": nuevas, "errores": errores[:5]}
+# El endpoint /walmart/sync_ordenes se movió a walmart.py (Blueprint)
+# Ver: walmart_bp en walmart.py
 
 @app.route("/walmart/ver_ordenes")
 def walmart_ver_ordenes():

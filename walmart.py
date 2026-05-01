@@ -167,3 +167,130 @@ def verificar_conexion_walmart():
         return token is not None
     except:
         return False
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# BLUEPRINT - Endpoints HTTP de Walmart
+# ═══════════════════════════════════════════════════════════════════════════
+# Este Blueprint se registra desde app.py con:
+#   from walmart import walmart_bp
+#   app.register_blueprint(walmart_bp)
+
+from flask import Blueprint, jsonify, request, session
+
+walmart_bp = Blueprint('walmart', __name__)
+
+
+@walmart_bp.route("/walmart/sync_ordenes")
+def walmart_sync_ordenes():
+    """Sincronización manual de órdenes Walmart desde la UI.
+    Usa lógica de bodegas: detecta WFS automáticamente y descuenta
+    de la bodega correcta (CENTRAL si es Seller, WALMART_FBM si es WFS)."""
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    # Imports locales para evitar circular imports
+    from inventario import (cargar_productos, orden_ya_procesada_texto,
+                            marcar_orden_procesada_texto, registrar_audit,
+                            listar_sku_mapeo)
+    from bodegas_logic import descontar_venta, sincronizar_stock_a_marketplaces
+
+    registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                    "sync_walmart", entidad="ordenes",
+                    detalle="Sync manual órdenes Walmart")
+
+    productos_dict = {p["sku"]: p for p in cargar_productos()}
+    nuevas = 0
+    errores = []
+    log = []
+
+    # Walmart Chile usa Created/Acknowledged para órdenes pendientes
+    for estado in ["Created", "Acknowledged", "Shipped", "Delivered"]:
+        try:
+            ordenes = obtener_ordenes_walmart(estado)
+            log.append(f"Estado {estado}: {len(ordenes)} órdenes")
+
+            for o in ordenes:
+                order_id = o.get("purchaseOrderId")
+                if not order_id:
+                    continue
+
+                # Usar customerOrderId (número largo) para evitar duplicados
+                customer_order_id = str(o.get("customerOrderId", order_id))
+                if orden_ya_procesada_texto(customer_order_id):
+                    continue
+
+                # Marcar ANTES de procesar para evitar dobles descuentos
+                marcar_orden_procesada_texto(customer_order_id)
+
+                # Detectar si es WFS (Walmart Fulfillment Services)
+                from bodegas_logic import detectar_fulfillment_walmart
+                es_wfs = detectar_fulfillment_walmart(o)
+                tipo_str = "WFS" if es_wfs else "Seller"
+
+                lineas = o.get("orderLines", {}).get("orderLine", [])
+                if isinstance(lineas, dict):
+                    lineas = [lineas]
+
+                for linea in lineas:
+                    try:
+                        sku_walmart = linea.get("item", {}).get("sku")
+                        if not sku_walmart:
+                            continue
+
+                        # Determinar cantidad
+                        cantidad = 1
+                        qty = linea.get("orderLineQuantity", {})
+                        if qty and qty.get("amount"):
+                            cantidad = int(float(qty.get("amount", 1)))
+                        if cantidad == 1:
+                            status_qty = linea.get("statusQuantity", {})
+                            if status_qty and status_qty.get("amount"):
+                                cantidad = int(float(status_qty.get("amount", 1)))
+
+                        # Buscar SKU Lusync vía mapeo
+                        sku_lusync = sku_walmart
+                        try:
+                            for fila in listar_sku_mapeo():
+                                if fila.get("sku_walmart") == sku_walmart:
+                                    sku_lusync = fila.get("sku_lusync")
+                                    break
+                        except: pass
+
+                        if sku_lusync not in productos_dict:
+                            log.append(f"{customer_order_id}: SKU '{sku_lusync}' no encontrado")
+                            continue
+
+                        # Descontar usando lógica de bodegas
+                        resultado = descontar_venta(
+                            sku=sku_lusync,
+                            cantidad=cantidad,
+                            canal="Walmart",
+                            fulfillment=es_wfs,
+                            orden_id=customer_order_id,
+                            motivo=f"Venta Walmart {tipo_str}"
+                        )
+                        log.append(f"{customer_order_id} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado['bodega']}")
+
+                        # Sync cruzado a otros canales SOLO si fue Seller (afectó Central)
+                        if not es_wfs:
+                            try:
+                                sincronizar_stock_a_marketplaces(sku_lusync, excepto=["walmart"])
+                            except Exception as e:
+                                log.append(f"  Sync cruzado falló: {e}")
+
+                    except Exception as e:
+                        errores.append(str(e))
+                        log.append(f"  Error línea: {e}")
+
+                nuevas += 1
+        except Exception as e:
+            errores.append(f"{estado}: {str(e)}")
+            log.append(f"Estado {estado}: ERROR {str(e)}")
+
+    return jsonify({
+        "ok": True,
+        "nuevas_ordenes": nuevas,
+        "errores": errores[:5],
+        "log": log
+    })
