@@ -50,7 +50,9 @@ init_bodegas()
 
 # Registrar Blueprints (módulos de marketplaces)
 from walmart import walmart_bp
+from paris import paris_bp
 app.register_blueprint(walmart_bp)
+app.register_blueprint(paris_bp)
 
 # ── SYNC AUTOMÁTICO WALMART CADA 5 MINUTOS ──
 def _sync_walmart_automatico():
@@ -1492,82 +1494,8 @@ def paris_stock():
     data = obtener_stock_paris()
     return data or {"error": "sin datos"}
 
-@app.route("/paris/sync_ordenes")
-def paris_sync_ordenes():
-    if not session.get("logged"):
-        return {"error": "no autorizado"}, 401
-    registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
-                    "sync_paris", detalle="Sync manual órdenes Paris")
-    from inventario import (descontar_venta_inteligente, detectar_fulfillment_paris,
-                            listar_sku_mapeo, cargar_productos)
-    dias = int(request.args.get("dias", 30))
-    productos_dict = {p["sku"]: p for p in cargar_productos()}
-    nuevas = 0
-    errores = []
-    log = []
-    # Sync TODOS los estados activos para no perder ventas
-    estados = ["awaiting_fullfillment", "ready_to_ship", "shipped", "delivered"]
-    for estado in estados:
-        try:
-            ordenes = obtener_ordenes_paris_todas(dias=dias, estado=estado)
-            log.append(f"Estado {estado}: {len(ordenes)} órdenes")
-            for so in ordenes:
-                sub_order_num = str(so.get("subOrderNumber", ""))
-                paris_key = f"PARIS-{sub_order_num}"
-                if orden_ya_procesada_texto(paris_key):
-                    continue
-                marcar_orden_procesada_texto(paris_key)
+# /paris/sync_ordenes movido a paris.py (Blueprint)
 
-                # Detectar si es CrossDocking o Seller
-                es_cd = detectar_fulfillment_paris(so)
-                tipo_str = "CD (Fulfillment)" if es_cd else "Seller"
-
-                shipments = so.get("shipments", [])
-                for ship in shipments:
-                    items = ship.get("items", [])
-                    for item in items:
-                        sku_seller = item.get("seller_sku") or item.get("sellerSku") or ""
-                        cantidad = int(item.get("quantity", 1) or 1)
-                        if not sku_seller:
-                            continue
-                        # Buscar en mapeo: sku_paris → sku_lusync
-                        sku_lusync = sku_seller
-                        try:
-                            for fila in listar_sku_mapeo():
-                                if fila.get("sku_paris") == sku_seller:
-                                    sku_lusync = fila.get("sku_lusync")
-                                    break
-                        except: pass
-                        if sku_lusync not in productos_dict:
-                            log.append(f"Orden {sub_order_num}: SKU '{sku_lusync}' no encontrado")
-                            continue
-                        # Descontar de la bodega correcta
-                        resultado = descontar_venta_inteligente(
-                            sku=sku_lusync,
-                            cantidad=cantidad,
-                            canal="Paris",
-                            fulfillment=es_cd,
-                            orden_id=sub_order_num,
-                            motivo=f"Venta Paris {tipo_str}",
-                            usuario="Sistema"
-                        )
-                        log.append(f"{sub_order_num} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado['bodega']}")
-
-                        # Sync a otros canales SOLO si fue Seller (afectó Central)
-                        if not es_cd:
-                            from inventario import cargar_productos as _cp
-                            stock_total = next((pp["stock"] for pp in _cp() if pp["sku"] == sku_lusync), 0)
-                            try: actualizar_stock_woo(sku_lusync, stock_total)
-                            except: pass
-                            try: actualizar_stock_walmart(sku_lusync, stock_total)
-                            except: pass
-                            try: actualizar_stock_paris(sku_lusync, stock_total)
-                            except: pass
-                nuevas += 1
-        except Exception as e:
-            errores.append(f"{estado}: {str(e)}")
-            log.append(f"Estado {estado}: ERROR {str(e)}")
-    return {"ok": True, "nuevas_ordenes": nuevas, "errores": errores, "log": log}
 
 # ── AUDIT LOG ──
 
@@ -2128,84 +2056,7 @@ def debug_paris_stock_warehouse():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
-@app.route("/paris/sync_estado")
-def ruta_paris_sync_estado():
-    """Compara stock en Lusync vs stock real en Paris API. Para vista de estado de sync."""
-    if not session.get("logged"): return jsonify({"error":"no autorizado"}), 401
-    try:
-        import requests as req
-        from inventario import listar_sku_mapeo, cargar_productos
-        from paris import paris_headers, PARIS_BASE_URL, verificar_conexion_paris
-
-        conexion = verificar_conexion_paris()
-        productos = {p["sku"]: p for p in cargar_productos()}
-        mapeo = listar_sku_mapeo()
-
-        # Obtener todo el stock de Paris en una sola llamada
-        stock_paris_dict = {}
-        try:
-            res = req.get(f"{PARIS_BASE_URL}/v2/stock", headers=paris_headers(),
-                          params={"limit": 200, "offset": 0}, timeout=20)
-            if res.status_code == 200:
-                data = res.json()
-                for s in data.get("skus", []):
-                    sku_seller = s.get("sku_seller", "")
-                    if sku_seller:
-                        stock_paris_dict[sku_seller] = {
-                            "quantity": s.get("quantity", 0),
-                            "availableStock": s.get("availableStock", 0),
-                            "updatedAt": s.get("updatedAt", ""),
-                            "warehouseName": s.get("warehouseName", ""),
-                            "active": s.get("active", False),
-                            "title": s.get("title", "")
-                        }
-        except Exception as e:
-            return jsonify({"error_paris": str(e), "conexion": conexion}), 500
-
-        # Construir comparación
-        resultados = []
-        for fila in mapeo:
-            sku_paris = (fila.get("sku_paris", "") or "").strip()
-            if not sku_paris:
-                continue
-            sku_lusync = fila.get("sku_lusync", "")
-            prod = productos.get(sku_lusync)
-            stock_lusync = int(prod.get("stock", 0)) if prod else 0
-            paris_data = stock_paris_dict.get(sku_paris, {})
-            stock_paris = paris_data.get("quantity", None)
-
-            if stock_paris is None:
-                estado = "no_encontrado"
-            elif stock_paris == stock_lusync:
-                estado = "sincronizado"
-            else:
-                estado = "desincronizado"
-
-            resultados.append({
-                "sku_lusync": sku_lusync,
-                "sku_paris": sku_paris,
-                "nombre": fila.get("nombre", "") or paris_data.get("title", ""),
-                "stock_lusync": stock_lusync,
-                "stock_paris": stock_paris,
-                "diferencia": (stock_paris - stock_lusync) if stock_paris is not None else None,
-                "ultima_actualizacion_paris": paris_data.get("updatedAt", ""),
-                "warehouse_paris": paris_data.get("warehouseName", ""),
-                "activo_en_paris": paris_data.get("active", False),
-                "estado": estado
-            })
-
-        sincronizados = sum(1 for r in resultados if r["estado"] == "sincronizado")
-        return jsonify({
-            "conexion": conexion,
-            "total": len(resultados),
-            "sincronizados": sincronizados,
-            "desincronizados": sum(1 for r in resultados if r["estado"] == "desincronizado"),
-            "no_encontrados": sum(1 for r in resultados if r["estado"] == "no_encontrado"),
-            "resultados": resultados
-        })
-    except Exception as e:
-        import traceback
-        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+# /paris/sync_estado movido a paris.py (Blueprint)
 
 
 @app.route("/paris/forzar_sync_sku", methods=["POST"])
@@ -2228,32 +2079,217 @@ def ruta_paris_forzar_sync():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-@app.route("/paris/forzar_sync_todos", methods=["POST"])
-def ruta_paris_forzar_todos():
-    """Re-envía el stock de todos los SKUs mapeados a Paris."""
-    if not session.get("logged"): return jsonify({"ok": False}), 401
+# /paris/forzar_sync_todos movido a paris.py (Blueprint)
+
+
+
+
+
+
+@app.route("/debug/orden_meli/<order_id>")
+def debug_orden_meli(order_id):
+    """Diagnóstico exhaustivo de una orden MELI específica.
+    Te dice por qué NO se descontó el stock."""
+    if not session.get("logged"): return redirect("/")
     try:
-        from inventario import listar_sku_mapeo, cargar_productos
-        from paris import actualizar_stock_paris
-        productos = {p["sku"]: p for p in cargar_productos()}
+        from mercadolibre import obtener_orden_meli
+        from inventario import (orden_ya_procesada_texto, listar_sku_mapeo,
+                                cargar_productos, get_stock_bodega)
+        from bodegas_logic import detectar_fulfillment_meli, determinar_bodega_para_canal
+
+        # 1. Traer la orden de MELI
+        orden = obtener_orden_meli(order_id)
+        if not orden:
+            return jsonify({
+                "error": f"Orden {order_id} no encontrada en MELI API",
+                "posibles_causas": [
+                    "El order_id es incorrecto",
+                    "El token OAuth expiró",
+                    "Esta orden no pertenece a tu cuenta MELI"
+                ]
+            }), 404
+
+        # 2. Estado de la orden
+        estado = orden.get("status", "")
+        order_items = orden.get("order_items", [])
+
+        # 3. ¿Ya está marcada como procesada?
+        meli_key = f"MELI-{order_id}"
+        ya_procesada = orden_ya_procesada_texto(meli_key)
+
+        # 4. Detectar Full vs Seller
+        es_full = detectar_fulfillment_meli(orden)
+        bodega_correcta = determinar_bodega_para_canal("MercadoLibre", fulfillment=es_full)
+
+        # 5. Para cada item: buscar mapeo y verificar
+        productos_dict = {p["sku"]: p for p in cargar_productos()}
         mapeo = listar_sku_mapeo()
-        enviados = 0
-        fallidos = 0
-        for fila in mapeo:
-            sku_lusync = fila.get("sku_lusync", "")
-            sku_paris = (fila.get("sku_paris", "") or "").strip()
-            if not sku_paris or sku_lusync not in productos:
-                continue
-            stock = productos[sku_lusync]["stock"]
-            if actualizar_stock_paris(sku_lusync, stock):
-                enviados += 1
-            else:
-                fallidos += 1
-        return jsonify({"ok": True, "enviados": enviados, "fallidos": fallidos})
+        items_diagnostico = []
+        for item in order_items:
+            sku_seller = (item.get("item", {}).get("seller_custom_field", "") or "").strip()
+            item_id = item.get("item", {}).get("id", "")
+            qty = int(item.get("quantity", 1) or 1)
+
+            # Buscar SKU Lusync
+            sku_lusync_por_mapeo = None
+            for fila in mapeo:
+                if (fila.get("sku_mercadolibre") == item_id or
+                    fila.get("sku_mercadolibre") == sku_seller):
+                    sku_lusync_por_mapeo = fila.get("sku_lusync")
+                    break
+
+            sku_lusync_final = sku_lusync_por_mapeo or sku_seller
+            existe_en_inventario = sku_lusync_final in productos_dict
+
+            stock_actual_central = get_stock_bodega(sku_lusync_final, "CENTRAL") if existe_en_inventario else None
+            stock_actual_bodega_correcta = get_stock_bodega(sku_lusync_final, bodega_correcta) if existe_en_inventario else None
+
+            items_diagnostico.append({
+                "item_id_meli": item_id,
+                "sku_seller_custom_field": sku_seller,
+                "cantidad": qty,
+                "sku_encontrado_en_mapeo": sku_lusync_por_mapeo,
+                "sku_lusync_que_se_usaria": sku_lusync_final,
+                "existe_en_inventario_lusync": existe_en_inventario,
+                "stock_actual_bodega_central": stock_actual_central,
+                "stock_actual_bodega_destino": stock_actual_bodega_correcta,
+                "bodega_donde_se_descontaria": bodega_correcta
+            })
+
+        # 6. Diagnóstico final: ¿por qué falló?
+        razones = []
+        if estado not in ("paid", "confirmed", "payment_required"):
+            razones.append(f"Estado de la orden es '{estado}', solo se procesan: paid/confirmed/payment_required")
+        if ya_procesada:
+            razones.append("La orden YA estaba marcada como procesada (se ignora en sync)")
+        for it in items_diagnostico:
+            if not it["existe_en_inventario_lusync"]:
+                razones.append(f"SKU '{it['sku_lusync_que_se_usaria']}' NO existe en inventario Lusync")
+
+        return jsonify({
+            "order_id": order_id,
+            "estado_orden_meli": estado,
+            "es_fulfillment_full": es_full,
+            "bodega_donde_descontaria": bodega_correcta,
+            "ya_marcada_como_procesada": ya_procesada,
+            "items": items_diagnostico,
+            "razones_no_descontado": razones if razones else ["✓ Debería descontar correctamente"],
+            "fecha_orden": orden.get("date_created", ""),
+            "comprador": orden.get("buyer", {}).get("nickname", "")
+        })
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/debug/orden_paris/<sub_order_number>")
+def debug_orden_paris(sub_order_number):
+    """Diagnóstico exhaustivo de una orden París específica."""
+    if not session.get("logged"): return redirect("/")
+    try:
+        from paris import obtener_orden_paris, obtener_ordenes_paris_todas
+        from inventario import (orden_ya_procesada_texto, listar_sku_mapeo,
+                                cargar_productos, get_stock_bodega)
+        from bodegas_logic import detectar_fulfillment_paris, determinar_bodega_para_canal
+
+        # 1. Buscar la orden — primero intentar directo, si falla buscar en lista
+        orden = None
+        try:
+            orden = obtener_orden_paris(sub_order_number)
+        except: pass
+
+        if not orden:
+            # Buscar en todas las órdenes recientes
+            for estado in ["awaiting_fullfillment", "ready_to_ship", "shipped", "delivered", "cancelled"]:
+                try:
+                    todas = obtener_ordenes_paris_todas(dias=60, estado=estado)
+                    for so in todas:
+                        if str(so.get("subOrderNumber", "")) == str(sub_order_number):
+                            orden = so
+                            break
+                    if orden: break
+                except: continue
+
+        if not orden:
+            return jsonify({
+                "error": f"Orden {sub_order_number} no encontrada en París API (buscado 60 días, todos los estados)",
+                "posibles_causas": [
+                    "El subOrderNumber es incorrecto",
+                    "La orden tiene más de 60 días",
+                    "El estado no está en la lista buscada"
+                ]
+            }), 404
+
+        # 2. Datos de la orden
+        estado_paris = orden.get("statusName") or orden.get("status") or ""
+        paris_key = f"PARIS-{sub_order_number}"
+        ya_procesada = orden_ya_procesada_texto(paris_key)
+
+        # 3. Detectar CD vs Seller
+        es_cd = detectar_fulfillment_paris(orden)
+        bodega_correcta = determinar_bodega_para_canal("Paris", fulfillment=es_cd)
+
+        # 4. Diagnóstico de cada item
+        productos_dict = {p["sku"]: p for p in cargar_productos()}
+        mapeo = listar_sku_mapeo()
+        items_diagnostico = []
+        shipments = orden.get("shipments", [])
+        for ship in shipments:
+            for item in ship.get("items", []):
+                sku_paris = item.get("seller_sku") or item.get("sellerSku") or ""
+                qty = int(item.get("quantity", 1) or 1)
+
+                # Buscar mapeo
+                sku_lusync_por_mapeo = None
+                for fila in mapeo:
+                    if fila.get("sku_paris") == sku_paris:
+                        sku_lusync_por_mapeo = fila.get("sku_lusync")
+                        break
+
+                sku_lusync_final = sku_lusync_por_mapeo or sku_paris
+                existe = sku_lusync_final in productos_dict
+
+                stock_central = get_stock_bodega(sku_lusync_final, "CENTRAL") if existe else None
+                stock_destino = get_stock_bodega(sku_lusync_final, bodega_correcta) if existe else None
+
+                items_diagnostico.append({
+                    "sku_paris_recibido": sku_paris,
+                    "cantidad": qty,
+                    "sku_encontrado_en_mapeo": sku_lusync_por_mapeo,
+                    "sku_lusync_que_se_usaria": sku_lusync_final,
+                    "existe_en_inventario_lusync": existe,
+                    "stock_actual_bodega_central": stock_central,
+                    "stock_actual_bodega_destino": stock_destino,
+                    "bodega_donde_se_descontaria": bodega_correcta
+                })
+
+        # 5. Razones de no descuento
+        razones = []
+        estados_validos = ["awaiting_fullfillment", "ready_to_ship", "shipped", "delivered"]
+        if estado_paris not in estados_validos:
+            razones.append(f"Estado '{estado_paris}' no está en la lista que el sync procesa: {estados_validos}")
+        if ya_procesada:
+            razones.append("La orden YA estaba marcada como procesada")
+        for it in items_diagnostico:
+            if not it["existe_en_inventario_lusync"]:
+                razones.append(f"SKU '{it['sku_lusync_que_se_usaria']}' NO existe en inventario Lusync")
+
+        return jsonify({
+            "sub_order_number": sub_order_number,
+            "estado_paris": estado_paris,
+            "es_fulfillment_cd": es_cd,
+            "bodega_donde_descontaria": bodega_correcta,
+            "ya_marcada_como_procesada": ya_procesada,
+            "items": items_diagnostico,
+            "razones_no_descontado": razones if razones else ["✓ Debería descontar correctamente"],
+            "datos_orden_completos": {
+                "fecha": orden.get("createdAt") or orden.get("date_created", ""),
+                "shipments_count": len(shipments)
+            }
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
 @app.route("/debug/precios_productos")
