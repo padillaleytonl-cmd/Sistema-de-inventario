@@ -1074,6 +1074,21 @@ def init_bodegas():
         # Agregar columna bodega_codigo a movimientos si no existe
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS bodega_codigo TEXT DEFAULT 'CENTRAL'")
 
+        # Tabla de historial de importaciones de stock por bodega
+        cur.execute("""CREATE TABLE IF NOT EXISTS bodegas_imports (
+            id SERIAL PRIMARY KEY,
+            archivo TEXT NOT NULL,
+            usuario TEXT,
+            estado TEXT DEFAULT 'procesando',
+            total_filas INTEGER DEFAULT 0,
+            procesados INTEGER DEFAULT 0,
+            advertencias INTEGER DEFAULT 0,
+            errores INTEGER DEFAULT 0,
+            log TEXT,
+            created_at TIMESTAMP DEFAULT NOW(),
+            finalizado_at TIMESTAMP
+        )""")
+
         conn.commit()
 
         # MIGRACIÓN: copiar stock actual de productos a Bodega Central
@@ -1482,3 +1497,94 @@ def actualizar_nombres_bodegas():
         print(f"[Bodegas] actualizar_nombres error: {e}"); conn.rollback()
     cur.close(); conn.close()
     return actualizadas
+
+
+# ── HISTORIAL DE IMPORTACIONES DE STOCK ────────────────────────────────────
+
+def crear_import_log(archivo, usuario, total_filas):
+    """Registra el inicio de una importación. Devuelve el id."""
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("""INSERT INTO bodegas_imports
+                       (archivo, usuario, estado, total_filas)
+                       VALUES (%s, %s, 'procesando', %s) RETURNING id""",
+                    (archivo, usuario, total_filas))
+        id_ = cur.fetchone()[0]
+        conn.commit()
+        return id_
+    except Exception as e:
+        print(f"[bodegas_imports] error: {e}"); conn.rollback()
+        return None
+    finally:
+        cur.close(); conn.close()
+
+
+def actualizar_import_log(import_id, procesados=None, advertencias=None,
+                          errores=None, estado=None, log=None):
+    """Actualiza el progreso de una importación."""
+    if not import_id: return
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        sets = []
+        vals = []
+        if procesados is not None: sets.append("procesados=%s"); vals.append(procesados)
+        if advertencias is not None: sets.append("advertencias=%s"); vals.append(advertencias)
+        if errores is not None: sets.append("errores=%s"); vals.append(errores)
+        if estado is not None: sets.append("estado=%s"); vals.append(estado)
+        if log is not None: sets.append("log=%s"); vals.append(log)
+        if estado in ("ok", "error", "advertencias"):
+            sets.append("finalizado_at=NOW()")
+        if sets:
+            vals.append(import_id)
+            cur.execute(f"UPDATE bodegas_imports SET {', '.join(sets)} WHERE id=%s", tuple(vals))
+            conn.commit()
+    except Exception as e:
+        print(f"[bodegas_imports] update error: {e}"); conn.rollback()
+    finally:
+        cur.close(); conn.close()
+
+
+def listar_imports_recientes(limit=20):
+    """Lista las últimas importaciones."""
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("""SELECT id, archivo, usuario, estado, total_filas,
+                              procesados, advertencias, errores, created_at, finalizado_at
+                       FROM bodegas_imports
+                       ORDER BY id DESC LIMIT %s""", (limit,))
+        rows = cur.fetchall()
+        return [{
+            "id": r[0], "archivo": r[1], "usuario": r[2], "estado": r[3],
+            "total_filas": r[4], "procesados": r[5], "advertencias": r[6],
+            "errores": r[7], "created_at": r[8].isoformat() if r[8] else None,
+            "finalizado_at": r[9].isoformat() if r[9] else None
+        } for r in rows]
+    except Exception as e:
+        print(f"[bodegas_imports] listar error: {e}")
+        return []
+    finally:
+        cur.close(); conn.close()
+
+
+def obtener_import_log(import_id):
+    """Devuelve el detalle completo de una importación incluyendo el log."""
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("""SELECT id, archivo, usuario, estado, total_filas,
+                              procesados, advertencias, errores, log,
+                              created_at, finalizado_at
+                       FROM bodegas_imports WHERE id=%s""", (import_id,))
+        r = cur.fetchone()
+        if not r: return None
+        return {
+            "id": r[0], "archivo": r[1], "usuario": r[2], "estado": r[3],
+            "total_filas": r[4], "procesados": r[5], "advertencias": r[6],
+            "errores": r[7], "log": r[8],
+            "created_at": r[9].isoformat() if r[9] else None,
+            "finalizado_at": r[10].isoformat() if r[10] else None
+        }
+    except Exception as e:
+        print(f"[bodegas_imports] detalle error: {e}")
+        return None
+    finally:
+        cur.close(); conn.close()

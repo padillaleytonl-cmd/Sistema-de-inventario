@@ -2749,6 +2749,300 @@ def ruta_bodegas_actualizar_nombres():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/bodegas/matriz")
+def ruta_bodegas_matriz():
+    """Devuelve la matriz completa SKU × Bodega para la UI.
+    Returns: {bodegas: [...], skus: [{sku, nombre, stocks: {bodega: cantidad}, total}]}
+    """
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import get_conn, listar_bodegas
+        bodegas = listar_bodegas()
+        bodega_codigos = [b["codigo"] for b in bodegas]
+
+        conn = get_conn(); cur = conn.cursor()
+        # Obtener todos los productos
+        cur.execute("SELECT sku, nombre FROM productos ORDER BY nombre")
+        productos = cur.fetchall()
+
+        # Obtener todo el stock_bodega en una sola query
+        cur.execute("SELECT sku, bodega_codigo, cantidad FROM stock_bodega")
+        stock_dict = {}
+        for sku, bod, cant in cur.fetchall():
+            stock_dict.setdefault(sku, {})[bod] = int(cant or 0)
+        cur.close(); conn.close()
+
+        # Construir matriz
+        skus = []
+        for sku, nombre in productos:
+            stocks = {b: stock_dict.get(sku, {}).get(b, 0) for b in bodega_codigos}
+            total = sum(stocks.values())
+            skus.append({
+                "sku": sku,
+                "nombre": nombre or sku,
+                "stocks": stocks,
+                "total": total
+            })
+
+        return jsonify({
+            "bodegas": bodegas,
+            "skus": skus,
+            "total_skus": len(skus)
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/bodegas/descargar_plantilla")
+def ruta_bodegas_descargar_plantilla():
+    """Genera Excel con todos los SKUs y columnas por bodega para llenar."""
+    if not session.get("logged"): return redirect("/")
+    try:
+        from inventario import get_conn, listar_bodegas
+        from openpyxl import Workbook
+        from io import BytesIO
+        from flask import send_file
+        from datetime import datetime
+
+        bodegas = listar_bodegas()
+
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("SELECT sku, nombre FROM productos ORDER BY nombre")
+        productos = cur.fetchall()
+        cur.execute("SELECT sku, bodega_codigo, cantidad FROM stock_bodega")
+        stock_dict = {}
+        for sku, bod, cant in cur.fetchall():
+            stock_dict.setdefault(sku, {})[bod] = int(cant or 0)
+        cur.close(); conn.close()
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Stock por Bodega"
+
+        # Encabezados: sku, nombre, + una columna por bodega
+        headers = ["sku_lusync", "nombre"] + [b["codigo"] for b in bodegas]
+        ws.append(headers)
+
+        # Estilizar encabezado
+        from openpyxl.styles import Font, PatternFill, Alignment
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+            cell.fill = PatternFill("solid", fgColor="EEEDFE")
+            cell.alignment = Alignment(horizontal="center")
+
+        # Filas con datos
+        for sku, nombre in productos:
+            row = [sku, nombre or sku]
+            for b in bodegas:
+                row.append(stock_dict.get(sku, {}).get(b["codigo"], 0))
+            ws.append(row)
+
+        # Hoja con instrucciones
+        ws2 = wb.create_sheet("Instrucciones")
+        ws2.append(["Plantilla de Stock por Bodega — Lusync"])
+        ws2.append([])
+        ws2.append(["Cómo usar:"])
+        ws2.append(["1. Edita las cantidades en cada celda según tu inventario real"])
+        ws2.append(["2. NO modifiques los nombres de columnas (encabezados)"])
+        ws2.append(["3. NO modifiques la columna 'sku_lusync' (es el identificador)"])
+        ws2.append(["4. Guarda el archivo y súbelo desde el botón 'Importar Excel'"])
+        ws2.append([])
+        ws2.append(["Bodegas disponibles:"])
+        for b in bodegas:
+            ws2.append([b["codigo"], "→", b["nombre"]])
+
+        # Generar archivo en memoria
+        buf = BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+
+        nombre_archivo = f"plantilla_stock_bodegas_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        return send_file(buf, as_attachment=True, download_name=nombre_archivo,
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/bodegas/importar_excel", methods=["POST"])
+def ruta_bodegas_importar_excel():
+    """Recibe un Excel con stock por bodega y lo aplica.
+    Procesa en lotes y registra el resultado en bodegas_imports."""
+    if not session.get("logged"): return jsonify({"ok": False, "error": "no autorizado"}), 401
+    try:
+        from openpyxl import load_workbook
+        from inventario import (set_stock_bodega, listar_bodegas,
+                                crear_import_log, actualizar_import_log)
+
+        if "archivo" not in request.files:
+            return jsonify({"ok": False, "error": "Sin archivo"}), 400
+
+        archivo = request.files["archivo"]
+        wb = load_workbook(archivo, data_only=True)
+        ws = wb.active
+
+        # Leer encabezados (fila 1)
+        headers = [str(c.value).strip() if c.value else "" for c in ws[1]]
+        if "sku_lusync" not in headers:
+            return jsonify({
+                "ok": False,
+                "error": "Columna 'sku_lusync' no encontrada en el Excel"
+            }), 400
+
+        idx_sku = headers.index("sku_lusync")
+        idx_nombre = headers.index("nombre") if "nombre" in headers else None
+
+        # Identificar columnas de bodegas (códigos válidos)
+        bodegas_validas = {b["codigo"] for b in listar_bodegas()}
+        cols_bodega = {}  # {col_idx: codigo_bodega}
+        for i, h in enumerate(headers):
+            if h in bodegas_validas:
+                cols_bodega[i] = h
+
+        if not cols_bodega:
+            return jsonify({
+                "ok": False,
+                "error": f"No se encontraron columnas de bodegas válidas. Columnas válidas: {sorted(bodegas_validas)}"
+            }), 400
+
+        # Contar filas (descontando encabezado)
+        total_filas = ws.max_row - 1
+
+        # Crear log de import
+        usuario = session.get("usuario", "Sistema")
+        nombre_archivo = archivo.filename or "stock.xlsx"
+        import_id = crear_import_log(nombre_archivo, usuario, total_filas)
+
+        procesados = 0
+        advertencias = 0
+        errores = 0
+        log_lines = []
+
+        # Procesar fila por fila
+        for fila_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            try:
+                sku = str(row[idx_sku]).strip() if row[idx_sku] else ""
+                if not sku:
+                    errores += 1
+                    log_lines.append(f"× Fila {fila_idx}: SKU vacío")
+                    continue
+
+                # Aplicar cada bodega
+                cambios = []
+                for col_idx, bod_codigo in cols_bodega.items():
+                    val = row[col_idx]
+                    if val is None or val == "":
+                        continue
+                    try:
+                        cantidad = int(float(val))
+                        if cantidad < 0:
+                            advertencias += 1
+                            log_lines.append(f"! Fila {fila_idx} {sku}: {bod_codigo} negativo, ajustado a 0")
+                            cantidad = 0
+                        set_stock_bodega(sku, bod_codigo, cantidad)
+                        cambios.append(f"{bod_codigo}={cantidad}")
+                    except (ValueError, TypeError):
+                        advertencias += 1
+                        log_lines.append(f"! Fila {fila_idx} {sku}: {bod_codigo} valor inválido '{val}'")
+
+                if cambios:
+                    procesados += 1
+                    log_lines.append(f"✓ Fila {fila_idx} {sku}: {', '.join(cambios)}")
+
+                # Actualizar progreso cada 25 filas
+                if fila_idx % 25 == 0:
+                    actualizar_import_log(import_id, procesados=procesados,
+                                          advertencias=advertencias, errores=errores)
+            except Exception as e:
+                errores += 1
+                log_lines.append(f"× Fila {fila_idx}: {str(e)[:100]}")
+
+        # Estado final
+        if errores > 0 and procesados == 0:
+            estado_final = "error"
+        elif advertencias > 0 or errores > 0:
+            estado_final = "advertencias"
+        else:
+            estado_final = "ok"
+
+        actualizar_import_log(import_id,
+                              procesados=procesados,
+                              advertencias=advertencias,
+                              errores=errores,
+                              estado=estado_final,
+                              log="\n".join(log_lines[-200:]))  # últimas 200 líneas
+
+        registrar_audit(usuario, request.remote_addr, "importar_stock_bodegas",
+                        entidad="stock_bodega",
+                        detalle=f"{procesados} OK, {advertencias} adv, {errores} err")
+
+        return jsonify({
+            "ok": True,
+            "import_id": import_id,
+            "procesados": procesados,
+            "advertencias": advertencias,
+            "errores": errores,
+            "estado": estado_final,
+            "ultimas_lineas": log_lines[-20:]
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/bodegas/imports")
+def ruta_bodegas_imports():
+    """Lista las últimas importaciones."""
+    if not session.get("logged"): return jsonify({"imports": []}), 401
+    try:
+        from inventario import listar_imports_recientes
+        return jsonify({"imports": listar_imports_recientes(limit=20)})
+    except Exception as e:
+        return jsonify({"imports": [], "error": str(e)}), 500
+
+
+@app.route("/bodegas/imports/<int:import_id>")
+def ruta_bodegas_import_detalle(import_id):
+    """Detalle de una importación específica con log completo."""
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import obtener_import_log
+        det = obtener_import_log(import_id)
+        if not det:
+            return jsonify({"error": "Import no encontrado"}), 404
+        return jsonify(det)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/bodegas/guardar_lote", methods=["POST"])
+def ruta_bodegas_guardar_lote():
+    """Guarda múltiples cambios de stock en una sola llamada (edición inline en UI)."""
+    if not session.get("logged"): return jsonify({"ok": False}), 401
+    try:
+        from inventario import set_stock_bodega
+        data = request.json or {}
+        cambios = data.get("cambios", [])  # [{sku, bodega_codigo, cantidad}, ...]
+
+        guardados = 0
+        errores = []
+        for c in cambios:
+            try:
+                set_stock_bodega(c["sku"], c["bodega_codigo"], int(c["cantidad"]))
+                guardados += 1
+            except Exception as e:
+                errores.append(f"{c.get('sku')}/{c.get('bodega_codigo')}: {e}")
+
+        registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                        "editar_stock_bodegas", entidad="stock_bodega",
+                        detalle=f"{guardados} celdas actualizadas")
+
+        return jsonify({"ok": True, "guardados": guardados, "errores": errores})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/bodegas/transferir", methods=["POST"])
 def ruta_bodegas_transferir():
     """Mueve stock de una bodega a otra para un SKU."""
