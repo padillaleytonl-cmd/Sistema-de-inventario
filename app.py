@@ -2086,6 +2086,96 @@ def ruta_paris_forzar_sync():
 
 
 
+@app.route("/debug/orden_paris_raw/<sub_order_number>")
+def debug_orden_paris_raw(sub_order_number):
+    """Devuelve el JSON crudo de la orden de París para identificar el campo de estado correcto."""
+    if not session.get("logged"): return redirect("/")
+    try:
+        from paris import obtener_ordenes_paris_todas
+        # Buscar en TODOS los estados posibles que conocemos
+        for estado in ["awaiting_fullfillment", "ready_to_ship", "shipped", "delivered", "cancelled"]:
+            try:
+                todas = obtener_ordenes_paris_todas(dias=60, estado=estado)
+                for so in todas:
+                    if str(so.get("subOrderNumber", "")) == str(sub_order_number):
+                        # Devolver TODA la orden para ver qué campos tiene
+                        return jsonify({
+                            "encontrada_buscando_estado": estado,
+                            "campos_top_nivel": list(so.keys()),
+                            "orden_completa": so
+                        })
+            except Exception as e:
+                print(f"[debug] Error buscando en {estado}: {e}")
+                continue
+        return jsonify({"error": f"Orden {sub_order_number} no encontrada en ningún estado"}), 404
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/debug/orden_meli_raw/<order_id>")
+def debug_orden_meli_raw(order_id):
+    """Devuelve datos crudos de MELI sobre una orden, probando varios endpoints."""
+    if not session.get("logged"): return redirect("/")
+    try:
+        from mercadolibre import meli_headers, MELI_API_URL
+        from inventario import get_meli_auth
+        import requests as req
+
+        auth = get_meli_auth()
+        if not auth or not auth.get("access_token"):
+            return jsonify({"error": "MELI no conectado"}), 400
+
+        resultados = {
+            "user_id_seller_lusync": auth.get("user_id"),
+            "intentos": []
+        }
+
+        # Intento 1: /orders/{id} directo
+        try:
+            res = req.get(f"{MELI_API_URL}/orders/{order_id}",
+                          headers=meli_headers(), timeout=15)
+            resultados["intentos"].append({
+                "endpoint": f"/orders/{order_id}",
+                "status_code": res.status_code,
+                "respuesta": res.json() if res.status_code == 200 else res.text[:500]
+            })
+        except Exception as e:
+            resultados["intentos"].append({"endpoint": f"/orders/{order_id}", "error": str(e)})
+
+        # Intento 2: buscar la orden en /orders/search?seller=... con q=order_id
+        try:
+            res = req.get(f"{MELI_API_URL}/orders/search",
+                          headers=meli_headers(),
+                          params={"seller": auth.get("user_id"), "q": order_id, "limit": 10},
+                          timeout=15)
+            resultados["intentos"].append({
+                "endpoint": "/orders/search?q=...",
+                "status_code": res.status_code,
+                "total_resultados": res.json().get("paging", {}).get("total", 0) if res.status_code == 200 else None,
+                "primeras_3_ordenes": res.json().get("results", [])[:3] if res.status_code == 200 else res.text[:500]
+            })
+        except Exception as e:
+            resultados["intentos"].append({"endpoint": "/orders/search", "error": str(e)})
+
+        # Intento 3: ¿es un PACK? Probar /packs/{id}
+        try:
+            res = req.get(f"{MELI_API_URL}/packs/{order_id}",
+                          headers=meli_headers(), timeout=15)
+            resultados["intentos"].append({
+                "endpoint": f"/packs/{order_id}",
+                "status_code": res.status_code,
+                "respuesta": res.json() if res.status_code == 200 else res.text[:300]
+            })
+        except Exception as e:
+            resultados["intentos"].append({"endpoint": f"/packs/{order_id}", "error": str(e)})
+
+        return jsonify(resultados)
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 @app.route("/debug/orden_meli/<order_id>")
 def debug_orden_meli(order_id):
     """Diagnóstico exhaustivo de una orden MELI específica.
