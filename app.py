@@ -3031,6 +3031,96 @@ def ruta_meli_sync_ordenes():
         return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/mercadolibre/reclasificar_bodegas", methods=["GET", "POST"])
+def ruta_meli_reclasificar_bodegas():
+    """Re-clasifica las ventas históricas de MercadoLibre verificando si fueron Full o Seller.
+    Para cada movimiento MELI ya registrado, consulta el shipment y mueve el stock
+    de bodega CENTRAL a MELI_FULL si era Full (y viceversa).
+
+    Útil para corregir descuentos hechos con el detector viejo que no consultaba shipments."""
+    if not session.get("logged"): return jsonify({"ok": False}), 401
+    try:
+        from mercadolibre import obtener_orden_meli
+        from inventario import (get_conn, ajustar_stock_bodega, get_stock_bodega,
+                                determinar_bodega_para_canal)
+        from bodegas_logic import detectar_fulfillment_meli
+        registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                        "reclasificar_bodegas_meli",
+                        detalle="Re-clasificar ventas MELI por bodega correcta")
+
+        max_ordenes = int(request.args.get("max", 100))
+        dry_run = request.args.get("dry_run", "0") == "1"
+        log = []
+        movidas = 0
+        ya_correctas = 0
+        sin_orden = 0
+        errores = []
+
+        # Buscar movimientos MELI únicos por orden
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("""SELECT DISTINCT orden_id, sku, cantidad, bodega_codigo
+                       FROM movimientos
+                       WHERE canal = 'MercadoLibre'
+                         AND tipo = 'salida'
+                         AND orden_id IS NOT NULL
+                         AND orden_id != ''
+                       ORDER BY id DESC
+                       LIMIT %s""", (max_ordenes,))
+        rows = cur.fetchall()
+        cur.close(); conn.close()
+        log.append(f"Revisando {len(rows)} movimientos MELI")
+
+        for orden_id, sku, cantidad, bodega_actual in rows:
+            try:
+                orden = obtener_orden_meli(orden_id)
+                if not orden:
+                    sin_orden += 1
+                    continue
+
+                es_full = detectar_fulfillment_meli(orden)
+                bodega_correcta = determinar_bodega_para_canal("MercadoLibre", fulfillment=es_full)
+
+                if bodega_actual == bodega_correcta:
+                    ya_correctas += 1
+                    continue
+
+                # Hay que mover: reintegrar a la bodega vieja, descontar de la nueva
+                if dry_run:
+                    log.append(f"[DRY-RUN] {orden_id} {sku} ({cantidad}u): {bodega_actual} → {bodega_correcta} ({'Full' if es_full else 'Seller'})")
+                else:
+                    # Reintegrar a bodega actual (deshacer descuento original)
+                    ajustar_stock_bodega(sku, bodega_actual, cantidad)
+                    # Descontar de bodega correcta
+                    ajustar_stock_bodega(sku, bodega_correcta, -cantidad)
+
+                    # Actualizar el bodega_codigo en el movimiento
+                    conn2 = get_conn(); cur2 = conn2.cursor()
+                    cur2.execute("""UPDATE movimientos SET bodega_codigo=%s
+                                   WHERE canal='MercadoLibre' AND tipo='salida'
+                                     AND orden_id=%s AND sku=%s""",
+                                (bodega_correcta, orden_id, sku))
+                    conn2.commit()
+                    cur2.close(); conn2.close()
+                    log.append(f"✓ {orden_id} {sku} ({cantidad}u): {bodega_actual} → {bodega_correcta}")
+                movidas += 1
+            except Exception as e:
+                errores.append(f"{orden_id}: {str(e)}")
+
+        return jsonify({
+            "ok": True,
+            "total_revisadas": len(rows),
+            "ya_correctas": ya_correctas,
+            "movidas": movidas,
+            "sin_orden_en_meli": sin_orden,
+            "dry_run": dry_run,
+            "errores": errores[:10],
+            "log": log[:60]
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+
+
 @app.route("/mercadolibre/forzar_sync_todos", methods=["POST"])
 def ruta_meli_forzar_todos():
     """Re-envía el stock de todos los SKUs mapeados a MercadoLibre."""

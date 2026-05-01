@@ -30,17 +30,56 @@ def detectar_fulfillment_meli(orden_data):
     """
     MercadoLibre Full vs Seller envía.
 
-    Campos posibles:
-      shipping.logistic_type:
-        'fulfillment'    → Full (MELI guarda y despacha)
-        'self_service'   → Seller envía con etiqueta
-        'cross_docking'  → Seller despacha a centro de MELI
-        'drop_off'       → Seller deja en punto de retiro
+    IMPORTANTE: La orden NO trae logistic_type directamente, solo shipping.id.
+    Para saber si es Full, hay que consultar /shipments/{id}.
+
+    Campos posibles donde puede venir 'fulfillment':
+      1. orden.fulfilled = true → Indicador directo (raro)
+      2. orden.shipping.logistic_type = 'fulfillment' (no aparece, viene null)
+      3. orden.tags incluye 'fulfillment' / 'fbm'
+      4. orden.shipping.id → consultar /shipments/{id}.logistic_type → AUTORITATIVO
+
+    Valores logistic_type:
+      'fulfillment'    → Full (MELI guarda y despacha)
+      'self_service'   → Seller envía con etiqueta
+      'cross_docking'  → Seller despacha a centro de MELI
+      'drop_off'       → Seller deja en punto de retiro
+      'xd_drop_off'    → variantes
     """
     try:
-        shipping = orden_data.get("shipping", {})
+        # Path 1: campo fulfilled de la orden
+        if orden_data.get("fulfilled") is True:
+            return True
+
+        # Path 2: shipping a nivel de orden (suele venir null pero por si acaso)
+        shipping = orden_data.get("shipping", {}) or {}
         logistic_type = (shipping.get("logistic_type") or "").lower()
-        return logistic_type == "fulfillment"
+        if logistic_type == "fulfillment":
+            return True
+
+        # Path 3: tags
+        tags = orden_data.get("tags", []) or []
+        if "fulfillment" in tags or "fbm" in tags:
+            return True
+
+        # Path 4 (AUTORITATIVO): consultar /shipments/{id}
+        shipping_id = shipping.get("id")
+        if shipping_id:
+            try:
+                # Importar acá para evitar circular
+                from mercadolibre import meli_headers, MELI_API_URL
+                import requests as req
+                res = req.get(f"{MELI_API_URL}/shipments/{shipping_id}",
+                              headers=meli_headers(), timeout=10)
+                if res.status_code == 200:
+                    ship = res.json()
+                    ship_logistic = (ship.get("logistic_type") or "").lower()
+                    if ship_logistic == "fulfillment":
+                        return True
+            except Exception as e:
+                print(f"[Bodegas] No se pudo consultar shipment {shipping_id}: {e}")
+
+        return False
     except Exception as e:
         print(f"[Bodegas] detectar_fulfillment_meli error: {e}")
         return False

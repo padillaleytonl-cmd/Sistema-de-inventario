@@ -1344,16 +1344,37 @@ def reintegrar_stock_bodega(sku, cantidad, bodega_codigo, motivo, canal=None, or
 
 
 def detectar_fulfillment_meli(orden_data):
-    """Detecta si una orden de MercadoLibre es Full o Seller envía."""
+    """Detecta si una orden MercadoLibre es Full o Seller envía.
+    AUTORITATIVO: consulta /shipments/{id} porque la orden no trae logistic_type."""
     try:
-        # En orders/{id}, MELI incluye shipping_id; consultar shipment da logistic_type
-        shipping = orden_data.get("shipping", {})
-        # logistic_type: 'fulfillment' = MELI Full, 'self_service'/'cross_docking'/'drop_off' = seller
-        logistic_type = shipping.get("logistic_type", "")
+        # Path 1: campo directo (raro pero posible)
+        if orden_data.get("fulfilled") is True:
+            return True
+
+        shipping = orden_data.get("shipping", {}) or {}
+        logistic_type = (shipping.get("logistic_type") or "").lower()
         if logistic_type == "fulfillment":
             return True
-        # En el payload de la orden a veces viene en shipping.id y hay que consultar /shipments/{id}
-        # Por ahora, asumimos que si NO viene logistic_type explícito, es seller envía
+
+        # Path 2: tags
+        tags = orden_data.get("tags", []) or []
+        if "fulfillment" in tags or "fbm" in tags:
+            return True
+
+        # Path 3 (AUTORITATIVO): consultar /shipments/{id}
+        shipping_id = shipping.get("id")
+        if shipping_id:
+            try:
+                from mercadolibre import meli_headers, MELI_API_URL
+                import requests as _req
+                res = _req.get(f"{MELI_API_URL}/shipments/{shipping_id}",
+                               headers=meli_headers(), timeout=10)
+                if res.status_code == 200:
+                    ship = res.json()
+                    if (ship.get("logistic_type") or "").lower() == "fulfillment":
+                        return True
+            except Exception as e:
+                print(f"[inventario] No se pudo consultar shipment {shipping_id}: {e}")
         return False
     except: return False
 
