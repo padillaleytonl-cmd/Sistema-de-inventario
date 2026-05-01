@@ -205,10 +205,18 @@ def walmart_sync_ordenes():
     log = []
 
     # Walmart Chile usa Created/Acknowledged para órdenes pendientes
-    for estado in ["Created", "Acknowledged", "Shipped", "Delivered"]:
+    # ESTADOS PRIORIZADOS: empezar por los nuevos primero (menos órdenes)
+    # Solo procesar Delivered si específicamente se pide via ?incluir_delivered=1
+    incluir_delivered = request.args.get("incluir_delivered", "0") == "1"
+    estados = ["Created", "Acknowledged", "Shipped"]
+    if incluir_delivered:
+        estados.append("Delivered")
+
+    for estado in estados:
         try:
-            ordenes = obtener_ordenes_walmart(estado)
-            log.append(f"Estado {estado}: {len(ordenes)} órdenes")
+            # Limitar a primeras 100 órdenes por estado para no agotar RAM
+            ordenes = obtener_ordenes_walmart(estado)[:100]
+            log.append(f"Estado {estado}: {len(ordenes)} órdenes (max 100)")
 
             for o in ordenes:
                 order_id = o.get("purchaseOrderId")
@@ -284,6 +292,10 @@ def walmart_sync_ordenes():
                         log.append(f"  Error línea: {e}")
 
                 nuevas += 1
+            # Liberar memoria de las órdenes procesadas
+            del ordenes
+            import gc
+            gc.collect()
         except Exception as e:
             errores.append(f"{estado}: {str(e)}")
             log.append(f"Estado {estado}: ERROR {str(e)}")
