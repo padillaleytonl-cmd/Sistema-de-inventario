@@ -99,20 +99,30 @@ def actualizar_precio_walmart(sku, precio):
 
 # ── ÓRDENES CON PAGINACIÓN ──
 
-def obtener_ordenes_walmart(estado="Created", fecha_desde=None):
-    """Obtiene órdenes de Walmart Chile. Si fecha_desde se pasa, solo trae desde ahí."""
+def obtener_ordenes_walmart(estado="Created", fecha_desde=None, max_paginas=2, limit=50, dias=30):
+    """Obtiene órdenes de Walmart Chile con paginación limitada para no agotar memoria.
+
+    Args:
+        estado: 'Created', 'Acknowledged', 'Shipped', 'Delivered'
+        fecha_desde: ISO date opcional. Si no se pasa, usa últimos 'dias' días
+        max_paginas: máximo de páginas a traer (default 2 = 100 órdenes max si limit=50)
+        limit: órdenes por página (Walmart soporta hasta 200)
+        dias: días hacia atrás (default 30) si no se pasa fecha_desde
+    """
     try:
         if fecha_desde:
             fecha_inicio = fecha_desde
         else:
-            fecha_inicio = (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%dT00:00:00.000Z")
+            fecha_inicio = (datetime.utcnow() - timedelta(days=dias)).strftime("%Y-%m-%dT00:00:00.000Z")
         todas = []
         next_cursor = None
+        pagina = 0
 
-        while True:
+        while pagina < max_paginas:
+            pagina += 1
             params = {
                 "createdStartDate": fecha_inicio,
-                "limit": 100
+                "limit": limit
             }
             if estado:
                 params["status"] = estado
@@ -122,9 +132,10 @@ def obtener_ordenes_walmart(estado="Created", fecha_desde=None):
             res = requests.get(
                 f"{WALMART_BASE_URL}/v3/orders",
                 headers=walmart_headers(),
-                params=params
+                params=params,
+                timeout=20
             )
-            print(f"[Walmart Ordenes] Estado:{estado} Status:{res.status_code}")
+            print(f"[Walmart Ordenes] Estado:{estado} Página:{pagina} Status:{res.status_code}")
 
             if res.status_code != 200:
                 print(f"[Walmart Ordenes] Error: {res.text[:200]}")
@@ -139,7 +150,7 @@ def obtener_ordenes_walmart(estado="Created", fecha_desde=None):
                 ordenes = [ordenes]
 
             todas.extend(ordenes)
-            print(f"[Walmart Ordenes] Página:{len(ordenes)} Total:{len(todas)}")
+            print(f"[Walmart Ordenes] Página:{pagina} +{len(ordenes)} Total:{len(todas)}")
 
             next_cursor = meta.get("nextCursor")
             if not next_cursor or next_cursor == "-1":
@@ -208,15 +219,16 @@ def walmart_sync_ordenes():
     # ESTADOS PRIORIZADOS: empezar por los nuevos primero (menos órdenes)
     # Solo procesar Delivered si específicamente se pide via ?incluir_delivered=1
     incluir_delivered = request.args.get("incluir_delivered", "0") == "1"
+    dias = int(request.args.get("dias", 7))   # default últimos 7 días
     estados = ["Created", "Acknowledged", "Shipped"]
     if incluir_delivered:
         estados.append("Delivered")
 
     for estado in estados:
         try:
-            # Limitar a primeras 100 órdenes por estado para no agotar RAM
-            ordenes = obtener_ordenes_walmart(estado)[:100]
-            log.append(f"Estado {estado}: {len(ordenes)} órdenes (max 100)")
+            # Solo 1 página de 50 órdenes por estado para no agotar RAM
+            ordenes = obtener_ordenes_walmart(estado, max_paginas=1, limit=50, dias=dias)
+            log.append(f"Estado {estado}: {len(ordenes)} órdenes")
 
             for o in ordenes:
                 order_id = o.get("purchaseOrderId")
