@@ -325,6 +325,57 @@ def resolver_pack_a_ordenes(pack_id):
         return []
 
 
+def obtener_sku_de_item_meli(item_id):
+    """Consulta el detalle de un item y devuelve el SKU del seller.
+    MELI guarda el SKU en varios lugares según la antigüedad de la publicación.
+    Esta función prueba todos en orden y devuelve el primero válido."""
+    try:
+        res = requests.get(
+            f"{MELI_API_URL}/items/{item_id}",
+            headers=meli_headers(),
+            timeout=15
+        )
+        if res.status_code != 200:
+            return None
+        item = res.json()
+
+        # Path 1: seller_sku directo (API moderna)
+        sku = (item.get("seller_sku") or "").strip()
+        if sku:
+            return sku
+
+        # Path 2: seller_custom_field (legacy)
+        sku = (item.get("seller_custom_field") or "").strip()
+        if sku:
+            return sku
+
+        # Path 3: en attributes (publicaciones de catálogo)
+        for attr in item.get("attributes", []):
+            attr_id = (attr.get("id") or "").upper()
+            if attr_id == "SELLER_SKU" or "SKU" in attr_id:
+                val = (attr.get("value_name") or "").strip()
+                if val:
+                    return val
+
+        # Path 4: en variations (productos con variantes)
+        for var in item.get("variations", []):
+            for attr in var.get("attributes", []):
+                attr_id = (attr.get("id") or "").upper()
+                if attr_id == "SELLER_SKU" or "SKU" in attr_id:
+                    val = (attr.get("value_name") or "").strip()
+                    if val:
+                        return val
+            # También seller_custom_field en variation
+            sku_var = (var.get("seller_custom_field") or "").strip()
+            if sku_var:
+                return sku_var
+
+        return None
+    except Exception as e:
+        print(f"[MELI] Error obteniendo SKU de item {item_id}: {e}")
+        return None
+
+
 # ── PRECIOS ─────────────────────────────────────────────────────────────────
 
 def actualizar_precio_meli(item_id, precio):
@@ -427,15 +478,40 @@ def _procesar_orden_webhook(resource):
         productos_dict = {p["sku"]: p for p in productos}
 
         for item in orden.get("order_items", []):
-            sku_meli = (item.get("item", {}).get("seller_custom_field", "")
-                        or item.get("item", {}).get("id", "")).strip()
+            item_data = item.get("item", {})
+            item_id = item_data.get("id", "")
+
+            # MELI puede tener el SKU en varios campos. Probamos por orden de confiabilidad:
+            #   1. item.seller_sku        → el campo directo más nuevo del API
+            #   2. item.seller_custom_field → campo legacy
+            #   3. CONSULTAR el detalle del item (cuando los anteriores vienen vacíos)
+            #   4. item.id                 → fallback al item_id MLC...
+            sku_meli = (
+                (item_data.get("seller_sku") or "").strip()
+                or (item_data.get("seller_custom_field") or "").strip()
+            )
+
+            # Si los campos directos están vacíos, consultar el detalle del item
+            if not sku_meli and item_id:
+                print(f"[MELI Webhook] SKU vacío en orden, consultando /items/{item_id}...")
+                sku_resuelto = obtener_sku_de_item_meli(item_id)
+                if sku_resuelto:
+                    sku_meli = sku_resuelto
+                    print(f"[MELI Webhook] SKU resuelto desde item detail: {sku_meli}")
+
+            # Último fallback: usar el item_id como SKU
+            if not sku_meli:
+                sku_meli = item_id
+
             qty = int(item.get("quantity", 1))
 
             # Buscar SKU Lusync correspondiente vía mapeo
+            # Buscar por sku_meli O por item_id (cualquiera que esté en el mapeo)
             sku_lusync = sku_meli
             try:
                 for fila in listar_sku_mapeo():
-                    if (fila.get("sku_mercadolibre") == sku_meli):
+                    sku_mapped = (fila.get("sku_mercadolibre") or "").strip()
+                    if sku_mapped and (sku_mapped == sku_meli or sku_mapped == item_id):
                         sku_lusync = fila.get("sku_lusync")
                         break
             except: pass

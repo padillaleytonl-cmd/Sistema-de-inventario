@@ -2889,16 +2889,31 @@ def ruta_meli_sync_ordenes():
                     tipo_str = "FULL" if es_full else "Seller"
 
                     for item in o.get("order_items", []):
-                        sku_seller = (item.get("item", {}).get("seller_custom_field", "") or "").strip()
-                        item_id = item.get("item", {}).get("id", "")
+                        item_data = item.get("item", {})
+                        item_id = item_data.get("id", "")
+                        # Leer SKU del campo correcto: seller_sku primero, luego seller_custom_field
+                        sku_seller = (
+                            (item_data.get("seller_sku") or "").strip()
+                            or (item_data.get("seller_custom_field") or "").strip()
+                        )
+                        # Si los campos directos están vacíos, consultar detalle del item
+                        if not sku_seller and item_id:
+                            try:
+                                from mercadolibre import obtener_sku_de_item_meli
+                                sku_resuelto = obtener_sku_de_item_meli(item_id)
+                                if sku_resuelto:
+                                    sku_seller = sku_resuelto
+                                    log.append(f"  SKU resuelto desde item detail: {sku_seller}")
+                            except Exception as e:
+                                log.append(f"  Error consultando item: {e}")
                         qty = int(item.get("quantity", 1) or 1)
 
                         # Buscar SKU en mapeo (item_id o sku_seller)
                         sku_lusync = None
                         try:
                             for fila in listar_sku_mapeo():
-                                if (fila.get("sku_mercadolibre") == item_id or
-                                    fila.get("sku_mercadolibre") == sku_seller):
+                                sku_mapped = (fila.get("sku_mercadolibre") or "").strip()
+                                if sku_mapped and (sku_mapped == item_id or sku_mapped == sku_seller):
                                     sku_lusync = fila.get("sku_lusync")
                                     break
                         except: pass
