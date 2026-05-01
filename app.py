@@ -2113,6 +2113,84 @@ def debug_orden_paris_raw(sub_order_number):
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/debug/buscar_orden_paris/<sub_order_number>")
+def debug_buscar_orden_paris(sub_order_number):
+    """Busca una orden Paris SIN filtro de estado para encontrarla."""
+    if not session.get("logged"): return redirect("/")
+    try:
+        from paris import paris_headers, PARIS_BASE_URL, get_seller_id
+        import requests as req
+        from datetime import datetime, timedelta
+
+        # Probar varias estrategias
+        resultados = {"intentos": []}
+
+        # Intento 1: buscar SIN filtro de estado (todas las órdenes 90 días)
+        for dias in [30, 60, 90, 180]:
+            fecha_desde = (datetime.utcnow() - timedelta(days=dias)).strftime("%Y-%m-%d")
+            params = {
+                "gteCreatedAt": fecha_desde,
+                "limit": 100,
+                "offset": 0
+            }
+            seller_id = get_seller_id()
+            if seller_id:
+                params["sellerId"] = seller_id
+
+            try:
+                res = req.get(f"{PARIS_BASE_URL}/v2/sub-orders",
+                              headers=paris_headers(),
+                              params=params, timeout=20)
+
+                if res.status_code != 200:
+                    resultados["intentos"].append({
+                        "dias": dias, "status_code": res.status_code,
+                        "error": res.text[:200]
+                    })
+                    continue
+
+                data = res.json()
+                ordenes = data.get("data", [])
+                total = data.get("count", 0)
+
+                # Buscar la sub-orden
+                encontrada = None
+                for o in ordenes:
+                    if str(o.get("subOrderNumber", "")) == str(sub_order_number):
+                        encontrada = o
+                        break
+
+                resultados["intentos"].append({
+                    "dias": dias,
+                    "total_ordenes_traidas": len(ordenes),
+                    "total_ordenes_paris": total,
+                    "encontrada": encontrada is not None,
+                    "campos_si_encontrada": list(encontrada.keys()) if encontrada else None,
+                    "orden_completa": encontrada
+                })
+                if encontrada:
+                    break  # ya la encontró, no seguir
+            except Exception as e:
+                resultados["intentos"].append({"dias": dias, "error": str(e)})
+
+        # Intento 2: buscar directamente por orderNumber/subOrderNumber en endpoint específico
+        try:
+            res = req.get(f"{PARIS_BASE_URL}/v2/sub-orders/{sub_order_number}",
+                          headers=paris_headers(), timeout=15)
+            resultados["endpoint_directo"] = {
+                "url": f"/v2/sub-orders/{sub_order_number}",
+                "status_code": res.status_code,
+                "respuesta": res.json() if res.status_code == 200 else res.text[:300]
+            }
+        except Exception as e:
+            resultados["endpoint_directo"] = {"error": str(e)}
+
+        return jsonify(resultados)
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 @app.route("/debug/orden_meli_raw/<order_id>")
 def debug_orden_meli_raw(order_id):
     """Devuelve datos crudos de MELI sobre una orden, probando varios endpoints."""
