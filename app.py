@@ -30,7 +30,11 @@ from inventario import (cargar_productos, guardar_productos, guardar_producto,
                         init_meli_auth, get_meli_auth, set_meli_auth, borrar_meli_auth,
                         stats_ventas_por_canal_dia, stats_top_productos_vendidos,
                         stats_movimientos_dia, stats_distribucion_stock_canal,
-                        stats_kpis_dashboard)
+                        stats_kpis_dashboard,
+                        init_bodegas, listar_bodegas, stock_por_bodega,
+                        get_stock_bodega, set_stock_bodega, ajustar_stock_bodega,
+                        listar_stock_completo, stock_total_por_bodega,
+                        determinar_bodega_para_canal)
 
 app = Flask(__name__)
 app.secret_key = "clave_super_segura"
@@ -41,6 +45,7 @@ init_audit()
 init_sku_mapeo()
 init_alertas()
 init_meli_auth()
+init_bodegas()
 
 # ── SYNC AUTOMÁTICO WALMART CADA 5 MINUTOS ──
 def _sync_walmart_automatico():
@@ -1519,38 +1524,60 @@ def paris_sync_ordenes():
         return {"error": "no autorizado"}, 401
     registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
                     "sync_paris", detalle="Sync manual órdenes Paris")
+    dias = int(request.args.get("dias", 30))
     productos = cargar_productos()
     nuevas = 0
     errores = []
-    for estado in ["awaiting_fullfillment", "ready_to_ship"]:
-        ordenes = obtener_ordenes_paris_todas(dias=7, estado=estado)
-        for so in ordenes:
-            sub_order_num = str(so.get("subOrderNumber", ""))
-            paris_key = f"PARIS-{sub_order_num}"
-            if orden_ya_procesada_texto(paris_key):
-                continue
-            shipments = so.get("shipments", [])
-            for ship in shipments:
-                items = ship.get("items", [])
-                for item in items:
-                    sku_seller = item.get("seller_sku") or item.get("sellerSku") or ""
-                    cantidad = 1
-                    if not sku_seller:
-                        continue
-                    for p in productos:
-                        if p["sku"] == sku_seller:
-                            p["stock"] = max(0, p["stock"] - cantidad)
-                            guardar_producto(p)
-                            registrar_movimiento("salida", p["sku"], p["nombre"],
-                                                cantidad, "Venta Paris",
-                                                usuario="Sistema", canal="Paris",
-                                                orden_id=sub_order_num)
-                            actualizar_stock_woo(p["sku"], p["stock"])
-                            actualizar_stock_walmart(p["sku"], p["stock"])
-                            actualizar_stock_paris(p["sku"], p["stock"])
-            marcar_orden_procesada_texto(paris_key)
-            nuevas += 1
-    return {"ok": True, "nuevas_ordenes": nuevas}
+    log = []
+    # Sync TODOS los estados activos para no perder ventas
+    estados = ["awaiting_fullfillment", "ready_to_ship", "shipped", "delivered"]
+    for estado in estados:
+        try:
+            ordenes = obtener_ordenes_paris_todas(dias=dias, estado=estado)
+            log.append(f"Estado {estado}: {len(ordenes)} órdenes")
+            for so in ordenes:
+                sub_order_num = str(so.get("subOrderNumber", ""))
+                paris_key = f"PARIS-{sub_order_num}"
+                if orden_ya_procesada_texto(paris_key):
+                    continue
+                marcar_orden_procesada_texto(paris_key)
+                shipments = so.get("shipments", [])
+                for ship in shipments:
+                    items = ship.get("items", [])
+                    for item in items:
+                        sku_seller = item.get("seller_sku") or item.get("sellerSku") or ""
+                        cantidad = int(item.get("quantity", 1) or 1)
+                        if not sku_seller:
+                            continue
+                        # Buscar en mapeo: sku_paris → sku_lusync
+                        sku_lusync = sku_seller
+                        try:
+                            from inventario import listar_sku_mapeo
+                            for fila in listar_sku_mapeo():
+                                if fila.get("sku_paris") == sku_seller:
+                                    sku_lusync = fila.get("sku_lusync")
+                                    break
+                        except: pass
+                        for p in productos:
+                            if p["sku"] == sku_lusync:
+                                p["stock"] = max(0, p["stock"] - cantidad)
+                                guardar_producto(p)
+                                registrar_movimiento("salida", p["sku"], p["nombre"],
+                                                    cantidad, "Venta Paris",
+                                                    usuario="Sistema", canal="Paris",
+                                                    orden_id=sub_order_num)
+                                try: actualizar_stock_woo(p["sku"], p["stock"])
+                                except: pass
+                                try: actualizar_stock_walmart(p["sku"], p["stock"])
+                                except: pass
+                                try: actualizar_stock_paris(p["sku"], p["stock"])
+                                except: pass
+                                break
+                nuevas += 1
+        except Exception as e:
+            errores.append(f"{estado}: {str(e)}")
+            log.append(f"Estado {estado}: ERROR {str(e)}")
+    return {"ok": True, "nuevas_ordenes": nuevas, "errores": errores, "log": log}
 
 # ── AUDIT LOG ──
 
@@ -2283,6 +2310,82 @@ def debug_precios_productos():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+
+# ── BODEGAS ─────────────────────────────────────────────────────────────────
+
+@app.route("/bodegas")
+def ruta_bodegas_listar():
+    if not session.get("logged"): return jsonify({}), 401
+    return jsonify(listar_bodegas())
+
+@app.route("/bodegas/stock")
+def ruta_bodegas_stock():
+    """Tabla completa producto × bodega para administración."""
+    if not session.get("logged"): return jsonify([]), 401
+    return jsonify(listar_stock_completo())
+
+@app.route("/bodegas/totales")
+def ruta_bodegas_totales():
+    """Totales por bodega para dashboard."""
+    if not session.get("logged"): return jsonify({}), 401
+    return jsonify(stock_total_por_bodega())
+
+@app.route("/bodegas/stock_sku")
+def ruta_bodegas_stock_sku():
+    """Stock detallado de un SKU específico en todas las bodegas."""
+    if not session.get("logged"): return jsonify({}), 401
+    sku = request.args.get("sku", "").strip()
+    if not sku: return jsonify({"error": "sku requerido"}), 400
+    return jsonify(stock_por_bodega(sku))
+
+@app.route("/bodegas/set_stock", methods=["POST"])
+def ruta_bodegas_set_stock():
+    """Establece stock de un SKU en una bodega (override)."""
+    if not session.get("logged"): return jsonify({"ok": False}), 401
+    data = request.json or {}
+    sku = (data.get("sku") or "").strip()
+    bodega = (data.get("bodega_codigo") or "").strip()
+    cantidad = int(data.get("cantidad", 0))
+    if not sku or not bodega:
+        return jsonify({"ok": False, "error": "sku y bodega_codigo requeridos"})
+    try:
+        set_stock_bodega(sku, bodega, cantidad)
+        registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                        "set_stock_bodega",
+                        detalle=f"SKU {sku} en bodega {bodega} = {cantidad}")
+        return jsonify({"ok": True, "nuevo_total": get_stock_bodega(sku, bodega)})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/bodegas/transferir", methods=["POST"])
+def ruta_bodegas_transferir():
+    """Mueve stock de una bodega a otra para un SKU."""
+    if not session.get("logged"): return jsonify({"ok": False}), 401
+    data = request.json or {}
+    sku = (data.get("sku") or "").strip()
+    desde = (data.get("desde") or "").strip()
+    hasta = (data.get("hasta") or "").strip()
+    cantidad = int(data.get("cantidad", 0))
+    if not sku or not desde or not hasta or cantidad <= 0:
+        return jsonify({"ok": False, "error": "Faltan parámetros"})
+
+    stock_origen = get_stock_bodega(sku, desde)
+    if stock_origen < cantidad:
+        return jsonify({"ok": False, "error": f"Stock insuficiente en {desde}: {stock_origen}"})
+
+    try:
+        ajustar_stock_bodega(sku, desde, -cantidad)
+        ajustar_stock_bodega(sku, hasta, cantidad)
+        registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                        "transferir_stock",
+                        detalle=f"SKU {sku}: {cantidad}u {desde} → {hasta}")
+        return jsonify({"ok": True,
+                        "stock_desde": get_stock_bodega(sku, desde),
+                        "stock_hasta": get_stock_bodega(sku, hasta)})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 # ── DASHBOARD STATS ─────────────────────────────────────────────────────────
 
 def _parse_rango_fechas():
@@ -2405,6 +2508,94 @@ def ruta_meli_publicaciones():
         return jsonify(obtener_publicaciones_meli(limite=50, offset=offset) or {"items":[],"total":0})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/mercadolibre/sync_ordenes")
+def ruta_meli_sync_ordenes():
+    """Descarga órdenes históricas de MercadoLibre y descuenta stock."""
+    if not session.get("logged"): return jsonify({"ok": False}), 401
+    try:
+        from mercadolibre import obtener_ordenes_meli
+        from datetime import datetime
+        registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                        "sync_meli", detalle="Sync manual órdenes MercadoLibre")
+
+        productos = cargar_productos()
+        nuevas = 0
+        errores = []
+        log = []
+
+        # Traer hasta 200 órdenes recientes (paginadas de 50 en 50)
+        for offset in [0, 50, 100, 150]:
+            try:
+                ordenes = obtener_ordenes_meli(limit=50, offset=offset)
+                log.append(f"Offset {offset}: {len(ordenes)} órdenes")
+                if not ordenes:
+                    break
+                for o in ordenes:
+                    order_id = str(o.get("id", ""))
+                    estado = o.get("status", "")
+                    if estado not in ("paid", "confirmed"):
+                        continue
+                    meli_key = f"MELI-{order_id}"
+                    if orden_ya_procesada_texto(meli_key):
+                        continue
+                    marcar_orden_procesada_texto(meli_key)
+
+                    # Iterar items de la orden
+                    for item in o.get("order_items", []):
+                        sku_seller = (item.get("item", {}).get("seller_custom_field", "") or "").strip()
+                        item_id = item.get("item", {}).get("id", "")
+                        qty = int(item.get("quantity", 1) or 1)
+
+                        # Buscar SKU en mapeo: el sku_mercadolibre puede ser el item_id (MLC...) o un SKU custom
+                        sku_lusync = None
+                        try:
+                            from inventario import listar_sku_mapeo
+                            for fila in listar_sku_mapeo():
+                                if (fila.get("sku_mercadolibre") == item_id or
+                                    fila.get("sku_mercadolibre") == sku_seller):
+                                    sku_lusync = fila.get("sku_lusync")
+                                    break
+                        except: pass
+
+                        # Si no hay mapeo, usar seller_custom_field como fallback
+                        if not sku_lusync and sku_seller:
+                            sku_lusync = sku_seller
+
+                        if not sku_lusync:
+                            log.append(f"Orden {order_id}: SKU no mapeado (item_id={item_id})")
+                            continue
+
+                        encontrado = False
+                        for p in productos:
+                            if p["sku"] == sku_lusync:
+                                p["stock"] = max(0, p["stock"] - qty)
+                                guardar_producto(p)
+                                registrar_movimiento("salida", p["sku"], p["nombre"],
+                                                    qty, "Venta MercadoLibre",
+                                                    usuario="Sistema", canal="MercadoLibre",
+                                                    orden_id=order_id)
+                                try: actualizar_stock_woo(p["sku"], p["stock"])
+                                except: pass
+                                try: actualizar_stock_walmart(p["sku"], p["stock"])
+                                except: pass
+                                try: actualizar_stock_paris(p["sku"], p["stock"])
+                                except: pass
+                                encontrado = True
+                                break
+                        if not encontrado:
+                            log.append(f"Orden {order_id}: SKU '{sku_lusync}' no existe en inventario")
+                    nuevas += 1
+            except Exception as e:
+                errores.append(f"offset {offset}: {str(e)}")
+                log.append(f"Offset {offset}: ERROR {str(e)}")
+                break  # si falla un offset, no seguir
+
+        return jsonify({"ok": True, "nuevas_ordenes": nuevas, "errores": errores, "log": log})
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
 
 
 @app.route("/mercadolibre/forzar_sync_todos", methods=["POST"])

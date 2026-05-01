@@ -1017,3 +1017,240 @@ def stats_kpis_dashboard(fecha_desde, fecha_hasta):
         print(f"[Stats] kpis: {e}")
     cur.close(); conn.close()
     return kpis
+
+
+# ── BODEGAS Y STOCK MULTI-BODEGA ────────────────────────────────────────────
+
+# Bodegas estándar de Lusync. Cada cliente tendrá estas mismas bodegas
+# (independiente de si usa fulfillment o no).
+BODEGAS_DEFAULT = [
+    # (codigo, nombre, tipo, canal_asociado)
+    ("CENTRAL",      "Bodega Central",         "propia",      None),
+    ("MELI_FULL",    "MercadoLibre Full",      "fulfillment", "mercadolibre"),
+    ("PARIS_CD",     "París CrossDocking",     "fulfillment", "paris"),
+    ("WALMART_FBM",  "Walmart Fulfillment",    "fulfillment", "walmart"),
+    ("FALABELLA_FBM","Falabella Fulfillment",  "fulfillment", "falabella"),
+    ("RIPLEY_FBM",   "Ripley Fulfillment",     "fulfillment", "ripley"),
+    ("HITES_FBM",    "Hites Fulfillment",      "fulfillment", "hites"),
+    ("WOO_DROP",     "WooCommerce Dropship",   "dropship",    "woocommerce"),
+]
+
+
+def init_bodegas():
+    """Crea tablas bodegas + stock_bodega y migra el stock actual a Bodega Central."""
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        # Tabla maestra de bodegas
+        cur.execute("""CREATE TABLE IF NOT EXISTS bodegas (
+            id SERIAL PRIMARY KEY,
+            codigo TEXT UNIQUE NOT NULL,
+            nombre TEXT NOT NULL,
+            tipo TEXT NOT NULL DEFAULT 'propia',
+            canal TEXT,
+            activa BOOLEAN DEFAULT TRUE,
+            orden INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT NOW()
+        )""")
+
+        # Tabla de stock por bodega (relación N:M producto-bodega)
+        cur.execute("""CREATE TABLE IF NOT EXISTS stock_bodega (
+            id SERIAL PRIMARY KEY,
+            sku TEXT NOT NULL,
+            bodega_codigo TEXT NOT NULL,
+            cantidad INTEGER DEFAULT 0,
+            actualizado_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE (sku, bodega_codigo)
+        )""")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_stock_bodega_sku ON stock_bodega(sku)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_stock_bodega_codigo ON stock_bodega(bodega_codigo)")
+
+        # Insertar bodegas default si no existen
+        for i, (codigo, nombre, tipo, canal) in enumerate(BODEGAS_DEFAULT):
+            cur.execute("""INSERT INTO bodegas (codigo, nombre, tipo, canal, orden)
+                           VALUES (%s, %s, %s, %s, %s)
+                           ON CONFLICT (codigo) DO NOTHING""",
+                        (codigo, nombre, tipo, canal, i))
+
+        # Agregar columna bodega_codigo a movimientos si no existe
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS bodega_codigo TEXT DEFAULT 'CENTRAL'")
+
+        conn.commit()
+
+        # MIGRACIÓN: copiar stock actual de productos a Bodega Central
+        cur.execute("""SELECT sku, stock FROM productos WHERE stock > 0""")
+        productos = cur.fetchall()
+        migrados = 0
+        for sku, stock in productos:
+            cur.execute("""INSERT INTO stock_bodega (sku, bodega_codigo, cantidad)
+                           VALUES (%s, 'CENTRAL', %s)
+                           ON CONFLICT (sku, bodega_codigo) DO NOTHING""",
+                        (sku, stock or 0))
+            if cur.rowcount > 0:
+                migrados += 1
+        conn.commit()
+        if migrados > 0:
+            print(f"[Bodegas] Migrados {migrados} productos a Bodega Central")
+    except Exception as e:
+        print(f"[Bodegas] init error: {e}"); conn.rollback()
+    cur.close(); conn.close()
+
+
+def listar_bodegas(solo_activas=True):
+    """Devuelve todas las bodegas configuradas."""
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        if solo_activas:
+            cur.execute("SELECT codigo, nombre, tipo, canal, activa FROM bodegas WHERE activa=TRUE ORDER BY orden, id")
+        else:
+            cur.execute("SELECT codigo, nombre, tipo, canal, activa FROM bodegas ORDER BY orden, id")
+        rows = cur.fetchall()
+    except Exception as e:
+        print(f"[Bodegas] listar error: {e}"); rows = []
+    cur.close(); conn.close()
+    return [{"codigo":r[0],"nombre":r[1],"tipo":r[2],"canal":r[3],"activa":r[4]} for r in rows]
+
+
+def stock_por_bodega(sku):
+    """Devuelve {bodega_codigo: cantidad} para un SKU."""
+    conn = get_conn(); cur = conn.cursor()
+    result = {}
+    try:
+        cur.execute("SELECT bodega_codigo, cantidad FROM stock_bodega WHERE sku=%s", (sku,))
+        result = {r[0]: int(r[1] or 0) for r in cur.fetchall()}
+    except Exception as e:
+        print(f"[Bodegas] stock_por_bodega error: {e}")
+    cur.close(); conn.close()
+    return result
+
+
+def get_stock_bodega(sku, bodega_codigo):
+    """Stock de un SKU en una bodega específica."""
+    conn = get_conn(); cur = conn.cursor()
+    cant = 0
+    try:
+        cur.execute("SELECT cantidad FROM stock_bodega WHERE sku=%s AND bodega_codigo=%s",
+                    (sku, bodega_codigo))
+        r = cur.fetchone()
+        if r: cant = int(r[0] or 0)
+    except Exception as e:
+        print(f"[Bodegas] get_stock_bodega: {e}")
+    cur.close(); conn.close()
+    return cant
+
+
+def set_stock_bodega(sku, bodega_codigo, cantidad):
+    """Establece el stock de un SKU en una bodega (override)."""
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("""INSERT INTO stock_bodega (sku, bodega_codigo, cantidad, actualizado_at)
+                       VALUES (%s, %s, %s, NOW())
+                       ON CONFLICT (sku, bodega_codigo)
+                       DO UPDATE SET cantidad=EXCLUDED.cantidad, actualizado_at=NOW()""",
+                    (sku, bodega_codigo, max(0, int(cantidad))))
+        conn.commit()
+        # Sincronizar columna stock de productos (sumatoria de todas las bodegas)
+        _recalcular_stock_total(sku)
+    except Exception as e:
+        print(f"[Bodegas] set_stock_bodega: {e}"); conn.rollback()
+    cur.close(); conn.close()
+
+
+def ajustar_stock_bodega(sku, bodega_codigo, delta):
+    """Suma o resta delta al stock de un SKU en una bodega. Retorna nuevo total."""
+    conn = get_conn(); cur = conn.cursor()
+    nuevo = 0
+    try:
+        cur.execute("""INSERT INTO stock_bodega (sku, bodega_codigo, cantidad, actualizado_at)
+                       VALUES (%s, %s, GREATEST(0, %s), NOW())
+                       ON CONFLICT (sku, bodega_codigo)
+                       DO UPDATE SET cantidad=GREATEST(0, stock_bodega.cantidad + EXCLUDED.cantidad),
+                                     actualizado_at=NOW()
+                       RETURNING cantidad""",
+                    (sku, bodega_codigo, max(0, int(delta)) if delta > 0 else int(delta)))
+        # NOTE: el INSERT inicial usa GREATEST(0, delta) por si se intenta restar de bodega vacía
+        # En el UPDATE se respeta el GREATEST(0, current+delta)
+        r = cur.fetchone()
+        if r: nuevo = int(r[0] or 0)
+        conn.commit()
+        _recalcular_stock_total(sku)
+    except Exception as e:
+        print(f"[Bodegas] ajustar_stock_bodega: {e}"); conn.rollback()
+    cur.close(); conn.close()
+    return nuevo
+
+
+def _recalcular_stock_total(sku):
+    """Sincroniza productos.stock = SUM(stock_bodega.cantidad) para un SKU."""
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("""UPDATE productos SET stock = (
+            SELECT COALESCE(SUM(cantidad), 0) FROM stock_bodega WHERE sku=%s
+        ) WHERE sku=%s""", (sku, sku))
+        conn.commit()
+    except Exception as e:
+        print(f"[Bodegas] _recalcular_stock_total: {e}"); conn.rollback()
+    cur.close(); conn.close()
+
+
+def listar_stock_completo():
+    """Tabla completa producto × bodega para vista admin de bodegas."""
+    conn = get_conn(); cur = conn.cursor()
+    result = []
+    try:
+        cur.execute("""
+            SELECT p.sku, p.nombre, p.stock,
+                   COALESCE(json_object_agg(sb.bodega_codigo, sb.cantidad)
+                            FILTER (WHERE sb.bodega_codigo IS NOT NULL), '{}'::json) AS por_bodega
+            FROM productos p
+            LEFT JOIN stock_bodega sb ON sb.sku = p.sku
+            GROUP BY p.sku, p.nombre, p.stock
+            ORDER BY p.nombre
+        """)
+        for row in cur.fetchall():
+            result.append({
+                "sku": row[0],
+                "nombre": row[1],
+                "stock_total": int(row[2] or 0),
+                "por_bodega": row[3] if isinstance(row[3], dict) else {}
+            })
+    except Exception as e:
+        print(f"[Bodegas] listar_stock_completo: {e}")
+    cur.close(); conn.close()
+    return result
+
+
+def stock_total_por_bodega():
+    """Resumen: total de unidades por bodega para dashboard."""
+    conn = get_conn(); cur = conn.cursor()
+    result = {}
+    try:
+        cur.execute("""SELECT b.codigo, b.nombre, b.tipo,
+                              COALESCE(SUM(sb.cantidad), 0) AS total
+                       FROM bodegas b
+                       LEFT JOIN stock_bodega sb ON sb.bodega_codigo = b.codigo
+                       WHERE b.activa = TRUE
+                       GROUP BY b.codigo, b.nombre, b.tipo, b.orden
+                       ORDER BY b.orden""")
+        for row in cur.fetchall():
+            result[row[0]] = {"nombre": row[1], "tipo": row[2], "total": int(row[3] or 0)}
+    except Exception as e:
+        print(f"[Bodegas] stock_total_por_bodega: {e}")
+    cur.close(); conn.close()
+    return result
+
+
+def determinar_bodega_para_canal(canal, fulfillment=False):
+    """Dado un canal y si es venta fulfillment, retorna el código de bodega."""
+    if not fulfillment:
+        return "CENTRAL"
+    canal_l = (canal or "").lower()
+    mapeo = {
+        "mercadolibre": "MELI_FULL",
+        "paris":        "PARIS_CD",
+        "walmart":      "WALMART_FBM",
+        "falabella":    "FALABELLA_FBM",
+        "ripley":       "RIPLEY_FBM",
+        "hites":        "HITES_FBM",
+        "woocommerce":  "WOO_DROP",
+    }
+    return mapeo.get(canal_l, "CENTRAL")
