@@ -2462,6 +2462,94 @@ def debug_orden_paris(sub_order_number):
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/debug/orden_meli_completa/<order_id>")
+def debug_orden_meli_completa(order_id):
+    """Vuelca la orden + el item asociado para encontrar dónde está el SKU."""
+    if not session.get("logged"): return redirect("/")
+    try:
+        from mercadolibre import obtener_orden_meli, meli_headers, MELI_API_URL
+        import requests as req
+
+        # 1. Traer la orden completa
+        orden = obtener_orden_meli(order_id)
+        if not orden:
+            return jsonify({"error": "Orden no encontrada"}), 404
+
+        # 2. Para cada item, traer también el detalle del item
+        items_completos = []
+        for item in orden.get("order_items", []):
+            item_data = item.get("item", {})
+            item_id_meli = item_data.get("id", "")
+
+            # Traer el ítem completo de la API
+            item_detalle = None
+            try:
+                res = req.get(f"{MELI_API_URL}/items/{item_id_meli}",
+                              headers=meli_headers(), timeout=15)
+                if res.status_code == 200:
+                    item_detalle = res.json()
+            except Exception as e:
+                item_detalle = {"error": str(e)}
+
+            items_completos.append({
+                "item_en_orden": item_data,
+                "campos_top_nivel_item": list(item_data.keys()),
+                "item_detalle_completo": item_detalle,
+                "campos_top_nivel_detalle": list(item_detalle.keys()) if isinstance(item_detalle, dict) else None,
+                # Buscar SKU en posibles ubicaciones del detalle
+                "POSIBLES_SKU_DETECTADOS": {
+                    "item.seller_custom_field": item_data.get("seller_custom_field"),
+                    "item.seller_sku": item_data.get("seller_sku"),
+                    "detalle.seller_custom_field": item_detalle.get("seller_custom_field") if isinstance(item_detalle, dict) else None,
+                    "detalle.seller_sku": item_detalle.get("seller_sku") if isinstance(item_detalle, dict) else None,
+                    "detalle.attributes": [
+                        {"id": a.get("id"), "name": a.get("name"), "value": a.get("value_name")}
+                        for a in (item_detalle.get("attributes", []) if isinstance(item_detalle, dict) else [])
+                        if "SKU" in (a.get("id", "") + a.get("name", "")).upper()
+                    ]
+                }
+            })
+
+        return jsonify({
+            "order_id": order_id,
+            "campos_top_nivel_orden": list(orden.keys()),
+            "items": items_completos
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/debug/mapeo_completo")
+def debug_mapeo_completo():
+    """Lista TODA la tabla sku_mapeo con todos los campos para detectar dónde está E10E11E12."""
+    if not session.get("logged"): return redirect("/")
+    try:
+        from inventario import listar_sku_mapeo
+        mapeo = listar_sku_mapeo()
+
+        # Filtrar el SKU específico
+        E10 = [m for m in mapeo if m.get("sku_lusync") == "E10E11E12"]
+
+        # Buscar por 'MLC1584290001' en cualquier campo
+        contiene_MLC = []
+        for m in mapeo:
+            for campo, valor in m.items():
+                if isinstance(valor, str) and "MLC1584290001" in valor:
+                    contiene_MLC.append({"sku_lusync": m.get("sku_lusync"), "campo": campo, "valor": valor})
+
+        return jsonify({
+            "total_filas_en_tabla": len(mapeo),
+            "todos_los_campos_disponibles": list(mapeo[0].keys()) if mapeo else [],
+            "sku_E10E11E12": E10,
+            "filas_con_MLC1584290001": contiene_MLC,
+            "primeras_5_filas_completas": mapeo[:5]
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 @app.route("/debug/mapeo_meli")
 def debug_mapeo_meli():
     """Lista todos los mapeos de SKU MercadoLibre para detectar duplicados o errores."""
