@@ -2462,6 +2462,58 @@ def debug_orden_paris(sub_order_number):
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/debug/orden_meli_shipment/<order_id>")
+def debug_orden_meli_shipment(order_id):
+    """Investiga el shipment de una orden MELI para identificar Full vs Seller."""
+    if not session.get("logged"): return redirect("/")
+    try:
+        from mercadolibre import obtener_orden_meli, meli_headers, MELI_API_URL
+        import requests as req
+
+        orden = obtener_orden_meli(order_id)
+        if not orden:
+            return jsonify({"error": "Orden no encontrada"}), 404
+
+        # Obtener shipping_id
+        shipping = orden.get("shipping", {}) or {}
+        shipping_id = shipping.get("id")
+
+        resultado = {
+            "order_id": order_id,
+            "shipping_object_en_orden": shipping,
+            "shipping_id": shipping_id,
+            "tags_orden": orden.get("tags", []),
+            "fulfilled_orden": orden.get("fulfilled"),
+        }
+
+        # Si hay shipping_id, consultar /shipments/{id}
+        if shipping_id:
+            try:
+                res = req.get(f"{MELI_API_URL}/shipments/{shipping_id}",
+                              headers=meli_headers(), timeout=15)
+                if res.status_code == 200:
+                    ship_detail = res.json()
+                    resultado["shipment_detalle_completo"] = ship_detail
+                    resultado["CAMPOS_CLAVE_PARA_DETECTAR_FULL"] = {
+                        "logistic_type": ship_detail.get("logistic_type"),
+                        "logistic.type": (ship_detail.get("logistic") or {}).get("type"),
+                        "logistic.mode": (ship_detail.get("logistic") or {}).get("mode"),
+                        "shipping_mode": ship_detail.get("shipping_mode"),
+                        "shipping_option_name": (ship_detail.get("shipping_option") or {}).get("name"),
+                        "service_id": ship_detail.get("service_id"),
+                        "tags": ship_detail.get("tags", [])
+                    }
+                else:
+                    resultado["shipment_error"] = f"{res.status_code}: {res.text[:300]}"
+            except Exception as e:
+                resultado["shipment_error"] = str(e)
+
+        return jsonify(resultado)
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 @app.route("/debug/orden_meli_completa/<order_id>")
 def debug_orden_meli_completa(order_id):
     """Vuelca la orden + el item asociado para encontrar dónde está el SKU."""
