@@ -2094,8 +2094,9 @@ def debug_orden_meli(order_id):
     try:
         from mercadolibre import obtener_orden_meli
         from inventario import (orden_ya_procesada_texto, listar_sku_mapeo,
-                                cargar_productos, get_stock_bodega)
-        from bodegas_logic import detectar_fulfillment_meli, determinar_bodega_para_canal
+                                cargar_productos, get_stock_bodega,
+                                determinar_bodega_para_canal)
+        from bodegas_logic import detectar_fulfillment_meli
 
         # 1. Traer la orden de MELI
         orden = obtener_orden_meli(order_id)
@@ -2189,8 +2190,9 @@ def debug_orden_paris(sub_order_number):
     try:
         from paris import obtener_orden_paris, obtener_ordenes_paris_todas
         from inventario import (orden_ya_procesada_texto, listar_sku_mapeo,
-                                cargar_productos, get_stock_bodega)
-        from bodegas_logic import detectar_fulfillment_paris, determinar_bodega_para_canal
+                                cargar_productos, get_stock_bodega,
+                                determinar_bodega_para_canal)
+        from bodegas_logic import detectar_fulfillment_paris
 
         # 1. Buscar la orden — primero intentar directo, si falla buscar en lista
         orden = None
