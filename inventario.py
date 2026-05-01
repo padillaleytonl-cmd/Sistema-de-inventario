@@ -1027,7 +1027,7 @@ BODEGAS_DEFAULT = [
     # (codigo, nombre, tipo, canal_asociado)
     ("CENTRAL",      "Bodega Central",         "propia",      None),
     ("MELI_FULL",    "MercadoLibre Full",      "fulfillment", "mercadolibre"),
-    ("PARIS_CD",     "París CrossDocking",     "fulfillment", "paris"),
+    ("PARIS_CD",     "París Fulfillment",      "fulfillment", "paris"),
     ("WALMART_FBM",  "Walmart Fulfillment",    "fulfillment", "walmart"),
     ("FALABELLA_FBM","Falabella Fulfillment",  "fulfillment", "falabella"),
     ("RIPLEY_FBM",   "Ripley Fulfillment",     "fulfillment", "ripley"),
@@ -1254,3 +1254,187 @@ def determinar_bodega_para_canal(canal, fulfillment=False):
         "woocommerce":  "WOO_DROP",
     }
     return mapeo.get(canal_l, "CENTRAL")
+
+
+# ── DESCUENTO INTELIGENTE POR BODEGA ────────────────────────────────────────
+
+def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None,
+                                 motivo=None, usuario="Sistema"):
+    """
+    Función central que descuenta stock de la bodega correcta según el canal y tipo.
+
+    Args:
+        sku: SKU del producto
+        cantidad: unidades a descontar (positivo)
+        canal: nombre canal (WooCommerce, Walmart, Paris, MercadoLibre, etc.)
+        fulfillment: True si es venta fulfillment del marketplace, False si seller envía
+        orden_id: número de orden del marketplace
+        motivo: texto descriptivo de la venta
+        usuario: quien registra el movimiento (default Sistema)
+
+    Returns:
+        dict con: {ok, bodega_codigo, stock_bodega_antes, stock_bodega_despues, sku, cantidad}
+    """
+    bodega = determinar_bodega_para_canal(canal, fulfillment=fulfillment)
+    stock_antes = get_stock_bodega(sku, bodega)
+
+    # Si la bodega no tiene stock suficiente, descontar lo que se pueda
+    # y registrar advertencia
+    descontar = min(cantidad, stock_antes)
+    advertencia = None
+    if stock_antes < cantidad:
+        advertencia = f"Bodega {bodega} sin stock suficiente: pedidas {cantidad}, había {stock_antes}"
+        print(f"[Bodegas] WARN {advertencia}")
+
+    if descontar > 0:
+        ajustar_stock_bodega(sku, bodega, -descontar)
+
+    stock_despues = get_stock_bodega(sku, bodega)
+
+    # Registrar movimiento con la bodega
+    try:
+        conn = get_conn(); cur = conn.cursor()
+        # Buscar nombre del producto
+        cur.execute("SELECT nombre FROM productos WHERE sku=%s LIMIT 1", (sku,))
+        r = cur.fetchone()
+        nombre = r[0] if r else sku
+
+        motivo_final = motivo or f"Venta {canal}{' (Fulfillment)' if fulfillment else ''}"
+
+        cur.execute("""INSERT INTO movimientos
+            (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id, bodega_codigo)
+            VALUES ('salida', %s, %s, %s, %s, %s, %s, NOW(), %s, %s)""",
+            (sku, nombre, descontar, motivo_final, usuario, canal, orden_id, bodega))
+        conn.commit()
+        cur.close(); conn.close()
+    except Exception as e:
+        print(f"[Bodegas] Error registrando movimiento: {e}")
+
+    return {
+        "ok": True,
+        "sku": sku,
+        "cantidad_solicitada": cantidad,
+        "cantidad_descontada": descontar,
+        "bodega": bodega,
+        "stock_antes": stock_antes,
+        "stock_despues": stock_despues,
+        "advertencia": advertencia
+    }
+
+
+def reintegrar_stock_bodega(sku, cantidad, bodega_codigo, motivo, canal=None, orden_id=None,
+                             usuario="Sistema"):
+    """Reintegra stock a una bodega específica (para cancelaciones/devoluciones)."""
+    ajustar_stock_bodega(sku, bodega_codigo, cantidad)
+
+    try:
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("SELECT nombre FROM productos WHERE sku=%s LIMIT 1", (sku,))
+        r = cur.fetchone()
+        nombre = r[0] if r else sku
+
+        cur.execute("""INSERT INTO movimientos
+            (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id, bodega_codigo)
+            VALUES ('entrada', %s, %s, %s, %s, %s, %s, NOW(), %s, %s)""",
+            (sku, nombre, cantidad, motivo, usuario, canal, orden_id, bodega_codigo))
+        conn.commit()
+        cur.close(); conn.close()
+    except Exception as e:
+        print(f"[Bodegas] Error registrando entrada: {e}")
+
+
+def detectar_fulfillment_meli(orden_data):
+    """Detecta si una orden de MercadoLibre es Full o Seller envía."""
+    try:
+        # En orders/{id}, MELI incluye shipping_id; consultar shipment da logistic_type
+        shipping = orden_data.get("shipping", {})
+        # logistic_type: 'fulfillment' = MELI Full, 'self_service'/'cross_docking'/'drop_off' = seller
+        logistic_type = shipping.get("logistic_type", "")
+        if logistic_type == "fulfillment":
+            return True
+        # En el payload de la orden a veces viene en shipping.id y hay que consultar /shipments/{id}
+        # Por ahora, asumimos que si NO viene logistic_type explícito, es seller envía
+        return False
+    except: return False
+
+
+def detectar_fulfillment_paris(orden_data):
+    """Detecta si una orden París es CrossDocking o Seller normal."""
+    try:
+        # En el payload de Paris, los shipments tienen 'flow' o 'carrier'
+        # Si flow == 'CROSSDOCKING' → es CD
+        shipments = orden_data.get("shipments", [])
+        for ship in shipments:
+            flow = (ship.get("flow") or ship.get("flowType") or "").upper()
+            if "CROSS" in flow or flow == "CD":
+                return True
+        # También puede estar en orden_data.shippingType
+        shipping_type = (orden_data.get("shippingType") or orden_data.get("shipping_type") or "").upper()
+        if "CROSS" in shipping_type or shipping_type == "CD":
+            return True
+        return False
+    except: return False
+
+
+def sincronizar_stock_a_bodega_central(sku):
+    """Helper: Si productos.stock cambió por código antiguo, sincroniza a bodega CENTRAL.
+    Útil para mantener consistencia mientras se migra todo el código a bodegas."""
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT stock FROM productos WHERE sku=%s", (sku,))
+        r = cur.fetchone()
+        if r:
+            stock_total = int(r[0] or 0)
+            # Calcular cuánto hay en otras bodegas
+            cur.execute("""SELECT COALESCE(SUM(cantidad), 0)
+                          FROM stock_bodega WHERE sku=%s AND bodega_codigo != 'CENTRAL'""", (sku,))
+            otras = int(cur.fetchone()[0] or 0)
+            # Lo que va en CENTRAL es el total menos lo de otras bodegas
+            central = max(0, stock_total - otras)
+            cur.execute("""INSERT INTO stock_bodega (sku, bodega_codigo, cantidad, actualizado_at)
+                          VALUES (%s, 'CENTRAL', %s, NOW())
+                          ON CONFLICT (sku, bodega_codigo)
+                          DO UPDATE SET cantidad=EXCLUDED.cantidad, actualizado_at=NOW()""",
+                       (sku, central))
+            conn.commit()
+    except Exception as e:
+        print(f"[Bodegas] sincronizar_stock_a_bodega_central: {e}"); conn.rollback()
+    cur.close(); conn.close()
+
+
+def detectar_fulfillment_walmart(orden_data):
+    """Detecta si una orden Walmart es WFS (Walmart Fulfillment Services) o Seller envía.
+    Walmart usa varios campos según versión del API:
+      - fulfillmentInfo.fulfillmentMethod = 'wfs' o 'WFS'
+      - shippingInfo.shipMethod
+      - purchaseOrderType
+    """
+    try:
+        # Path 1: fulfillmentInfo
+        fi = orden_data.get("fulfillmentInfo", {}) or orden_data.get("fulfillment_info", {})
+        method = (fi.get("fulfillmentMethod") or fi.get("fulfillment_method") or "").upper()
+        if "WFS" in method or "FULFILLED_BY_WALMART" in method:
+            return True
+
+        # Path 2: orderType o purchaseOrderType
+        order_type = (orden_data.get("orderType") or orden_data.get("purchaseOrderType") or "").upper()
+        if "WFS" in order_type or "FULFILLED" in order_type:
+            return True
+
+        # Path 3: shippingInfo / lines (a veces el shipNode tiene "WFS")
+        ship_info = orden_data.get("shippingInfo", {}) or orden_data.get("shipping_info", {})
+        ship_method = (ship_info.get("shipMethod") or ship_info.get("methodCode") or "").upper()
+        if "WFS" in ship_method:
+            return True
+
+        # Path 4: en orderLines hay fulfillment indicator
+        order_lines = orden_data.get("orderLines", {}).get("orderLine", [])
+        if isinstance(order_lines, dict):
+            order_lines = [order_lines]
+        for line in order_lines:
+            line_fi = line.get("fulfillment", {}) or {}
+            if (line_fi.get("fulfillmentOption") or "").upper() in ("WFS", "FULFILLED_BY_WALMART"):
+                return True
+
+        return False
+    except: return False

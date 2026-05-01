@@ -76,6 +76,11 @@ def _sync_walmart_automatico():
                 if isinstance(lineas, dict):
                     lineas = [lineas]
 
+                # Detectar si esta orden es WFS (Walmart Fulfillment Services)
+                from inventario import detectar_fulfillment_walmart, descontar_venta_inteligente
+                es_wfs = detectar_fulfillment_walmart(o)
+                tipo_str = "WFS" if es_wfs else "Seller"
+
                 for linea in lineas:
                     try:
                         sku = linea.get("item", {}).get("sku")
@@ -90,18 +95,43 @@ def _sync_walmart_automatico():
                             if status_qty and status_qty.get("amount"):
                                 cantidad = int(float(status_qty.get("amount", 1)))
 
-                        for p in productos:
-                            if p["sku"] == sku:
-                                p["stock"] = max(0, p["stock"] - cantidad)
-                                guardar_producto(p)
-                                registrar_movimiento("salida", p["sku"], p["nombre"],
-                                                    cantidad, "Venta Walmart",
-                                                    usuario="Sistema", canal="Walmart",
-                                                    orden_id=customer_order_id)
-                                actualizar_stock_woo(p["sku"], p["stock"])
-                                actualizar_stock_walmart(p["sku"], p["stock"])
-                                actualizar_stock_paris(p["sku"], p["stock"])
-                                print(f"[Scheduler] SKU:{sku} Cant:{cantidad} Stock:{p['stock']}")
+                        # Buscar SKU Lusync vía mapeo (sku que viene de Walmart puede no ser igual a sku Lusync)
+                        sku_lusync = sku
+                        try:
+                            from inventario import listar_sku_mapeo
+                            for fila in listar_sku_mapeo():
+                                if fila.get("sku_walmart") == sku:
+                                    sku_lusync = fila.get("sku_lusync")
+                                    break
+                        except: pass
+
+                        # Buscar producto y descontar de bodega correcta
+                        producto_existe = any(p["sku"] == sku_lusync for p in productos)
+                        if not producto_existe:
+                            print(f"[Scheduler] SKU '{sku_lusync}' no encontrado en inventario")
+                            continue
+
+                        resultado = descontar_venta_inteligente(
+                            sku=sku_lusync,
+                            cantidad=cantidad,
+                            canal="Walmart",
+                            fulfillment=es_wfs,
+                            orden_id=customer_order_id,
+                            motivo=f"Venta Walmart {tipo_str}",
+                            usuario="Sistema"
+                        )
+                        print(f"[Scheduler] {customer_order_id} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado['bodega']}")
+
+                        # Sync a otros canales SOLO si fue Seller (afectó Central)
+                        if not es_wfs:
+                            from inventario import cargar_productos as _cp
+                            stock_total = next((pp["stock"] for pp in _cp() if pp["sku"] == sku_lusync), 0)
+                            try: actualizar_stock_woo(sku_lusync, stock_total)
+                            except: pass
+                            try: actualizar_stock_walmart(sku_lusync, stock_total)
+                            except: pass
+                            try: actualizar_stock_paris(sku_lusync, stock_total)
+                            except: pass
                     except Exception as e:
                         errores.append(str(e))
                         print(f"[Scheduler] Error linea: {e}")
@@ -280,6 +310,10 @@ def _sync_recuperacion():
                                 actualizar_stock_woo(p["sku"], p["stock"])
                                 actualizar_stock_walmart(p["sku"], p["stock"])
                                 actualizar_stock_paris(p["sku"], p["stock"])
+                                try:
+                                    from inventario import sincronizar_stock_a_bodega_central
+                                    sincronizar_stock_a_bodega_central(p["sku"])
+                                except: pass
                                 print(f"[Recuperación] SKU:{sku} Cant:{cantidad} OC:{customer_order_id}")
                     except Exception as e:
                         print(f"[Recuperación] Error linea: {e}")
@@ -803,6 +837,10 @@ def walmart_sync_ordenes():
                             actualizar_stock_woo(p["sku"], p["stock"])
                             actualizar_stock_walmart(p["sku"], p["stock"])
                             actualizar_stock_paris(p["sku"], p["stock"])
+                            try:
+                                from inventario import sincronizar_stock_a_bodega_central
+                                sincronizar_stock_a_bodega_central(p["sku"])
+                            except: pass
                             print(f"[Walmart] Procesado SKU:{sku} Cant:{cantidad} Stock restante:{p['stock']}")
                 except Exception as e:
                     errores.append(str(e))
@@ -1220,6 +1258,10 @@ def walmart_sync_debug():
                         actualizar_stock_woo(p["sku"], p["stock"])
                         actualizar_stock_walmart(p["sku"], p["stock"])
                         actualizar_stock_paris(p["sku"], p["stock"])
+                        try:
+                            from inventario import sincronizar_stock_a_bodega_central
+                            sincronizar_stock_a_bodega_central(p["sku"])
+                        except: pass
                         log.append(f"  OK {p['nombre']} stock:{stock_antes}->{p['stock']}")
 
                 if not encontrado:
@@ -1524,8 +1566,10 @@ def paris_sync_ordenes():
         return {"error": "no autorizado"}, 401
     registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
                     "sync_paris", detalle="Sync manual órdenes Paris")
+    from inventario import (descontar_venta_inteligente, detectar_fulfillment_paris,
+                            listar_sku_mapeo, cargar_productos)
     dias = int(request.args.get("dias", 30))
-    productos = cargar_productos()
+    productos_dict = {p["sku"]: p for p in cargar_productos()}
     nuevas = 0
     errores = []
     log = []
@@ -1541,6 +1585,11 @@ def paris_sync_ordenes():
                 if orden_ya_procesada_texto(paris_key):
                     continue
                 marcar_orden_procesada_texto(paris_key)
+
+                # Detectar si es CrossDocking o Seller
+                es_cd = detectar_fulfillment_paris(so)
+                tipo_str = "CD (Fulfillment)" if es_cd else "Seller"
+
                 shipments = so.get("shipments", [])
                 for ship in shipments:
                     items = ship.get("items", [])
@@ -1552,27 +1601,36 @@ def paris_sync_ordenes():
                         # Buscar en mapeo: sku_paris → sku_lusync
                         sku_lusync = sku_seller
                         try:
-                            from inventario import listar_sku_mapeo
                             for fila in listar_sku_mapeo():
                                 if fila.get("sku_paris") == sku_seller:
                                     sku_lusync = fila.get("sku_lusync")
                                     break
                         except: pass
-                        for p in productos:
-                            if p["sku"] == sku_lusync:
-                                p["stock"] = max(0, p["stock"] - cantidad)
-                                guardar_producto(p)
-                                registrar_movimiento("salida", p["sku"], p["nombre"],
-                                                    cantidad, "Venta Paris",
-                                                    usuario="Sistema", canal="Paris",
-                                                    orden_id=sub_order_num)
-                                try: actualizar_stock_woo(p["sku"], p["stock"])
-                                except: pass
-                                try: actualizar_stock_walmart(p["sku"], p["stock"])
-                                except: pass
-                                try: actualizar_stock_paris(p["sku"], p["stock"])
-                                except: pass
-                                break
+                        if sku_lusync not in productos_dict:
+                            log.append(f"Orden {sub_order_num}: SKU '{sku_lusync}' no encontrado")
+                            continue
+                        # Descontar de la bodega correcta
+                        resultado = descontar_venta_inteligente(
+                            sku=sku_lusync,
+                            cantidad=cantidad,
+                            canal="Paris",
+                            fulfillment=es_cd,
+                            orden_id=sub_order_num,
+                            motivo=f"Venta Paris {tipo_str}",
+                            usuario="Sistema"
+                        )
+                        log.append(f"{sub_order_num} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado['bodega']}")
+
+                        # Sync a otros canales SOLO si fue Seller (afectó Central)
+                        if not es_cd:
+                            from inventario import cargar_productos as _cp
+                            stock_total = next((pp["stock"] for pp in _cp() if pp["sku"] == sku_lusync), 0)
+                            try: actualizar_stock_woo(sku_lusync, stock_total)
+                            except: pass
+                            try: actualizar_stock_walmart(sku_lusync, stock_total)
+                            except: pass
+                            try: actualizar_stock_paris(sku_lusync, stock_total)
+                            except: pass
                 nuevas += 1
         except Exception as e:
             errores.append(f"{estado}: {str(e)}")
@@ -2512,15 +2570,17 @@ def ruta_meli_publicaciones():
 
 @app.route("/mercadolibre/sync_ordenes")
 def ruta_meli_sync_ordenes():
-    """Descarga órdenes históricas de MercadoLibre y descuenta stock."""
+    """Descarga órdenes históricas de MercadoLibre y descuenta stock de bodega correcta."""
     if not session.get("logged"): return jsonify({"ok": False}), 401
     try:
         from mercadolibre import obtener_ordenes_meli
+        from inventario import (descontar_venta_inteligente, detectar_fulfillment_meli,
+                                listar_sku_mapeo)
         from datetime import datetime
         registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
                         "sync_meli", detalle="Sync manual órdenes MercadoLibre")
 
-        productos = cargar_productos()
+        productos_dict = {p["sku"]: p for p in cargar_productos()}
         nuevas = 0
         errores = []
         log = []
@@ -2542,55 +2602,57 @@ def ruta_meli_sync_ordenes():
                         continue
                     marcar_orden_procesada_texto(meli_key)
 
-                    # Iterar items de la orden
+                    # Detectar Full vs Seller
+                    es_full = detectar_fulfillment_meli(o)
+                    tipo_str = "FULL" if es_full else "Seller"
+
                     for item in o.get("order_items", []):
                         sku_seller = (item.get("item", {}).get("seller_custom_field", "") or "").strip()
                         item_id = item.get("item", {}).get("id", "")
                         qty = int(item.get("quantity", 1) or 1)
 
-                        # Buscar SKU en mapeo: el sku_mercadolibre puede ser el item_id (MLC...) o un SKU custom
+                        # Buscar SKU en mapeo (item_id o sku_seller)
                         sku_lusync = None
                         try:
-                            from inventario import listar_sku_mapeo
                             for fila in listar_sku_mapeo():
                                 if (fila.get("sku_mercadolibre") == item_id or
                                     fila.get("sku_mercadolibre") == sku_seller):
                                     sku_lusync = fila.get("sku_lusync")
                                     break
                         except: pass
-
-                        # Si no hay mapeo, usar seller_custom_field como fallback
                         if not sku_lusync and sku_seller:
                             sku_lusync = sku_seller
 
-                        if not sku_lusync:
-                            log.append(f"Orden {order_id}: SKU no mapeado (item_id={item_id})")
+                        if not sku_lusync or sku_lusync not in productos_dict:
+                            log.append(f"Orden {order_id}: SKU '{sku_lusync or item_id}' no encontrado")
                             continue
 
-                        encontrado = False
-                        for p in productos:
-                            if p["sku"] == sku_lusync:
-                                p["stock"] = max(0, p["stock"] - qty)
-                                guardar_producto(p)
-                                registrar_movimiento("salida", p["sku"], p["nombre"],
-                                                    qty, "Venta MercadoLibre",
-                                                    usuario="Sistema", canal="MercadoLibre",
-                                                    orden_id=order_id)
-                                try: actualizar_stock_woo(p["sku"], p["stock"])
-                                except: pass
-                                try: actualizar_stock_walmart(p["sku"], p["stock"])
-                                except: pass
-                                try: actualizar_stock_paris(p["sku"], p["stock"])
-                                except: pass
-                                encontrado = True
-                                break
-                        if not encontrado:
-                            log.append(f"Orden {order_id}: SKU '{sku_lusync}' no existe en inventario")
+                        resultado = descontar_venta_inteligente(
+                            sku=sku_lusync,
+                            cantidad=qty,
+                            canal="MercadoLibre",
+                            fulfillment=es_full,
+                            orden_id=order_id,
+                            motivo=f"Venta MercadoLibre {tipo_str}",
+                            usuario="Sistema"
+                        )
+                        log.append(f"{order_id} {tipo_str}: {sku_lusync} -{qty} desde {resultado['bodega']}")
+
+                        # Sync a otros canales SOLO si fue Seller (afectó Central)
+                        if not es_full:
+                            from inventario import cargar_productos as _cp
+                            stock_total = next((pp["stock"] for pp in _cp() if pp["sku"] == sku_lusync), 0)
+                            try: actualizar_stock_woo(sku_lusync, stock_total)
+                            except: pass
+                            try: actualizar_stock_walmart(sku_lusync, stock_total)
+                            except: pass
+                            try: actualizar_stock_paris(sku_lusync, stock_total)
+                            except: pass
                     nuevas += 1
             except Exception as e:
                 errores.append(f"offset {offset}: {str(e)}")
                 log.append(f"Offset {offset}: ERROR {str(e)}")
-                break  # si falla un offset, no seguir
+                break
 
         return jsonify({"ok": True, "nuevas_ordenes": nuevas, "errores": errores, "log": log})
     except Exception as e:
