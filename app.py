@@ -2852,10 +2852,11 @@ def ruta_meli_publicaciones():
 
 @app.route("/mercadolibre/sync_ordenes")
 def ruta_meli_sync_ordenes():
-    """Descarga órdenes históricas de MercadoLibre y descuenta stock de bodega correcta."""
+    """Descarga órdenes históricas de MercadoLibre y descuenta stock de bodega correcta.
+    Optimizado para no agotar RAM en Render."""
     if not session.get("logged"): return jsonify({"ok": False}), 401
     try:
-        from mercadolibre import obtener_ordenes_meli
+        from mercadolibre import obtener_ordenes_meli, obtener_sku_de_item_meli
         from inventario import (descontar_venta_inteligente, detectar_fulfillment_meli,
                                 listar_sku_mapeo)
         from datetime import datetime
@@ -2867,11 +2868,19 @@ def ruta_meli_sync_ordenes():
         errores = []
         log = []
 
-        # Traer hasta 200 órdenes recientes (paginadas de 50 en 50)
-        for offset in [0, 50, 100, 150]:
+        # Cache de SKUs ya resueltos via /items/{id} para no re-consultar la misma publicación
+        cache_sku_por_item = {}
+
+        # ⚠️ PROTECCIÓN RAM: traer máx 2 páginas de 50 = 100 órdenes por request
+        # Para cargar más históricos, llamar el endpoint varias veces o usar ?paginas=4
+        max_paginas = int(request.args.get("paginas", 2))
+        log.append(f"Configuración: máx {max_paginas} páginas × 50 = {max_paginas*50} órdenes")
+
+        for pagina in range(max_paginas):
+            offset = pagina * 50
             try:
                 ordenes = obtener_ordenes_meli(limit=50, offset=offset)
-                log.append(f"Offset {offset}: {len(ordenes)} órdenes")
+                log.append(f"Página {pagina+1} (offset {offset}): {len(ordenes)} órdenes")
                 if not ordenes:
                     break
                 for o in ordenes:
@@ -2891,21 +2900,26 @@ def ruta_meli_sync_ordenes():
                     for item in o.get("order_items", []):
                         item_data = item.get("item", {})
                         item_id = item_data.get("id", "")
-                        # Leer SKU del campo correcto: seller_sku primero, luego seller_custom_field
+                        # Leer SKU: seller_sku primero, luego seller_custom_field
                         sku_seller = (
                             (item_data.get("seller_sku") or "").strip()
                             or (item_data.get("seller_custom_field") or "").strip()
                         )
-                        # Si los campos directos están vacíos, consultar detalle del item
+                        # Si vacío, consultar detalle (con cache)
                         if not sku_seller and item_id:
-                            try:
-                                from mercadolibre import obtener_sku_de_item_meli
-                                sku_resuelto = obtener_sku_de_item_meli(item_id)
-                                if sku_resuelto:
-                                    sku_seller = sku_resuelto
-                                    log.append(f"  SKU resuelto desde item detail: {sku_seller}")
-                            except Exception as e:
-                                log.append(f"  Error consultando item: {e}")
+                            if item_id in cache_sku_por_item:
+                                sku_seller = cache_sku_por_item[item_id]
+                            else:
+                                try:
+                                    sku_resuelto = obtener_sku_de_item_meli(item_id)
+                                    if sku_resuelto:
+                                        sku_seller = sku_resuelto
+                                        cache_sku_por_item[item_id] = sku_resuelto
+                                        log.append(f"  SKU resuelto desde item detail: {sku_seller}")
+                                    else:
+                                        cache_sku_por_item[item_id] = None
+                                except Exception as e:
+                                    log.append(f"  Error consultando item: {e}")
                         qty = int(item.get("quantity", 1) or 1)
 
                         # Buscar SKU en mapeo (item_id o sku_seller)
@@ -2937,21 +2951,29 @@ def ruta_meli_sync_ordenes():
 
                         # Sync a otros canales SOLO si fue Seller (afectó Central)
                         if not es_full:
-                            from inventario import cargar_productos as _cp
-                            stock_total = next((pp["stock"] for pp in _cp() if pp["sku"] == sku_lusync), 0)
-                            try: actualizar_stock_woo(sku_lusync, stock_total)
-                            except: pass
-                            try: actualizar_stock_walmart(sku_lusync, stock_total)
-                            except: pass
-                            try: actualizar_stock_paris(sku_lusync, stock_total)
-                            except: pass
+                            try:
+                                from bodegas_logic import sincronizar_stock_a_marketplaces
+                                sincronizar_stock_a_marketplaces(sku_lusync, excepto=["mercadolibre"])
+                            except Exception as e:
+                                log.append(f"  Sync cruzado falló: {e}")
                     nuevas += 1
+
+                # Liberar memoria entre páginas
+                del ordenes
+                import gc
+                gc.collect()
             except Exception as e:
-                errores.append(f"offset {offset}: {str(e)}")
-                log.append(f"Offset {offset}: ERROR {str(e)}")
+                errores.append(f"página {pagina+1}: {str(e)}")
+                log.append(f"Página {pagina+1}: ERROR {str(e)}")
                 break
 
-        return jsonify({"ok": True, "nuevas_ordenes": nuevas, "errores": errores, "log": log})
+        log.append(f"Cache SKU items consultados: {len(cache_sku_por_item)} ítems")
+        return jsonify({
+            "ok": True,
+            "nuevas_ordenes": nuevas,
+            "errores": errores,
+            "log": log
+        })
     except Exception as e:
         import traceback
         return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
