@@ -1788,6 +1788,23 @@ tbody td {
       </div>
     </div>
 
+    <!-- Card Propia vs Fulfillment (NUEVO) -->
+    <div style="margin-top:14px;">
+      <div class="card" id="cardPropiaFulfillment">
+        <div class="card-header">
+          <div>
+            <div class="card-title">Ventas: Propia vs Fulfillment</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:2px;">Distribución del período seleccionado</div>
+          </div>
+          <button class="btn-secondary" style="font-size:11px;" onclick="abrirModalPropiaFulfillment()">Ver detalle</button>
+        </div>
+
+        <div id="pfContent" style="padding:14px 4px;">
+          <div style="text-align:center;color:var(--hint);font-size:12px;padding:30px;">Cargando…</div>
+        </div>
+      </div>
+    </div>
+
     <!-- Distribución stock + Top productos -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
       <div class="card">
@@ -5904,8 +5921,207 @@ async function cargarDashboardCompleto() {
     cargarChartMovimientos(),
     cargarChartDistribucion(),
     cargarStockCritico(),
-    cargarActividad()
+    cargarActividad(),
+    cargarPropiaVsFulfillment()
   ]);
+}
+
+// ─── CARD: Propia vs Fulfillment ───────────────
+async function cargarPropiaVsFulfillment(){
+  const cont = document.getElementById('pfContent');
+  if(!cont) return;
+  try {
+    const r = dashRangoActual();
+    const res = await fetch(`/stats/propia_vs_fulfillment?desde=${r.desde}&hasta=${r.hasta}`);
+    const d = await res.json();
+    if(d.error){ cont.innerHTML = '<div style="text-align:center;color:#E24B4A;font-size:12px;padding:20px;">Error: ' + d.error + '</div>'; return; }
+    window._propiaFulfillmentData = d; // Guardar para modal
+    renderPropiaVsFulfillment(d);
+  } catch(e){
+    cont.innerHTML = '<div style="text-align:center;color:#E24B4A;font-size:12px;padding:20px;">Error: ' + e.message + '</div>';
+  }
+}
+
+function _fmtMoneda(n){
+  const num = Number(n) || 0;
+  if(num >= 1000000) return '$ ' + (num/1000000).toFixed(2).replace(/\.?0+$/,'') + 'M';
+  if(num >= 1000) return '$ ' + (num/1000).toFixed(0) + 'k';
+  return '$ ' + num.toLocaleString('es-CL');
+}
+
+function _fmtMonedaFull(n){
+  return '$ ' + (Number(n) || 0).toLocaleString('es-CL');
+}
+
+function _colorBodega(codigo){
+  const map = {
+    'CENTRAL': '#7c3aed',
+    'MELI_FULL': '#BA7517',
+    'PARIS_CD': '#0C447C',
+    'WALMART_FBM': '#0071CE',
+    'FALABELLA_FBM': '#00B25E',
+    'RIPLEY_FBM': '#A01B7A',
+    'HITES_FBM': '#E30613',
+    'WOO_DROP': '#7F54B3'
+  };
+  return map[codigo] || '#888780';
+}
+
+function renderPropiaVsFulfillment(d){
+  const cont = document.getElementById('pfContent');
+  if(!cont) return;
+
+  const propia = d.propia || {monto:0,ventas:0,porcentaje:0};
+  const full = d.fulfillment || {monto:0,ventas:0,porcentaje:0};
+  const total = d.total || 0;
+
+  if(total === 0){
+    cont.innerHTML = '<div style="text-align:center;color:var(--hint);font-size:12px;padding:30px;">No hay ventas en el período seleccionado.</div>';
+    return;
+  }
+
+  let html = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+
+      <div style="background:#EEEDFE;border-radius:10px;padding:14px;">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+          <span style="width:8px;height:8px;border-radius:50%;background:#7c3aed;"></span>
+          <span style="font-size:11px;font-weight:500;color:#3C3489;text-transform:uppercase;letter-spacing:0.5px;">Propia (Bodega Central)</span>
+        </div>
+        <div style="font-size:24px;font-weight:500;color:#26215C;">${_fmtMonedaFull(propia.monto)}</div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:#534AB7;margin-top:4px;">
+          <span>${propia.ventas} ventas · ${propia.unidades} u</span>
+          <span style="font-weight:500;">${propia.porcentaje}%</span>
+        </div>
+      </div>
+
+      <div style="background:#E1F5EE;border-radius:10px;padding:14px;">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+          <span style="width:8px;height:8px;border-radius:50%;background:#1D9E75;"></span>
+          <span style="font-size:11px;font-weight:500;color:#085041;text-transform:uppercase;letter-spacing:0.5px;">Fulfillment</span>
+        </div>
+        <div style="font-size:24px;font-weight:500;color:#04342C;">${_fmtMonedaFull(full.monto)}</div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:#0F6E56;margin-top:4px;">
+          <span>${full.ventas} ventas · ${full.unidades} u</span>
+          <span style="font-weight:500;">${full.porcentaje}%</span>
+        </div>
+      </div>
+
+    </div>
+
+    <div style="background:var(--bg2);border-radius:99px;height:8px;overflow:hidden;display:flex;margin-bottom:14px;">
+      <div style="background:#7c3aed;width:${propia.porcentaje}%;height:100%;"></div>
+      <div style="background:#1D9E75;width:${full.porcentaje}%;height:100%;"></div>
+    </div>
+
+    <div style="border-top:0.5px solid var(--border);padding-top:14px;">
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">Desglose por bodega</div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+  `;
+
+  (d.por_bodega || []).forEach(b => {
+    const pct = total > 0 ? Math.round(b.monto / total * 100) : 0;
+    const opacity = b.monto === 0 ? 0.4 : 1;
+    const nombreCorto = (b.nombre || '').replace('Bodega ','').replace(' Fulfillment','').replace(' Dropship','').trim();
+    html += `
+      <div style="display:flex;align-items:center;gap:10px;opacity:${opacity};">
+        <div style="width:90px;font-size:12px;color:var(--text);" title="${b.nombre}">${nombreCorto}</div>
+        <div style="flex:1;background:var(--bg2);border-radius:99px;height:6px;overflow:hidden;">
+          <div style="background:${_colorBodega(b.codigo)};width:${pct}%;height:100%;"></div>
+        </div>
+        <div style="font-size:12px;font-weight:500;color:var(--text);width:80px;text-align:right;">${_fmtMoneda(b.monto)}</div>
+        <div style="font-size:11px;color:var(--muted);width:36px;text-align:right;">${b.ventas}v</div>
+      </div>
+    `;
+  });
+
+  html += `</div></div>`;
+  cont.innerHTML = html;
+}
+
+function abrirModalPropiaFulfillment(){
+  const d = window._propiaFulfillmentData;
+  if(!d){ toast('Cargando datos…'); return; }
+  const total = d.total || 0;
+
+  let tablaBodegas = '';
+  (d.por_bodega || []).forEach(b => {
+    const pct = total > 0 ? Math.round(b.monto / total * 100) : 0;
+    tablaBodegas += `
+      <tr>
+        <td style="padding:8px 6px;border-bottom:0.5px solid var(--border);">
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${_colorBodega(b.codigo)};margin-right:6px;vertical-align:middle;"></span>
+          ${b.nombre}
+        </td>
+        <td style="padding:8px 6px;border-bottom:0.5px solid var(--border);font-size:11px;color:var(--muted);">${b.tipo === 'propia' ? 'Propia' : (b.tipo === 'dropship' ? 'Dropship' : 'Fulfillment')}</td>
+        <td style="padding:8px 6px;border-bottom:0.5px solid var(--border);text-align:right;">${b.ventas}</td>
+        <td style="padding:8px 6px;border-bottom:0.5px solid var(--border);text-align:right;">${b.unidades}</td>
+        <td style="padding:8px 6px;border-bottom:0.5px solid var(--border);text-align:right;font-weight:500;">${_fmtMonedaFull(b.monto)}</td>
+        <td style="padding:8px 6px;border-bottom:0.5px solid var(--border);text-align:right;color:var(--muted);">${pct}%</td>
+      </tr>
+    `;
+  });
+
+  const html = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+      <div>
+        <p style="font-size:16px;font-weight:500;margin:0;color:var(--text);">Detalle: Propia vs Fulfillment</p>
+        <p style="font-size:12px;color:var(--muted);margin:4px 0 0;">${d.desde} → ${d.hasta}</p>
+      </div>
+      <button onclick="cerrarModalPF()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--muted);">×</button>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:18px;">
+      <div style="background:#EEEDFE;border-radius:8px;padding:10px;">
+        <div style="font-size:10px;color:#3C3489;">PROPIA</div>
+        <div style="font-size:18px;font-weight:500;color:#26215C;">${_fmtMonedaFull(d.propia.monto)}</div>
+        <div style="font-size:11px;color:#534AB7;">${d.propia.ventas}v · ${d.propia.unidades}u · ${d.propia.porcentaje}%</div>
+      </div>
+      <div style="background:#E1F5EE;border-radius:8px;padding:10px;">
+        <div style="font-size:10px;color:#085041;">FULFILLMENT</div>
+        <div style="font-size:18px;font-weight:500;color:#04342C;">${_fmtMonedaFull(d.fulfillment.monto)}</div>
+        <div style="font-size:11px;color:#0F6E56;">${d.fulfillment.ventas}v · ${d.fulfillment.unidades}u · ${d.fulfillment.porcentaje}%</div>
+      </div>
+      <div style="background:var(--bg2);border-radius:8px;padding:10px;">
+        <div style="font-size:10px;color:var(--muted);">TOTAL</div>
+        <div style="font-size:18px;font-weight:500;color:var(--text);">${_fmtMonedaFull(d.total)}</div>
+        <div style="font-size:11px;color:var(--muted);">${d.propia.ventas + d.fulfillment.ventas} ventas totales</div>
+      </div>
+    </div>
+
+    <div style="overflow-x:auto;">
+      <table style="width:100%;font-size:12px;border-collapse:collapse;">
+        <thead>
+          <tr style="border-bottom:0.5px solid var(--border);">
+            <th style="text-align:left;padding:8px 6px;font-weight:500;color:var(--muted);font-size:11px;">Bodega</th>
+            <th style="text-align:left;padding:8px 6px;font-weight:500;color:var(--muted);font-size:11px;">Tipo</th>
+            <th style="text-align:right;padding:8px 6px;font-weight:500;color:var(--muted);font-size:11px;">Ventas</th>
+            <th style="text-align:right;padding:8px 6px;font-weight:500;color:var(--muted);font-size:11px;">Unidades</th>
+            <th style="text-align:right;padding:8px 6px;font-weight:500;color:var(--muted);font-size:11px;">Monto</th>
+            <th style="text-align:right;padding:8px 6px;font-weight:500;color:var(--muted);font-size:11px;">%</th>
+          </tr>
+        </thead>
+        <tbody>${tablaBodegas}</tbody>
+      </table>
+    </div>
+  `;
+
+  let modal = document.getElementById('modalPF');
+  if(!modal){
+    modal = document.createElement('div');
+    modal.id = 'modalPF';
+    modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.45);z-index:9997;display:flex;align-items:center;justify-content:center;';
+    modal.innerHTML = '<div style="background:var(--bg1);border-radius:12px;padding:22px;width:90%;max-width:680px;max-height:85vh;overflow-y:auto;border:0.5px solid var(--border);" id="modalPFInner"></div>';
+    modal.addEventListener('click', e => { if(e.target === modal) cerrarModalPF(); });
+    document.body.appendChild(modal);
+  }
+  document.getElementById('modalPFInner').innerHTML = html;
+  modal.style.display = 'flex';
+}
+
+function cerrarModalPF(){
+  const m = document.getElementById('modalPF');
+  if(m) m.style.display = 'none';
 }
 
 // Auto-init cuando se entra al dashboard

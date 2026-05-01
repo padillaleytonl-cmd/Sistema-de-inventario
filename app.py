@@ -3124,6 +3124,89 @@ def ruta_stats_distribucion():
     return jsonify(stats_distribucion_stock_canal())
 
 
+@app.route("/stats/propia_vs_fulfillment")
+def ruta_stats_propia_vs_fulfillment():
+    """Desglose de ventas por bodega: propia (CENTRAL) vs fulfillment (otras).
+    Devuelve montos, unidades y % por cada bodega individual."""
+    if not session.get("logged"): return jsonify({}), 401
+    desde, hasta = _parse_rango_fechas()
+    try:
+        from inventario import get_conn, listar_bodegas
+        conn = get_conn(); cur = conn.cursor()
+
+        # Query: agrupar movimientos de salida por bodega y calcular monto + cantidad
+        # Para el monto: cantidad × precio del producto
+        cur.execute("""
+            SELECT
+              COALESCE(m.bodega_codigo, 'CENTRAL') AS bodega,
+              COUNT(DISTINCT m.orden_id) AS ventas,
+              COALESCE(SUM(m.cantidad), 0) AS unidades,
+              COALESCE(SUM(m.cantidad * COALESCE(p.precio_oferta, p.precio_normal, 0)), 0) AS monto
+            FROM movimientos m
+            LEFT JOIN productos p ON p.sku = m.sku
+            WHERE m.tipo = 'salida'
+              AND m.canal NOT IN ('Manual', 'Sistema')
+              AND m.fecha::date BETWEEN %s AND %s
+            GROUP BY COALESCE(m.bodega_codigo, 'CENTRAL')
+        """, (desde, hasta))
+        rows = cur.fetchall()
+        cur.close(); conn.close()
+
+        # Mapear por bodega y enriquecer con metadata
+        bodegas_meta = {b["codigo"]: b for b in listar_bodegas()}
+        por_bodega = {}
+        for bod_codigo, ventas, unidades, monto in rows:
+            por_bodega[bod_codigo] = {
+                "codigo": bod_codigo,
+                "nombre": bodegas_meta.get(bod_codigo, {}).get("nombre", bod_codigo),
+                "tipo": bodegas_meta.get(bod_codigo, {}).get("tipo", "propia"),
+                "ventas": int(ventas or 0),
+                "unidades": int(unidades or 0),
+                "monto": float(monto or 0)
+            }
+
+        # Asegurar que todas las bodegas activas aparezcan (aunque sea con 0)
+        for b in listar_bodegas():
+            if b["codigo"] not in por_bodega:
+                por_bodega[b["codigo"]] = {
+                    "codigo": b["codigo"],
+                    "nombre": b["nombre"],
+                    "tipo": b["tipo"],
+                    "ventas": 0, "unidades": 0, "monto": 0
+                }
+
+        # Totales agregados: propia vs fulfillment
+        total_propia_monto = sum(b["monto"] for b in por_bodega.values() if b["tipo"] == "propia")
+        total_propia_ventas = sum(b["ventas"] for b in por_bodega.values() if b["tipo"] == "propia")
+        total_propia_unidades = sum(b["unidades"] for b in por_bodega.values() if b["tipo"] == "propia")
+        total_full_monto = sum(b["monto"] for b in por_bodega.values() if b["tipo"] != "propia")
+        total_full_ventas = sum(b["ventas"] for b in por_bodega.values() if b["tipo"] != "propia")
+        total_full_unidades = sum(b["unidades"] for b in por_bodega.values() if b["tipo"] != "propia")
+        total_general = total_propia_monto + total_full_monto
+
+        return jsonify({
+            "desde": str(desde),
+            "hasta": str(hasta),
+            "propia": {
+                "monto": total_propia_monto,
+                "ventas": total_propia_ventas,
+                "unidades": total_propia_unidades,
+                "porcentaje": round((total_propia_monto / total_general * 100) if total_general > 0 else 0, 1)
+            },
+            "fulfillment": {
+                "monto": total_full_monto,
+                "ventas": total_full_ventas,
+                "unidades": total_full_unidades,
+                "porcentaje": round((total_full_monto / total_general * 100) if total_general > 0 else 0, 1)
+            },
+            "total": total_general,
+            "por_bodega": sorted(por_bodega.values(), key=lambda x: -x["monto"])
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 # ── MERCADOLIBRE ─────────────────────────────────────────────────────────────
 
 @app.route("/mercadolibre/conectar")
