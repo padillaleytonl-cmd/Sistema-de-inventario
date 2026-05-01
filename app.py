@@ -2462,6 +2462,47 @@ def debug_orden_paris(sub_order_number):
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/debug/mapeo_meli")
+def debug_mapeo_meli():
+    """Lista todos los mapeos de SKU MercadoLibre para detectar duplicados o errores."""
+    if not session.get("logged"): return redirect("/")
+    try:
+        from inventario import listar_sku_mapeo
+        mapeo = listar_sku_mapeo()
+
+        # Filtrar solo los que tienen sku_mercadolibre
+        con_meli = [m for m in mapeo if m.get("sku_mercadolibre")]
+
+        # Detectar duplicados (mismo MLC apunta a distintos sku_lusync)
+        meli_to_lusync = {}
+        for m in con_meli:
+            sku_meli = m.get("sku_mercadolibre", "").strip()
+            sku_lusync = m.get("sku_lusync", "")
+            if sku_meli not in meli_to_lusync:
+                meli_to_lusync[sku_meli] = []
+            meli_to_lusync[sku_meli].append(sku_lusync)
+
+        duplicados = {k: v for k, v in meli_to_lusync.items() if len(v) > 1}
+
+        return jsonify({
+            "total_mapeos_con_meli": len(con_meli),
+            "lista_completa": [
+                {"sku_lusync": m.get("sku_lusync"),
+                 "sku_mercadolibre": m.get("sku_mercadolibre"),
+                 "nombre": m.get("nombre", "")}
+                for m in con_meli
+            ],
+            "DUPLICADOS_DETECTADOS": duplicados,
+            "buscar_MLC1584290001": [
+                m for m in con_meli
+                if m.get("sku_mercadolibre", "").strip() == "MLC1584290001"
+            ]
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 @app.route("/debug/precios_productos")
 def debug_precios_productos():
     """Diagnóstico: muestra los precios cargados en BD para los productos vendidos."""
