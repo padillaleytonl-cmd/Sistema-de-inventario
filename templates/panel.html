@@ -6156,8 +6156,9 @@ const CANALES_DEF = [
     accion_sync:'/mercadolibre/forzar_sync_todos' },
   { id:'falabella',   code:'FA', nombre:'Falabella', tipo:'proximamente',
     color:'#dc2626', bg:'#fee2e2' },
-  { id:'ripley',      code:'RP', nombre:'Ripley', tipo:'proximamente',
-    color:'#7c3aed', bg:'#ede9fe' },
+  { id:'ripley',      code:'RP', nombre:'Ripley', tipo:'gestionado',
+    color:'#A01B7A', bg:'#fbe6f0', estado_endpoint: '/ripley/estado',
+    accion_sync:'/ripley/sync_stock', accion_ordenes:'/ripley/sync_ordenes' },
   { id:'hites',       code:'HI', nombre:'Hites', tipo:'proximamente',
     color:'#ec4899', bg:'#fce7f3' }
 ];
@@ -6277,6 +6278,13 @@ function canalSync(id) {
     fetch('/walmart/sync', {method:'POST'}).then(()=>alert('✓ Sync Walmart iniciado'));
   } else if (id === 'woocommerce') {
     if (typeof sincronizarWoo === 'function') sincronizarWoo();
+  } else if (id === 'ripley') {
+    if (!confirm('¿Reenviar stock de todos los SKUs mapeados a Ripley?')) return;
+    fetch('/ripley/sync_stock', {method:'POST'})
+      .then(r=>r.json()).then(res=>{
+        if (res.ok) alert(`✓ ${res.enviados} enviados, ${res.fallidos} fallidos`);
+        else alert('Error: ' + (res.error || 'desconocido'));
+      });
   } else {
     alert('Canal sin sync configurado todavía');
   }
@@ -6288,6 +6296,24 @@ function canalOrdenes(id) {
     else alert('Descarga de órdenes Walmart no disponible');
   } else if (id === 'woocommerce') {
     if (typeof importarWoo === 'function') importarWoo();
+  } else if (id === 'paris') {
+    if (!confirm('¿Descargar últimas órdenes de París?')) return;
+    fetch('/paris/sync_ordenes').then(r=>r.json()).then(res=>{
+      if (res.ok) alert(`✓ ${res.nuevas_ordenes} órdenes nuevas`);
+      else alert('Error: ' + (res.error || 'desconocido'));
+    });
+  } else if (id === 'mercadolibre') {
+    if (!confirm('¿Descargar últimas órdenes de MercadoLibre?\\n(Procesa hasta 100 órdenes)')) return;
+    fetch('/mercadolibre/sync_ordenes').then(r=>r.json()).then(res=>{
+      if (res.ok) alert(`✓ ${res.nuevas_ordenes} órdenes nuevas procesadas`);
+      else alert('Error: ' + (res.error || 'desconocido'));
+    });
+  } else if (id === 'ripley') {
+    if (!confirm('¿Descargar últimas órdenes de Ripley?')) return;
+    fetch('/ripley/sync_ordenes').then(r=>r.json()).then(res=>{
+      if (res.ok) alert(`✓ ${res.nuevas_ordenes} órdenes nuevas`);
+      else alert('Error: ' + (res.error || 'desconocido'));
+    });
   } else {
     alert('Descarga de órdenes para ' + id + ' próximamente');
   }
@@ -6296,6 +6322,15 @@ function canalOrdenes(id) {
 function canalEstado(id) {
   if (id === 'paris' && typeof abrirSyncParis === 'function') {
     abrirSyncParis();
+  } else if (id === 'ripley') {
+    fetch('/ripley/estado').then(r=>r.json()).then(d=>{
+      const txt = `Conexión: ${d.conexion?.mensaje || 'desconocida'}\nOfertas visibles: ${d.ofertas_visibles}\nAPI Key: ${d.api_key_configurada ? 'configurada ✓' : 'falta'}\nURL: ${d.base_url}`;
+      alert(txt);
+    });
+  } else if (id === 'mercadolibre') {
+    fetch('/mercadolibre/estado').then(r=>r.json()).then(d=>{
+      alert(`Conectado: ${d.conectado ? 'Sí' : 'No'}\n${d.nickname ? 'Nickname: ' + d.nickname : ''}`);
+    });
   } else {
     alert('Vista de estado para ' + id + ' próximamente');
   }
@@ -6614,7 +6649,8 @@ const LIVE_CHANNELS = [
   { id:'mercadolibre',code:'ML', nombre:'MercadoLibre',  bg:'#fef3c7', color:'#fbbf24', tipo:'self-service',
     estado_endpoint:'/mercadolibre/estado' },
   { id:'falabella',   code:'FA', nombre:'Falabella',     bg:'#fee2e2', color:'#dc2626', tipo:'proximamente' },
-  { id:'ripley',      code:'RP', nombre:'Ripley',        bg:'#ede9fe', color:'#7c3aed', tipo:'proximamente' },
+  { id:'ripley',      code:'RP', nombre:'Ripley',        bg:'#fbe6f0', color:'#A01B7A', tipo:'gestionado',
+    estado_endpoint:'/ripley/estado' },
   { id:'hites',       code:'HI', nombre:'Hites',         bg:'#fce7f3', color:'#ec4899', tipo:'proximamente' }
 ];
 
