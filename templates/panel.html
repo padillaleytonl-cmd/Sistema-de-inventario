@@ -5310,13 +5310,13 @@ document.getElementById('notifModal').addEventListener('click', function(e){
   <div style="background:var(--bg);width:min(960px,94vw);max-height:88vh;border-radius:14px;box-shadow:0 20px 50px rgba(0,0,0,.3);display:flex;flex-direction:column;overflow:hidden;">
     <div style="padding:16px 20px;border-bottom:0.5px solid var(--border);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
       <div style="display:flex;align-items:center;gap:10px;">
-        <span style="font-size:18px;">🔄</span>
+        <span style="font-size:18px;" class="modal-sync-icon">🔄</span>
         <h3 style="margin:0;font-size:16px;font-weight:600;color:var(--text);">Estado de sincronización · París</h3>
         <span id="syncParisResumen" style="font-size:11px;color:var(--muted);"></span>
       </div>
       <div style="display:flex;gap:6px;">
-        <button onclick="cargarSyncParis()" id="btnRefrescarSync" style="font-size:11px;padding:6px 10px;border:0.5px solid var(--border);background:transparent;border-radius:6px;cursor:pointer;color:var(--text);">↻ Refrescar</button>
-        <button onclick="forzarSyncTodosParis()" id="btnForzarSync" style="font-size:11px;padding:6px 10px;border:0.5px solid var(--border);background:var(--navy);border-radius:6px;cursor:pointer;color:white;font-weight:600;">↑ Forzar sync de todos</button>
+        <button onclick="cargarSyncCanal()" id="btnRefrescarSync" style="font-size:11px;padding:6px 10px;border:0.5px solid var(--border);background:transparent;border-radius:6px;cursor:pointer;color:var(--text);">↻ Refrescar</button>
+        <button onclick="forzarSyncTodosCanal()" id="btnForzarSync" style="font-size:11px;padding:6px 10px;border:0.5px solid var(--border);background:var(--navy);border-radius:6px;cursor:pointer;color:white;font-weight:600;">↑ Forzar sync de todos</button>
         <button onclick="cerrarSyncParis()" style="font-size:18px;background:transparent;border:none;cursor:pointer;color:var(--muted);padding:0 6px;">×</button>
       </div>
     </div>
@@ -5331,11 +5331,137 @@ document.getElementById('notifModal').addEventListener('click', function(e){
 
 <script>
 function abrirSyncParis(){
-  document.getElementById('syncParisModal').style.display = 'flex';
-  cargarSyncParis();
+  abrirSyncCanal('paris', 'París', '🔄', '/paris/sync_estado',
+                 '/paris/forzar_sync_sku', '/paris/forzar_sync_todos',
+                 'Compara el stock de Lusync con el stock real en la API de París. Cencosud puede tardar 15min–1h en reflejar (hasta 24h en cierre de mes).');
 }
 function cerrarSyncParis(){
   document.getElementById('syncParisModal').style.display = 'none';
+}
+
+// ═══════════ MODAL DE ESTADO DE SINCRONIZACIÓN GENÉRICO (NUEVO) ═══════════
+// Reutiliza el modal de Paris para todos los canales
+let _canalSyncActual = 'paris';
+
+function abrirSyncCanal(canalId, canalNombre, icono, urlEstado, urlForzarSku, urlForzarTodos, ayuda){
+  _canalSyncActual = canalId;
+  // Actualizar título dinámicamente
+  const modal = document.getElementById('syncParisModal');
+  if(!modal) return;
+  modal.style.display = 'flex';
+  // Actualizar header
+  const headerTitle = modal.querySelector('h3');
+  if(headerTitle) headerTitle.innerHTML = 'Estado de sincronización · ' + canalNombre;
+  const headerIcon = modal.querySelector('.modal-sync-icon');
+  if(headerIcon) headerIcon.textContent = icono;
+  // Actualizar texto de ayuda
+  const info = document.getElementById('syncParisInfo');
+  if(info) info.innerHTML = ayuda;
+  // Guardar URLs en variables globales
+  window._syncCanalUrls = { estado: urlEstado, forzarSku: urlForzarSku, forzarTodos: urlForzarTodos, nombre: canalNombre };
+  cargarSyncCanal();
+}
+
+function cargarSyncCanal(){
+  var body = document.getElementById('syncParisBody');
+  var resumen = document.getElementById('syncParisResumen');
+  var urls = window._syncCanalUrls || {};
+  body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted);font-size:13px;">Consultando API de '+urls.nombre+'…</div>';
+  resumen.textContent = '';
+
+  fetch(urls.estado).then(r=>r.json()).then(data=>{
+    if(data.error){
+      body.innerHTML = '<div style="text-align:center;padding:40px;color:#e94560;font-size:13px;">Error: '+data.error+'</div>';
+      return;
+    }
+    var resultados = data.resultados || [];
+    resumen.textContent = '· '+data.sincronizados+'/'+data.total+' sincronizados';
+
+    if(!resultados.length){
+      body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted);font-size:13px;">No hay SKUs mapeados a '+urls.nombre+'. Configúralos en Mapeo SKUs.</div>';
+      return;
+    }
+
+    var html = '<div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;">';
+    html += '<div style="flex:1;min-width:120px;background:#ecfdf5;color:#065f46;border-radius:10px;padding:10px 14px;"><div style="font-size:11px;opacity:.8;">Sincronizados</div><div style="font-size:22px;font-weight:700;">'+data.sincronizados+'</div></div>';
+    html += '<div style="flex:1;min-width:120px;background:#fef3c7;color:#92400e;border-radius:10px;padding:10px 14px;"><div style="font-size:11px;opacity:.8;">Desincronizados</div><div style="font-size:22px;font-weight:700;">'+data.desincronizados+'</div></div>';
+    html += '<div style="flex:1;min-width:120px;background:#fee2e2;color:#991b1b;border-radius:10px;padding:10px 14px;"><div style="font-size:11px;opacity:.8;">No encontrados en '+urls.nombre+'</div><div style="font-size:22px;font-weight:700;">'+data.no_encontrados+'</div></div>';
+    html += '</div>';
+
+    html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+    html += '<thead><tr style="background:var(--bg2);text-align:left;color:var(--muted);font-size:11px;">';
+    html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);">SKU Lusync</th>';
+    html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);">SKU '+urls.nombre+'</th>';
+    html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);">Producto</th>';
+    html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);text-align:right;">Stock Lusync</th>';
+    html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);text-align:right;">Stock '+urls.nombre+'</th>';
+    html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);">Última act.</th>';
+    html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);">Estado</th>';
+    html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);"></th>';
+    html += '</tr></thead><tbody>';
+
+    resultados.forEach(function(r){
+      var color, label;
+      if(r.estado === 'sincronizado'){ color='#059669'; label='● Sincronizado'; }
+      else if(r.estado === 'desincronizado'){ color='#d97706'; label='⚠ Desincronizado'; }
+      else { color='#dc2626'; label='✕ No existe en '+urls.nombre; }
+
+      var stockMkt = r.stock_paris === null || r.stock_paris === undefined ? '—' : r.stock_paris;
+      var skuMkt = r.sku_paris || r.sku_meli || r.sku_walmart || r.sku_ripley || '';
+      var nombre = (r.nombre || '').length > 50 ? r.nombre.substring(0,50)+'…' : (r.nombre||'');
+      var ultimaAct = r.ultima_actualizacion_paris || r.ultima_actualizacion || '—';
+
+      html += '<tr style="border-bottom:0.5px solid var(--border);">';
+      html += '<td style="padding:8px 10px;font-family:ui-monospace,monospace;font-size:11px;">'+r.sku_lusync+'</td>';
+      html += '<td style="padding:8px 10px;font-family:ui-monospace,monospace;font-size:11px;">'+skuMkt+'</td>';
+      html += '<td style="padding:8px 10px;color:var(--muted);">'+nombre+'</td>';
+      html += '<td style="padding:8px 10px;text-align:right;font-weight:600;">'+r.stock_lusync+'</td>';
+      html += '<td style="padding:8px 10px;text-align:right;font-weight:600;">'+stockMkt+'</td>';
+      html += '<td style="padding:8px 10px;color:var(--muted);font-size:10px;">'+ultimaAct+'</td>';
+      html += '<td style="padding:8px 10px;color:'+color+';font-weight:500;font-size:11px;">'+label+'</td>';
+      html += '<td style="padding:8px 10px;text-align:right;">';
+      html += '<button onclick="forzarSyncSkuCanal(\\''+r.sku_lusync+'\\')" style="font-size:10px;padding:4px 8px;border:0.5px solid var(--border);background:transparent;border-radius:6px;cursor:pointer;color:var(--text);">↑ Reenviar</button>';
+      html += '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+
+    body.innerHTML = html;
+  }).catch(function(e){
+    body.innerHTML = '<div style="text-align:center;padding:40px;color:#e94560;font-size:13px;">Error de conexión: '+e.message+'</div>';
+  });
+}
+
+function forzarSyncSkuCanal(sku){
+  var urls = window._syncCanalUrls || {};
+  fetch(urls.forzarSku, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({sku_lusync: sku})
+  }).then(r=>r.json()).then(res=>{
+    if(res.ok){
+      alert('✓ Stock '+(res.stock_enviado || '?')+' enviado a '+urls.nombre+' para '+sku);
+      setTimeout(cargarSyncCanal, 1000);
+    } else {
+      alert('Error: '+(res.error||'desconocido'));
+    }
+  }).catch(()=>alert('Error de conexión'));
+}
+
+function forzarSyncTodosCanal(){
+  var urls = window._syncCanalUrls || {};
+  if(!confirm('¿Reenviar stock de TODOS los SKUs mapeados a '+urls.nombre+'?')) return;
+  var btn = document.getElementById('btnForzarSync');
+  btn.disabled = true; btn.textContent = 'Enviando…';
+  fetch(urls.forzarTodos, {method:'POST'}).then(r=>r.json()).then(res=>{
+    btn.disabled = false; btn.textContent = '↑ Forzar sync de todos';
+    if(res.ok){
+      alert('✓ '+res.enviados+' SKUs enviados, '+res.fallidos+' fallidos');
+      setTimeout(cargarSyncCanal, 1000);
+    } else {
+      alert('Error: '+(res.error||'desconocido'));
+    }
+  }).catch(()=>alert('Error de conexión'));
 }
 
 function cargarSyncParis(){
@@ -6323,14 +6449,17 @@ function canalEstado(id) {
   if (id === 'paris' && typeof abrirSyncParis === 'function') {
     abrirSyncParis();
   } else if (id === 'ripley') {
-    fetch('/ripley/estado').then(r=>r.json()).then(d=>{
-      const txt = `Conexión: ${d.conexion?.mensaje || 'desconocida'}\nOfertas visibles: ${d.ofertas_visibles}\nAPI Key: ${d.api_key_configurada ? 'configurada ✓' : 'falta'}\nURL: ${d.base_url}`;
-      alert(txt);
-    });
+    abrirSyncCanal('ripley', 'Ripley', '🛍', '/ripley/sync_estado',
+                   '/ripley/forzar_sync_sku', '/ripley/sync_stock',
+                   'Compara el stock de Lusync (bodega Central) con el stock real en Ripley vía Mirakl. Las actualizaciones suelen reflejar en pocos minutos.');
   } else if (id === 'mercadolibre') {
-    fetch('/mercadolibre/estado').then(r=>r.json()).then(d=>{
-      alert(`Conectado: ${d.conectado ? 'Sí' : 'No'}\n${d.nickname ? 'Nickname: ' + d.nickname : ''}`);
-    });
+    abrirSyncCanal('mercadolibre', 'MercadoLibre', '📦', '/mercadolibre/sync_estado',
+                   '/mercadolibre/forzar_sync_sku', '/mercadolibre/forzar_sync_todos',
+                   'Compara el stock de Lusync con el stock real publicado en MercadoLibre. Solo muestra los primeros 50 ítems del seller.');
+  } else if (id === 'walmart') {
+    abrirSyncCanal('walmart', 'Walmart', '🛒', '/walmart/sync_estado',
+                   '/walmart/forzar_sync_sku', '/walmart/forzar_sync_todos',
+                   'Compara el stock de Lusync con el stock real en Walmart Chile. Las actualizaciones de stock suelen reflejar en 5-15 minutos.');
   } else {
     alert('Vista de estado para ' + id + ' próximamente');
   }

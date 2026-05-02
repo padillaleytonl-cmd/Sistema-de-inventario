@@ -2085,6 +2085,249 @@ def ruta_paris_forzar_sync():
 # /paris/forzar_sync_todos movido a paris.py (Blueprint)
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# SYNC_ESTADO PARA MELI Y WALMART (NUEVO - patrón unificado)
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/mercadolibre/sync_estado")
+def ruta_meli_sync_estado():
+    """Compara stock en Lusync (CENTRAL) vs stock real en MercadoLibre.
+    Usa el mismo formato que /paris/sync_estado para reutilizar UI."""
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    try:
+        from mercadolibre import obtener_publicaciones_meli, verificar_conexion_meli
+        from inventario import listar_sku_mapeo, get_stock_bodega
+
+        conexion = verificar_conexion_meli()
+
+        # Obtener publicaciones del seller (las que están publicadas en MELI)
+        publicaciones = obtener_publicaciones_meli(limite=50, offset=0)
+        if publicaciones is None:
+            return jsonify({"error": "No se pudo conectar con MercadoLibre", "conexion": conexion}), 500
+
+        # Indexar por SKU MELI (item_id) y por seller_custom_field
+        meli_dict_por_item = {}
+        meli_dict_por_seller_sku = {}
+        for it in publicaciones.get("items", []):
+            item_id = it.get("item_id", "")
+            seller_sku = (it.get("sku_seller", "") or "").strip()
+            data_meli = {
+                "stock": it.get("stock", 0),
+                "title": it.get("title", ""),
+                "price": it.get("price", 0),
+                "status": it.get("status", "")
+            }
+            if item_id: meli_dict_por_item[item_id] = data_meli
+            if seller_sku: meli_dict_por_seller_sku[seller_sku] = data_meli
+
+        # Comparar stock CENTRAL vs MELI
+        mapeo = listar_sku_mapeo()
+        resultados = []
+        for fila in mapeo:
+            sku_meli = (fila.get("sku_mercadolibre", "") or "").strip()
+            if not sku_meli:
+                continue
+            sku_lusync = fila.get("sku_lusync", "")
+            stock_central = get_stock_bodega(sku_lusync, "CENTRAL")
+
+            # Buscar primero por item_id, después por seller_custom_field
+            meli_data = meli_dict_por_item.get(sku_meli) or meli_dict_por_seller_sku.get(sku_meli, {})
+            stock_meli = meli_data.get("stock", None) if meli_data else None
+
+            if stock_meli is None:
+                estado = "no_encontrado"
+            elif stock_meli == stock_central:
+                estado = "sincronizado"
+            else:
+                estado = "desincronizado"
+
+            resultados.append({
+                "sku_lusync": sku_lusync,
+                "sku_paris": sku_meli,  # nombre genérico para template
+                "sku_meli": sku_meli,
+                "nombre": fila.get("nombre", "") or meli_data.get("title", ""),
+                "stock_lusync": stock_central,
+                "stock_paris": stock_meli,  # nombre genérico
+                "stock_meli": stock_meli,
+                "diferencia": (stock_meli - stock_central) if stock_meli is not None else None,
+                "ultima_actualizacion_paris": "",
+                "status_meli": meli_data.get("status", ""),
+                "estado": estado
+            })
+
+        return jsonify({
+            "conexion": conexion,
+            "total": len(resultados),
+            "sincronizados": sum(1 for r in resultados if r["estado"] == "sincronizado"),
+            "desincronizados": sum(1 for r in resultados if r["estado"] == "desincronizado"),
+            "no_encontrados": sum(1 for r in resultados if r["estado"] == "no_encontrado"),
+            "resultados": resultados
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/mercadolibre/forzar_sync_sku", methods=["POST"])
+def ruta_meli_forzar_sync_sku():
+    """Re-envía el stock de un SKU específico a MercadoLibre."""
+    if not session.get("logged"): return jsonify({"ok": False}), 401
+    try:
+        from mercadolibre import actualizar_stock_meli
+        from inventario import listar_sku_mapeo, get_stock_bodega
+        data = request.json or {}
+        sku_lusync = data.get("sku_lusync", "").strip()
+        if not sku_lusync:
+            return jsonify({"ok": False, "error": "sku_lusync requerido"}), 400
+
+        sku_meli = None
+        for fila in listar_sku_mapeo():
+            if fila.get("sku_lusync") == sku_lusync:
+                sku_meli = (fila.get("sku_mercadolibre", "") or "").strip()
+                break
+        if not sku_meli:
+            return jsonify({"ok": False, "error": f"SKU {sku_lusync} no tiene mapeo MELI"}), 400
+
+        stock = get_stock_bodega(sku_lusync, "CENTRAL")
+        ok = actualizar_stock_meli(sku_meli, stock)
+        return jsonify({"ok": ok, "sku": sku_lusync, "sku_meli": sku_meli, "stock_enviado": stock})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/walmart/sync_estado")
+def ruta_walmart_sync_estado():
+    """Compara stock en Lusync (CENTRAL) vs stock real en Walmart.
+    Devuelve el mismo formato que /paris/sync_estado para reutilizar UI."""
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    try:
+        from walmart import walmart_headers, WALMART_BASE_URL
+        from inventario import listar_sku_mapeo, get_stock_bodega
+        import requests as req
+
+        # Obtener stock actual de Walmart
+        # Walmart paginar items - usar endpoint /v3/items
+        walmart_dict = {}
+        try:
+            # Buscar items del seller
+            res = req.get(
+                f"{WALMART_BASE_URL}/v3/items",
+                headers=walmart_headers(),
+                params={"limit": 200, "offset": 0},
+                timeout=20
+            )
+            if res.status_code == 200:
+                data = res.json()
+                items = data.get("ItemResponse", []) or data.get("itemResponse", []) or []
+                for it in items:
+                    sku = it.get("sku") or it.get("itemSku", "")
+                    if sku:
+                        walmart_dict[sku] = {
+                            "stock": int(it.get("availableQuantity") or it.get("totalAvailableQty") or 0),
+                            "title": it.get("productName", "") or it.get("title", ""),
+                            "price": float(it.get("price", {}).get("amount", 0)) if isinstance(it.get("price"), dict) else 0,
+                            "status": it.get("status", ""),
+                            "wfs": it.get("wfsEnabled", False)
+                        }
+        except Exception as e:
+            return jsonify({"error_walmart": str(e)}), 500
+
+        # Comparar
+        mapeo = listar_sku_mapeo()
+        resultados = []
+        for fila in mapeo:
+            sku_walmart = (fila.get("sku_walmart", "") or "").strip()
+            if not sku_walmart:
+                continue
+            sku_lusync = fila.get("sku_lusync", "")
+            stock_central = get_stock_bodega(sku_lusync, "CENTRAL")
+            wm_data = walmart_dict.get(sku_walmart, {})
+            stock_walmart = wm_data.get("stock", None) if wm_data else None
+
+            if stock_walmart is None:
+                estado = "no_encontrado"
+            elif stock_walmart == stock_central:
+                estado = "sincronizado"
+            else:
+                estado = "desincronizado"
+
+            resultados.append({
+                "sku_lusync": sku_lusync,
+                "sku_paris": sku_walmart,  # nombre genérico
+                "sku_walmart": sku_walmart,
+                "nombre": fila.get("nombre", "") or wm_data.get("title", ""),
+                "stock_lusync": stock_central,
+                "stock_paris": stock_walmart,  # nombre genérico
+                "stock_walmart": stock_walmart,
+                "diferencia": (stock_walmart - stock_central) if stock_walmart is not None else None,
+                "ultima_actualizacion_paris": "",
+                "wfs": wm_data.get("wfs", False),
+                "estado": estado
+            })
+
+        return jsonify({
+            "total": len(resultados),
+            "sincronizados": sum(1 for r in resultados if r["estado"] == "sincronizado"),
+            "desincronizados": sum(1 for r in resultados if r["estado"] == "desincronizado"),
+            "no_encontrados": sum(1 for r in resultados if r["estado"] == "no_encontrado"),
+            "resultados": resultados
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/walmart/forzar_sync_sku", methods=["POST"])
+def ruta_walmart_forzar_sync_sku():
+    """Re-envía el stock de un SKU específico a Walmart."""
+    if not session.get("logged"): return jsonify({"ok": False}), 401
+    try:
+        from walmart import actualizar_stock_walmart
+        from inventario import listar_sku_mapeo, get_stock_bodega
+        data = request.json or {}
+        sku_lusync = data.get("sku_lusync", "").strip()
+        if not sku_lusync:
+            return jsonify({"ok": False, "error": "sku_lusync requerido"}), 400
+
+        sku_walmart = None
+        for fila in listar_sku_mapeo():
+            if fila.get("sku_lusync") == sku_lusync:
+                sku_walmart = (fila.get("sku_walmart", "") or "").strip()
+                break
+        if not sku_walmart:
+            return jsonify({"ok": False, "error": f"SKU {sku_lusync} no tiene mapeo Walmart"}), 400
+
+        stock = get_stock_bodega(sku_lusync, "CENTRAL")
+        ok = actualizar_stock_walmart(sku_walmart, stock)
+        return jsonify({"ok": ok, "sku": sku_lusync, "sku_walmart": sku_walmart, "stock_enviado": stock})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/walmart/forzar_sync_todos", methods=["POST"])
+def ruta_walmart_forzar_sync_todos():
+    """Re-envía el stock de todos los SKUs mapeados a Walmart."""
+    if not session.get("logged"): return jsonify({"ok": False}), 401
+    try:
+        from walmart import actualizar_stock_walmart
+        from inventario import listar_sku_mapeo, get_stock_bodega
+        enviados = 0
+        fallidos = 0
+        for fila in listar_sku_mapeo():
+            sku_walmart = (fila.get("sku_walmart", "") or "").strip()
+            sku_lusync = fila.get("sku_lusync", "")
+            if not sku_walmart or not sku_lusync:
+                continue
+            stock = get_stock_bodega(sku_lusync, "CENTRAL")
+            if actualizar_stock_walmart(sku_walmart, stock):
+                enviados += 1
+            else:
+                fallidos += 1
+        return jsonify({"ok": True, "enviados": enviados, "fallidos": fallidos})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 
 
 
