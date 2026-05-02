@@ -22,7 +22,9 @@ from flask import Blueprint, jsonify, request, session
 # ═══════════════════════════════════════════════════════════════════════════
 # CONFIGURACIÓN
 # ═══════════════════════════════════════════════════════════════════════════
-RIPLEY_API_KEY = os.environ.get("RIPLEY_API_KEY", "fcfea486-5fcf-4af7-a7ad-aefbb51f512e")
+# IMPORTANTE: La API Key SIEMPRE debe venir de variables de entorno.
+# NUNCA hardcodearla aquí - exponer credenciales en GitHub es un riesgo de seguridad.
+RIPLEY_API_KEY = os.environ.get("RIPLEY_API_KEY", "")
 RIPLEY_BASE_URL = os.environ.get("RIPLEY_BASE_URL", "https://ripley.mirakl.net")
 
 
@@ -37,6 +39,12 @@ def ripley_headers():
 
 def verificar_conexion_ripley():
     """Hace un ping a la API para confirmar que la conexión y el API Key funcionan."""
+    if not RIPLEY_API_KEY:
+        return {
+            "ok": False,
+            "error": "RIPLEY_API_KEY no configurada en variables de entorno",
+            "mensaje": "Agrega RIPLEY_API_KEY en Render → Environment"
+        }
     try:
         # Endpoint liviano: 1 sola orden
         res = requests.get(
