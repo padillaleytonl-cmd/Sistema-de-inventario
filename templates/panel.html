@@ -5420,7 +5420,7 @@ function cargarSyncCanal(){
       html += '<td style="padding:8px 10px;color:var(--muted);font-size:10px;">'+ultimaAct+'</td>';
       html += '<td style="padding:8px 10px;color:'+color+';font-weight:500;font-size:11px;">'+label+'</td>';
       html += '<td style="padding:8px 10px;text-align:right;">';
-      html += '<button onclick="forzarSyncSkuCanal(\\''+r.sku_lusync+'\\')" style="font-size:10px;padding:4px 8px;border:0.5px solid var(--border);background:transparent;border-radius:6px;cursor:pointer;color:var(--text);">↑ Reenviar</button>';
+      html += '<button onclick="forzarSyncSkuCanal(\''+r.sku_lusync+'\')" style="font-size:10px;padding:4px 8px;border:0.5px solid var(--border);background:transparent;border-radius:6px;cursor:pointer;color:var(--text);">↑ Reenviar</button>';
       html += '</td>';
       html += '</tr>';
     });
@@ -7333,7 +7333,7 @@ async function verDetalleImport(id){
         <div class="imports-error-log">${(d.log || 'Sin log disponible').replace(/</g,'&lt;')}</div>
         <div style="display:flex;gap:6px;margin-top:8px;">
           ${tipo === 'error' ? '<button class="btn-secondary" style="font-size:11px;" onclick="bodegasDescargarPlantilla()">Descargar plantilla correcta</button>' : ''}
-          <button class="btn-secondary" style="font-size:11px;" onclick="document.getElementById(\\'reporteErrores\\').style.display=\\'none\\';">Cerrar reporte</button>
+          <button class="btn-secondary" style="font-size:11px;" onclick="document.getElementById('reporteErrores').style.display='none';">Cerrar reporte</button>
         </div>
       </div>
     `;
