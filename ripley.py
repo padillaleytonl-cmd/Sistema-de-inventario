@@ -25,7 +25,7 @@ from flask import Blueprint, jsonify, request, session
 # IMPORTANTE: La API Key SIEMPRE debe venir de variables de entorno.
 # NUNCA hardcodearla aquí - exponer credenciales en GitHub es un riesgo de seguridad.
 RIPLEY_API_KEY = os.environ.get("RIPLEY_API_KEY", "")
-RIPLEY_BASE_URL = os.environ.get("RIPLEY_BASE_URL", "https://ripley.mirakl.net")
+RIPLEY_BASE_URL = os.environ.get("RIPLEY_BASE_URL", "https://ripley-prod.mirakl.net")
 
 
 def ripley_headers():
