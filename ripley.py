@@ -67,66 +67,167 @@ def verificar_conexion_ripley():
 # ═══════════════════════════════════════════════════════════════════════════
 
 def actualizar_stock_ripley(sku, cantidad):
-    """Actualiza solo el stock (cantidad disponible) de una oferta en Ripley.
-    Ripley/Mirakl maneja todo bajo el concepto de 'offer' (oferta del seller)."""
+    """Actualiza solo el stock de una oferta usando el endpoint STO01 de Mirakl.
+
+    POST /api/offers/stocks/imports es el endpoint correcto para SOLO modificar
+    stock sin tocar otros campos (precio, state_code, etc).
+
+    Es asíncrono: devuelve un import_id. Para verificar éxito hay que consultar
+    /api/offers/stocks/imports/{id} con STO02. Para uso simple, asumimos que si
+    el import se aceptó (201), el stock se actualizará en pocos segundos.
+    """
     try:
-        payload = {
-            "offers": [
-                {
-                    "shop_sku": sku,
-                    "update_delete": "update",
-                    "quantity": int(cantidad)
-                }
-            ]
+        import csv
+        import io
+
+        # Mirakl STO01 espera un CSV con formato específico
+        # Columnas: sku, quantity
+        csv_content = "sku;quantity\n"
+        csv_content += f"{sku};{int(cantidad)}\n"
+
+        # multipart/form-data
+        files = {
+            "file": ("stock.csv", csv_content, "text/csv")
         }
+        # Headers SIN Content-Type (requests lo arma para multipart)
+        headers = {
+            "Authorization": RIPLEY_API_KEY,
+            "Accept": "application/json"
+        }
+
         res = requests.post(
-            f"{RIPLEY_BASE_URL}/api/offers",
-            headers=ripley_headers(),
-            json=payload,
+            f"{RIPLEY_BASE_URL}/api/offers/stocks/imports",
+            headers=headers,
+            files=files,
             timeout=20
         )
         if res.status_code in (200, 201, 202):
-            print(f"[Ripley] Stock {sku} = {cantidad} OK")
+            try:
+                data = res.json()
+                import_id = data.get("import_id", "?")
+                print(f"[Ripley] Stock {sku} = {cantidad} OK (import_id={import_id})")
+            except:
+                print(f"[Ripley] Stock {sku} = {cantidad} OK")
             return True
-        print(f"[Ripley] Stock {sku} ERROR {res.status_code}: {res.text[:200]}")
+        print(f"[Ripley] Stock {sku} ERROR {res.status_code}: {res.text[:300]}")
         return False
     except Exception as e:
         print(f"[Ripley] actualizar_stock error: {e}")
         return False
 
 
-def actualizar_precio_ripley(sku, precio_normal, precio_oferta=None):
-    """Actualiza el precio (y opcionalmente el precio de oferta) de un SKU en Ripley.
+def actualizar_stocks_ripley_lote(skus_cantidades):
+    """Actualiza el stock de múltiples SKUs en una sola llamada (más eficiente).
 
     Args:
-        sku: SKU del seller (mapeado al SKU de Ripley)
-        precio_normal: precio principal (CLP, sin decimales)
-        precio_oferta: precio rebajado opcional (CLP). Si se pasa, se publica como discount_price.
+        skus_cantidades: dict {sku: cantidad} o lista de tuplas [(sku, cantidad), ...]
     """
     try:
-        offer = {
-            "shop_sku": sku,
-            "update_delete": "update",
-            "price": float(precio_normal)
-        }
-        if precio_oferta and float(precio_oferta) > 0 and float(precio_oferta) < float(precio_normal):
-            offer["discount_price"] = float(precio_oferta)
-            # Fechas de vigencia: hoy hasta +30 días
-            hoy = datetime.utcnow()
-            offer["discount_start_date"] = hoy.strftime("%Y-%m-%dT00:00:00Z")
-            offer["discount_end_date"] = (hoy + timedelta(days=30)).strftime("%Y-%m-%dT23:59:59Z")
+        # Aceptar dict o lista
+        if isinstance(skus_cantidades, dict):
+            items = list(skus_cantidades.items())
+        else:
+            items = list(skus_cantidades)
+        if not items:
+            return False, "Lista vacía"
 
-        payload = {"offers": [offer]}
+        csv_content = "sku;quantity\n"
+        for sku, cantidad in items:
+            csv_content += f"{sku};{int(cantidad)}\n"
+
+        files = {
+            "file": ("stocks_lote.csv", csv_content, "text/csv")
+        }
+        headers = {
+            "Authorization": RIPLEY_API_KEY,
+            "Accept": "application/json"
+        }
+
         res = requests.post(
-            f"{RIPLEY_BASE_URL}/api/offers",
+            f"{RIPLEY_BASE_URL}/api/offers/stocks/imports",
+            headers=headers,
+            files=files,
+            timeout=30
+        )
+        if res.status_code in (200, 201, 202):
+            try:
+                data = res.json()
+                import_id = data.get("import_id", "?")
+                print(f"[Ripley] Lote {len(items)} stocks OK (import_id={import_id})")
+                return True, import_id
+            except:
+                return True, None
+        print(f"[Ripley] Lote ERROR {res.status_code}: {res.text[:300]}")
+        return False, res.text[:300]
+    except Exception as e:
+        print(f"[Ripley] lote error: {e}")
+        return False, str(e)
+
+
+def consultar_estado_import_stock(import_id):
+    """Consulta el estado de un import de stock (STO02).
+    Estados: WAITING, RUNNING, COMPLETE, FAILED, INTERRUPTED."""
+    try:
+        res = requests.get(
+            f"{RIPLEY_BASE_URL}/api/offers/stocks/imports/{import_id}",
             headers=ripley_headers(),
-            json=payload,
+            timeout=10
+        )
+        if res.status_code == 200:
+            return res.json()
+        return None
+    except Exception as e:
+        print(f"[Ripley] consultar import error: {e}")
+        return None
+
+
+def actualizar_precio_ripley(sku, precio_normal, precio_oferta=None):
+    """Actualiza el precio (y opcionalmente precio de oferta) usando PRI01 de Mirakl.
+
+    POST /api/offers/pricing/imports es el endpoint específico para SOLO modificar
+    precios sin tocar otros campos. Es asíncrono.
+
+    Args:
+        sku: shop_sku del seller
+        precio_normal: precio principal (CLP, sin decimales)
+        precio_oferta: precio rebajado opcional. Si se pasa, se publica como discount-price
+                       con vigencia de 30 días.
+    """
+    try:
+        # CSV con formato Mirakl PRI01
+        # Columnas: offer-sku;price;discount-price;discount-start-date;discount-end-date
+        if precio_oferta and float(precio_oferta) > 0 and float(precio_oferta) < float(precio_normal):
+            hoy = datetime.utcnow().strftime("%Y-%m-%d")
+            fin = (datetime.utcnow() + timedelta(days=30)).strftime("%Y-%m-%d")
+            csv_content = "offer-sku;price;discount-price;discount-start-date;discount-end-date\n"
+            csv_content += f"{sku};{int(precio_normal)};{int(precio_oferta)};{hoy};{fin}\n"
+        else:
+            csv_content = "offer-sku;price\n"
+            csv_content += f"{sku};{int(precio_normal)}\n"
+
+        files = {
+            "file": ("price.csv", csv_content, "text/csv")
+        }
+        headers = {
+            "Authorization": RIPLEY_API_KEY,
+            "Accept": "application/json"
+        }
+
+        res = requests.post(
+            f"{RIPLEY_BASE_URL}/api/offers/pricing/imports",
+            headers=headers,
+            files=files,
             timeout=20
         )
         if res.status_code in (200, 201, 202):
-            print(f"[Ripley] Precio {sku} = {precio_normal} (oferta {precio_oferta}) OK")
+            try:
+                data = res.json()
+                import_id = data.get("import_id", "?")
+                print(f"[Ripley] Precio {sku}={precio_normal} OK (import_id={import_id})")
+            except:
+                print(f"[Ripley] Precio {sku}={precio_normal} OK")
             return True
-        print(f"[Ripley] Precio {sku} ERROR {res.status_code}: {res.text[:200]}")
+        print(f"[Ripley] Precio {sku} ERROR {res.status_code}: {res.text[:300]}")
         return False
     except Exception as e:
         print(f"[Ripley] actualizar_precio error: {e}")
@@ -305,7 +406,8 @@ def ripley_test():
 
 @ripley_bp.route("/ripley/sync_stock", methods=["POST"])
 def ripley_sync_stock():
-    """Envía a Ripley el stock actual (de bodega CENTRAL) de todos los SKUs mapeados."""
+    """Envía a Ripley el stock actual (de bodega CENTRAL) de todos los SKUs mapeados.
+    Usa el endpoint STO01 con un único CSV (más eficiente que mandar 1 por 1)."""
     if not session.get("logged"): return jsonify({"ok": False}), 401
     try:
         from inventario import listar_sku_mapeo, get_stock_bodega, registrar_audit
@@ -313,8 +415,7 @@ def ripley_sync_stock():
                         "sync_ripley_stock", detalle="Sync masivo stock Ripley")
 
         productos_mapeo = listar_sku_mapeo()
-        enviados = 0
-        fallidos = 0
+        skus_a_enviar = {}
         log = []
         for fila in productos_mapeo:
             sku_lusync = fila.get("sku_lusync", "")
@@ -322,13 +423,26 @@ def ripley_sync_stock():
             if not sku_ripley or not sku_lusync:
                 continue
             stock = get_stock_bodega(sku_lusync, "CENTRAL")
-            if actualizar_stock_ripley(sku_ripley, stock):
-                enviados += 1
-                log.append(f"✓ {sku_ripley} → {stock}u")
-            else:
-                fallidos += 1
-                log.append(f"× {sku_ripley} falló")
-        return jsonify({"ok": True, "enviados": enviados, "fallidos": fallidos, "log": log[:30]})
+            skus_a_enviar[sku_ripley] = stock
+            log.append(f"→ {sku_ripley}={stock}u")
+
+        if not skus_a_enviar:
+            return jsonify({"ok": True, "enviados": 0, "fallidos": 0,
+                            "log": ["Sin SKUs mapeados a Ripley"]})
+
+        # Enviar TODOS en una sola llamada
+        ok, info = actualizar_stocks_ripley_lote(skus_a_enviar)
+        if ok:
+            return jsonify({
+                "ok": True,
+                "enviados": len(skus_a_enviar),
+                "fallidos": 0,
+                "import_id": info,
+                "nota": "Envío encolado. Mirakl tarda 5-15min en procesar y reflejar.",
+                "log": log[:30]
+            })
+        return jsonify({"ok": False, "enviados": 0, "fallidos": len(skus_a_enviar),
+                        "error": str(info), "log": log[:30]})
     except Exception as e:
         import traceback
         return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
