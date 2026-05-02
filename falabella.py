@@ -773,3 +773,265 @@ def falabella_debug_stock(sku):
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# WEBHOOKS - Receptor de notificaciones de Falabella
+# ═══════════════════════════════════════════════════════════════════════════
+
+@falabella_bp.route("/falabella/webhook", methods=["POST", "GET"])
+def falabella_webhook():
+    """Endpoint receptor de webhooks de Falabella.
+
+    Falabella envía POST con JSON cuando ocurre un evento configurado.
+    Ejemplos de payload:
+      - order_created: {"event": "onOrderCreated", "data": {"OrderId": "...", "Items": [...]}}
+      - order_items_status_changed: {"event": "...", "data": {"OrderId": "...", "Status": "shipped"}}
+      - order_canceled: {"event": "onOrderCanceled", "data": {"OrderId": "..."}}
+
+    Falabella espera HTTP 200 para confirmar recepción. Si devolvemos error,
+    reintentará automáticamente.
+    """
+    # Falabella primero hace un GET de prueba al configurar el webhook
+    if request.method == "GET":
+        return jsonify({
+            "ok": True,
+            "mensaje": "Webhook receptor Lusync activo. Esperando eventos de Falabella.",
+            "service": "Lusync ERP"
+        })
+
+    try:
+        payload = request.get_json(silent=True) or {}
+        evento = payload.get("event", "desconocido")
+        data = payload.get("data", {})
+
+        print(f"[Falabella WEBHOOK] Evento: {evento} · payload: {str(payload)[:300]}")
+
+        # Procesar según tipo de evento
+        if evento in ("onOrderCreated", "OrderCreated", "order_created"):
+            procesar_webhook_orden_creada(data)
+        elif evento in ("onOrderItemsStatusChanged", "OrderItemsStatusChanged"):
+            procesar_webhook_estado_orden(data)
+        elif evento in ("onOrderCanceled", "OrderCanceled"):
+            procesar_webhook_orden_cancelada(data)
+        elif evento in ("onProductCreated", "ProductCreated"):
+            procesar_webhook_producto(data, accion="creado")
+        elif evento in ("onProductUpdated", "ProductUpdated"):
+            procesar_webhook_producto(data, accion="actualizado")
+        elif evento in ("onFeedCompleted", "FeedCompleted"):
+            print(f"[Falabella WEBHOOK] Feed completado: {data}")
+        else:
+            print(f"[Falabella WEBHOOK] Evento sin handler: {evento}")
+
+        # SIEMPRE devolver 200 para que Falabella no reintente
+        return jsonify({"ok": True, "evento": evento}), 200
+    except Exception as e:
+        import traceback
+        # Loggeamos el error pero devolvemos 200 para no entrar en loop de reintentos
+        print(f"[Falabella WEBHOOK] ERROR: {e}")
+        print(traceback.format_exc())
+        return jsonify({"ok": False, "error": str(e)}), 200
+
+
+def procesar_webhook_orden_creada(data):
+    """Cuando llega una orden nueva, descontar stock automáticamente."""
+    try:
+        from inventario import (cargar_productos, orden_ya_procesada_texto,
+                                marcar_orden_procesada_texto, listar_sku_mapeo)
+        from bodegas_logic import descontar_venta, sincronizar_stock_a_marketplaces, detectar_fulfillment_falabella
+
+        order_id = str(data.get("OrderId") or data.get("OrderNumber") or "")
+        if not order_id:
+            print("[Falabella WEBHOOK] order_created sin OrderId")
+            return
+
+        # Idempotencia
+        fb_key = f"FALABELLA-{order_id}"
+        if orden_ya_procesada_texto(fb_key):
+            print(f"[Falabella WEBHOOK] Orden {order_id} ya procesada, skip")
+            return
+        marcar_orden_procesada_texto(fb_key)
+
+        # Si el payload no trae items, los obtenemos por API
+        items = data.get("Items") or data.get("OrderItems")
+        if not items:
+            items = obtener_items_orden_falabella(order_id)
+        if isinstance(items, dict):
+            items = [items]
+
+        # Detectar fulfillment (FBF si Falabella maneja la logística)
+        es_fbf = detectar_fulfillment_falabella(data)
+        tipo_str = "FBF" if es_fbf else "FBS"
+
+        productos_dict = {p["sku"]: p for p in cargar_productos()}
+        for item in items or []:
+            sku_falabella = item.get("SellerSku") or item.get("ShopSku") or ""
+            cantidad = int(item.get("Quantity", 1) or 1)
+            if not sku_falabella:
+                continue
+
+            # Buscar SKU Lusync en mapeo
+            sku_lusync = sku_falabella
+            for fila in listar_sku_mapeo():
+                if fila.get("sku_falabella") == sku_falabella:
+                    sku_lusync = fila.get("sku_lusync")
+                    break
+
+            if sku_lusync not in productos_dict:
+                print(f"[Falabella WEBHOOK] {order_id}: SKU '{sku_lusync}' no encontrado")
+                continue
+
+            resultado = descontar_venta(
+                sku=sku_lusync,
+                cantidad=cantidad,
+                canal="Falabella",
+                fulfillment=es_fbf,
+                orden_id=order_id,
+                motivo=f"Webhook Falabella {tipo_str}"
+            )
+            print(f"[Falabella WEBHOOK] {order_id} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado.get('bodega')}")
+
+            # Sync cruzado solo si fue Seller (afectó CENTRAL)
+            if not es_fbf:
+                try:
+                    sincronizar_stock_a_marketplaces(sku_lusync, excepto=["falabella"])
+                except Exception as e:
+                    print(f"[Falabella WEBHOOK] Sync cruzado falló: {e}")
+    except Exception as e:
+        import traceback
+        print(f"[Falabella WEBHOOK] procesar_orden_creada ERROR: {e}")
+        print(traceback.format_exc())
+
+
+def procesar_webhook_estado_orden(data):
+    """Cuando cambia el estado de items de una orden (shipped, delivered, etc.)."""
+    try:
+        order_id = str(data.get("OrderId") or "")
+        nuevo_estado = data.get("Status") or data.get("NewStatus") or ""
+        print(f"[Falabella WEBHOOK] Orden {order_id} cambió a estado: {nuevo_estado}")
+        # Por ahora solo loggeamos. A futuro podemos:
+        # - Si pasa a 'delivered': marcar orden como completada
+        # - Si pasa a 'returned': reintegrar stock con reintegrar_venta()
+    except Exception as e:
+        print(f"[Falabella WEBHOOK] procesar_estado ERROR: {e}")
+
+
+def procesar_webhook_orden_cancelada(data):
+    """Cuando se cancela una orden, reintegrar el stock que se había descontado."""
+    try:
+        from inventario import listar_sku_mapeo
+        from bodegas_logic import reintegrar_venta
+
+        order_id = str(data.get("OrderId") or "")
+        if not order_id:
+            return
+
+        items = data.get("Items") or data.get("OrderItems") or []
+        if not items:
+            items = obtener_items_orden_falabella(order_id)
+        if isinstance(items, dict):
+            items = [items]
+
+        for item in items:
+            sku_falabella = item.get("SellerSku") or ""
+            cantidad = int(item.get("Quantity", 1) or 1)
+            if not sku_falabella:
+                continue
+
+            # Mapear a SKU Lusync
+            sku_lusync = sku_falabella
+            for fila in listar_sku_mapeo():
+                if fila.get("sku_falabella") == sku_falabella:
+                    sku_lusync = fila.get("sku_lusync")
+                    break
+
+            try:
+                reintegrar_venta(
+                    sku=sku_lusync,
+                    cantidad=cantidad,
+                    canal="Falabella",
+                    orden_id=order_id,
+                    motivo="Cancelación Falabella (webhook)"
+                )
+                print(f"[Falabella WEBHOOK] Reintegrado {sku_lusync} +{cantidad} de orden {order_id}")
+            except Exception as e:
+                print(f"[Falabella WEBHOOK] Reintegro falló: {e}")
+    except Exception as e:
+        print(f"[Falabella WEBHOOK] procesar_cancelacion ERROR: {e}")
+
+
+def procesar_webhook_producto(data, accion="creado"):
+    """Cuando se crea o actualiza un producto en Falabella."""
+    try:
+        seller_sku = data.get("SellerSku") or ""
+        print(f"[Falabella WEBHOOK] Producto {accion}: {seller_sku}")
+        # Aquí se podría auto-crear el producto en Lusync si no existe,
+        # o actualizar nombre/precio. Por ahora solo loggeamos.
+    except Exception as e:
+        print(f"[Falabella WEBHOOK] procesar_producto ERROR: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# WEBHOOKS - Gestión (crear, listar, eliminar)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@falabella_bp.route("/falabella/webhooks/listar")
+def falabella_listar_webhooks():
+    """Lista los webhooks que tienes configurados en Falabella."""
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    res = llamar_api_falabella("GetWebhooks", method="GET", formato="JSON")
+    return jsonify(res)
+
+
+@falabella_bp.route("/falabella/webhooks/crear", methods=["POST"])
+def falabella_crear_webhook():
+    """Crea un webhook desde Lusync (alternativa al panel manual de Falabella).
+
+    Body JSON: {"callback_url": "...", "events": ["onOrderCreated", ...]}
+    """
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    try:
+        body = request.json or {}
+        callback_url = body.get("callback_url", f"{request.host_url.rstrip('/')}/falabella/webhook")
+        events = body.get("events", ["onOrderCreated", "onOrderItemsStatusChanged", "onOrderCanceled"])
+
+        # CreateWebhook usa body XML
+        events_xml = "".join(f"<Event>{e}</Event>" for e in events)
+        body_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Request>
+  <Webhook>
+    <CallbackUrl>{callback_url}</CallbackUrl>
+    <Events>{events_xml}</Events>
+  </Webhook>
+</Request>"""
+
+        res = llamar_api_falabella(
+            "CreateWebhook",
+            body_xml=body_xml,
+            method="POST",
+            formato="JSON"
+        )
+        return jsonify(res)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@falabella_bp.route("/falabella/webhooks/eliminar/<webhook_id>", methods=["POST", "DELETE"])
+def falabella_eliminar_webhook(webhook_id):
+    """Elimina un webhook por ID."""
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    res = llamar_api_falabella(
+        "DeleteWebhook",
+        params_extra={"WebhookId": webhook_id},
+        method="POST",
+        formato="JSON"
+    )
+    return jsonify(res)
+
+
+@falabella_bp.route("/falabella/webhooks/eventos_disponibles")
+def falabella_eventos_disponibles():
+    """Lista los eventos a los que se puede suscribir."""
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    res = llamar_api_falabella("GetWebhookEntities", method="GET", formato="JSON")
+    return jsonify(res)
