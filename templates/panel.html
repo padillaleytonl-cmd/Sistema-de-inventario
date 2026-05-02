@@ -5342,6 +5342,8 @@ function cerrarSyncParis(){
 // ═══════════ MODAL DE ESTADO DE SINCRONIZACIÓN GENÉRICO (NUEVO) ═══════════
 // Reutiliza el modal de Paris para todos los canales
 let _canalSyncActual = 'paris';
+// Stock pendiente de confirmación por marketplace: { 'paris': { 'SKU001': 50 } }
+let _pendientesSync = {};
 
 function abrirSyncCanal(canalId, canalNombre, icono, urlEstado, urlForzarSku, urlForzarTodos, ayuda){
   _canalSyncActual = canalId;
@@ -5357,9 +5359,39 @@ function abrirSyncCanal(canalId, canalNombre, icono, urlEstado, urlForzarSku, ur
   // Actualizar texto de ayuda
   const info = document.getElementById('syncParisInfo');
   if(info) info.innerHTML = ayuda;
+  // Limpiar banner de aviso si quedó de antes
+  ocultarBannerSync();
   // Guardar URLs en variables globales
-  window._syncCanalUrls = { estado: urlEstado, forzarSku: urlForzarSku, forzarTodos: urlForzarTodos, nombre: canalNombre };
+  window._syncCanalUrls = { id: canalId, estado: urlEstado, forzarSku: urlForzarSku, forzarTodos: urlForzarTodos, nombre: canalNombre };
   cargarSyncCanal();
+}
+
+function mostrarBannerSync(mensaje, tipo){
+  // tipo: 'info' (azul), 'ok' (verde), 'warn' (amarillo), 'error' (rojo)
+  let banner = document.getElementById('syncBannerAviso');
+  if(!banner){
+    banner = document.createElement('div');
+    banner.id = 'syncBannerAviso';
+    banner.style.cssText = 'padding:10px 14px;font-size:12px;border-radius:8px;margin:0 20px 12px;display:flex;align-items:center;gap:10px;line-height:1.5;';
+    var info = document.getElementById('syncParisInfo');
+    info.parentNode.insertBefore(banner, info.nextSibling);
+  }
+  var colores = {
+    'info': {bg:'#dbeafe', color:'#1e40af', icon:'⏳'},
+    'ok':   {bg:'#dcfce7', color:'#065f46', icon:'✓'},
+    'warn': {bg:'#fef3c7', color:'#92400e', icon:'⚠'},
+    'error':{bg:'#fee2e2', color:'#991b1b', icon:'×'}
+  };
+  var c = colores[tipo] || colores.info;
+  banner.style.background = c.bg;
+  banner.style.color = c.color;
+  banner.innerHTML = '<span style="font-size:14px;">'+c.icon+'</span> <span style="flex:1;">'+mensaje+'</span> <button onclick="ocultarBannerSync()" style="background:transparent;border:none;font-size:14px;cursor:pointer;color:'+c.color+';opacity:0.7;">×</button>';
+  banner.style.display = 'flex';
+}
+
+function ocultarBannerSync(){
+  var banner = document.getElementById('syncBannerAviso');
+  if(banner) banner.style.display = 'none';
 }
 
 function cargarSyncCanal(){
@@ -5377,6 +5409,20 @@ function cargarSyncCanal(){
     var resultados = data.resultados || [];
     resumen.textContent = '· '+data.sincronizados+'/'+data.total+' sincronizados';
 
+    // Limpiar pendientes que ya se confirmaron (si Ripley ya devuelve el valor pendiente)
+    var pendientesCanal = _pendientesSync[urls.id] || {};
+    var confirmados = 0;
+    resultados.forEach(function(r){
+      var pend = pendientesCanal[r.sku_lusync];
+      if(pend !== undefined && r.stock_paris === pend){
+        delete pendientesCanal[r.sku_lusync];
+        confirmados++;
+      }
+    });
+    if(confirmados > 0){
+      mostrarBannerSync(confirmados+' SKU(s) confirmados por '+urls.nombre+'. Sincronización completada ✓', 'ok');
+    }
+
     if(!resultados.length){
       body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted);font-size:13px;">No hay SKUs mapeados a '+urls.nombre+'. Configúralos en Mapeo SKUs.</div>';
       return;
@@ -5386,6 +5432,10 @@ function cargarSyncCanal(){
     html += '<div style="flex:1;min-width:120px;background:#ecfdf5;color:#065f46;border-radius:10px;padding:10px 14px;"><div style="font-size:11px;opacity:.8;">Sincronizados</div><div style="font-size:22px;font-weight:700;">'+data.sincronizados+'</div></div>';
     html += '<div style="flex:1;min-width:120px;background:#fef3c7;color:#92400e;border-radius:10px;padding:10px 14px;"><div style="font-size:11px;opacity:.8;">Desincronizados</div><div style="font-size:22px;font-weight:700;">'+data.desincronizados+'</div></div>';
     html += '<div style="flex:1;min-width:120px;background:#fee2e2;color:#991b1b;border-radius:10px;padding:10px 14px;"><div style="font-size:11px;opacity:.8;">No encontrados en '+urls.nombre+'</div><div style="font-size:22px;font-weight:700;">'+data.no_encontrados+'</div></div>';
+    var pendCount = Object.keys(pendientesCanal).length;
+    if(pendCount > 0){
+      html += '<div style="flex:1;min-width:120px;background:#dbeafe;color:#1e40af;border-radius:10px;padding:10px 14px;"><div style="font-size:11px;opacity:.8;">Pendientes</div><div style="font-size:22px;font-weight:700;">'+pendCount+'</div></div>';
+    }
     html += '</div>';
 
     html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
@@ -5395,21 +5445,30 @@ function cargarSyncCanal(){
     html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);">Producto</th>';
     html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);text-align:right;">Stock Lusync</th>';
     html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);text-align:right;">Stock '+urls.nombre+'</th>';
-    html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);">Última act.</th>';
+    html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);text-align:right;">Pendiente</th>';
     html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);">Estado</th>';
     html += '<th style="padding:8px 10px;border-bottom:0.5px solid var(--border);"></th>';
     html += '</tr></thead><tbody>';
 
     resultados.forEach(function(r){
+      var pend = pendientesCanal[r.sku_lusync];
       var color, label;
-      if(r.estado === 'sincronizado'){ color='#059669'; label='● Sincronizado'; }
-      else if(r.estado === 'desincronizado'){ color='#d97706'; label='⚠ Desincronizado'; }
-      else { color='#dc2626'; label='✕ No existe en '+urls.nombre; }
+      if(pend !== undefined){
+        color='#1e40af'; label='⏳ Esperando confirmación';
+      } else if(r.estado === 'sincronizado'){
+        color='#059669'; label='● Sincronizado';
+      } else if(r.estado === 'desincronizado'){
+        color='#d97706'; label='⚠ Desincronizado';
+      } else {
+        color='#dc2626'; label='✕ No existe en '+urls.nombre;
+      }
 
       var stockMkt = r.stock_paris === null || r.stock_paris === undefined ? '—' : r.stock_paris;
       var skuMkt = r.sku_paris || r.sku_meli || r.sku_walmart || r.sku_ripley || '';
       var nombre = (r.nombre || '').length > 50 ? r.nombre.substring(0,50)+'…' : (r.nombre||'');
-      var ultimaAct = r.ultima_actualizacion_paris || r.ultima_actualizacion || '—';
+      var pendienteCell = (pend !== undefined)
+        ? '<span style="color:#1e40af;font-weight:600;background:#dbeafe;padding:2px 8px;border-radius:99px;font-size:11px;">→ '+pend+'</span>'
+        : '<span style="color:var(--muted);">—</span>';
 
       html += '<tr style="border-bottom:0.5px solid var(--border);">';
       html += '<td style="padding:8px 10px;font-family:ui-monospace,monospace;font-size:11px;">'+r.sku_lusync+'</td>';
@@ -5417,7 +5476,7 @@ function cargarSyncCanal(){
       html += '<td style="padding:8px 10px;color:var(--muted);">'+nombre+'</td>';
       html += '<td style="padding:8px 10px;text-align:right;font-weight:600;">'+r.stock_lusync+'</td>';
       html += '<td style="padding:8px 10px;text-align:right;font-weight:600;">'+stockMkt+'</td>';
-      html += '<td style="padding:8px 10px;color:var(--muted);font-size:10px;">'+ultimaAct+'</td>';
+      html += '<td style="padding:8px 10px;text-align:right;">'+pendienteCell+'</td>';
       html += '<td style="padding:8px 10px;color:'+color+';font-weight:500;font-size:11px;">'+label+'</td>';
       html += '<td style="padding:8px 10px;text-align:right;">';
       html += '<button onclick="forzarSyncSkuCanal(\''+r.sku_lusync+'\')" style="font-size:10px;padding:4px 8px;border:0.5px solid var(--border);background:transparent;border-radius:6px;cursor:pointer;color:var(--text);">↑ Reenviar</button>';
@@ -5440,12 +5499,17 @@ function forzarSyncSkuCanal(sku){
     body: JSON.stringify({sku_lusync: sku})
   }).then(r=>r.json()).then(res=>{
     if(res.ok){
-      alert('✓ Stock '+(res.stock_enviado || '?')+' enviado a '+urls.nombre+' para '+sku);
+      // Guardar en pendientes y mostrar banner persistente
+      if(!_pendientesSync[urls.id]) _pendientesSync[urls.id] = {};
+      _pendientesSync[urls.id][sku] = res.stock_enviado;
+      mostrarBannerSync('Stock <strong>'+res.stock_enviado+'</strong> enviado a '+urls.nombre+' para <strong>'+sku+'</strong>. <em>'+urls.nombre+' tarda 5–15 minutos en reflejar el cambio.</em> Pulsa ↻ Refrescar en unos minutos para ver si ya se confirmó.', 'info');
       setTimeout(cargarSyncCanal, 1000);
     } else {
-      alert('Error: '+(res.error||'desconocido'));
+      mostrarBannerSync('Error al enviar '+sku+': '+(res.error||'desconocido'), 'error');
     }
-  }).catch(()=>alert('Error de conexión'));
+  }).catch(function(e){
+    mostrarBannerSync('Error de conexión al enviar '+sku+': '+e.message, 'error');
+  });
 }
 
 function forzarSyncTodosCanal(){
@@ -5456,12 +5520,14 @@ function forzarSyncTodosCanal(){
   fetch(urls.forzarTodos, {method:'POST'}).then(r=>r.json()).then(res=>{
     btn.disabled = false; btn.textContent = '↑ Forzar sync de todos';
     if(res.ok){
-      alert('✓ '+res.enviados+' SKUs enviados, '+res.fallidos+' fallidos');
+      mostrarBannerSync('<strong>'+res.enviados+'</strong> SKUs enviados a '+urls.nombre+', <strong>'+res.fallidos+'</strong> fallidos. <em>'+urls.nombre+' tarda 5–15 minutos en reflejar los cambios.</em>', 'info');
       setTimeout(cargarSyncCanal, 1000);
     } else {
-      alert('Error: '+(res.error||'desconocido'));
+      mostrarBannerSync('Error: '+(res.error||'desconocido'), 'error');
     }
-  }).catch(()=>alert('Error de conexión'));
+  }).catch(function(e){
+    mostrarBannerSync('Error de conexión: '+e.message, 'error');
+  });
 }
 
 function cargarSyncParis(){
