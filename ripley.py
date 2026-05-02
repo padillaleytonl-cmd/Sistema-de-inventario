@@ -503,6 +503,7 @@ def ripley_estado():
     conn = verificar_conexion_ripley()
     ofertas_count = len(obtener_ofertas_ripley(max_resultados=10))
     return jsonify({
+        "conectado": bool(conn.get("ok")),  # ← Campo plano para compatibilidad con UI
         "conexion": conn,
         "ofertas_visibles": ofertas_count,
         "api_key_configurada": bool(RIPLEY_API_KEY),
