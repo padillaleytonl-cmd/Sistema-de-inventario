@@ -51,8 +51,10 @@ init_bodegas()
 # Registrar Blueprints (módulos de marketplaces)
 from walmart import walmart_bp
 from paris import paris_bp
+from ripley import ripley_bp
 app.register_blueprint(walmart_bp)
 app.register_blueprint(paris_bp)
+app.register_blueprint(ripley_bp)
 
 # ── SYNC AUTOMÁTICO WALMART CADA 5 MINUTOS ──
 def _sync_walmart_automatico():
@@ -762,25 +764,26 @@ def walmart_sync_stock():
 
 @app.route("/walmart/sync_precios", methods=["POST"])
 def walmart_sync_precios():
+    """Envía precios actuales (precio_normal/oferta) tal cual a Walmart, sin transformaciones.
+    Las comisiones, márgenes y redondeos se manejarán en el módulo Motor de Precios."""
     if not session.get("logged"):
         return {"error": "no autorizado"}, 401
-    from inventario import get_configuracion
-    cfg = get_configuracion()
-    comision = float(cfg.get("walmart_comision", 12)) / 100
-
     productos = cargar_productos()
-    ok = 0
+    enviados = 0
+    fallidos = 0
+    log = []
     for p in productos:
-        if p.get("sku") and p.get("precio_normal", 0) > 0:
-            precio_base = p["precio_oferta"] if p.get("precio_oferta", 0) > 0 else p["precio_normal"]
-            precio_walmart = precio_base * (1 + comision)
-            # Redondear a x90
-            precio_walmart = int(precio_walmart / 100) * 100 + 90
-            if precio_walmart < precio_base:
-                precio_walmart += 100
-            actualizar_precio_walmart(p["sku"], precio_walmart)
-            ok += 1
-    return {"ok": ok}
+        if not p.get("sku") or not p.get("precio_normal", 0) > 0:
+            continue
+        # Enviar precio tal cual: si hay oferta, usar oferta; si no, precio normal
+        precio = p["precio_oferta"] if p.get("precio_oferta", 0) > 0 else p["precio_normal"]
+        if actualizar_precio_walmart(p["sku"], precio):
+            enviados += 1
+            log.append(f"✓ {p['sku']} → ${precio}")
+        else:
+            fallidos += 1
+            log.append(f"× {p['sku']} falló")
+    return {"ok": True, "enviados": enviados, "fallidos": fallidos, "log": log[:30]}
 
 # El endpoint /walmart/sync_ordenes se movió a walmart.py (Blueprint)
 # Ver: walmart_bp en walmart.py
@@ -3277,6 +3280,97 @@ def ruta_meli_publicaciones():
         return jsonify(obtener_publicaciones_meli(limite=50, offset=offset) or {"items":[],"total":0})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/mercadolibre/sync_precios", methods=["POST"])
+def ruta_meli_sync_precios():
+    """Envía precios actuales tal cual a MercadoLibre, sin transformaciones.
+    Las comisiones, márgenes y redondeos se manejarán en el módulo Motor de Precios."""
+    if not session.get("logged"): return jsonify({"ok": False}), 401
+    try:
+        from mercadolibre import actualizar_precio_meli
+        from inventario import listar_sku_mapeo
+
+        productos = cargar_productos()
+        productos_dict = {p["sku"]: p for p in productos}
+        mapeos = listar_sku_mapeo()
+
+        registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                        "sync_meli_precios", detalle="Sync masivo precios MercadoLibre")
+
+        enviados = 0
+        fallidos = 0
+        log = []
+        for fila in mapeos:
+            sku_lusync = fila.get("sku_lusync", "")
+            sku_meli = (fila.get("sku_mercadolibre", "") or "").strip()
+            if not sku_meli or not sku_lusync:
+                continue
+            p = productos_dict.get(sku_lusync, {})
+            precio_normal = p.get("precio_normal") or 0
+            precio_oferta = p.get("precio_oferta") or 0
+            # Enviar precio tal cual: oferta si existe, si no normal
+            precio = precio_oferta if precio_oferta > 0 else precio_normal
+            if precio <= 0:
+                log.append(f"⚠ {sku_lusync} sin precio")
+                continue
+            if actualizar_precio_meli(sku_meli, precio):
+                enviados += 1
+                log.append(f"✓ {sku_meli} → ${precio}")
+            else:
+                fallidos += 1
+                log.append(f"× {sku_meli} falló")
+        return jsonify({"ok": True, "enviados": enviados, "fallidos": fallidos, "log": log[:30]})
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/paris/sync_precios", methods=["POST"])
+def ruta_paris_sync_precios():
+    """Envía precios actuales tal cual a París, sin transformaciones.
+    Las comisiones, márgenes y redondeos se manejarán en el módulo Motor de Precios."""
+    if not session.get("logged"): return jsonify({"ok": False}), 401
+    try:
+        from paris import actualizar_precio_paris
+        from inventario import listar_sku_mapeo
+
+        productos = cargar_productos()
+        productos_dict = {p["sku"]: p for p in productos}
+        mapeos = listar_sku_mapeo()
+
+        registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                        "sync_paris_precios", detalle="Sync masivo precios Paris")
+
+        enviados = 0
+        fallidos = 0
+        log = []
+        for fila in mapeos:
+            sku_lusync = fila.get("sku_lusync", "")
+            sku_paris = (fila.get("sku_paris", "") or "").strip()
+            if not sku_paris or not sku_lusync:
+                continue
+            p = productos_dict.get(sku_lusync, {})
+            precio_normal = p.get("precio_normal") or 0
+            precio_oferta = p.get("precio_oferta") or 0
+            if precio_normal <= 0:
+                log.append(f"⚠ {sku_lusync} sin precio_normal")
+                continue
+            # Enviar precios tal cual: precio_normal y precio_oferta si existe
+            precio_oferta_final = precio_oferta if (precio_oferta > 0 and precio_oferta < precio_normal) else None
+            ok = actualizar_precio_paris(sku_paris, precio_normal, precio_oferta_final)
+            if ok:
+                enviados += 1
+                txt = f"✓ {sku_paris} → ${precio_normal}"
+                if precio_oferta_final: txt += f" (oferta ${precio_oferta_final})"
+                log.append(txt)
+            else:
+                fallidos += 1
+                log.append(f"× {sku_paris} falló")
+        return jsonify({"ok": True, "enviados": enviados, "fallidos": fallidos, "log": log[:30]})
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
 
 
 @app.route("/mercadolibre/sync_ordenes")
