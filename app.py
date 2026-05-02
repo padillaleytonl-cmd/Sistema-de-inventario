@@ -52,9 +52,11 @@ init_bodegas()
 from walmart import walmart_bp
 from paris import paris_bp
 from ripley import ripley_bp
+from falabella import falabella_bp
 app.register_blueprint(walmart_bp)
 app.register_blueprint(paris_bp)
 app.register_blueprint(ripley_bp)
+app.register_blueprint(falabella_bp)
 
 # ── SYNC AUTOMÁTICO WALMART CADA 5 MINUTOS ──
 def _sync_walmart_automatico():

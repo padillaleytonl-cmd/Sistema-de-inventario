@@ -6346,8 +6346,9 @@ const CANALES_DEF = [
     color:'#fbbf24', bg:'#fef3c7', estado_endpoint: '/mercadolibre/estado',
     accion_conectar:'/mercadolibre/conectar', accion_desconectar:'/mercadolibre/desconectar',
     accion_sync:'/mercadolibre/forzar_sync_todos' },
-  { id:'falabella',   code:'FA', nombre:'Falabella', tipo:'proximamente',
-    color:'#dc2626', bg:'#fee2e2' },
+  { id:'falabella',   code:'FA', nombre:'Falabella', tipo:'gestionado',
+    color:'#00B25E', bg:'#dcfce7', estado_endpoint: '/falabella/estado',
+    accion_sync:'/falabella/sync_stock', accion_ordenes:'/falabella/sync_ordenes' },
   { id:'ripley',      code:'RP', nombre:'Ripley', tipo:'gestionado',
     color:'#A01B7A', bg:'#fbe6f0', estado_endpoint: '/ripley/estado',
     accion_sync:'/ripley/sync_stock', accion_ordenes:'/ripley/sync_ordenes' },
@@ -6477,6 +6478,13 @@ function canalSync(id) {
         if (res.ok) alert(`✓ ${res.enviados} enviados, ${res.fallidos} fallidos`);
         else alert('Error: ' + (res.error || 'desconocido'));
       });
+  } else if (id === 'falabella') {
+    if (!confirm('¿Reenviar stock de todos los SKUs mapeados a Falabella?')) return;
+    fetch('/falabella/sync_stock', {method:'POST'})
+      .then(r=>r.json()).then(res=>{
+        if (res.ok) alert(`✓ ${res.enviados} enviados, ${res.fallidos} fallidos`);
+        else alert('Error: ' + (res.error || 'desconocido'));
+      });
   } else {
     alert('Canal sin sync configurado todavía');
   }
@@ -6506,6 +6514,12 @@ function canalOrdenes(id) {
       if (res.ok) alert(`✓ ${res.nuevas_ordenes} órdenes nuevas`);
       else alert('Error: ' + (res.error || 'desconocido'));
     });
+  } else if (id === 'falabella') {
+    if (!confirm('¿Descargar últimas órdenes de Falabella?')) return;
+    fetch('/falabella/sync_ordenes').then(r=>r.json()).then(res=>{
+      if (res.ok) alert(`✓ ${res.nuevas_ordenes} órdenes nuevas`);
+      else alert('Error: ' + (res.error || 'desconocido'));
+    });
   } else {
     alert('Descarga de órdenes para ' + id + ' próximamente');
   }
@@ -6518,6 +6532,10 @@ function canalEstado(id) {
     abrirSyncCanal('ripley', 'Ripley', '🛍', '/ripley/sync_estado',
                    '/ripley/forzar_sync_sku', '/ripley/sync_stock',
                    'Compara el stock de Lusync (bodega Central) con el stock real en Ripley vía Mirakl. Las actualizaciones suelen reflejar en pocos minutos.');
+  } else if (id === 'falabella') {
+    abrirSyncCanal('falabella', 'Falabella', '🏬', '/falabella/sync_estado',
+                   '/falabella/forzar_sync_sku', '/falabella/sync_stock',
+                   'Compara el stock de Lusync con el stock real en Falabella Seller Center. Las actualizaciones suelen reflejar en 5-15 minutos.');
   } else if (id === 'mercadolibre') {
     abrirSyncCanal('mercadolibre', 'MercadoLibre', '📦', '/mercadolibre/sync_estado',
                    '/mercadolibre/forzar_sync_sku', '/mercadolibre/forzar_sync_todos',
@@ -6843,7 +6861,8 @@ const LIVE_CHANNELS = [
   { id:'paris',       code:'PA', nombre:'París',         bg:'#e0f2fe', color:'#0369a1', tipo:'gestionado' },
   { id:'mercadolibre',code:'ML', nombre:'MercadoLibre',  bg:'#fef3c7', color:'#fbbf24', tipo:'self-service',
     estado_endpoint:'/mercadolibre/estado' },
-  { id:'falabella',   code:'FA', nombre:'Falabella',     bg:'#fee2e2', color:'#dc2626', tipo:'proximamente' },
+  { id:'falabella',   code:'FA', nombre:'Falabella',     bg:'#dcfce7', color:'#00B25E', tipo:'gestionado',
+    estado_endpoint:'/falabella/estado' },
   { id:'ripley',      code:'RP', nombre:'Ripley',        bg:'#fbe6f0', color:'#A01B7A', tipo:'gestionado',
     estado_endpoint:'/ripley/estado' },
   { id:'hites',       code:'HI', nombre:'Hites',         bg:'#fce7f3', color:'#ec4899', tipo:'proximamente' }
