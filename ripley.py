@@ -503,9 +503,126 @@ def ripley_estado():
     conn = verificar_conexion_ripley()
     ofertas_count = len(obtener_ofertas_ripley(max_resultados=10))
     return jsonify({
-        "conectado": bool(conn.get("ok")),  # ← Campo plano para compatibilidad con UI
+        "conectado": bool(conn.get("ok")),
         "conexion": conn,
         "ofertas_visibles": ofertas_count,
         "api_key_configurada": bool(RIPLEY_API_KEY),
         "base_url": RIPLEY_BASE_URL
     })
+
+
+@ripley_bp.route("/ripley/sync_estado")
+def ripley_sync_estado():
+    """Compara stock en Lusync (CENTRAL) vs stock real en Ripley (Mirakl).
+    Devuelve la misma estructura que /paris/sync_estado para reutilizar UI."""
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import listar_sku_mapeo, get_stock_bodega
+
+        conexion = verificar_conexion_ripley()
+
+        # Obtener TODAS las ofertas (necesitamos paginar para más de 100)
+        ofertas_dict = {}
+        try:
+            offset = 0
+            while True:
+                params = {"max": 100, "offset": offset}
+                res = requests.get(f"{RIPLEY_BASE_URL}/api/offers",
+                                   headers=ripley_headers(), params=params, timeout=20)
+                if res.status_code != 200:
+                    break
+                data = res.json()
+                ofertas = data.get("offers", [])
+                if not ofertas:
+                    break
+                for o in ofertas:
+                    shop_sku = o.get("shop_sku", "")
+                    if shop_sku:
+                        ofertas_dict[shop_sku] = {
+                            "quantity": o.get("quantity", 0),
+                            "price": o.get("price", 0),
+                            "discount_price": o.get("discount_price"),
+                            "active": o.get("active", False),
+                            "logistic_class": (o.get("logistic_class") or {}).get("code", ""),
+                            "title": o.get("product_title", "")
+                        }
+                if len(ofertas) < 100:
+                    break
+                offset += 100
+                if offset > 500:  # Safety: max 5 páginas
+                    break
+        except Exception as e:
+            return jsonify({"error_ripley": str(e), "conexion": conexion}), 500
+
+        # Comparar stock CENTRAL vs Ripley
+        mapeo = listar_sku_mapeo()
+        resultados = []
+        for fila in mapeo:
+            sku_ripley = (fila.get("sku_ripley", "") or "").strip()
+            if not sku_ripley:
+                continue
+            sku_lusync = fila.get("sku_lusync", "")
+            stock_central = get_stock_bodega(sku_lusync, "CENTRAL")
+            ripley_data = ofertas_dict.get(sku_ripley, {})
+            stock_ripley = ripley_data.get("quantity", None) if ripley_data else None
+
+            if stock_ripley is None:
+                estado = "no_encontrado"
+            elif stock_ripley == stock_central:
+                estado = "sincronizado"
+            else:
+                estado = "desincronizado"
+
+            resultados.append({
+                "sku_lusync": sku_lusync,
+                "sku_paris": sku_ripley,  # nombre genérico para reutilizar template Paris
+                "sku_ripley": sku_ripley,
+                "nombre": fila.get("nombre", "") or ripley_data.get("title", ""),
+                "stock_lusync": stock_central,
+                "stock_paris": stock_ripley,  # nombre genérico
+                "stock_ripley": stock_ripley,
+                "diferencia": (stock_ripley - stock_central) if stock_ripley is not None else None,
+                "ultima_actualizacion_paris": "",  # Ripley no devuelve fecha
+                "logistic_class": ripley_data.get("logistic_class", ""),
+                "activo_en_ripley": ripley_data.get("active", False),
+                "estado": estado
+            })
+
+        return jsonify({
+            "conexion": conexion,
+            "total": len(resultados),
+            "sincronizados": sum(1 for r in resultados if r["estado"] == "sincronizado"),
+            "desincronizados": sum(1 for r in resultados if r["estado"] == "desincronizado"),
+            "no_encontrados": sum(1 for r in resultados if r["estado"] == "no_encontrado"),
+            "resultados": resultados
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@ripley_bp.route("/ripley/forzar_sync_sku", methods=["POST"])
+def ripley_forzar_sync_sku():
+    """Fuerza el envío de stock de un SKU específico a Ripley."""
+    if not session.get("logged"): return jsonify({"ok": False}), 401
+    try:
+        from inventario import listar_sku_mapeo, get_stock_bodega
+        data = request.json or {}
+        sku_lusync = data.get("sku_lusync", "")
+        if not sku_lusync:
+            return jsonify({"ok": False, "error": "sku_lusync requerido"}), 400
+
+        # Buscar SKU Ripley en mapeo
+        sku_ripley = None
+        for fila in listar_sku_mapeo():
+            if fila.get("sku_lusync") == sku_lusync:
+                sku_ripley = (fila.get("sku_ripley", "") or "").strip()
+                break
+        if not sku_ripley:
+            return jsonify({"ok": False, "error": f"SKU {sku_lusync} no tiene mapeo Ripley"}), 400
+
+        stock = get_stock_bodega(sku_lusync, "CENTRAL")
+        ok = actualizar_stock_ripley(sku_ripley, stock)
+        return jsonify({"ok": ok, "stock_enviado": stock, "sku_ripley": sku_ripley})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
