@@ -59,13 +59,19 @@ def generar_firma_falabella(parameters, api_key=None):
 
 
 def construir_parametros_base(action, formato="JSON"):
-    """Construye los parámetros comunes a todas las llamadas."""
+    """Construye los parámetros comunes a todas las llamadas.
+
+    IMPORTANTE: El Timestamp debe incluir timezone explícito (formato ISO 8601 con offset).
+    Falabella rechaza timestamps sin zona con error E003 'Timestamp has expired'.
+    Formato correcto: 2026-05-02T21:30:00+00:00
+    """
+    from datetime import timezone
     return {
         "UserID": FALABELLA_USER_ID,
         "Version": FALABELLA_VERSION,
         "Action": action,
         "Format": formato,
-        "Timestamp": datetime.utcnow().isoformat()
+        "Timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 
@@ -122,7 +128,6 @@ def llamar_api_falabella(action, params_extra=None, body_xml=None,
             )
 
         result = {
-            "ok": res.status_code in (200, 201, 202),
             "status_code": res.status_code,
             "raw_text": res.text[:2000]
         }
@@ -130,8 +135,24 @@ def llamar_api_falabella(action, params_extra=None, body_xml=None,
             result["data"] = res.json()
         except:
             result["data"] = None
+
+        # Falabella devuelve HTTP 200 incluso con errores. Hay que detectar
+        # si el body contiene ErrorResponse en lugar de SuccessResponse.
+        es_http_ok = res.status_code in (200, 201, 202)
+        tiene_error_body = False
+        error_msg = ""
+        if result["data"] and isinstance(result["data"], dict):
+            if "ErrorResponse" in result["data"]:
+                tiene_error_body = True
+                head = result["data"]["ErrorResponse"].get("Head", {})
+                error_msg = f"{head.get('ErrorCode', '?')}: {head.get('ErrorMessage', '?')}"
+
+        result["ok"] = es_http_ok and not tiene_error_body
         if not result["ok"]:
-            result["error"] = f"HTTP {res.status_code}: {res.text[:300]}"
+            if tiene_error_body:
+                result["error"] = f"Falabella rechazó: {error_msg}"
+            else:
+                result["error"] = f"HTTP {res.status_code}: {res.text[:300]}"
         return result
     except Exception as e:
         return {"ok": False, "error": str(e)}
