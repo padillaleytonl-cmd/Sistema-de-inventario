@@ -67,63 +67,78 @@ def verificar_conexion_ripley():
 # ═══════════════════════════════════════════════════════════════════════════
 
 def actualizar_stock_ripley(sku, cantidad):
-    """Actualiza solo el stock de una oferta usando el endpoint STO01 de Mirakl.
+    """Actualiza el stock de un SKU usando OF24 con todos los campos requeridos.
 
-    POST /api/offers/stocks/imports es el endpoint correcto para SOLO modificar
-    stock sin tocar otros campos (precio, state_code, etc).
+    OF24 (POST /api/offers) requiere price, state_code y logistic_class además
+    de quantity. Si solo enviamos quantity, Mirakl rechaza con 'lines_in_error'.
 
-    Es asíncrono: devuelve un import_id. Para verificar éxito hay que consultar
-    /api/offers/stocks/imports/{id} con STO02. Para uso simple, asumimos que si
-    el import se aceptó (201), el stock se actualizará en pocos segundos.
+    Para no perder los otros valores, primero consultamos la oferta actual,
+    cambiamos solo el quantity y reenviamos todos los campos.
     """
     try:
-        import csv
-        import io
+        # 1) Obtener oferta actual para preservar precio, state_code y logistic_class
+        res_get = requests.get(
+            f"{RIPLEY_BASE_URL}/api/offers",
+            headers={**ripley_headers(), "Content-Type": "application/json"},
+            params={"sku": sku, "max": 1},
+            timeout=15
+        )
+        if res_get.status_code != 200:
+            print(f"[Ripley] No se pudo obtener oferta actual {sku}: {res_get.status_code}")
+            return False
+        ofertas = res_get.json().get("offers", [])
+        if not ofertas:
+            print(f"[Ripley] SKU {sku} no encontrado en Ripley")
+            return False
 
-        # Mirakl STO01 espera un CSV con formato específico
-        # Columnas: sku, quantity
-        csv_content = "sku;quantity\n"
-        csv_content += f"{sku};{int(cantidad)}\n"
+        offer_actual = ofertas[0]
 
-        # multipart/form-data
-        files = {
-            "file": ("stock.csv", csv_content, "text/csv")
+        # 2) Construir payload con todos los campos requeridos
+        offer_payload = {
+            "shop_sku": sku,
+            "update_delete": "update",
+            "quantity": int(cantidad),
+            "price": offer_actual.get("price"),
+            "state_code": str(offer_actual.get("state_code", "11")),
+            "logistic_class": (offer_actual.get("logistic_class") or {}).get("code", "")
         }
-        # Headers SIN Content-Type (requests lo arma para multipart)
-        headers = {
-            "Authorization": RIPLEY_API_KEY,
-            "Accept": "application/json"
-        }
+        # Si tenía discount_price activo, conservarlo
+        if offer_actual.get("discount_price"):
+            offer_payload["discount_price"] = offer_actual["discount_price"]
+            if offer_actual.get("discount_start_date"):
+                offer_payload["discount_start_date"] = offer_actual["discount_start_date"]
+            if offer_actual.get("discount_end_date"):
+                offer_payload["discount_end_date"] = offer_actual["discount_end_date"]
 
+        # 3) POST a OF24
         res = requests.post(
-            f"{RIPLEY_BASE_URL}/api/offers/stocks/imports",
-            headers=headers,
-            files=files,
+            f"{RIPLEY_BASE_URL}/api/offers",
+            headers={**ripley_headers(), "Content-Type": "application/json"},
+            json={"offers": [offer_payload]},
             timeout=20
         )
         if res.status_code in (200, 201, 202):
             try:
                 data = res.json()
                 import_id = data.get("import_id", "?")
-                print(f"[Ripley] Stock {sku} = {cantidad} OK (import_id={import_id})")
+                print(f"[Ripley] Stock {sku}={cantidad} OK (import_id={import_id})")
             except:
-                print(f"[Ripley] Stock {sku} = {cantidad} OK")
+                pass
             return True
         print(f"[Ripley] Stock {sku} ERROR {res.status_code}: {res.text[:300]}")
         return False
     except Exception as e:
-        print(f"[Ripley] actualizar_stock error: {e}")
+        print(f"[Ripley] actualizar_stock {sku} error: {e}")
         return False
 
 
 def actualizar_stocks_ripley_lote(skus_cantidades):
-    """Actualiza el stock de múltiples SKUs en una sola llamada (más eficiente).
+    """Actualiza múltiples SKUs en una sola llamada OF24.
 
     Args:
-        skus_cantidades: dict {sku: cantidad} o lista de tuplas [(sku, cantidad), ...]
+        skus_cantidades: dict {sku: cantidad} o lista [(sku, cantidad), ...]
     """
     try:
-        # Aceptar dict o lista
         if isinstance(skus_cantidades, dict):
             items = list(skus_cantidades.items())
         else:
@@ -131,45 +146,89 @@ def actualizar_stocks_ripley_lote(skus_cantidades):
         if not items:
             return False, "Lista vacía"
 
-        csv_content = "sku;quantity\n"
+        # 1) Obtener TODAS las ofertas del seller en una sola llamada
+        ofertas_dict = {}
+        try:
+            offset = 0
+            while True:
+                res_get = requests.get(
+                    f"{RIPLEY_BASE_URL}/api/offers",
+                    headers={**ripley_headers(), "Content-Type": "application/json"},
+                    params={"max": 100, "offset": offset},
+                    timeout=20
+                )
+                if res_get.status_code != 200:
+                    break
+                ofertas = res_get.json().get("offers", [])
+                if not ofertas:
+                    break
+                for o in ofertas:
+                    if o.get("shop_sku"):
+                        ofertas_dict[o["shop_sku"]] = o
+                if len(ofertas) < 100:
+                    break
+                offset += 100
+                if offset > 500:
+                    break
+        except Exception as e:
+            return False, f"Error obteniendo ofertas: {e}"
+
+        # 2) Construir payload para todos los SKUs encontrados
+        offers_payload = []
+        no_encontrados = []
         for sku, cantidad in items:
-            csv_content += f"{sku};{int(cantidad)}\n"
+            offer_actual = ofertas_dict.get(sku)
+            if not offer_actual:
+                no_encontrados.append(sku)
+                continue
+            payload = {
+                "shop_sku": sku,
+                "update_delete": "update",
+                "quantity": int(cantidad),
+                "price": offer_actual.get("price"),
+                "state_code": str(offer_actual.get("state_code", "11")),
+                "logistic_class": (offer_actual.get("logistic_class") or {}).get("code", "")
+            }
+            if offer_actual.get("discount_price"):
+                payload["discount_price"] = offer_actual["discount_price"]
+                if offer_actual.get("discount_start_date"):
+                    payload["discount_start_date"] = offer_actual["discount_start_date"]
+                if offer_actual.get("discount_end_date"):
+                    payload["discount_end_date"] = offer_actual["discount_end_date"]
+            offers_payload.append(payload)
 
-        files = {
-            "file": ("stocks_lote.csv", csv_content, "text/csv")
-        }
-        headers = {
-            "Authorization": RIPLEY_API_KEY,
-            "Accept": "application/json"
-        }
+        if not offers_payload:
+            return False, f"Ninguno de los {len(items)} SKUs existe en Ripley. No encontrados: {no_encontrados[:10]}"
 
+        # 3) POST OF24 con todos los offers
         res = requests.post(
-            f"{RIPLEY_BASE_URL}/api/offers/stocks/imports",
-            headers=headers,
-            files=files,
+            f"{RIPLEY_BASE_URL}/api/offers",
+            headers={**ripley_headers(), "Content-Type": "application/json"},
+            json={"offers": offers_payload},
             timeout=30
         )
         if res.status_code in (200, 201, 202):
             try:
                 data = res.json()
                 import_id = data.get("import_id", "?")
-                print(f"[Ripley] Lote {len(items)} stocks OK (import_id={import_id})")
-                return True, import_id
+                print(f"[Ripley] Lote {len(offers_payload)} ofertas OK (import_id={import_id}, no_encontrados={len(no_encontrados)})")
+                return True, {"import_id": import_id, "enviados": len(offers_payload), "no_encontrados": no_encontrados}
             except:
                 return True, None
         print(f"[Ripley] Lote ERROR {res.status_code}: {res.text[:300]}")
-        return False, res.text[:300]
+        return False, f"Status {res.status_code}: {res.text[:200]}"
     except Exception as e:
         print(f"[Ripley] lote error: {e}")
         return False, str(e)
 
 
 def consultar_estado_import_stock(import_id):
-    """Consulta el estado de un import de stock (STO02).
+    """Consulta el estado de un import en Mirakl. Funciona tanto para STO02 como OF02.
     Estados: WAITING, RUNNING, COMPLETE, FAILED, INTERRUPTED."""
     try:
+        # OF02 = consultar estado de import OF24
         res = requests.get(
-            f"{RIPLEY_BASE_URL}/api/offers/stocks/imports/{import_id}",
+            f"{RIPLEY_BASE_URL}/api/offers/imports/{import_id}",
             headers=ripley_headers(),
             timeout=10
         )
@@ -182,41 +241,58 @@ def consultar_estado_import_stock(import_id):
 
 
 def actualizar_precio_ripley(sku, precio_normal, precio_oferta=None):
-    """Actualiza el precio (y opcionalmente precio de oferta) usando PRI01 de Mirakl.
+    """Actualiza el precio de un SKU usando OF24 con todos los campos requeridos.
 
-    POST /api/offers/pricing/imports es el endpoint específico para SOLO modificar
-    precios sin tocar otros campos. Es asíncrono.
+    Misma lógica que actualizar_stock_ripley: obtenemos la oferta actual,
+    cambiamos solo el precio (manteniendo quantity y demás) y reenviamos.
 
     Args:
         sku: shop_sku del seller
         precio_normal: precio principal (CLP, sin decimales)
-        precio_oferta: precio rebajado opcional. Si se pasa, se publica como discount-price
-                       con vigencia de 30 días.
+        precio_oferta: precio rebajado opcional. Si se pasa, se publica como
+                       discount_price con vigencia de 30 días.
     """
     try:
-        # CSV con formato Mirakl PRI01
-        # Columnas: offer-sku;price;discount-price;discount-start-date;discount-end-date
+        # 1) Obtener oferta actual
+        res_get = requests.get(
+            f"{RIPLEY_BASE_URL}/api/offers",
+            headers={**ripley_headers(), "Content-Type": "application/json"},
+            params={"sku": sku, "max": 1},
+            timeout=15
+        )
+        if res_get.status_code != 200:
+            print(f"[Ripley] No se pudo obtener oferta {sku}: {res_get.status_code}")
+            return False
+        ofertas = res_get.json().get("offers", [])
+        if not ofertas:
+            print(f"[Ripley] SKU {sku} no encontrado en Ripley")
+            return False
+        offer_actual = ofertas[0]
+
+        # 2) Construir payload conservando quantity y otros campos
+        offer_payload = {
+            "shop_sku": sku,
+            "update_delete": "update",
+            "quantity": int(offer_actual.get("quantity", 0)),
+            "price": float(precio_normal),
+            "state_code": str(offer_actual.get("state_code", "11")),
+            "logistic_class": (offer_actual.get("logistic_class") or {}).get("code", "")
+        }
+
+        # Manejo de precio de oferta
         if precio_oferta and float(precio_oferta) > 0 and float(precio_oferta) < float(precio_normal):
-            hoy = datetime.utcnow().strftime("%Y-%m-%d")
-            fin = (datetime.utcnow() + timedelta(days=30)).strftime("%Y-%m-%d")
-            csv_content = "offer-sku;price;discount-price;discount-start-date;discount-end-date\n"
-            csv_content += f"{sku};{int(precio_normal)};{int(precio_oferta)};{hoy};{fin}\n"
-        else:
-            csv_content = "offer-sku;price\n"
-            csv_content += f"{sku};{int(precio_normal)}\n"
+            hoy = datetime.utcnow()
+            offer_payload["discount_price"] = float(precio_oferta)
+            offer_payload["discount_start_date"] = hoy.strftime("%Y-%m-%dT00:00:00Z")
+            offer_payload["discount_end_date"] = (hoy + timedelta(days=30)).strftime("%Y-%m-%dT23:59:59Z")
+        # Si no se pasa precio_oferta pero la oferta actual tenía discount, lo dejamos eliminado
+        # (porque OF24 espera todos los campos: si no se mandan, quedan vacíos)
 
-        files = {
-            "file": ("price.csv", csv_content, "text/csv")
-        }
-        headers = {
-            "Authorization": RIPLEY_API_KEY,
-            "Accept": "application/json"
-        }
-
+        # 3) POST a OF24
         res = requests.post(
-            f"{RIPLEY_BASE_URL}/api/offers/pricing/imports",
-            headers=headers,
-            files=files,
+            f"{RIPLEY_BASE_URL}/api/offers",
+            headers={**ripley_headers(), "Content-Type": "application/json"},
+            json={"offers": [offer_payload]},
             timeout=20
         )
         if res.status_code in (200, 201, 202):
@@ -225,12 +301,12 @@ def actualizar_precio_ripley(sku, precio_normal, precio_oferta=None):
                 import_id = data.get("import_id", "?")
                 print(f"[Ripley] Precio {sku}={precio_normal} OK (import_id={import_id})")
             except:
-                print(f"[Ripley] Precio {sku}={precio_normal} OK")
+                pass
             return True
         print(f"[Ripley] Precio {sku} ERROR {res.status_code}: {res.text[:300]}")
         return False
     except Exception as e:
-        print(f"[Ripley] actualizar_precio error: {e}")
+        print(f"[Ripley] actualizar_precio {sku} error: {e}")
         return False
 
 
