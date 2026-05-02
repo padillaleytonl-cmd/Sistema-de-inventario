@@ -736,7 +736,83 @@ def ripley_forzar_sync_sku():
             return jsonify({"ok": False, "error": f"SKU {sku_lusync} no tiene mapeo Ripley"}), 400
 
         stock = get_stock_bodega(sku_lusync, "CENTRAL")
-        ok = actualizar_stock_ripley(sku_ripley, stock)
-        return jsonify({"ok": ok, "stock_enviado": stock, "sku_ripley": sku_ripley})
+
+        # Usar el lote para tener el detalle del error
+        ok, info = actualizar_stocks_ripley_lote({sku_ripley: stock})
+        if ok:
+            return jsonify({
+                "ok": True,
+                "stock_enviado": stock,
+                "sku_ripley": sku_ripley,
+                "import_id": info,
+                "nota": "Mirakl tarda 5-15min en procesar"
+            })
+        else:
+            return jsonify({
+                "ok": False,
+                "error": f"Mirakl rechazó: {info}",
+                "sku_ripley": sku_ripley,
+                "stock_intentado": stock
+            })
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        import traceback
+        return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@ripley_bp.route("/ripley/debug_stock/<sku>")
+def ripley_debug_stock(sku):
+    """Endpoint de debug: intenta enviar stock=1 al SKU dado y muestra la respuesta cruda de Mirakl."""
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    try:
+        import csv
+        import io
+
+        # Probar con cantidad 1 (no afecta tu inventario real)
+        cantidad_prueba = int(request.args.get("cantidad", 1))
+
+        csv_content = "sku;quantity\n"
+        csv_content += f"{sku};{cantidad_prueba}\n"
+
+        files = {
+            "file": ("test_stock.csv", csv_content, "text/csv")
+        }
+        headers = {
+            "Authorization": RIPLEY_API_KEY,
+            "Accept": "application/json"
+        }
+
+        # Intento 1: STO01 con CSV
+        res = requests.post(
+            f"{RIPLEY_BASE_URL}/api/offers/stocks/imports",
+            headers=headers,
+            files=files,
+            timeout=20
+        )
+
+        resultado = {
+            "url": f"{RIPLEY_BASE_URL}/api/offers/stocks/imports",
+            "metodo": "POST CSV multipart",
+            "csv_enviado": csv_content,
+            "status_code": res.status_code,
+            "response_text": res.text[:1000],
+            "response_headers": dict(res.headers)
+        }
+
+        # Si el import fue aceptado, esperar 2s y consultar el estado
+        if res.status_code in (200, 201, 202):
+            try:
+                data = res.json()
+                import_id = data.get("import_id")
+                resultado["import_id"] = import_id
+                if import_id:
+                    import time
+                    time.sleep(2)
+                    estado = consultar_estado_import_stock(import_id)
+                    resultado["estado_import"] = estado
+            except Exception as e:
+                resultado["error_parse"] = str(e)
+
+        return jsonify(resultado)
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
