@@ -761,58 +761,123 @@ def ripley_forzar_sync_sku():
 
 @ripley_bp.route("/ripley/debug_stock/<sku>")
 def ripley_debug_stock(sku):
-    """Endpoint de debug: intenta enviar stock=1 al SKU dado y muestra la respuesta cruda de Mirakl."""
+    """Endpoint de debug: prueba VARIOS endpoints alternativos de Mirakl para
+    actualizar stock y muestra cuál funciona."""
     if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
     try:
-        import csv
-        import io
-
-        # Probar con cantidad 1 (no afecta tu inventario real)
         cantidad_prueba = int(request.args.get("cantidad", 1))
+        resultados = []
 
-        csv_content = "sku;quantity\n"
-        csv_content += f"{sku};{cantidad_prueba}\n"
-
-        files = {
-            "file": ("test_stock.csv", csv_content, "text/csv")
-        }
-        headers = {
+        headers_auth = {
             "Authorization": RIPLEY_API_KEY,
             "Accept": "application/json"
         }
 
-        # Intento 1: STO01 con CSV
-        res = requests.post(
-            f"{RIPLEY_BASE_URL}/api/offers/stocks/imports",
-            headers=headers,
-            files=files,
-            timeout=20
-        )
+        # ── Test 1: STO01 con CSV (POST /api/offers/stocks/imports) ──
+        csv_content = "sku;quantity\n" + f"{sku};{cantidad_prueba}\n"
+        try:
+            res = requests.post(
+                f"{RIPLEY_BASE_URL}/api/offers/stocks/imports",
+                headers=headers_auth,
+                files={"file": ("stock.csv", csv_content, "text/csv")},
+                timeout=15
+            )
+            resultados.append({
+                "test": "1. STO01 POST /api/offers/stocks/imports (CSV)",
+                "status": res.status_code,
+                "response": res.text[:300]
+            })
+        except Exception as e:
+            resultados.append({"test": "1. STO01 CSV", "error": str(e)})
 
-        resultado = {
-            "url": f"{RIPLEY_BASE_URL}/api/offers/stocks/imports",
-            "metodo": "POST CSV multipart",
-            "csv_enviado": csv_content,
-            "status_code": res.status_code,
-            "response_text": res.text[:1000],
-            "response_headers": dict(res.headers)
-        }
+        # ── Test 2: OF24 POST /api/offers JSON con campos completos ──
+        # Primero obtenemos los datos actuales del SKU para no perderlos
+        try:
+            res_get = requests.get(
+                f"{RIPLEY_BASE_URL}/api/offers",
+                headers={**headers_auth, "Content-Type": "application/json"},
+                params={"sku": sku, "max": 1},
+                timeout=10
+            )
+            offer_actual = None
+            if res_get.status_code == 200:
+                ofertas = res_get.json().get("offers", [])
+                if ofertas:
+                    offer_actual = ofertas[0]
 
-        # Si el import fue aceptado, esperar 2s y consultar el estado
-        if res.status_code in (200, 201, 202):
-            try:
-                data = res.json()
-                import_id = data.get("import_id")
-                resultado["import_id"] = import_id
-                if import_id:
-                    import time
-                    time.sleep(2)
-                    estado = consultar_estado_import_stock(import_id)
-                    resultado["estado_import"] = estado
-            except Exception as e:
-                resultado["error_parse"] = str(e)
+            if offer_actual:
+                # Construir payload con TODOS los campos requeridos
+                payload = {
+                    "offers": [{
+                        "shop_sku": sku,
+                        "update_delete": "update",
+                        "quantity": cantidad_prueba,
+                        "price": offer_actual.get("price"),
+                        "state_code": offer_actual.get("state_code", "11"),
+                        "logistic_class": (offer_actual.get("logistic_class") or {}).get("code", "")
+                    }]
+                }
+                res = requests.post(
+                    f"{RIPLEY_BASE_URL}/api/offers",
+                    headers={**headers_auth, "Content-Type": "application/json"},
+                    json=payload,
+                    timeout=15
+                )
+                resultados.append({
+                    "test": "2. OF24 POST /api/offers (JSON con campos completos)",
+                    "payload_enviado": payload,
+                    "status": res.status_code,
+                    "response": res.text[:500]
+                })
+            else:
+                resultados.append({
+                    "test": "2. OF24 - no se pudo obtener oferta actual para SKU " + sku,
+                    "status": res_get.status_code,
+                    "response": res_get.text[:300]
+                })
+        except Exception as e:
+            resultados.append({"test": "2. OF24 JSON", "error": str(e)})
 
-        return jsonify(resultado)
+        # ── Test 3: OF01 POST /api/offers/imports (CSV de ofertas) ──
+        try:
+            csv_content_2 = "sku;product-id;product-id-type;quantity;update-delete\n"
+            csv_content_2 += f"{sku};{sku};SHOP_SKU;{cantidad_prueba};update\n"
+            res = requests.post(
+                f"{RIPLEY_BASE_URL}/api/offers/imports",
+                headers=headers_auth,
+                files={"file": ("offer.csv", csv_content_2, "text/csv")},
+                timeout=15
+            )
+            resultados.append({
+                "test": "3. OF01 POST /api/offers/imports (CSV de oferta completa)",
+                "status": res.status_code,
+                "response": res.text[:300]
+            })
+        except Exception as e:
+            resultados.append({"test": "3. OF01 CSV", "error": str(e)})
+
+        # ── Test 4: Listar imports recientes para ver qué API funciona ──
+        try:
+            res = requests.get(
+                f"{RIPLEY_BASE_URL}/api/offers/imports",
+                headers=headers_auth,
+                params={"max": 3},
+                timeout=10
+            )
+            resultados.append({
+                "test": "4. GET /api/offers/imports (listar imports recientes)",
+                "status": res.status_code,
+                "response": res.text[:500]
+            })
+        except Exception as e:
+            resultados.append({"test": "4. Listar imports", "error": str(e)})
+
+        return jsonify({
+            "sku_probado": sku,
+            "cantidad": cantidad_prueba,
+            "base_url": RIPLEY_BASE_URL,
+            "tests": resultados
+        })
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
