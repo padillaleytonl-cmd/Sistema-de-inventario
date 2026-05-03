@@ -2276,15 +2276,52 @@ tbody td {
       </div>
 
       <!-- Cantidad -->
-      <div id="devCantidadBox" style="display:none;margin-bottom:18px;">
+      <div id="devCantidadBox" style="display:none;margin-bottom:14px;">
         <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">Cantidad devuelta</div>
         <input id="devCantidadInput" type="number" value="1" min="1"
           style="width:100%;padding:8px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg2);color:var(--text);">
       </div>
 
+      <!-- Tipificación (NUEVO) -->
+      <div id="devTipificacionBox" style="display:none;margin-bottom:14px;">
+        <div style="font-size:10px;color:var(--muted);margin-bottom:6px;">Estado del producto recibido</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+          <label style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;cursor:pointer;display:flex;align-items:center;gap:6px;font-size:12px;" data-tipif="buen_estado">
+            <input type="radio" name="devTipif" value="buen_estado" onchange="seleccionarTipificacion(this)">
+            <span style="color:#065f46;font-weight:500;">✓ Buen estado</span>
+          </label>
+          <label style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;cursor:pointer;display:flex;align-items:center;gap:6px;font-size:12px;" data-tipif="reenviado">
+            <input type="radio" name="devTipif" value="reenviado" onchange="seleccionarTipificacion(this)">
+            <span style="color:#854F0B;font-weight:500;">⤴ Reenviado al cliente</span>
+          </label>
+          <label style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;cursor:pointer;display:flex;align-items:center;gap:6px;font-size:12px;" data-tipif="reparable">
+            <input type="radio" name="devTipif" value="reparable" onchange="seleccionarTipificacion(this)">
+            <span style="color:#92400e;font-weight:500;">🔧 Reparable</span>
+          </label>
+          <label style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;cursor:pointer;display:flex;align-items:center;gap:6px;font-size:12px;" data-tipif="dado_de_baja">
+            <input type="radio" name="devTipif" value="dado_de_baja" onchange="seleccionarTipificacion(this)">
+            <span style="color:#7f1d1d;font-weight:500;">✕ Dar de baja</span>
+          </label>
+          <label style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;cursor:pointer;display:flex;align-items:center;gap:6px;font-size:12px;grid-column:span 2;" data-tipif="reembolsado">
+            <input type="radio" name="devTipif" value="reembolsado" onchange="seleccionarTipificacion(this)">
+            <span style="color:#1e3a8a;font-weight:500;">💰 Reembolsado sin retorno</span>
+          </label>
+        </div>
+        <div id="devTipifInfo" style="font-size:10px;color:var(--muted);margin-top:6px;line-height:1.4;"></div>
+
+        <!-- Motivo (texto largo) -->
+        <div style="margin-top:10px;">
+          <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">
+            Motivo / Notas <span id="devMotivoReq" style="color:#7f1d1d;display:none;">(obligatorio)</span>
+          </div>
+          <textarea id="devMotivoTexto" placeholder="Describe el estado del producto..."
+            style="width:100%;padding:8px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);min-height:50px;font-family:inherit;box-sizing:border-box;"></textarea>
+        </div>
+      </div>
+
       <div style="display:flex;gap:8px;justify-content:flex-end;">
         <button onclick="cerrarModalNuevaDev()" style="background:transparent;border:0.5px solid var(--border);border-radius:8px;padding:8px 16px;font-size:12px;cursor:pointer;color:var(--text);">Cancelar</button>
-        <button id="devCrearBtn" onclick="confirmarNuevaDevolucion()" disabled style="background:var(--text);color:var(--bg);border:none;border-radius:8px;padding:8px 18px;font-size:12px;cursor:pointer;opacity:.4;font-weight:500;">Crear devolución</button>
+        <button id="devCrearBtn" onclick="confirmarNuevaDevolucion()" disabled style="background:var(--text);color:var(--bg);border:none;border-radius:8px;padding:8px 18px;font-size:12px;cursor:pointer;opacity:.4;font-weight:500;">Registrar devolución</button>
       </div>
     </div>
   </div>
@@ -4765,6 +4802,13 @@ function abrirModalNuevaDevolucion(){
   document.getElementById('devProductosList').innerHTML = '';
   document.getElementById('devProductoSelBox').style.display = 'none';
   document.getElementById('devCantidadBox').style.display = 'none';
+  document.getElementById('devTipificacionBox').style.display = 'none';
+  document.getElementById('devMotivoTexto').value = '';
+  document.querySelectorAll('input[name="devTipif"]').forEach(i => i.checked = false);
+  document.querySelectorAll('#devTipificacionBox label').forEach(l => {
+    l.style.borderColor = 'var(--border)';
+    l.style.background = 'var(--bg2)';
+  });
   document.getElementById('devCrearBtn').disabled = true;
   document.getElementById('devCrearBtn').style.opacity = '.4';
   const modal = document.getElementById('modalNuevaDev');
@@ -4792,40 +4836,83 @@ function buscarOC(){
   status.textContent = 'Buscando...';
   status.style.color = 'var(--muted)';
 
-  fetch('/devoluciones/lookup_oc?oc=' + encodeURIComponent(oc))
+  fetch('/devoluciones/buscar_orden?numero=' + encodeURIComponent(oc))
     .then(r => r.json())
     .then(d => {
-      if(d.error){
-        status.textContent = '✕ ' + d.error;
-        status.style.color = '#A32D2D';
+      if(!d.encontrada){
+        // No encontrada en BD pero quizás detectamos el marketplace
+        const sugerido = d.marketplace_sugerido;
+        if(sugerido){
+          status.textContent = '⚠ Orden no está en BD local. Posible: ' + sugerido + '. Puedes seguir si tienes el SKU.';
+          status.style.color = '#854F0B';
+        } else {
+          status.textContent = '✕ Orden no encontrada y formato no reconocido';
+          status.style.color = '#A32D2D';
+        }
         document.getElementById('devProductosEncontrados').style.display = 'none';
         return;
       }
 
       const items = d.items || [];
-      status.textContent = '✓ Orden encontrada · ' + items.length + ' producto(s)';
+      const mkt = d.marketplace || 'Desconocido';
+      status.textContent = '✓ Encontrada en ' + mkt + ' · ' + items.length + ' producto(s)';
       status.style.color = '#27500A';
+
+      // Guardar marketplace globalmente para usarlo al registrar
+      window._devMarketplace = mkt;
+      window._devNumeroOrden = d.numero_orden;
 
       const listEl = document.getElementById('devProductosList');
       const labelEl = document.getElementById('devProductosLabel');
 
       if(items.length === 1){
-        // Un solo producto — seleccionar automáticamente
         labelEl.textContent = '1 producto en esta orden';
         listEl.innerHTML = renderItemDev(items[0], true);
         seleccionarProductoDev(items[0]);
       } else {
-        // Múltiples — mostrar listado para elegir
         labelEl.textContent = items.length + ' productos en esta orden · selecciona el devuelto';
         listEl.innerHTML = items.map(item => renderItemDev(item, false)).join('');
       }
 
       document.getElementById('devProductosEncontrados').style.display = '';
     })
-    .catch(()=>{
-      status.textContent = '✕ Error de conexión';
+    .catch(e => {
+      status.textContent = '✕ Error de conexión: ' + e.message;
       status.style.color = '#A32D2D';
     });
+}
+
+// Tipificación: marca visualmente y exige motivo si aplica
+function seleccionarTipificacion(input){
+  // Limpiar selección visual previa
+  document.querySelectorAll('#devTipificacionBox label').forEach(l => {
+    l.style.borderColor = 'var(--border)';
+    l.style.background = 'var(--bg2)';
+  });
+  // Resaltar la elegida
+  const label = input.closest('label');
+  if(label){
+    label.style.borderColor = '#7c3aed';
+    label.style.background = 'rgba(124,58,237,0.08)';
+  }
+
+  const tipif = input.value;
+  const info = document.getElementById('devTipifInfo');
+  const motivoReq = document.getElementById('devMotivoReq');
+
+  // Texto de info según tipificación
+  const infos = {
+    'buen_estado':   '→ Reintegra +' + (parseInt(document.getElementById('devCantidadInput').value || 1)) + 'u al stock CENTRAL',
+    'reenviado':     '→ NO reintegra. Producto fue reenviado al cliente final',
+    'reparable':     '→ NO reintegra. Genera etiqueta para identificar producto físico en zona de reparación',
+    'dado_de_baja':  '→ NO reintegra. Genera etiqueta de baja. Sale definitivamente del inventario',
+    'reembolsado':   '→ NO reintegra. Cliente se queda con el producto, solo registro contable'
+  };
+  info.textContent = infos[tipif] || '';
+  info.style.color = (tipif === 'buen_estado') ? '#065f46' : 'var(--muted)';
+
+  // Motivo obligatorio para reparable/dado_de_baja
+  motivoReq.style.display = (tipif === 'reparable' || tipif === 'dado_de_baja') ? '' : 'none';
 }
 
 function renderItemDev(item, autosel){
@@ -4864,6 +4951,9 @@ function seleccionarProductoDev(item){
   document.getElementById('devCantidadInput').value = item.cantidad || 1;
   document.getElementById('devCantidadInput').max = item.cantidad || 99;
 
+  // Mostrar caja de tipificación (NUEVO)
+  document.getElementById('devTipificacionBox').style.display = '';
+
   document.getElementById('devCrearBtn').disabled = false;
   document.getElementById('devCrearBtn').style.opacity = '1';
 
@@ -4879,6 +4969,7 @@ function deseleccionarProductoDev(){
   _devSelItem = null;
   document.getElementById('devProductoSelBox').style.display = 'none';
   document.getElementById('devCantidadBox').style.display = 'none';
+  document.getElementById('devTipificacionBox').style.display = 'none';
   document.getElementById('devCrearBtn').disabled = true;
   document.getElementById('devCrearBtn').style.opacity = '.4';
 }
@@ -4887,30 +4978,66 @@ function confirmarNuevaDevolucion(){
   if(!_devSelItem) return;
   const oc = document.getElementById('devOcInput').value.trim();
   const cantidad = parseInt(document.getElementById('devCantidadInput').value) || 1;
-  const usuario = document.querySelector('.user-name')?.textContent || 'Luis Padilla';
+  const usuario = document.querySelector('.user-name')?.textContent || 'Sistema';
+  const motivoTexto = document.getElementById('devMotivoTexto').value.trim();
 
-  fetch('/devoluciones/nueva', {
+  // Tipificación elegida
+  const tipifInput = document.querySelector('input[name="devTipif"]:checked');
+  if(!tipifInput){
+    toast('Selecciona el estado del producto');
+    return;
+  }
+  const tipificacion = tipifInput.value;
+
+  // Validar motivo obligatorio
+  if((tipificacion === 'reparable' || tipificacion === 'dado_de_baja') && !motivoTexto){
+    toast('El motivo es obligatorio para reparable / dar de baja');
+    document.getElementById('devMotivoTexto').focus();
+    return;
+  }
+
+  const btn = document.getElementById('devCrearBtn');
+  btn.disabled = true;
+  btn.textContent = 'Registrando…';
+
+  fetch('/devoluciones/registrar_avanzado', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({
       oc_origen: oc,
-      canal: _devSelItem.canal,
+      marketplace: window._devMarketplace || _devSelItem.canal,
       sku: _devSelItem.sku,
       nombre: _devSelItem.nombre,
       cantidad: cantidad,
+      tipificacion: tipificacion,
+      motivo_texto: motivoTexto,
       responsable: usuario
     })
   })
   .then(r=>r.json())
   .then(d=>{
+    btn.disabled = false;
+    btn.textContent = 'Registrar devolución';
     if(d.ok){
       cerrarModalNuevaDev();
-      toast('Devolución creada');
+      toast('Devolución ' + d.codigo + ' registrada · Deadline: ' + d.deadline_legible);
       cargarDevoluciones('todas');
+
+      // Si la tipificación requiere etiqueta, ofrecer descargar el PDF
+      if(['reparable', 'dado_de_baja', 'reembolsado'].includes(tipificacion)){
+        if(confirm('¿Descargar etiqueta con código de barras para este producto?')){
+          window.open('/devoluciones/' + d.id + '/etiqueta_pdf', '_blank');
+        }
+      }
       setTimeout(()=>abrirFichaDev(d.id), 400);
     } else {
-      toast('Error al crear devolución');
+      toast('Error: ' + (d.error || 'desconocido'));
     }
+  })
+  .catch(e => {
+    btn.disabled = false;
+    btn.textContent = 'Registrar devolución';
+    toast('Error: ' + e.message);
   });
 }
 

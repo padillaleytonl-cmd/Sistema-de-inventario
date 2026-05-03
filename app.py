@@ -1402,6 +1402,487 @@ def devoluciones_lookup_oc():
               "cantidad": r[3], "fecha": r[4]} for r in rows]
     return {"items": items, "oc": oc}
 
+
+@app.route("/devoluciones/buscar_orden", methods=["GET", "POST"])
+def devoluciones_buscar_orden():
+    """Busca una orden de manera inteligente:
+    1) Primero en BD local (movimientos) — si la encuentra, ya sabe el canal
+    2) Si no está local, intenta detectar marketplace por formato del N°
+    3) Devuelve items + canal detectado para que el usuario seleccione qué devolver
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    if request.method == "POST":
+        numero = (request.json or {}).get("numero", "").strip()
+    else:
+        numero = request.args.get("numero", "").strip()
+
+    if not numero:
+        return jsonify({"error": "Número de orden requerido"}), 400
+
+    # Limpiar el número (quitar espacios, prefijos opcionales que el usuario haya puesto)
+    numero_limpio = numero.upper().strip()
+    # Si pegó algo como "ML-2000012757", quitar el prefijo
+    for prefix in ("ML-", "FA-", "WM-", "PA-", "RP-", "WC-"):
+        if numero_limpio.startswith(prefix):
+            numero_limpio = numero_limpio[len(prefix):]
+            break
+
+    # ── Paso 1: Buscar en BD local ─────────────────────────────────
+    conn = __import__('psycopg2').connect(__import__('os').environ.get("DATABASE_URL"))
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT m.sku, m.nombre, m.canal, ABS(m.cantidad) as cantidad,
+               TO_CHAR(m.fecha, 'DD/MM/YYYY HH24:MI') as fecha,
+               m.bodega_codigo, m.orden_id
+        FROM movimientos m
+        WHERE m.orden_id = %s AND m.tipo = 'salida'
+        ORDER BY m.sku
+    """, (numero_limpio,))
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+
+    if rows:
+        # ¡Encontrada en BD! Devolvemos toda la info al toque
+        canal_detectado = rows[0][2] or "Desconocido"
+        items = []
+        for r in rows:
+            items.append({
+                "sku": r[0],
+                "nombre": r[1],
+                "canal": r[2],
+                "cantidad": int(r[3] or 1),
+                "fecha": r[4],
+                "bodega_origen": r[5] or "CENTRAL",
+                "orden_id": r[6]
+            })
+        return jsonify({
+            "encontrada": True,
+            "fuente": "bd_local",
+            "marketplace": canal_detectado,
+            "marketplace_codigo": _normalizar_marketplace(canal_detectado),
+            "numero_orden": numero_limpio,
+            "items": items,
+            "total_items": len(items)
+        })
+
+    # ── Paso 2: No encontrada local — detectar por formato e intentar API ──
+    marketplace_sugerido = _detectar_marketplace_por_formato(numero_limpio)
+
+    return jsonify({
+        "encontrada": False,
+        "fuente": "no_encontrada",
+        "marketplace_sugerido": marketplace_sugerido,
+        "numero_orden": numero_limpio,
+        "mensaje": (
+            f"Orden no encontrada en BD local. "
+            f"Posible marketplace: {marketplace_sugerido or 'desconocido'}. "
+            f"Puedes registrar la devolución manualmente seleccionando el SKU."
+        )
+    })
+
+
+def _detectar_marketplace_por_formato(numero):
+    """Detecta el marketplace por el formato del número de orden."""
+    n = numero.strip().upper()
+    # Reglas en orden de especificidad
+    if n.endswith("-A") or n.endswith("-B"):
+        return "Ripley"
+    if n.startswith("CLP") or n.startswith("PAR"):
+        return "Paris"
+    if n.startswith("PO") or n.startswith("WMT"):
+        return "Walmart"
+    # Por longitud numérica
+    if n.isdigit():
+        if len(n) >= 14:
+            return "MercadoLibre"  # 16 dígitos típicos
+        if 7 <= len(n) <= 9:
+            return "Falabella"
+        if len(n) <= 6:
+            return "WooCommerce"
+    return None
+
+
+def _normalizar_marketplace(canal_raw):
+    """Convierte el nombre del canal en código estándar (lowercase sin espacios)"""
+    if not canal_raw: return ""
+    c = canal_raw.lower().strip()
+    if "mercadolibre" in c or "meli" in c: return "mercadolibre"
+    if "paris" in c or "parís" in c: return "paris"
+    if "walmart" in c or "wfs" in c: return "walmart"
+    if "woo" in c: return "woocommerce"
+    if "ripley" in c: return "ripley"
+    if "falabella" in c: return "falabella"
+    if "hites" in c: return "hites"
+    return c
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# DEVOLUCIONES — SISTEMA AVANZADO con tipificación, deadline 72h hábiles y etiqueta
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/devoluciones/registrar_avanzado", methods=["POST"])
+def devoluciones_registrar_avanzado():
+    """Registra una devolución con el flujo completo:
+    - OC asociada (manual o detectada)
+    - Producto seleccionado de la OC
+    - Tipificación (buen_estado / reparable / dado_de_baja / reembolsado / reenviado)
+    - Motivo/notas
+    - Calcula deadline = ahora + 72h hábiles
+    - Genera código DEV-YYYY-NNNN
+
+    Body JSON:
+    {
+      "oc_origen": "2000012654022175",
+      "marketplace": "MercadoLibre",
+      "sku": "SDCMM001",
+      "nombre": "Silla de comer Menta",
+      "cantidad": 1,
+      "tipificacion": "dado_de_baja",
+      "motivo_texto": "Carcasa fracturada lateral derecho...",
+      "responsable": "Luis"
+    }
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    try:
+        from inventario import (crear_devolucion, generar_codigo_dev,
+                                ajustar_stock_dev, registrar_audit, get_conn)
+        from feriados import calcular_deadline_habil
+        from datetime import datetime
+        import json
+
+        data = request.json or {}
+        oc = (data.get("oc_origen") or "").strip()
+        sku = (data.get("sku") or "").strip()
+        tipificacion = (data.get("tipificacion") or "").strip()
+        motivo_texto = data.get("motivo_texto", "").strip()
+        cantidad = int(data.get("cantidad", 1))
+        nombre = data.get("nombre", "")
+        marketplace = data.get("marketplace", "")
+        responsable = session.get("usuario", "Sistema")
+
+        # Validaciones
+        if not oc:
+            return jsonify({"ok": False, "error": "OC origen requerida"}), 400
+        if not sku:
+            return jsonify({"ok": False, "error": "SKU requerido"}), 400
+        tipificaciones_validas = {
+            "buen_estado", "reenviado", "reparable",
+            "dado_de_baja", "reembolsado"
+        }
+        if tipificacion not in tipificaciones_validas:
+            return jsonify({"ok": False, "error": f"Tipificación inválida. Válidas: {tipificaciones_validas}"}), 400
+        # Para casos críticos exigir motivo
+        if tipificacion in ("reparable", "dado_de_baja") and not motivo_texto:
+            return jsonify({"ok": False, "error": "Motivo obligatorio para reparable/dado_de_baja"}), 400
+
+        ahora = datetime.now()
+        deadline = calcular_deadline_habil(ahora, dias_habiles=3)
+        codigo = generar_codigo_dev()
+
+        # Snapshot de la orden (por si después se necesita)
+        orden_snapshot = json.dumps({
+            "oc_origen": oc,
+            "marketplace": marketplace,
+            "fecha_registro": ahora.isoformat()
+        })
+
+        # Crear devolución (usa función existente)
+        dev_data = {
+            "oc_origen": oc,
+            "canal": marketplace,
+            "sku": sku,
+            "nombre": nombre,
+            "cantidad": cantidad,
+            "motivo_cliente": motivo_texto[:500],
+            "estado_producto": tipificacion,
+            "responsable": responsable,
+            "estado": _estado_segun_tipificacion(tipificacion)
+        }
+        dev_id = crear_devolucion(dev_data)
+        if not dev_id:
+            return jsonify({"ok": False, "error": "No se pudo crear devolución en BD"}), 500
+
+        # Actualizar campos avanzados
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("""
+            UPDATE devoluciones SET
+                codigo = COALESCE(codigo, %s),
+                tipificacion = %s,
+                motivo_texto = %s,
+                usuario_revisor = %s,
+                fecha_deadline = %s,
+                fecha_recepcion = %s,
+                origen_datos = 'manual',
+                orden_data_json = %s
+            WHERE id = %s
+        """, (codigo, tipificacion, motivo_texto, responsable,
+              deadline, ahora, orden_snapshot, dev_id))
+        conn.commit()
+        cur.close(); conn.close()
+
+        # Aplicar impacto en stock según tipificación
+        impacto = _aplicar_impacto_devolucion(tipificacion, sku, cantidad, dev_id)
+
+        registrar_audit(responsable, request.remote_addr,
+                        "devolucion_avanzada",
+                        entidad="devoluciones", entidad_id=str(dev_id),
+                        detalle=f"OC {oc} · {sku} · {tipificacion} · {impacto}")
+
+        return jsonify({
+            "ok": True,
+            "id": dev_id,
+            "codigo": codigo,
+            "tipificacion": tipificacion,
+            "deadline_iso": deadline.isoformat(),
+            "deadline_legible": deadline.strftime("%d/%m/%Y %H:%M"),
+            "impacto_stock": impacto,
+            "estado": _estado_segun_tipificacion(tipificacion)
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+
+
+def _estado_segun_tipificacion(tipif):
+    """Mapea tipificación a estado interno"""
+    return {
+        "buen_estado": "aceptada_reintegrada",
+        "reenviado": "aceptada_reenviada",
+        "reparable": "en_reparacion",
+        "dado_de_baja": "dada_de_baja",
+        "reembolsado": "reembolsada"
+    }.get(tipif, "pendiente")
+
+
+def _aplicar_impacto_devolucion(tipificacion, sku, cantidad, dev_id):
+    """Aplica el impacto en stock según la tipificación."""
+    try:
+        from inventario import get_conn, ajustar_stock_dev
+        if tipificacion == "buen_estado":
+            # Reintegra al stock CENTRAL
+            ajustar_stock_dev(sku, cantidad, dev_id, "reintegro_buen_estado")
+            return f"Reintegrado +{cantidad} a CENTRAL"
+        elif tipificacion in ("reenviado", "reembolsado", "dado_de_baja", "reparable"):
+            # No reintegra
+            return "Sin impacto en stock (no reintegrable)"
+        return "Sin impacto"
+    except Exception as e:
+        return f"Error aplicando impacto: {e}"
+
+
+@app.route("/devoluciones/<int:dev_id>/etiqueta_pdf")
+def devoluciones_etiqueta_pdf(dev_id):
+    """Genera un PDF con código de barras para identificar el producto físico.
+
+    Solo aplica para tipificaciones: reparable, dado_de_baja, reembolsado
+    """
+    if not session.get("logged"):
+        return "No autorizado", 401
+    try:
+        from inventario import get_devolucion
+        from io import BytesIO
+        from flask import send_file
+        from reportlab.lib.pagesizes import A6, landscape
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.units import mm
+        from reportlab.lib.colors import HexColor, black, white
+        import barcode
+        from barcode.writer import ImageWriter
+
+        dev = get_devolucion(dev_id=dev_id)
+        if not dev:
+            return "Devolución no encontrada", 404
+
+        tipif = dev.get("tipificacion", "")
+        codigo = dev.get("codigo", f"DEV-{dev_id:06d}")
+        sku = dev.get("sku", "")
+        nombre = dev.get("nombre", "") or sku
+        oc = dev.get("oc_origen", "")
+        canal = dev.get("canal", "")
+        motivo = dev.get("motivo_texto", "") or dev.get("motivo_cliente", "")
+        fecha_recepcion = dev.get("fecha_recepcion") or dev.get("fecha_solicitud")
+
+        # Configurar título y color según tipificación
+        titulo_color, titulo_text = {
+            "dado_de_baja": (HexColor("#7f1d1d"), "DAR DE BAJA"),
+            "reparable": (HexColor("#92400e"), "EN REPARACION"),
+            "reembolsado": (HexColor("#1e3a8a"), "REEMBOLSADO"),
+            "buen_estado": (HexColor("#065f46"), "REINTEGRADO"),
+            "reenviado": (HexColor("#854F0B"), "REENVIADO")
+        }.get(tipif, (black, "DEVOLUCION"))
+
+        # Generar código de barras como imagen en memoria
+        EAN = barcode.get_barcode_class('code128')
+        barcode_io = BytesIO()
+        EAN(codigo, writer=ImageWriter()).write(barcode_io, options={
+            "module_width": 0.4,
+            "module_height": 12.0,
+            "font_size": 10,
+            "text_distance": 4.0,
+            "quiet_zone": 2.0
+        })
+        barcode_io.seek(0)
+        # Guardar a temporal para reportlab
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+            tmp.write(barcode_io.read())
+            barcode_path = tmp.name
+
+        # Crear PDF
+        pdf_buf = BytesIO()
+        # Etiqueta tamaño A6 horizontal (10x15cm aprox)
+        c = canvas.Canvas(pdf_buf, pagesize=landscape(A6))
+        ancho, alto = landscape(A6)
+
+        # Header
+        c.setFillColor(black)
+        c.setFont("Helvetica-Bold", 7)
+        c.drawString(8*mm, alto - 8*mm, "DEVOLUCIÓN")
+        c.setFillColor(titulo_color)
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(8*mm, alto - 14*mm, titulo_text)
+
+        # Línea divisoria
+        c.setStrokeColor(black)
+        c.setLineWidth(1)
+        c.line(8*mm, alto - 17*mm, ancho - 8*mm, alto - 17*mm)
+
+        # Datos lado izquierdo
+        c.setFillColor(black)
+        c.setFont("Helvetica-Bold", 8)
+        y = alto - 22*mm
+        info_lines = [
+            ("SKU:", sku),
+            ("Producto:", nombre[:35]),
+            ("Orden:", f"{oc} ({canal})"),
+            ("Recepción:", fecha_recepcion.strftime("%d/%m/%Y %H:%M") if fecha_recepcion and hasattr(fecha_recepcion, 'strftime') else "—")
+        ]
+        for label, value in info_lines:
+            c.setFont("Helvetica-Bold", 7)
+            c.drawString(8*mm, y, label)
+            c.setFont("Helvetica", 7)
+            c.drawString(28*mm, y, str(value))
+            y -= 4*mm
+
+        # Motivo (en caja con fondo)
+        if motivo:
+            y_motivo_top = y - 2*mm
+            c.setFillColor(HexColor("#fef2f2") if tipif == "dado_de_baja" else HexColor("#fef3c7"))
+            c.rect(8*mm, y_motivo_top - 18*mm, ancho - 16*mm, 18*mm, fill=1, stroke=0)
+            c.setFillColor(titulo_color)
+            c.setFont("Helvetica-Bold", 7)
+            c.drawString(10*mm, y_motivo_top - 4*mm, "MOTIVO:")
+            c.setFillColor(black)
+            c.setFont("Helvetica", 7)
+            # Wrap del texto
+            words = motivo.split()
+            linea = ""
+            y_text = y_motivo_top - 8*mm
+            for w in words:
+                test = (linea + " " + w).strip()
+                if len(test) > 60:
+                    c.drawString(10*mm, y_text, linea)
+                    y_text -= 3.5*mm
+                    linea = w
+                    if y_text < y_motivo_top - 16*mm: break
+                else:
+                    linea = test
+            if linea:
+                c.drawString(10*mm, y_text, linea)
+
+        # Código de barras en la parte inferior
+        from reportlab.lib.utils import ImageReader
+        try:
+            barcode_img = ImageReader(barcode_path)
+            barcode_w = (ancho - 16*mm)
+            c.drawImage(barcode_img, 8*mm, 5*mm, width=barcode_w, height=18*mm,
+                        preserveAspectRatio=True, anchor='c')
+        except Exception as e:
+            c.setFont("Helvetica", 6)
+            c.drawString(8*mm, 8*mm, f"Error generando barcode: {e}")
+
+        # Footer
+        c.setFont("Helvetica", 5)
+        c.setFillColor(HexColor("#666666"))
+        c.drawString(8*mm, 2*mm, "Lusync ERP · Babymine")
+
+        c.showPage()
+        c.save()
+        pdf_buf.seek(0)
+
+        # Limpiar tempfile
+        try:
+            import os
+            os.unlink(barcode_path)
+        except: pass
+
+        # Marcar etiqueta como generada
+        try:
+            from inventario import get_conn
+            conn = get_conn(); cur = conn.cursor()
+            cur.execute("UPDATE devoluciones SET etiqueta_generada=TRUE WHERE id=%s", (dev_id,))
+            conn.commit()
+            cur.close(); conn.close()
+        except: pass
+
+        return send_file(pdf_buf, as_attachment=True,
+                         download_name=f"etiqueta_{codigo}.pdf",
+                         mimetype="application/pdf")
+    except Exception as e:
+        import traceback
+        return f"Error generando PDF: {e}\n\n{traceback.format_exc()}", 500
+
+
+@app.route("/devoluciones/pendientes_revision")
+def devoluciones_pendientes_revision():
+    """Lista devoluciones que están pendientes de revisión, con info de deadline."""
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import get_conn
+        from feriados import descripcion_tiempo_restante, color_urgencia
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("""
+            SELECT id, codigo, oc_origen, canal, sku, nombre, cantidad,
+                   tipificacion, motivo_texto, fecha_recepcion, fecha_deadline,
+                   etiqueta_generada, estado
+            FROM devoluciones
+            WHERE estado IN ('pendiente', 'en_reparacion')
+              AND fecha_deadline IS NOT NULL
+            ORDER BY fecha_deadline ASC
+            LIMIT 100
+        """)
+        rows = cur.fetchall()
+        cur.close(); conn.close()
+
+        items = []
+        for r in rows:
+            deadline = r[10]
+            items.append({
+                "id": r[0], "codigo": r[1], "oc_origen": r[2], "canal": r[3],
+                "sku": r[4], "nombre": r[5], "cantidad": r[6],
+                "tipificacion": r[7], "motivo_texto": r[8],
+                "fecha_recepcion": r[9].isoformat() if r[9] else None,
+                "fecha_deadline": deadline.isoformat() if deadline else None,
+                "etiqueta_generada": bool(r[11]),
+                "estado": r[12],
+                "tiempo_restante": descripcion_tiempo_restante(deadline) if deadline else "Sin deadline",
+                "urgencia": color_urgencia(deadline) if deadline else "normal"
+            })
+
+        return jsonify({
+            "total": len(items),
+            "items": items
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 @app.route("/devoluciones/<int:dev_id>/actualizar", methods=["POST"])
 def devoluciones_actualizar(dev_id):
     if not session.get("logged"):

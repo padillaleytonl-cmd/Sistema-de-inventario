@@ -334,6 +334,23 @@ def init_devoluciones():
             impacto_stock_reingresado BOOLEAN DEFAULT FALSE
         )
     """)
+    # Columnas nuevas para sistema mejorado de devoluciones (sin romper datos existentes)
+    columnas_nuevas = [
+        ("tipificacion", "TEXT"),                  # buen_estado / reparable / dado_de_baja / reembolsado / reenviado
+        ("motivo_texto", "TEXT"),                  # texto largo del motivo/notas
+        ("usuario_revisor", "TEXT"),               # quién revisó la devolución
+        ("fecha_deadline", "TIMESTAMP"),           # cuando vencen las 72h hábiles
+        ("foto_url", "TEXT"),                      # URL opcional de foto evidencia
+        ("etiqueta_generada", "BOOLEAN DEFAULT FALSE"),
+        ("etiqueta_pdf_url", "TEXT"),              # URL del PDF generado
+        ("origen_datos", "TEXT DEFAULT 'manual'"), # manual / webhook / sync
+        ("orden_data_json", "TEXT")                # snapshot de los datos de la OC al momento del registro
+    ]
+    for nombre, tipo in columnas_nuevas:
+        try:
+            cur.execute(f"ALTER TABLE devoluciones ADD COLUMN IF NOT EXISTS {nombre} {tipo}")
+        except Exception as e:
+            print(f"[devoluciones] columna {nombre}: {e}")
     conn.commit()
     cur.close()
     conn.close()

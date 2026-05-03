@@ -5,3 +5,6 @@ psycopg2-binary
 pytz
 apscheduler
 openpyxl
+holidays
+reportlab
+python-barcode
