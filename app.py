@@ -4159,8 +4159,12 @@ def ruta_meli_sync_ordenes():
                                 # Formato: 2026-05-03T18:32:15-04:00 o con Z
                                 date_str_clean = date_str.replace("Z", "+00:00")
                                 fecha_compra_meli = datetime.fromisoformat(date_str_clean)
+                            # DEBUG temporal: loggear lo que se parseó
+                            log.append(f"  Orden {order_id}: date_created='{date_str}' → parsed={fecha_compra_meli}")
+                        else:
+                            log.append(f"  Orden {order_id}: date_created VACÍO en payload")
                     except Exception as e:
-                        log.append(f"  Orden {order_id}: no se pudo parsear date_created '{o.get('date_created','')}': {e}")
+                        log.append(f"  Orden {order_id}: NO se pudo parsear date_created '{o.get('date_created','')}': {e}")
                         fecha_compra_meli = None
 
                     # Detectar Full vs Seller
@@ -4463,6 +4467,200 @@ def ruta_alertas_test():
         return jsonify({"ok": True, "mensaje": "Alerta creada y email enviado (revisa configuración SMTP en logs si no llega)"})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# DIAGNÓSTICO DE TRAZABILIDAD DE FECHAS (temporal/debug)
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/debug/movimientos_trazabilidad")
+def debug_movimientos_trazabilidad():
+    """Muestra los últimos 30 movimientos con TODOS los campos de trazabilidad.
+    Sirve para verificar si fecha_compra_marketplace se está guardando correctamente.
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import get_conn
+        conn = get_conn(); cur = conn.cursor()
+
+        # Asegurar columnas
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_compra_marketplace TIMESTAMP")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS origen_registro TEXT DEFAULT 'sistema'")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS stock_antes INTEGER")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS stock_despues INTEGER")
+        conn.commit()
+
+        # Resumen agregado
+        cur.execute("""
+            SELECT COALESCE(canal, '?') as canal,
+                   COALESCE(bodega_codigo, 'CENTRAL') as bodega,
+                   COALESCE(origen_registro, 'sistema') as origen,
+                   COUNT(*) as total,
+                   COUNT(fecha_compra_marketplace) as con_fecha_real,
+                   COUNT(fecha_importacion) as con_fecha_import,
+                   COUNT(stock_antes) as con_stock_antes,
+                   TO_CHAR(MIN(fecha), 'DD/MM HH24:MI') as primer_mov,
+                   TO_CHAR(MAX(fecha), 'DD/MM HH24:MI') as ultimo_mov
+            FROM movimientos
+            WHERE fecha > NOW() - INTERVAL '7 days'
+            GROUP BY canal, bodega_codigo, origen_registro
+            ORDER BY total DESC
+        """)
+        resumen = []
+        for r in cur.fetchall():
+            resumen.append({
+                "canal": r[0], "bodega": r[1], "origen": r[2],
+                "total": r[3], "con_fecha_real": r[4],
+                "con_fecha_import": r[5], "con_stock_antes": r[6],
+                "primer": r[7], "ultimo": r[8],
+                "porcentaje_con_fecha_real": round((r[4]/r[3])*100, 1) if r[3] > 0 else 0
+            })
+
+        # Detalle de los últimos 30 movimientos
+        cur.execute("""
+            SELECT id, tipo, sku, canal, bodega_codigo, orden_id,
+                   TO_CHAR(fecha, 'DD/MM/YYYY HH24:MI') as fecha_mov,
+                   TO_CHAR(fecha_importacion, 'DD/MM/YYYY HH24:MI') as fecha_imp,
+                   TO_CHAR(fecha_compra_marketplace, 'DD/MM/YYYY HH24:MI') as fecha_compra,
+                   origen_registro, stock_antes, stock_despues, cantidad
+            FROM movimientos
+            ORDER BY fecha DESC
+            LIMIT 30
+        """)
+        detalles = []
+        for r in cur.fetchall():
+            detalles.append({
+                "id": r[0], "tipo": r[1], "sku": r[2], "canal": r[3],
+                "bodega": r[4], "orden_id": r[5],
+                "fecha_mov": r[6], "fecha_import": r[7],
+                "fecha_compra_marketplace": r[8],
+                "origen": r[9],
+                "stock_antes": r[10], "stock_despues": r[11],
+                "cantidad": r[12]
+            })
+
+        cur.close(); conn.close()
+
+        # Diagnóstico automático
+        diagnostico = []
+        total_recientes = sum(r["total"] for r in resumen)
+        total_con_fecha = sum(r["con_fecha_real"] for r in resumen)
+
+        if total_recientes == 0:
+            diagnostico.append("⚠ No hay movimientos en los últimos 7 días")
+        elif total_con_fecha == 0:
+            diagnostico.append("✗ NINGÚN movimiento tiene fecha_compra_marketplace. El parsing/guardado está fallando.")
+        elif total_con_fecha < total_recientes:
+            faltantes = total_recientes - total_con_fecha
+            diagnostico.append(f"⚠ {faltantes}/{total_recientes} movimientos sin fecha_compra_marketplace")
+        else:
+            diagnostico.append(f"✓ Todos los {total_recientes} movimientos recientes tienen fecha de compra real")
+
+        # Detectar si todavía hay movimientos sin bodega_codigo
+        sin_bodega = [r for r in resumen if not r["bodega"] or r["bodega"] == "CENTRAL" and "FULL" not in str(r)]
+
+        return jsonify({
+            "diagnostico": diagnostico,
+            "resumen_por_canal": resumen,
+            "ultimos_30_movimientos": detalles
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/debug/payload_orden_meli/<order_id>")
+def debug_payload_orden_meli(order_id):
+    """Muestra el payload crudo de una orden MELI específica para verificar
+    qué campos vienen y poder diagnosticar el parsing de date_created."""
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from mercadolibre import obtener_orden_meli
+        from datetime import datetime as _dt
+        orden = obtener_orden_meli(order_id)
+        if not orden:
+            return jsonify({"error": f"Orden {order_id} no encontrada"}), 404
+
+        # Intentar parsear date_created como lo hace el sync
+        date_str = orden.get("date_created", "") or ""
+        parseo_result = {
+            "date_created_raw": date_str,
+            "tipo": str(type(date_str).__name__),
+            "es_string_vacio": date_str == "",
+            "longitud": len(str(date_str))
+        }
+        try:
+            if date_str:
+                date_str_clean = date_str.replace("Z", "+00:00")
+                fecha = _dt.fromisoformat(date_str_clean)
+                parseo_result["parseado_ok"] = True
+                parseo_result["datetime_parseado"] = str(fecha)
+                parseo_result["tiene_tzinfo"] = fecha.tzinfo is not None
+        except Exception as e:
+            parseo_result["parseado_ok"] = False
+            parseo_result["error"] = str(e)
+
+        return jsonify({
+            "order_id": order_id,
+            "campos_fecha_disponibles": {
+                "date_created": orden.get("date_created"),
+                "date_closed": orden.get("date_closed"),
+                "last_updated": orden.get("last_updated")
+            },
+            "diagnostico_parseo": parseo_result,
+            "shipping_id": (orden.get("shipping") or {}).get("id"),
+            "status": orden.get("status"),
+            "total_items": len(orden.get("order_items", []))
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/debug/test_parseo_fechas")
+def debug_test_parseo_fechas():
+    """Test directo del código de parseo con strings de ejemplo de cada marketplace."""
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    from datetime import datetime as _dt
+    import pytz as _pytz
+    TZ = _pytz.timezone('America/Santiago')
+
+    casos = [
+        ("MELI con tz Chile", "2026-05-03T18:32:15.000-04:00"),
+        ("MELI con tz UTC", "2026-05-03T22:32:15.000Z"),
+        ("Paris UTC con Z", "2026-05-03T05:02:00.000Z"),
+        ("Ripley UTC con Z", "2026-05-03T18:32:15Z"),
+        ("Falabella sin tz", "2026-05-03 14:32:15"),
+        ("Falabella +0000", "2026-05-03T14:32:15+0000")
+    ]
+    resultados = []
+    for nombre, date_str in casos:
+        item = {"nombre": nombre, "input": date_str}
+        try:
+            try:
+                fecha = _dt.fromisoformat(date_str.replace("Z", "+00:00"))
+                item["parseado"] = str(fecha)
+                if fecha.tzinfo:
+                    fecha_chile = fecha.astimezone(TZ).replace(tzinfo=None)
+                    item["en_chile"] = str(fecha_chile)
+                else:
+                    item["en_chile"] = "sin tz, no se convierte"
+            except ValueError:
+                # Fallback Falabella sin T
+                fecha_naive = _dt.strptime(date_str.strip(), "%Y-%m-%d %H:%M:%S")
+                fecha = _pytz.utc.localize(fecha_naive)
+                fecha_chile = fecha.astimezone(TZ).replace(tzinfo=None)
+                item["parseado"] = str(fecha) + " (UTC asumido)"
+                item["en_chile"] = str(fecha_chile)
+            item["ok"] = True
+        except Exception as e:
+            item["ok"] = False
+            item["error"] = str(e)
+        resultados.append(item)
+    return jsonify({"resultados": resultados})
 
 
 if __name__ == "__main__":
