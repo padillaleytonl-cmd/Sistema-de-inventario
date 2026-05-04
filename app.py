@@ -5902,9 +5902,9 @@ def admin_skus_marketplace(canal):
                 data = obtener_productos_paris(limite=25, offset=offset)
                 if not data:
                     break
-                # París devuelve estructura: {products: [...]} o lista directa
+                # París devuelve estructura: {results: [...], total, offset, limit}
                 if isinstance(data, dict):
-                    productos = data.get("products") or data.get("items") or []
+                    productos = data.get("results") or data.get("products") or data.get("items") or []
                 elif isinstance(data, list):
                     productos = data
                 else:
@@ -5914,13 +5914,15 @@ def admin_skus_marketplace(canal):
                     log.append(f"  data keys: {list(data.keys()) if isinstance(data, dict) else type(data).__name__}")
                     break
                 for p in productos:
+                    # París estructura típica: sellerSku, partnerSku, name, price, stock, status
                     items.append({
-                        "sku_paris":       p.get("sellerSku") or p.get("sku") or "",
-                        "titulo":          p.get("name") or p.get("productName") or "",
-                        "stock":           p.get("stock", 0),
-                        "precio":          (p.get("price") or {}).get("normal") if isinstance(p.get("price"), dict) else p.get("price"),
-                        "status":          p.get("status", ""),
-                        "raw_keys":        list(p.keys())[:10]  # primeras 10 keys del payload crudo
+                        "sku_paris":       p.get("sellerSku") or p.get("partnerSku") or p.get("sku") or "",
+                        "partner_sku":     p.get("partnerSku", ""),
+                        "titulo":          p.get("name") or p.get("productName") or p.get("title") or "",
+                        "stock":           p.get("stock") or (p.get("offer") or {}).get("stock") or 0,
+                        "precio":          (p.get("price") or {}).get("normal") if isinstance(p.get("price"), dict) else (p.get("price") or (p.get("offer") or {}).get("price")),
+                        "status":          p.get("status") or p.get("itemStatus") or "",
+                        "raw_keys":        list(p.keys())[:15]  # primeras 15 keys del payload crudo (debug)
                     })
                 if len(productos) < 25:
                     break
@@ -5929,7 +5931,10 @@ def admin_skus_marketplace(canal):
 
         elif canal_l == "walmart":
             from walmart import obtener_productos_walmart
-            items_raw = obtener_productos_walmart(limit=200, max_paginas=10)
+            resultado_debug = obtener_productos_walmart(limit=200, max_paginas=10, debug=True)
+            items_raw = resultado_debug.get("items", [])
+            for line in resultado_debug.get("debug_log", []):
+                log.append(f"  Walmart: {line}")
             for p in items_raw[:limite_max]:
                 items.append({
                     "sku_walmart":   p.get("sku", ""),

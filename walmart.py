@@ -99,7 +99,7 @@ def actualizar_precio_walmart(sku, precio):
 
 # ── PRODUCTOS / ITEMS (para auto-mapeo de SKUs) ──
 
-def obtener_productos_walmart(limit=200, max_paginas=5):
+def obtener_productos_walmart(limit=200, max_paginas=5, debug=False):
     """Lista los productos publicados del seller en Walmart Chile.
 
     Returns:
@@ -109,6 +109,7 @@ def obtener_productos_walmart(limit=200, max_paginas=5):
         todas = []
         next_cursor = None
         pagina = 0
+        debug_log = []
 
         while pagina < max_paginas:
             pagina += 1
@@ -120,40 +121,102 @@ def obtener_productos_walmart(limit=200, max_paginas=5):
                 f"{WALMART_BASE_URL}/v3/items",
                 headers=walmart_headers(),
                 params=params,
-                timeout=20
+                timeout=30
             )
             print(f"[Walmart Items] Página:{pagina} Status:{res.status_code}")
+            debug_log.append(f"Página {pagina}: HTTP {res.status_code}")
 
             if res.status_code != 200:
-                print(f"[Walmart Items] Error: {res.text[:200]}")
+                err_msg = res.text[:500]
+                print(f"[Walmart Items] Error: {err_msg}")
+                debug_log.append(f"Error body: {err_msg}")
                 break
 
             data = res.json()
-            # La estructura suele ser:
-            # { "ItemResponse": [...], "totalItems": N, "nextCursor": "..." }
-            items = data.get("ItemResponse", []) or data.get("items", [])
+            # ── Soportar MÚLTIPLES estructuras posibles de respuesta ──
+            # Estructura A (Walmart Chile/MX modern):
+            #   { "ItemResponse": [...], "totalItems": N, "nextCursor": "..." }
+            # Estructura B (Walmart antiguo):
+            #   { "items": [...], "totalItems": N }
+            # Estructura C (anidado en payload):
+            #   { "payload": { "items": [...] } }
+            # Estructura D (response anidado):
+            #   { "response": { "items": [...] } }
+
+            items = None
+            estructura_usada = "?"
+
+            if isinstance(data, dict):
+                # Probar todas las estructuras conocidas
+                if "ItemResponse" in data and isinstance(data["ItemResponse"], list):
+                    items = data["ItemResponse"]
+                    estructura_usada = "ItemResponse"
+                elif "items" in data and isinstance(data["items"], list):
+                    items = data["items"]
+                    estructura_usada = "items"
+                elif "payload" in data:
+                    p = data["payload"]
+                    if isinstance(p, dict):
+                        items = p.get("items") or p.get("ItemResponse")
+                        estructura_usada = "payload.items"
+                elif "response" in data:
+                    r = data["response"]
+                    if isinstance(r, dict):
+                        items = r.get("items") or r.get("ItemResponse")
+                        estructura_usada = "response.items"
+                # Última opción: ver si data es directamente una lista de items en alguna key
+                if items is None:
+                    debug_log.append(f"Keys disponibles: {list(data.keys())}")
+                    # Buscar la primera key que contenga una lista no vacía
+                    for k, v in data.items():
+                        if isinstance(v, list) and len(v) > 0:
+                            items = v
+                            estructura_usada = f"auto:{k}"
+                            break
+            elif isinstance(data, list):
+                items = data
+                estructura_usada = "lista_directa"
+
+            if items is None:
+                debug_log.append(f"No se pudo encontrar items en respuesta. Keys: {list(data.keys()) if isinstance(data, dict) else type(data).__name__}")
+                debug_log.append(f"Sample respuesta (primeros 300 chars): {str(data)[:300]}")
+                break
+
             if isinstance(items, dict):
                 items = [items]
 
+            debug_log.append(f"Estructura: {estructura_usada}, items en página: {len(items)}")
+            print(f"[Walmart Items] Estructura detectada: {estructura_usada}, +{len(items)} items")
+
             for item in items:
-                # Walmart Chile devuelve estructura variada según versión
+                # Soportar todos los campos posibles según versión del API
+                sku = (item.get("sku") or item.get("itemSku") or
+                       item.get("SKU") or item.get("seller_sku") or "")
+                name = (item.get("productName") or item.get("name") or
+                        item.get("title") or item.get("productTitle") or "")
+                wpid = (item.get("wpid") or item.get("itemId") or
+                        item.get("walmartItemId") or "")
+
                 producto = {
-                    "sku":               item.get("sku") or item.get("itemSku") or "",
-                    "productName":       item.get("productName") or item.get("name") or "",
+                    "sku":               sku,
+                    "productName":       name,
                     "price":             None,
-                    "availableInventory": item.get("availableInventory") or 0,
-                    "status":            item.get("publishedStatus") or item.get("status") or "",
-                    "wpid":              item.get("wpid") or item.get("itemId") or ""
+                    "availableInventory": item.get("availableInventory") or item.get("inventory") or item.get("quantity") or 0,
+                    "status":            (item.get("publishedStatus") or item.get("status") or
+                                          item.get("itemStatus") or item.get("lifecycleStatus") or ""),
+                    "wpid":              wpid
                 }
-                # Intentar extraer precio de distintas estructuras posibles
-                price_raw = item.get("price")
+                # Extraer precio de distintas estructuras
+                price_raw = item.get("price") or item.get("currentPrice") or item.get("listPrice")
                 if isinstance(price_raw, dict):
-                    producto["price"] = price_raw.get("amount") or price_raw.get("currentPrice", {}).get("amount")
-                elif isinstance(price_raw, (int, float, str)):
-                    try:
-                        producto["price"] = float(price_raw)
+                    producto["price"] = (price_raw.get("amount") or
+                                         (price_raw.get("currentPrice") or {}).get("amount") or
+                                         price_raw.get("value"))
+                elif isinstance(price_raw, (int, float)):
+                    producto["price"] = price_raw
+                elif isinstance(price_raw, str):
+                    try: producto["price"] = float(price_raw)
                     except: pass
-                # Algunas versiones lo ponen en .pricing
                 if producto["price"] is None:
                     pricing = item.get("pricing") or {}
                     cp = pricing.get("currentPrice") or {}
@@ -161,15 +224,28 @@ def obtener_productos_walmart(limit=200, max_paginas=5):
 
                 todas.append(producto)
 
-            print(f"[Walmart Items] Página:{pagina} +{len(items)} Total:{len(todas)}")
+            print(f"[Walmart Items] Total acumulado:{len(todas)}")
 
-            next_cursor = data.get("nextCursor")
+            # Ver si hay siguiente página
+            if isinstance(data, dict):
+                next_cursor = data.get("nextCursor") or data.get("cursor")
+                # En algunas versiones el cursor está en metadata
+                if not next_cursor:
+                    meta = data.get("meta") or data.get("metadata") or {}
+                    if isinstance(meta, dict):
+                        next_cursor = meta.get("nextCursor")
             if not next_cursor or next_cursor == "*":
                 break
 
+        if debug:
+            return {"items": todas, "debug_log": debug_log}
         return todas
     except Exception as e:
+        import traceback
         print(f"[Walmart] Error productos: {e}")
+        print(traceback.format_exc())
+        if debug:
+            return {"items": [], "debug_log": [f"EXCEPTION: {e}", traceback.format_exc()]}
         return []
 
 
