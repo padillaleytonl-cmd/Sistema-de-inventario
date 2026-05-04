@@ -4663,5 +4663,333 @@ def debug_test_parseo_fechas():
     return jsonify({"resultados": resultados})
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# RECONSTRUCCIÓN DE FECHAS DE COMPRA HISTÓRICAS
+# ════════════════════════════════════════════════════════════════════════════
+# Endpoint admin para rellenar la columna fecha_compra_marketplace de los
+# movimientos antiguos consultando los APIs de cada marketplace.
+#
+# Estrategia: traer todas las órdenes de los últimos N días una sola vez por
+# canal (mucho más eficiente que consultar de a una), construir un diccionario
+# {orden_id: fecha_compra} en memoria, y luego hacer UN UPDATE por movimiento.
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/reconstruir_fechas_compra", methods=["GET", "POST"])
+def admin_reconstruir_fechas_compra():
+    """Reconstruye fecha_compra_marketplace para movimientos antiguos.
+
+    Query string:
+      ?canales=mercadolibre,paris,walmart,falabella   (default: los 4)
+      ?dias=30                                         (default: 30)
+      ?dry_run=1                                       (default: 0; si 1 no escribe)
+
+    Usa los APIs de cada marketplace para obtener la fecha real de compra,
+    luego hace UPDATE en bloque por orden_id.
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    from datetime import datetime as _dt
+    import pytz as _pytz
+    TZ_CHILE = _pytz.timezone('America/Santiago')
+
+    canales_str = request.args.get("canales", "mercadolibre,paris,walmart,falabella")
+    canales_pedidos = set(c.strip().lower() for c in canales_str.split(",") if c.strip())
+    dias = int(request.args.get("dias", 30))
+    dry_run = request.args.get("dry_run", "0") == "1"
+
+    registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                    "reconstruir_fechas_compra",
+                    detalle=f"canales={canales_pedidos} dias={dias} dry_run={dry_run}")
+
+    log = []
+    log.append(f"Configuración: canales={list(canales_pedidos)}, dias={dias}, dry_run={dry_run}")
+
+    # ── 1) Cargar movimientos pendientes de la BD ──
+    from inventario import get_conn
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""
+        SELECT id, canal, orden_id
+        FROM movimientos
+        WHERE fecha_compra_marketplace IS NULL
+          AND orden_id IS NOT NULL AND orden_id != ''
+          AND fecha > NOW() - (%s || ' days')::INTERVAL
+        ORDER BY fecha DESC
+    """, (dias,))
+    pendientes = cur.fetchall()
+    cur.close(); conn.close()
+
+    log.append(f"Movimientos pendientes en BD: {len(pendientes)}")
+
+    # Agrupar pendientes por canal normalizado
+    pendientes_por_canal = {}
+    for mov_id, canal, orden_id in pendientes:
+        canal_norm = (canal or "").lower()
+        # Normalizar nombres de canales
+        if "mercadolibre" in canal_norm or "meli" in canal_norm:
+            canal_norm = "mercadolibre"
+        elif "paris" in canal_norm or "parís" in canal_norm:
+            canal_norm = "paris"
+        elif "walmart" in canal_norm or "wfs" in canal_norm:
+            canal_norm = "walmart"
+        elif "falabella" in canal_norm:
+            canal_norm = "falabella"
+        else:
+            continue  # Manual, WooCommerce, Sistema, etc → no se reconstruye desde API
+        if canal_norm not in canales_pedidos:
+            continue
+        pendientes_por_canal.setdefault(canal_norm, []).append((mov_id, str(orden_id)))
+
+    for c, items in pendientes_por_canal.items():
+        log.append(f"  {c}: {len(items)} movimientos pendientes")
+
+    # ── 2) Para cada canal, traer las órdenes y armar mapa orden_id → fecha ──
+    fecha_por_orden = {}  # {(canal_norm, orden_id): datetime con tz}
+
+    # MELI: consultar orden por orden (no hay endpoint que filtre por order_id en bloque útil)
+    if "mercadolibre" in pendientes_por_canal:
+        ids_meli = pendientes_por_canal["mercadolibre"]
+        log.append(f"[MELI] Consultando {len(set(o for _, o in ids_meli))} órdenes únicas...")
+        try:
+            from mercadolibre import obtener_orden_meli
+            ya_consultados = set()
+            for mov_id, orden_id in ids_meli:
+                if orden_id in ya_consultados:
+                    continue
+                ya_consultados.add(orden_id)
+                try:
+                    orden = obtener_orden_meli(orden_id)
+                    if orden:
+                        date_str = orden.get("date_created", "") or ""
+                        if date_str:
+                            try:
+                                fecha = _dt.fromisoformat(date_str.replace("Z", "+00:00"))
+                                fecha_por_orden[("mercadolibre", orden_id)] = fecha
+                            except Exception as e:
+                                log.append(f"  MELI {orden_id}: error parseando '{date_str}': {e}")
+                except Exception as e:
+                    log.append(f"  MELI {orden_id}: error consultando API: {e}")
+            log.append(f"[MELI] Fechas obtenidas: {len([k for k in fecha_por_orden if k[0]=='mercadolibre'])}")
+        except Exception as e:
+            log.append(f"[MELI] ERROR general: {e}")
+
+    # PARÍS: traer todas las órdenes recientes y filtrar
+    if "paris" in pendientes_por_canal:
+        log.append(f"[Paris] Trayendo órdenes últimos {dias} días...")
+        try:
+            from paris import obtener_ordenes_paris_todas
+            ordenes = obtener_ordenes_paris_todas(dias=dias, estado=None)
+            log.append(f"[Paris] {len(ordenes)} órdenes obtenidas")
+            for so in ordenes:
+                sub_order_num = str(so.get("subOrderNumber", "") or "")
+                if not sub_order_num:
+                    continue
+                date_str = (so.get("createdAt") or so.get("created_at") or "")
+                if date_str:
+                    try:
+                        fecha = _dt.fromisoformat(date_str.replace("Z", "+00:00"))
+                        fecha_por_orden[("paris", sub_order_num)] = fecha
+                    except Exception as e:
+                        pass
+            log.append(f"[Paris] Fechas obtenidas: {len([k for k in fecha_por_orden if k[0]=='paris'])}")
+        except Exception as e:
+            log.append(f"[Paris] ERROR: {e}")
+            import gc; gc.collect()
+
+    # WALMART: traer órdenes recientes (todos los estados que conocemos)
+    if "walmart" in pendientes_por_canal:
+        log.append(f"[Walmart] Trayendo órdenes últimos {dias} días...")
+        try:
+            from walmart import obtener_ordenes_walmart
+            ya_consultados = set()
+            # Walmart requiere consultar por estado. Iteramos los estados activos.
+            for estado in ["Created", "Acknowledged", "Shipped", "Delivered"]:
+                try:
+                    ords_walmart = obtener_ordenes_walmart(estado=estado, max_paginas=2, limit=50, dias=dias)
+                    log.append(f"[Walmart] {estado}: {len(ords_walmart)} órdenes")
+                    for o in ords_walmart:
+                        po = str(o.get("purchaseOrderId", "") or "")
+                        co = str(o.get("customerOrderId", "") or po)
+                        # En BD usamos customerOrderId como orden_id
+                        if co in ya_consultados:
+                            continue
+                        ya_consultados.add(co)
+                        # Walmart trae orderDate como timestamp en ms (epoch)
+                        order_date_raw = o.get("orderDate")
+                        fecha = None
+                        if order_date_raw:
+                            try:
+                                # Si es int (epoch ms), convertir
+                                if isinstance(order_date_raw, (int, float)):
+                                    fecha = _dt.fromtimestamp(order_date_raw / 1000, tz=_pytz.utc)
+                                elif isinstance(order_date_raw, str):
+                                    if order_date_raw.isdigit():
+                                        fecha = _dt.fromtimestamp(int(order_date_raw) / 1000, tz=_pytz.utc)
+                                    else:
+                                        fecha = _dt.fromisoformat(order_date_raw.replace("Z", "+00:00"))
+                            except Exception as e:
+                                log.append(f"  Walmart {co}: error parseando orderDate '{order_date_raw}': {e}")
+                        if fecha:
+                            fecha_por_orden[("walmart", co)] = fecha
+                            # Walmart en BD a veces usa purchaseOrderId, también guardamos por po
+                            if po and po != co:
+                                fecha_por_orden[("walmart", po)] = fecha
+                except Exception as e:
+                    log.append(f"[Walmart] estado {estado}: error {e}")
+            log.append(f"[Walmart] Fechas obtenidas: {len([k for k in fecha_por_orden if k[0]=='walmart'])}")
+            import gc; gc.collect()
+        except Exception as e:
+            log.append(f"[Walmart] ERROR general: {e}")
+
+    # FALABELLA: traer órdenes recientes (varios estados)
+    if "falabella" in pendientes_por_canal:
+        log.append(f"[Falabella] Trayendo órdenes últimos {dias} días...")
+        try:
+            from falabella import obtener_ordenes_falabella
+            ya_consultados = set()
+            for estado in [None, "pending", "ready_to_ship", "shipped", "delivered"]:
+                try:
+                    ords_fal = obtener_ordenes_falabella(estado=estado, dias=dias, limit=100)
+                    log.append(f"[Falabella] {estado or 'todos'}: {len(ords_fal)} órdenes")
+                    for o in ords_fal:
+                        oid = str(o.get("OrderId") or o.get("OrderNumber") or "")
+                        if not oid or oid in ya_consultados:
+                            continue
+                        ya_consultados.add(oid)
+                        date_str = (o.get("CreatedAt") or o.get("created_at") or "")
+                        if date_str:
+                            try:
+                                fecha = _dt.fromisoformat(date_str.replace("Z", "+00:00"))
+                            except ValueError:
+                                try:
+                                    fecha_naive = _dt.strptime(date_str.strip(), "%Y-%m-%d %H:%M:%S")
+                                    fecha = _pytz.utc.localize(fecha_naive)
+                                except Exception as e:
+                                    log.append(f"  Falabella {oid}: error parseando '{date_str}': {e}")
+                                    continue
+                            fecha_por_orden[("falabella", oid)] = fecha
+                except Exception as e:
+                    log.append(f"[Falabella] estado {estado}: error {e}")
+            log.append(f"[Falabella] Fechas obtenidas: {len([k for k in fecha_por_orden if k[0]=='falabella'])}")
+            import gc; gc.collect()
+        except Exception as e:
+            log.append(f"[Falabella] ERROR general: {e}")
+
+    # ── 3) Hacer UPDATE en BD por cada movimiento que tenga match ──
+    actualizados = 0
+    sin_match = 0
+    errores_db = 0
+    detalle_no_encontrados = []
+
+    if dry_run:
+        log.append("DRY RUN: no se escribirá nada en BD")
+
+    conn = get_conn(); cur = conn.cursor()
+    for canal_norm, lista in pendientes_por_canal.items():
+        for mov_id, orden_id in lista:
+            fecha = fecha_por_orden.get((canal_norm, orden_id))
+            if fecha is None:
+                sin_match += 1
+                if len(detalle_no_encontrados) < 30:
+                    detalle_no_encontrados.append(f"{canal_norm}:{orden_id} (mov_id={mov_id})")
+                continue
+            # Convertir a Chile sin tz para guardar
+            try:
+                if hasattr(fecha, 'tzinfo') and fecha.tzinfo:
+                    fecha_chile = fecha.astimezone(TZ_CHILE).replace(tzinfo=None)
+                else:
+                    fecha_chile = fecha
+                if not dry_run:
+                    cur.execute("""UPDATE movimientos
+                                   SET fecha_compra_marketplace = %s
+                                   WHERE id = %s""", (fecha_chile, mov_id))
+                actualizados += 1
+            except Exception as e:
+                errores_db += 1
+                log.append(f"  ERR DB mov_id={mov_id}: {e}")
+
+    if not dry_run:
+        try:
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            log.append(f"COMMIT ERROR: {e}")
+            errores_db += 1
+    cur.close(); conn.close()
+
+    # ── 4) Verificar cuántos quedan pendientes después ──
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""
+        SELECT COUNT(*) FROM movimientos
+        WHERE fecha_compra_marketplace IS NULL
+          AND orden_id IS NOT NULL AND orden_id != ''
+          AND fecha > NOW() - (%s || ' days')::INTERVAL
+    """, (dias,))
+    quedan_pendientes = cur.fetchone()[0]
+    cur.close(); conn.close()
+
+    return jsonify({
+        "ok": True,
+        "dry_run": dry_run,
+        "movimientos_pendientes_iniciales": len(pendientes),
+        "actualizados": actualizados,
+        "sin_match_en_api": sin_match,
+        "errores_db": errores_db,
+        "movimientos_pendientes_restantes": quedan_pendientes,
+        "ejemplos_no_encontrados": detalle_no_encontrados,
+        "log": log
+    })
+
+
+@app.route("/admin/estado_reconstruccion")
+def admin_estado_reconstruccion():
+    """Muestra cuántos movimientos tienen/no tienen fecha_compra_marketplace,
+    agrupado por canal. Útil para ver el progreso antes/después de ejecutar
+    /admin/reconstruir_fechas_compra."""
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import get_conn
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("""
+            SELECT COALESCE(canal, '?') as canal,
+                   COUNT(*) as total,
+                   COUNT(fecha_compra_marketplace) as con_fecha,
+                   COUNT(*) - COUNT(fecha_compra_marketplace) as sin_fecha,
+                   TO_CHAR(MIN(fecha), 'DD/MM/YYYY') as desde,
+                   TO_CHAR(MAX(fecha), 'DD/MM/YYYY') as hasta
+            FROM movimientos
+            WHERE orden_id IS NOT NULL AND orden_id != ''
+            GROUP BY canal
+            ORDER BY total DESC
+        """)
+        resumen = []
+        for r in cur.fetchall():
+            pct = round((r[2]/r[1])*100, 1) if r[1] > 0 else 0
+            resumen.append({
+                "canal": r[0],
+                "total": r[1],
+                "con_fecha_real": r[2],
+                "sin_fecha_real": r[3],
+                "porcentaje_completo": pct,
+                "desde": r[4],
+                "hasta": r[5]
+            })
+        cur.close(); conn.close()
+
+        total_general = sum(r["total"] for r in resumen)
+        total_con = sum(r["con_fecha_real"] for r in resumen)
+        return jsonify({
+            "total_movimientos_con_orden": total_general,
+            "con_fecha_real": total_con,
+            "sin_fecha_real": total_general - total_con,
+            "porcentaje_completo": round((total_con/total_general)*100, 1) if total_general > 0 else 0,
+            "por_canal": resumen
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
