@@ -578,6 +578,276 @@ def init_sku_mapeo():
     cur.execute("INSERT INTO configuracion (clave,valor) VALUES ('plataforma_web','WooCommerce') ON CONFLICT (clave) DO NOTHING")
     conn.commit(); cur.close(); conn.close()
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MAPEO MULTI-PUBLICACIÓN (sku_mapeo_canal)
+# ═══════════════════════════════════════════════════════════════════════════
+# Modelo: 1 producto Lusync puede tener N publicaciones por marketplace
+# Ejemplo: ODJM001 (Lusync) → 2 publicaciones MELI: MLC2710421490 y MLC1584290001
+# Ambas se sincronizan al actualizar stock/precio.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def init_sku_mapeo_canal():
+    """Crea la tabla nueva sku_mapeo_canal (multi-publicación por canal).
+
+    NO migra datos de la tabla vieja sku_mapeo automáticamente.
+    Si quieres poblarla, usa el endpoint /admin/auto_mapeo_v2 que trae
+    todas las publicaciones de cada marketplace y las inserta aquí.
+    """
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS sku_mapeo_canal (
+            id              SERIAL PRIMARY KEY,
+            sku_lusync      TEXT NOT NULL,
+            canal           TEXT NOT NULL,
+            sku_canal       TEXT NOT NULL,
+            item_id_canal   TEXT,
+            es_catalogo     BOOLEAN DEFAULT FALSE,
+            activo          BOOLEAN DEFAULT TRUE,
+            creado_at       TIMESTAMP DEFAULT NOW(),
+            actualizado_at  TIMESTAMP DEFAULT NOW(),
+            notas           TEXT
+        )
+    """)
+    # Índices únicos: una publicación de un canal solo puede mapear a un SKU Lusync
+    # Permitimos que item_id_canal sea NULL (para canales que no usan item_id, como Walmart/Falabella)
+    cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_smc_unique_item
+        ON sku_mapeo_canal(canal, item_id_canal)
+        WHERE item_id_canal IS NOT NULL
+    """)
+    # Si no hay item_id, prevenimos duplicados por (canal, sku_canal, sku_lusync)
+    cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_smc_unique_sku
+        ON sku_mapeo_canal(canal, sku_canal, sku_lusync)
+        WHERE item_id_canal IS NULL
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_smc_lusync ON sku_mapeo_canal(sku_lusync, canal)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_smc_sku_canal ON sku_mapeo_canal(canal, sku_canal)")
+    conn.commit(); cur.close(); conn.close()
+
+
+def obtener_publicaciones_canal(sku_lusync, canal):
+    """Devuelve TODAS las publicaciones de un SKU Lusync en un canal específico.
+
+    Args:
+        sku_lusync: el SKU local de Lusync (ej: "ODJM001")
+        canal: 'mercadolibre' | 'paris' | 'walmart' | 'falabella' | 'ripley' | 'web' | 'hites'
+
+    Returns:
+        list[dict] con: {id, sku_canal, item_id_canal, es_catalogo, activo}
+        Lista VACÍA si no hay mapeos.
+
+    Esta función reemplaza a get_sku_canal() que devolvía solo un string.
+    Las funciones actualizar_stock_X / actualizar_precio_X deben loopear por estas.
+    """
+    init_sku_mapeo_canal()
+    canal = (canal or "").lower().strip()
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""
+        SELECT id, sku_canal, item_id_canal, es_catalogo, activo
+        FROM sku_mapeo_canal
+        WHERE sku_lusync = %s AND canal = %s AND activo = TRUE
+        ORDER BY id
+    """, (sku_lusync, canal))
+    filas = cur.fetchall()
+    cur.close(); conn.close()
+    return [{
+        "id": r[0],
+        "sku_canal": r[1],
+        "item_id_canal": r[2],
+        "es_catalogo": r[3],
+        "activo": r[4]
+    } for r in filas]
+
+
+def obtener_sku_lusync_por_canal(canal, sku_canal=None, item_id_canal=None):
+    """Operación inversa: dado un SKU del marketplace o item_id, encuentra el SKU Lusync.
+    Útil para webhooks y sync de órdenes.
+
+    Args:
+        canal: 'mercadolibre' | 'paris' | etc
+        sku_canal: SKU del marketplace (opcional si se pasa item_id_canal)
+        item_id_canal: item_id del marketplace (preferido cuando existe)
+
+    Returns:
+        str con el SKU Lusync, o None si no hay match.
+    """
+    if not (sku_canal or item_id_canal):
+        return None
+    init_sku_mapeo_canal()
+    canal = (canal or "").lower().strip()
+    conn = get_conn(); cur = conn.cursor()
+
+    # Prioridad 1: buscar por item_id_canal (más específico)
+    if item_id_canal:
+        cur.execute("""
+            SELECT sku_lusync FROM sku_mapeo_canal
+            WHERE canal = %s AND item_id_canal = %s AND activo = TRUE
+            LIMIT 1
+        """, (canal, str(item_id_canal)))
+        r = cur.fetchone()
+        if r:
+            cur.close(); conn.close()
+            return r[0]
+
+    # Prioridad 2: buscar por sku_canal
+    if sku_canal:
+        cur.execute("""
+            SELECT sku_lusync FROM sku_mapeo_canal
+            WHERE canal = %s AND sku_canal = %s AND activo = TRUE
+            LIMIT 1
+        """, (canal, sku_canal))
+        r = cur.fetchone()
+        if r:
+            cur.close(); conn.close()
+            return r[0]
+
+    cur.close(); conn.close()
+    return None
+
+
+def agregar_publicacion(sku_lusync, canal, sku_canal, item_id_canal=None,
+                        es_catalogo=False, notas=None):
+    """Registra una publicación de un SKU Lusync en un canal.
+
+    Si ya existe (canal + item_id_canal) o (canal + sku_canal + sku_lusync),
+    actualiza el registro existente en vez de duplicar.
+
+    Returns:
+        int (id de la fila) o None si falló.
+    """
+    init_sku_mapeo_canal()
+    canal = (canal or "").lower().strip()
+    conn = get_conn(); cur = conn.cursor()
+
+    try:
+        # Primero verificar si ya existe (evitar conflicto de UNIQUE)
+        if item_id_canal:
+            cur.execute("""
+                SELECT id FROM sku_mapeo_canal
+                WHERE canal = %s AND item_id_canal = %s
+            """, (canal, str(item_id_canal)))
+        else:
+            cur.execute("""
+                SELECT id FROM sku_mapeo_canal
+                WHERE canal = %s AND sku_canal = %s AND sku_lusync = %s
+                  AND item_id_canal IS NULL
+            """, (canal, sku_canal, sku_lusync))
+        existe = cur.fetchone()
+
+        if existe:
+            mapeo_id = existe[0]
+            cur.execute("""
+                UPDATE sku_mapeo_canal
+                SET sku_lusync = %s, sku_canal = %s, es_catalogo = %s,
+                    activo = TRUE, actualizado_at = NOW(),
+                    notas = COALESCE(%s, notas)
+                WHERE id = %s
+            """, (sku_lusync, sku_canal, bool(es_catalogo), notas, mapeo_id))
+        else:
+            cur.execute("""
+                INSERT INTO sku_mapeo_canal
+                (sku_lusync, canal, sku_canal, item_id_canal, es_catalogo, notas)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (sku_lusync, canal, sku_canal,
+                  str(item_id_canal) if item_id_canal else None,
+                  bool(es_catalogo), notas))
+            mapeo_id = cur.fetchone()[0]
+
+        conn.commit()
+        cur.close(); conn.close()
+        return mapeo_id
+    except Exception as e:
+        try: conn.rollback()
+        except: pass
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+        print(f"[sku_mapeo_canal] Error agregando publicación: {e}")
+        return None
+
+
+def eliminar_publicacion(mapeo_id):
+    """Marca como inactiva una publicación (soft delete)."""
+    init_sku_mapeo_canal()
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("UPDATE sku_mapeo_canal SET activo = FALSE, actualizado_at = NOW() WHERE id = %s",
+                    (mapeo_id,))
+        conn.commit()
+        cur.close(); conn.close()
+        return True
+    except Exception as e:
+        try: conn.rollback()
+        except: pass
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+        return False
+
+
+def listar_mapeos_canal(canal=None, sku_lusync=None, solo_activos=True):
+    """Lista los mapeos canal. Filtra opcionalmente por canal y/o sku_lusync."""
+    init_sku_mapeo_canal()
+    conn = get_conn(); cur = conn.cursor()
+    where_clauses = []
+    params = []
+    if canal:
+        where_clauses.append("canal = %s")
+        params.append(canal.lower().strip())
+    if sku_lusync:
+        where_clauses.append("sku_lusync = %s")
+        params.append(sku_lusync)
+    if solo_activos:
+        where_clauses.append("activo = TRUE")
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+    cur.execute(f"""
+        SELECT id, sku_lusync, canal, sku_canal, item_id_canal,
+               es_catalogo, activo,
+               TO_CHAR(creado_at, 'DD/MM/YYYY HH24:MI'),
+               TO_CHAR(actualizado_at, 'DD/MM/YYYY HH24:MI'),
+               COALESCE(notas, '')
+        FROM sku_mapeo_canal {where_sql}
+        ORDER BY sku_lusync, canal, id
+    """, tuple(params))
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    return [{
+        "id": r[0], "sku_lusync": r[1], "canal": r[2],
+        "sku_canal": r[3], "item_id_canal": r[4],
+        "es_catalogo": r[5], "activo": r[6],
+        "creado_at": r[7], "actualizado_at": r[8],
+        "notas": r[9]
+    } for r in rows]
+
+
+def contar_publicaciones_por_sku():
+    """Devuelve un dict {sku_lusync: {canal: cantidad}} para mostrar en UI."""
+    init_sku_mapeo_canal()
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""
+        SELECT sku_lusync, canal, COUNT(*)
+        FROM sku_mapeo_canal
+        WHERE activo = TRUE
+        GROUP BY sku_lusync, canal
+    """)
+    resultado = {}
+    for sku, canal, cnt in cur.fetchall():
+        resultado.setdefault(sku, {})[canal] = cnt
+    cur.close(); conn.close()
+    return resultado
+
+
+# Llamar init al cargar el módulo (idempotente)
+try:
+    init_sku_mapeo_canal()
+except Exception as e:
+    print(f"[inventario] No se pudo inicializar sku_mapeo_canal: {e}")
+
 def listar_sku_mapeo():
     init_sku_mapeo()
     conn = get_conn(); cur = conn.cursor()

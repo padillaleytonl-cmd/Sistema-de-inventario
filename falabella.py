@@ -187,7 +187,7 @@ def verificar_conexion_falabella():
 # ═══════════════════════════════════════════════════════════════════════════
 
 def actualizar_stock_falabella(sku, cantidad):
-    """Actualiza el stock de un SKU en Falabella usando UpdateStock.
+    """Actualiza el stock de UN SKU en Falabella usando UpdateStock (single-publicación).
 
     El body es XML con estructura:
     <Request>
@@ -216,6 +216,70 @@ def actualizar_stock_falabella(sku, cantidad):
         return True
     print(f"[Falabella] Stock {sku} ERROR: {res.get('error')}")
     return False
+
+
+def actualizar_stock_falabella_lusync(sku_lusync, cantidad):
+    """Actualiza stock en Falabella para TODAS las publicaciones de un SKU Lusync.
+
+    Returns:
+        dict: {ok, total_publicaciones, exitosas, fallidas, log}
+    """
+    from inventario import obtener_publicaciones_canal
+    publicaciones = obtener_publicaciones_canal(sku_lusync, "falabella")
+    if not publicaciones:
+        try:
+            from inventario import get_sku_canal
+            sku_legacy = get_sku_canal(sku_lusync, "falabella")
+            if sku_legacy:
+                publicaciones = [{"id": None, "sku_canal": sku_legacy, "item_id_canal": None}]
+        except: pass
+        if not publicaciones:
+            publicaciones = [{"id": None, "sku_canal": sku_lusync, "item_id_canal": None}]
+
+    exitosas, fallidas = 0, 0
+    log = []
+    for pub in publicaciones:
+        sku_fa = (pub.get("sku_canal") or "").strip()
+        if not sku_fa:
+            fallidas += 1
+            continue
+        ok = actualizar_stock_falabella(sku_fa, cantidad)
+        if ok: exitosas += 1
+        else: fallidas += 1
+        log.append(f"  {sku_fa}: {'OK' if ok else 'FAIL'}")
+
+    return {"ok": exitosas > 0, "total_publicaciones": len(publicaciones),
+            "exitosas": exitosas, "fallidas": fallidas, "log": log}
+
+
+def actualizar_precio_falabella_lusync(sku_lusync, precio_normal, precio_oferta=None):
+    """Wrapper precios Falabella loop por publicaciones."""
+    from inventario import obtener_publicaciones_canal
+    publicaciones = obtener_publicaciones_canal(sku_lusync, "falabella")
+    if not publicaciones:
+        try:
+            from inventario import get_sku_canal
+            sku_legacy = get_sku_canal(sku_lusync, "falabella")
+            if sku_legacy:
+                publicaciones = [{"id": None, "sku_canal": sku_legacy, "item_id_canal": None}]
+        except: pass
+        if not publicaciones:
+            publicaciones = [{"id": None, "sku_canal": sku_lusync, "item_id_canal": None}]
+
+    exitosas, fallidas = 0, 0
+    log = []
+    for pub in publicaciones:
+        sku_fa = (pub.get("sku_canal") or "").strip()
+        if not sku_fa:
+            fallidas += 1
+            continue
+        ok = actualizar_precio_falabella(sku_fa, precio_normal, precio_oferta)
+        if ok: exitosas += 1
+        else: fallidas += 1
+        log.append(f"  {sku_fa}: {'OK' if ok else 'FAIL'}")
+
+    return {"ok": exitosas > 0, "total_publicaciones": len(publicaciones),
+            "exitosas": exitosas, "fallidas": fallidas, "log": log}
 
 
 def actualizar_stocks_falabella_lote(skus_cantidades):
@@ -595,14 +659,21 @@ def falabella_sync_ordenes():
                         if not sku_falabella:
                             continue
 
-                        # Buscar SKU Lusync en mapeo
-                        sku_lusync = sku_falabella
+                        # Buscar SKU Lusync: PRIORIDAD sku_mapeo_canal, fallback legacy
+                        sku_lusync = None
                         try:
-                            for fila in listar_sku_mapeo():
-                                if fila.get("sku_falabella") == sku_falabella:
-                                    sku_lusync = fila.get("sku_lusync")
-                                    break
+                            from inventario import obtener_sku_lusync_por_canal
+                            sku_lusync = obtener_sku_lusync_por_canal("falabella", sku_canal=sku_falabella)
                         except: pass
+                        if not sku_lusync:
+                            try:
+                                for fila in listar_sku_mapeo():
+                                    if fila.get("sku_falabella") == sku_falabella:
+                                        sku_lusync = fila.get("sku_lusync")
+                                        break
+                            except: pass
+                        if not sku_lusync:
+                            sku_lusync = sku_falabella  # último fallback
 
                         if sku_lusync not in productos_dict:
                             log.append(f"{order_id}: SKU '{sku_lusync}' no encontrado")

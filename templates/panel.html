@@ -2019,7 +2019,8 @@ tbody td {
           <option value="Prestashop">Prestashop</option>
           <option value="Jumpseller">Jumpseller</option>
         </select>
-        <button onclick="abrirAutoMapeo()" style="padding:7px 12px;border:0.5px solid #3C3489;background:#EEEDFE;color:#3C3489;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:500;" title="Trae los productos de los marketplaces y propone matches automáticos">⚙ Auto-mapear desde APIs</button>
+        <button onclick="abrirAutoMapeoV2()" style="padding:7px 12px;border:0.5px solid #155724;background:#D4EDDA;color:#155724;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:600;" title="Multi-publicación: 1 SKU Lusync puede tener N publicaciones por marketplace">⚡ Auto-mapeo Multi-publicación</button>
+        <button onclick="abrirAutoMapeo()" style="padding:7px 12px;border:0.5px solid #3C3489;background:#EEEDFE;color:#3C3489;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:500;" title="Mapeo legacy 1:1 (un SKU por marketplace)">⚙ Auto-mapear (legacy)</button>
         <button onclick="descargarExcelMapeo()" style="padding:7px 12px;border:0.5px solid var(--border);background:var(--bg);color:var(--text);border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">↓ Descargar Excel</button>
         <label style="padding:7px 12px;border:0.5px solid var(--border);background:var(--bg);color:var(--text);border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">
           ↑ Importar Excel
@@ -5119,11 +5120,17 @@ function confirmarNuevaDevolucion(){
 // MAPEO DE SKUs
 // ════════════════════════════════════════════
 let _mapeoCache = [];
+let _conteoPublicaciones = {};
 let _mapeoEditando = {};
 
 function cargarSkuMapeo(){
-  fetch('/sku_mapeo').then(r=>r.json()).then(d=>{
+  // Cargar mapeo legacy + conteo de publicaciones nuevas en paralelo
+  Promise.all([
+    fetch('/sku_mapeo').then(r=>r.json()),
+    fetch('/sku_mapeo_canal/contar').then(r=>r.json()).catch(()=>({datos:{}}))
+  ]).then(([d, c])=>{
     _mapeoCache = d.mapeos || [];
+    _conteoPublicaciones = c.datos || {};
     const sel = document.getElementById('selPlataformaWeb');
     if(sel && d.plataforma_web) sel.value = d.plataforma_web;
     const thWeb = document.getElementById('thWeb');
@@ -5138,31 +5145,49 @@ function renderTablaSkuMapeo(){
     body.innerHTML = '<tr><td colspan="9" style="padding:40px;text-align:center;color:var(--hint);font-size:12px;">No hay productos. Crea productos primero en Inventario.</td></tr>';
     return;
   }
-  body.innerHTML = _mapeoCache.map(m => `
+  body.innerHTML = _mapeoCache.map(m => {
+    const conteo = (_conteoPublicaciones || {})[m.sku_lusync] || {};
+    const totalPubs = Object.values(conteo).reduce((a,b)=>a+b, 0);
+    const badgePubs = totalPubs > 0
+      ? `<button onclick="verPublicacionesSku('${m.sku_lusync}')" title="Ver ${totalPubs} publicaciones de ${m.sku_lusync}" style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border:0.5px solid #155724;background:#D4EDDA;color:#155724;border-radius:10px;font-size:10px;font-weight:600;cursor:pointer;margin-left:6px;">⚡ ${totalPubs}</button>`
+      : `<button onclick="verPublicacionesSku('${m.sku_lusync}')" title="Ver publicaciones (vacío)" style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border:0.5px solid var(--border);background:var(--bg2);color:var(--muted);border-radius:10px;font-size:10px;cursor:pointer;margin-left:6px;">·</button>`;
+    return `
     <tr style="border-bottom:0.5px solid var(--border);">
-      <td style="padding:8px 12px;font-family:'DM Mono',monospace;font-size:11px;color:var(--text);font-weight:500;">${m.sku_lusync}</td>
+      <td style="padding:8px 12px;font-family:'DM Mono',monospace;font-size:11px;color:var(--text);font-weight:500;white-space:nowrap;">
+        ${m.sku_lusync}${badgePubs}
+      </td>
       <td style="padding:8px 12px;color:var(--text);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px;" title="${m.nombre}">${m.nombre}</td>
-      ${renderCeldaSku(m.sku_lusync, 'sku_web', m.sku_web)}
-      ${renderCeldaSku(m.sku_lusync, 'sku_walmart', m.sku_walmart)}
-      ${renderCeldaSku(m.sku_lusync, 'sku_paris', m.sku_paris)}
-      ${renderCeldaSku(m.sku_lusync, 'sku_falabella', m.sku_falabella)}
-      ${renderCeldaSku(m.sku_lusync, 'sku_ripley', m.sku_ripley)}
-      ${renderCeldaSku(m.sku_lusync, 'sku_mercadolibre', m.sku_mercadolibre)}
-      ${renderCeldaSku(m.sku_lusync, 'sku_hites', m.sku_hites)}
+      ${renderCeldaSku(m.sku_lusync, 'sku_web', m.sku_web, conteo.web)}
+      ${renderCeldaSku(m.sku_lusync, 'sku_walmart', m.sku_walmart, conteo.walmart)}
+      ${renderCeldaSku(m.sku_lusync, 'sku_paris', m.sku_paris, conteo.paris)}
+      ${renderCeldaSku(m.sku_lusync, 'sku_falabella', m.sku_falabella, conteo.falabella)}
+      ${renderCeldaSku(m.sku_lusync, 'sku_ripley', m.sku_ripley, conteo.ripley)}
+      ${renderCeldaSku(m.sku_lusync, 'sku_mercadolibre', m.sku_mercadolibre, conteo.mercadolibre)}
+      ${renderCeldaSku(m.sku_lusync, 'sku_hites', m.sku_hites, conteo.hites)}
     </tr>
-  `).join('');
+  `;}).join('');
 }
 
-function renderCeldaSku(skuLusync, campo, valor){
+function renderCeldaSku(skuLusync, campo, valor, cantidadPubs){
   const id = `mp_${skuLusync}_${campo}`.replace(/[^a-zA-Z0-9_]/g,'_');
+  // Si hay 2+ publicaciones para este canal, mostrar badge "+N" además del input
+  let badge = '';
+  if(cantidadPubs && cantidadPubs > 1){
+    badge = `<span style="display:inline-flex;align-items:center;padding:1px 5px;background:#155724;color:white;border-radius:8px;font-size:9px;font-weight:600;margin-left:4px;" title="${cantidadPubs} publicaciones en este canal">+${cantidadPubs - 1}</span>`;
+  } else if(cantidadPubs === 1){
+    badge = `<span style="display:inline-block;width:6px;height:6px;background:#155724;border-radius:50%;margin-left:4px;vertical-align:middle;" title="1 publicación mapeada"></span>`;
+  }
   return `<td style="padding:6px 10px;">
-    <input id="${id}" type="text" value="${valor||''}" placeholder="—"
-      onchange="onChangeSkuMapeo('${skuLusync}', '${campo}', this.value)"
-      onblur="guardarFilaSkuMapeo('${skuLusync}')"
-      style="width:100%;padding:5px 8px;border:0.5px solid transparent;border-radius:6px;font-size:11px;font-family:'DM Mono',monospace;background:transparent;color:var(--text);min-width:120px;"
-      onfocus="this.style.border='0.5px solid var(--text)';this.style.background='var(--white)';"
-      onmouseover="if(document.activeElement!==this)this.style.background='var(--bg2)';"
-      onmouseout="if(document.activeElement!==this)this.style.background='transparent';">
+    <div style="display:flex;align-items:center;">
+      <input id="${id}" type="text" value="${valor||''}" placeholder="—"
+        onchange="onChangeSkuMapeo('${skuLusync}', '${campo}', this.value)"
+        onblur="guardarFilaSkuMapeo('${skuLusync}')"
+        style="flex:1;padding:5px 8px;border:0.5px solid transparent;border-radius:6px;font-size:11px;font-family:'DM Mono',monospace;background:transparent;color:var(--text);min-width:100px;"
+        onfocus="this.style.border='0.5px solid var(--text)';this.style.background='var(--white)';"
+        onmouseover="if(document.activeElement!==this)this.style.background='var(--bg2)';"
+        onmouseout="if(document.activeElement!==this)this.style.background='transparent';">
+      ${badge}
+    </div>
   </td>`;
 }
 
@@ -5545,6 +5570,275 @@ function guardarMatchesSeleccionados(){
       completados++;
       fallidos++;
     });
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// AUTO-MAPEO V2 — MULTI-PUBLICACIÓN (1 SKU Lusync → N publicaciones MELI)
+// ─────────────────────────────────────────────────────────────────────────
+
+function abrirAutoMapeoV2(){
+  const ya = document.getElementById('modalAutoMapeoV2');
+  if(ya) ya.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modalAutoMapeoV2';
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;display:flex;align-items:center;justify-content:center;';
+  modal.innerHTML = `
+    <div style="background:var(--bg);border-radius:12px;padding:24px;max-width:560px;width:92%;max-height:90vh;overflow:auto;">
+      <div style="font-size:16px;font-weight:600;margin-bottom:8px;">⚡ Auto-mapeo Multi-publicación</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:18px;line-height:1.5;">
+        Trae <b>TODAS</b> las publicaciones de cada marketplace y las vincula al SKU Lusync correspondiente.
+        <br><br>
+        <b>Diferencia con el auto-mapeo legacy:</b> aquí 1 SKU Lusync puede tener N publicaciones.
+        Por ejemplo, si tienes 2 publicaciones MELI con el mismo SKU "ODJM001", ambas se vincularán y
+        ambas recibirán el sync de stock.
+      </div>
+
+      <div style="font-size:11px;font-weight:500;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em;">Marketplaces a consultar</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px;">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;padding:8px;border:0.5px solid var(--border);border-radius:6px;">
+          <input type="checkbox" id="amv2ML" checked> MercadoLibre
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;padding:8px;border:0.5px solid var(--border);border-radius:6px;">
+          <input type="checkbox" id="amv2PA" checked> París
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;padding:8px;border:0.5px solid var(--border);border-radius:6px;">
+          <input type="checkbox" id="amv2WM" checked> Walmart
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;padding:8px;border:0.5px solid var(--border);border-radius:6px;">
+          <input type="checkbox" id="amv2FA" checked> Falabella
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;padding:8px;border:0.5px solid var(--border);border-radius:6px;">
+          <input type="checkbox" id="amv2RP" checked> Ripley
+        </label>
+      </div>
+
+      <div style="font-size:11px;font-weight:500;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em;">Umbral similitud nombre (para cuando no hay SKU exacto)</div>
+      <div style="margin-bottom:18px;">
+        <input type="range" id="amv2Umbral" min="0.70" max="0.95" step="0.05" value="0.85" oninput="document.getElementById('amv2UmbralVal').textContent = this.value" style="width:100%;">
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:4px;">
+          <span>0.70 (más matches)</span>
+          <span><b id="amv2UmbralVal">0.85</b></span>
+          <span>0.95 (solo nombres casi idénticos)</span>
+        </div>
+      </div>
+
+      <div style="background:#FFF4E0;border:0.5px solid #FCBA40;color:#7C4A03;font-size:11px;padding:10px;border-radius:6px;margin-bottom:18px;line-height:1.5;">
+        ⚠ Esto INSERTA filas en la nueva tabla <code style="background:#fff;padding:1px 4px;border-radius:3px;">sku_mapeo_canal</code>.
+        Es <b>idempotente</b>: si vuelves a ejecutar, no duplica.
+        Las publicaciones que ya están vinculadas a un SKU Lusync no se mueven.
+      </div>
+
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button onclick="document.getElementById('modalAutoMapeoV2').remove()" style="padding:8px 16px;border:0.5px solid var(--border);background:var(--bg);color:var(--text);border-radius:6px;font-size:13px;cursor:pointer;">Cancelar</button>
+        <button onclick="ejecutarAutoMapeoV2(true)" style="padding:8px 16px;border:0.5px solid var(--border);background:var(--bg);color:var(--text);border-radius:6px;font-size:13px;cursor:pointer;">Dry-run (sin guardar)</button>
+        <button onclick="ejecutarAutoMapeoV2(false)" style="padding:8px 16px;border:none;background:#155724;color:white;border-radius:6px;font-size:13px;cursor:pointer;font-weight:500;">Ejecutar y guardar</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+function ejecutarAutoMapeoV2(dry_run){
+  const canales = [];
+  if(document.getElementById('amv2ML')?.checked) canales.push('mercadolibre');
+  if(document.getElementById('amv2PA')?.checked) canales.push('paris');
+  if(document.getElementById('amv2WM')?.checked) canales.push('walmart');
+  if(document.getElementById('amv2FA')?.checked) canales.push('falabella');
+  if(document.getElementById('amv2RP')?.checked) canales.push('ripley');
+
+  if(canales.length === 0){
+    toast('Selecciona al menos un marketplace');
+    return;
+  }
+  const umbral = document.getElementById('amv2Umbral')?.value || '0.85';
+
+  const url = `/admin/auto_mapeo_v2?canales=${canales.join(',')}&dry_run=${dry_run?'1':'0'}&umbral_nombre=${umbral}`;
+
+  // Loading
+  const modal = document.getElementById('modalAutoMapeoV2');
+  if(modal){
+    modal.querySelector('div').innerHTML = `
+      <div style="text-align:center;padding:40px;">
+        <div style="font-size:32px;margin-bottom:12px;">⏳</div>
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px;">${dry_run ? 'Simulando' : 'Mapeando'}...</div>
+        <div style="font-size:12px;color:var(--muted);">Esto puede tomar 1-3 minutos. No cierres esta ventana.</div>
+      </div>`;
+  }
+
+  fetch(url).then(r=>r.json()).then(d=>{
+    if(!d.ok){
+      toast('Error: ' + (d.error || 'desconocido'));
+      document.getElementById('modalAutoMapeoV2')?.remove();
+      return;
+    }
+    mostrarResultadosAutoMapeoV2(d, dry_run);
+  }).catch(e=>{
+    toast('Error: ' + e.message);
+    document.getElementById('modalAutoMapeoV2')?.remove();
+  });
+}
+
+function mostrarResultadosAutoMapeoV2(data, era_dry_run){
+  const r = data.resumen || {};
+  const ejemplos = data.ejemplos_creadas || [];
+  const log = data.log || [];
+
+  document.getElementById('modalAutoMapeoV2')?.remove();
+
+  // Resumen por canal
+  const canalesNombres = {mercadolibre:'MELI', paris:'París', walmart:'Walmart', falabella:'Falabella', ripley:'Ripley'};
+  let resumenHtml = '';
+  for(const [canal, info] of Object.entries(r)){
+    const nombre = canalesNombres[canal] || canal;
+    if(info.error){
+      resumenHtml += `<div style="padding:8px 12px;background:#F8D7DA;border:0.5px solid #F1C2C7;border-radius:6px;margin-bottom:6px;font-size:12px;color:#721C24;"><b>${nombre}:</b> error - ${info.error}</div>`;
+    } else {
+      const total = info.publicaciones || 0;
+      const ok = info.mapeadas || 0;
+      const sm = info.sin_match || 0;
+      const pct = total > 0 ? Math.round((ok/total)*100) : 0;
+      resumenHtml += `<div style="padding:8px 12px;background:#D4EDDA;border:0.5px solid #C3E6CB;border-radius:6px;margin-bottom:6px;font-size:12px;color:#155724;">
+        <b>${nombre}:</b> ${total} publicaciones · <b>${ok} mapeadas</b> (${pct}%) · ${sm} sin match
+      </div>`;
+    }
+  }
+
+  const modal = document.createElement('div');
+  modal.id = 'modalAutoMapeoV2Res';
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;';
+
+  modal.innerHTML = `
+    <div style="background:var(--bg);border-radius:12px;padding:20px;width:90vw;max-width:900px;max-height:92vh;display:flex;flex-direction:column;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+        <div>
+          <div style="font-size:16px;font-weight:600;">${era_dry_run ? '🔍 Resultado dry-run' : '✓ Auto-mapeo completado'}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px;">
+            Total publicaciones procesadas: <b>${data.publicaciones_creadas_total}</b>
+            ${era_dry_run ? '(no se guardó nada en BD)' : '(guardadas en sku_mapeo_canal)'}
+          </div>
+        </div>
+        <button onclick="document.getElementById('modalAutoMapeoV2Res').remove(); cargarSkuMapeo();" style="padding:6px 12px;border:0.5px solid var(--border);background:var(--bg);color:var(--text);border-radius:6px;font-size:12px;cursor:pointer;">Cerrar</button>
+      </div>
+
+      <div style="margin-bottom:14px;">${resumenHtml}</div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;flex:1;overflow:hidden;">
+        <div style="display:flex;flex-direction:column;overflow:hidden;">
+          <div style="font-size:11px;font-weight:500;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;">
+            Ejemplos vinculados (primeros 30)
+          </div>
+          <div style="flex:1;overflow:auto;border:0.5px solid var(--border);border-radius:6px;padding:6px;">
+            ${ejemplos.length === 0 ? '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">Sin ejemplos</div>' :
+              ejemplos.map(e => `
+                <div style="padding:6px 8px;border-bottom:0.5px solid var(--border);font-size:11px;">
+                  <span style="font-weight:500;color:#3C3489;">${canalesNombres[e.canal] || e.canal}</span>:
+                  <code style="background:var(--bg2);padding:1px 4px;border-radius:3px;font-size:10px;">${e.sku_canal || e.item_id_canal}</code>
+                  → <span style="font-weight:500;">${e.sku_lusync}</span>
+                  <span style="color:var(--muted);font-size:10px;margin-left:4px;">[${e.razon}]</span>
+                </div>`).join('')}
+          </div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;overflow:hidden;">
+          <div style="font-size:11px;font-weight:500;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;">
+            Log detallado
+          </div>
+          <div style="flex:1;overflow:auto;border:0.5px solid var(--border);border-radius:6px;padding:6px;font-family:monospace;font-size:10px;line-height:1.5;color:var(--muted);">
+            ${log.map(l => `<div>${l.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`).join('')}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// VISTA DE PUBLICACIONES POR SKU (sku_mapeo_canal)
+// ─────────────────────────────────────────────────────────────────────────
+
+function verPublicacionesSku(sku_lusync){
+  fetch('/sku_mapeo_canal/listar?sku_lusync=' + encodeURIComponent(sku_lusync))
+    .then(r=>r.json()).then(d=>{
+      const mapeos = d.mapeos || [];
+      const ya = document.getElementById('modalPubsSku');
+      if(ya) ya.remove();
+
+      const canalesNombres = {mercadolibre:'MELI', paris:'PA', walmart:'WM', falabella:'FA', ripley:'RP', web:'WEB', hites:'HI'};
+      const canalesColores = {
+        mercadolibre: '#FFF4E0', paris: '#E0F2FE', walmart: '#E1F5EE',
+        falabella: '#E8F0E0', ripley: '#F8E1E5', web: '#E6F1FB', hites: '#FCE8DD'
+      };
+
+      // Agrupar por canal
+      const agrupado = {};
+      mapeos.forEach(m => {
+        if(!agrupado[m.canal]) agrupado[m.canal] = [];
+        agrupado[m.canal].push(m);
+      });
+
+      let bloquesHtml = '';
+      const canalesOrden = ['mercadolibre','paris','walmart','falabella','ripley','web','hites'];
+      canalesOrden.forEach(canal => {
+        const pubs = agrupado[canal] || [];
+        const bg = canalesColores[canal] || '#F1EFE8';
+        bloquesHtml += `
+          <div style="margin-bottom:14px;border:0.5px solid var(--border);border-radius:8px;overflow:hidden;">
+            <div style="padding:8px 12px;background:${bg};display:flex;justify-content:space-between;align-items:center;">
+              <span style="font-size:13px;font-weight:600;">${canalesNombres[canal] || canal}</span>
+              <span style="font-size:11px;color:var(--muted);">${pubs.length} publicación${pubs.length===1?'':'es'}</span>
+            </div>
+            ${pubs.length === 0 ? '<div style="padding:12px;text-align:center;color:var(--muted);font-size:11px;">Sin publicaciones mapeadas</div>' :
+              pubs.map(p => `
+                <div style="padding:8px 12px;border-top:0.5px solid var(--border);display:grid;grid-template-columns:1fr 1fr 80px 30px;gap:8px;align-items:center;font-size:11px;">
+                  <div>
+                    <div style="color:var(--muted);font-size:10px;">SKU canal</div>
+                    <code style="background:var(--bg2);padding:2px 6px;border-radius:4px;font-size:11px;">${p.sku_canal || '—'}</code>
+                  </div>
+                  <div>
+                    <div style="color:var(--muted);font-size:10px;">Item ID</div>
+                    <code style="background:var(--bg2);padding:2px 6px;border-radius:4px;font-size:11px;">${p.item_id_canal || '—'}</code>
+                  </div>
+                  <div style="color:var(--muted);font-size:10px;">${p.creado_at || ''}</div>
+                  <button onclick="eliminarPublicacion(${p.id}, '${sku_lusync}')" style="padding:4px 8px;border:0.5px solid #F1C2C7;background:#F8D7DA;color:#721C24;border-radius:4px;font-size:11px;cursor:pointer;" title="Eliminar publicación">✕</button>
+                </div>`).join('')}
+          </div>
+        `;
+      });
+
+      const modal = document.createElement('div');
+      modal.id = 'modalPubsSku';
+      modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;';
+      modal.innerHTML = `
+        <div style="background:var(--bg);border-radius:12px;padding:20px;width:90vw;max-width:800px;max-height:92vh;display:flex;flex-direction:column;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+            <div>
+              <div style="font-size:16px;font-weight:600;">Publicaciones de ${sku_lusync}</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:2px;">${mapeos.length} publicación${mapeos.length===1?'':'es'} en total</div>
+            </div>
+            <button onclick="document.getElementById('modalPubsSku').remove()" style="padding:6px 12px;border:0.5px solid var(--border);background:var(--bg);color:var(--text);border-radius:6px;font-size:12px;cursor:pointer;">Cerrar</button>
+          </div>
+          <div style="flex:1;overflow:auto;">${bloquesHtml}</div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+    });
+}
+
+function eliminarPublicacion(mapeo_id, sku_lusync){
+  if(!confirm('¿Eliminar esta publicación del mapeo? Ya no recibirá sync de stock/precio.')) return;
+  fetch('/sku_mapeo_canal/eliminar', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({mapeo_id})
+  }).then(r=>r.json()).then(d=>{
+    if(d.ok){
+      toast('✓ Eliminada');
+      verPublicacionesSku(sku_lusync);  // refrescar vista
+    } else {
+      toast('Error: ' + (d.error || 'desconocido'));
+    }
   });
 }
 

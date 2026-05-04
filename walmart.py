@@ -50,6 +50,7 @@ def walmart_headers():
 # ── INVENTARIO ──
 
 def actualizar_stock_walmart(sku, cantidad):
+    """Actualiza stock en Walmart Chile para UN SKU específico (single-publicación)."""
     try:
         headers = walmart_headers()
         headers["Content-Type"] = "application/json"
@@ -67,6 +68,84 @@ def actualizar_stock_walmart(sku, cantidad):
     except Exception as e:
         print(f"[Walmart] Error stock {sku}: {e}")
         return False
+
+
+def actualizar_stock_walmart_lusync(sku_lusync, cantidad):
+    """Actualiza stock en Walmart para TODAS las publicaciones de un SKU Lusync.
+
+    Aunque Walmart usualmente tiene 1 publicación por SKU, este wrapper soporta
+    múltiples por consistencia con MELI/París.
+
+    Returns:
+        dict: {ok, total_publicaciones, exitosas, fallidas, log}
+    """
+    from inventario import obtener_publicaciones_canal
+    publicaciones = obtener_publicaciones_canal(sku_lusync, "walmart")
+
+    # Fallback legacy
+    if not publicaciones:
+        try:
+            from inventario import get_sku_canal
+            sku_legacy = get_sku_canal(sku_lusync, "walmart")
+            if sku_legacy:
+                publicaciones = [{"id": None, "sku_canal": sku_legacy, "item_id_canal": None}]
+        except: pass
+        if not publicaciones:
+            publicaciones = [{"id": None, "sku_canal": sku_lusync, "item_id_canal": None}]
+
+    exitosas, fallidas = 0, 0
+    log = []
+    for pub in publicaciones:
+        sku_wm = (pub.get("sku_canal") or "").strip()
+        if not sku_wm:
+            fallidas += 1
+            log.append(f"  Publicación sin sku_canal")
+            continue
+        ok = actualizar_stock_walmart(sku_wm, cantidad)
+        if ok:
+            exitosas += 1
+            log.append(f"  {sku_wm}: OK")
+        else:
+            fallidas += 1
+            log.append(f"  {sku_wm}: FAIL")
+
+    return {
+        "ok": exitosas > 0,
+        "total_publicaciones": len(publicaciones),
+        "exitosas": exitosas,
+        "fallidas": fallidas,
+        "log": log
+    }
+
+
+def actualizar_precio_walmart_lusync(sku_lusync, precio):
+    """Actualiza precio en TODAS las publicaciones Walmart de un SKU Lusync."""
+    from inventario import obtener_publicaciones_canal
+    publicaciones = obtener_publicaciones_canal(sku_lusync, "walmart")
+    if not publicaciones:
+        try:
+            from inventario import get_sku_canal
+            sku_legacy = get_sku_canal(sku_lusync, "walmart")
+            if sku_legacy:
+                publicaciones = [{"id": None, "sku_canal": sku_legacy, "item_id_canal": None}]
+        except: pass
+        if not publicaciones:
+            publicaciones = [{"id": None, "sku_canal": sku_lusync, "item_id_canal": None}]
+
+    exitosas, fallidas = 0, 0
+    log = []
+    for pub in publicaciones:
+        sku_wm = (pub.get("sku_canal") or "").strip()
+        if not sku_wm:
+            fallidas += 1
+            continue
+        ok = actualizar_precio_walmart(sku_wm, precio)
+        if ok: exitosas += 1
+        else: fallidas += 1
+        log.append(f"  {sku_wm}: {'OK' if ok else 'FAIL'}")
+
+    return {"ok": exitosas > 0, "total_publicaciones": len(publicaciones),
+            "exitosas": exitosas, "fallidas": fallidas, "log": log}
 
 # ── PRECIOS ──
 
@@ -99,8 +178,11 @@ def actualizar_precio_walmart(sku, precio):
 
 # ── PRODUCTOS / ITEMS (para auto-mapeo de SKUs) ──
 
-def obtener_productos_walmart(limit=200, max_paginas=5, debug=False):
+def obtener_productos_walmart(limit=50, max_paginas=20, debug=False):
     """Lista los productos publicados del seller en Walmart Chile.
+
+    Walmart Chile/MX limita a 50 items por página máximo.
+    Para traer ~200 productos usar max_paginas=4-5.
 
     Returns:
         list de dicts con: sku, productName, price, availableInventory, status
@@ -113,7 +195,8 @@ def obtener_productos_walmart(limit=200, max_paginas=5, debug=False):
 
         while pagina < max_paginas:
             pagina += 1
-            params = {"limit": min(limit, 200)}
+            # IMPORTANTE: Walmart Chile máximo 50 por página
+            params = {"limit": min(limit, 50)}
             if next_cursor and next_cursor != "*":
                 params["nextCursor"] = next_cursor
 
@@ -420,14 +503,21 @@ def walmart_sync_ordenes():
                             if status_qty and status_qty.get("amount"):
                                 cantidad = int(float(status_qty.get("amount", 1)))
 
-                        # Buscar SKU Lusync vía mapeo
-                        sku_lusync = sku_walmart
+                        # Buscar SKU Lusync: PRIORIDAD sku_mapeo_canal, fallback legacy
+                        sku_lusync = None
                         try:
-                            for fila in listar_sku_mapeo():
-                                if fila.get("sku_walmart") == sku_walmart:
-                                    sku_lusync = fila.get("sku_lusync")
-                                    break
+                            from inventario import obtener_sku_lusync_por_canal
+                            sku_lusync = obtener_sku_lusync_por_canal("walmart", sku_canal=sku_walmart)
                         except: pass
+                        if not sku_lusync:
+                            try:
+                                for fila in listar_sku_mapeo():
+                                    if fila.get("sku_walmart") == sku_walmart:
+                                        sku_lusync = fila.get("sku_lusync")
+                                        break
+                            except: pass
+                        if not sku_lusync:
+                            sku_lusync = sku_walmart  # último fallback
 
                         if sku_lusync not in productos_dict:
                             log.append(f"{customer_order_id}: SKU '{sku_lusync}' no encontrado")

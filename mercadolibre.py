@@ -150,40 +150,76 @@ def verificar_conexion_meli():
 
 # ── STOCK ───────────────────────────────────────────────────────────────────
 
-def actualizar_stock_meli(sku_seller, cantidad):
+def actualizar_stock_meli(sku_lusync, cantidad):
     """
-    Actualiza stock en MercadoLibre. Busca el ITEM_ID asociado al SKU usando user_products.
-    Para apps simples, suele ser más directo guardar el ITEM_ID junto al SKU en el mapeo.
+    Actualiza stock en MercadoLibre para TODAS las publicaciones de un SKU Lusync.
+
+    Si tienes 1 SKU Lusync con N publicaciones MELI (ej: ODJM001 con 2 MLC),
+    actualiza el stock en LAS N publicaciones.
+
+    Returns:
+        dict: {ok, total_publicaciones, exitosas, fallidas, log}
     """
-    try:
-        from inventario import get_sku_canal
-        sku_meli = get_sku_canal(sku_seller, "mercadolibre")
-    except Exception:
-        sku_meli = None
+    from inventario import obtener_publicaciones_canal
 
-    if not sku_meli or str(sku_meli).strip() == "":
-        sku_meli = sku_seller
+    publicaciones = obtener_publicaciones_canal(sku_lusync, "mercadolibre")
 
-    sku_meli = str(sku_meli).strip()
+    if not publicaciones:
+        # Fallback legacy: si no hay mapeo nuevo, intentar con el sistema viejo
+        try:
+            from inventario import get_sku_canal
+            sku_meli_legacy = get_sku_canal(sku_lusync, "mercadolibre")
+            if sku_meli_legacy and str(sku_meli_legacy).strip().startswith("MLC"):
+                publicaciones = [{
+                    "id": None,
+                    "sku_canal": sku_lusync,
+                    "item_id_canal": str(sku_meli_legacy).strip()
+                }]
+        except: pass
 
-    # En MELI cada publicación tiene un MLC item_id (no usa SKU directo).
-    # El sku_meli en nuestro mapeo debe ser el item_id (ej: MLC1234567890)
-    if not sku_meli.startswith("MLC"):
-        print(f"[MELI Stock] SKU '{sku_meli}' no parece un item_id válido (debe empezar con MLC)")
-        return False
+    if not publicaciones:
+        print(f"[MELI Stock] SKU '{sku_lusync}' sin publicaciones mapeadas, no se actualiza")
+        return {"ok": False, "total_publicaciones": 0, "exitosas": 0, "fallidas": 0,
+                "log": [f"Sin publicaciones mapeadas para {sku_lusync}"]}
 
-    try:
-        res = requests.put(
-            f"{MELI_API_URL}/items/{sku_meli}",
-            headers=meli_headers(),
-            json={"available_quantity": int(cantidad)},
-            timeout=15
-        )
-        print(f"[MELI Stock] Item:{sku_meli} Qty:{cantidad} Status:{res.status_code}")
-        return res.status_code in (200, 201)
-    except Exception as e:
-        print(f"[MELI Stock] Error {sku_meli}: {e}")
-        return False
+    exitosas = 0
+    fallidas = 0
+    log = []
+
+    for pub in publicaciones:
+        item_id = pub.get("item_id_canal") or pub.get("sku_canal")
+        if not item_id or not str(item_id).strip().upper().startswith("MLC"):
+            log.append(f"  Publicación {item_id}: no es item_id MELI válido (debe empezar con MLC)")
+            fallidas += 1
+            continue
+
+        try:
+            res = requests.put(
+                f"{MELI_API_URL}/items/{item_id}",
+                headers=meli_headers(),
+                json={"available_quantity": int(cantidad)},
+                timeout=15
+            )
+            ok = res.status_code in (200, 201)
+            log.append(f"  {item_id}: status {res.status_code} {'OK' if ok else 'FAIL'}")
+            print(f"[MELI Stock] Item:{item_id} Qty:{cantidad} Status:{res.status_code}")
+            if ok:
+                exitosas += 1
+            else:
+                fallidas += 1
+                log.append(f"    body: {res.text[:200]}")
+        except Exception as e:
+            fallidas += 1
+            log.append(f"  {item_id}: error {e}")
+            print(f"[MELI Stock] Error {item_id}: {e}")
+
+    return {
+        "ok": exitosas > 0,
+        "total_publicaciones": len(publicaciones),
+        "exitosas": exitosas,
+        "fallidas": fallidas,
+        "log": log
+    }
 
 
 def obtener_publicaciones_meli(limite=50, offset=0):
@@ -433,7 +469,7 @@ def obtener_sku_de_item_meli(item_id):
 # ── PRECIOS ─────────────────────────────────────────────────────────────────
 
 def actualizar_precio_meli(item_id, precio):
-    """Actualiza el precio de una publicación."""
+    """Actualiza el precio de UNA publicación específica (por item_id MLC)."""
     try:
         res = requests.put(
             f"{MELI_API_URL}/items/{item_id}",
@@ -446,6 +482,43 @@ def actualizar_precio_meli(item_id, precio):
     except Exception as e:
         print(f"[MELI Precio] Error: {e}")
         return False
+
+
+def actualizar_precio_meli_lusync(sku_lusync, precio):
+    """Actualiza precio en TODAS las publicaciones MELI de un SKU Lusync.
+
+    Returns:
+        dict: {ok, total_publicaciones, exitosas, fallidas, log}
+    """
+    from inventario import obtener_publicaciones_canal
+    publicaciones = obtener_publicaciones_canal(sku_lusync, "mercadolibre")
+    if not publicaciones:
+        return {"ok": False, "total_publicaciones": 0, "exitosas": 0, "fallidas": 0,
+                "log": [f"Sin publicaciones mapeadas para {sku_lusync}"]}
+
+    exitosas = 0
+    fallidas = 0
+    log = []
+    for pub in publicaciones:
+        item_id = pub.get("item_id_canal") or pub.get("sku_canal")
+        if not item_id or not str(item_id).strip().upper().startswith("MLC"):
+            log.append(f"  {item_id}: no es item_id MELI válido")
+            fallidas += 1
+            continue
+        ok = actualizar_precio_meli(item_id, precio)
+        if ok:
+            exitosas += 1
+            log.append(f"  {item_id}: OK")
+        else:
+            fallidas += 1
+            log.append(f"  {item_id}: FAIL")
+    return {
+        "ok": exitosas > 0,
+        "total_publicaciones": len(publicaciones),
+        "exitosas": exitosas,
+        "fallidas": fallidas,
+        "log": log
+    }
 
 
 # ── WEBHOOKS ────────────────────────────────────────────────────────────────

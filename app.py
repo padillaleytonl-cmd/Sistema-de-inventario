@@ -2664,16 +2664,33 @@ def ruta_meli_forzar_sync_sku():
             return jsonify({"ok": False, "error": "sku_lusync requerido"}), 400
 
         sku_meli = None
-        for fila in listar_sku_mapeo():
-            if fila.get("sku_lusync") == sku_lusync:
-                sku_meli = (fila.get("sku_mercadolibre", "") or "").strip()
-                break
-        if not sku_meli:
-            return jsonify({"ok": False, "error": f"SKU {sku_lusync} no tiene mapeo MELI"}), 400
+        # Obtener publicaciones MELI para el SKU (multi-publicación)
+        from inventario import obtener_publicaciones_canal
+        publicaciones = obtener_publicaciones_canal(sku_lusync, "mercadolibre")
+
+        # Fallback legacy: si no hay mapeos en sku_mapeo_canal, usar tabla vieja
+        if not publicaciones:
+            sku_meli = ""
+            for fila in listar_sku_mapeo():
+                if fila.get("sku_lusync") == sku_lusync:
+                    sku_meli = (fila.get("sku_mercadolibre", "") or "").strip()
+                    break
+            if not sku_meli:
+                return jsonify({"ok": False, "error": f"SKU {sku_lusync} no tiene mapeo MELI"}), 400
 
         stock = get_stock_bodega(sku_lusync, "CENTRAL")
-        ok = actualizar_stock_meli(sku_meli, stock)
-        return jsonify({"ok": ok, "sku": sku_lusync, "sku_meli": sku_meli, "stock_enviado": stock})
+        # Usar wrapper multi-publicación
+        from mercadolibre import actualizar_stock_meli
+        resultado = actualizar_stock_meli(sku_lusync, stock)
+        return jsonify({
+            "ok": resultado.get("ok", False),
+            "sku": sku_lusync,
+            "stock_enviado": stock,
+            "publicaciones_actualizadas": resultado.get("exitosas", 0),
+            "publicaciones_fallidas": resultado.get("fallidas", 0),
+            "total_publicaciones": resultado.get("total_publicaciones", 0),
+            "log": resultado.get("log", [])
+        })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -4196,15 +4213,29 @@ def ruta_meli_sync_ordenes():
                                     log.append(f"  Error consultando item: {e}")
                         qty = int(item.get("quantity", 1) or 1)
 
-                        # Buscar SKU en mapeo (item_id o sku_seller)
+                        # Buscar SKU Lusync vía sku_mapeo_canal (PRIORIDAD: por item_id, luego por sku_seller)
                         sku_lusync = None
                         try:
-                            for fila in listar_sku_mapeo():
-                                sku_mapped = (fila.get("sku_mercadolibre") or "").strip()
-                                if sku_mapped and (sku_mapped == item_id or sku_mapped == sku_seller):
-                                    sku_lusync = fila.get("sku_lusync")
-                                    break
-                        except: pass
+                            from inventario import obtener_sku_lusync_por_canal
+                            sku_lusync = obtener_sku_lusync_por_canal(
+                                "mercadolibre",
+                                item_id_canal=item_id,
+                                sku_canal=sku_seller
+                            )
+                        except Exception as e:
+                            log.append(f"  Error consultando sku_mapeo_canal: {e}")
+
+                        # Fallback legacy: tabla sku_mapeo vieja
+                        if not sku_lusync:
+                            try:
+                                for fila in listar_sku_mapeo():
+                                    sku_mapped = (fila.get("sku_mercadolibre") or "").strip()
+                                    if sku_mapped and (sku_mapped == item_id or sku_mapped == sku_seller):
+                                        sku_lusync = fila.get("sku_lusync")
+                                        break
+                            except: pass
+
+                        # Último fallback: usar el SKU del seller tal cual
                         if not sku_lusync and sku_seller:
                             sku_lusync = sku_seller
 
@@ -5898,6 +5929,7 @@ def admin_skus_marketplace(canal):
         elif canal_l == "paris":
             from paris import obtener_productos_paris
             offset = 0
+            total_reportado = None
             while len(items) < limite_max:
                 data = obtener_productos_paris(limite=25, offset=offset)
                 if not data:
@@ -5905,6 +5937,9 @@ def admin_skus_marketplace(canal):
                 # París devuelve estructura: {results: [...], total, offset, limit}
                 if isinstance(data, dict):
                     productos = data.get("results") or data.get("products") or data.get("items") or []
+                    if total_reportado is None:
+                        total_reportado = data.get("total", 0)
+                        log.append(f"  Paris: total reportado por API = {total_reportado}")
                 elif isinstance(data, list):
                     productos = data
                 else:
@@ -5924,14 +5959,20 @@ def admin_skus_marketplace(canal):
                         "status":          p.get("status") or p.get("itemStatus") or "",
                         "raw_keys":        list(p.keys())[:15]  # primeras 15 keys del payload crudo (debug)
                     })
+                # Salir si: ya trajimos todo o la página vino con menos del límite
                 if len(productos) < 25:
+                    log.append(f"  Paris: última página (vino {len(productos)} < 25)")
+                    break
+                if total_reportado and len(items) >= total_reportado:
+                    log.append(f"  Paris: alcanzado total reportado ({total_reportado})")
                     break
                 offset += 25
             log.append(f"Paris: {len(items)} productos obtenidos")
 
         elif canal_l == "walmart":
             from walmart import obtener_productos_walmart
-            resultado_debug = obtener_productos_walmart(limit=200, max_paginas=10, debug=True)
+            # Walmart Chile máximo 50 por página → 20 páginas = 1000 items max
+            resultado_debug = obtener_productos_walmart(limit=50, max_paginas=20, debug=True)
             items_raw = resultado_debug.get("items", [])
             for line in resultado_debug.get("debug_log", []):
                 log.append(f"  Walmart: {line}")
@@ -6032,6 +6073,425 @@ def admin_skus_marketplace(canal):
         "error": error,
         "items": items
     })
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# AUTO-MAPEO MULTI-PUBLICACIÓN (v2) — POBLAR sku_mapeo_canal
+# ════════════════════════════════════════════════════════════════════════════
+# Trae todas las publicaciones de cada marketplace y las inserta en la nueva
+# tabla sku_mapeo_canal, soportando MÚLTIPLES publicaciones por SKU Lusync.
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/auto_mapeo_v2", methods=["GET", "POST"])
+def admin_auto_mapeo_v2():
+    """Auto-mapeo de SKUs en modelo multi-publicación.
+
+    Para cada marketplace, trae TODAS las publicaciones y las inserta en
+    sku_mapeo_canal vinculadas al producto Lusync correspondiente.
+
+    Si una publicación tiene SKU exacto a un producto Lusync → se vincula.
+    Si una publicación tiene SKU vacío → se vincula al SKU Lusync por similitud
+    de nombre (umbral configurable).
+
+    Query params:
+      ?canales=mercadolibre,paris,walmart,falabella,ripley   (default: todos)
+      ?dry_run=1                                             (default 0)
+      ?umbral_nombre=0.85                                    (similitud nombre)
+    """
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+
+    canales_str = request.args.get("canales", "mercadolibre,paris,walmart,falabella,ripley")
+    canales_pedidos = set(c.strip().lower() for c in canales_str.split(",") if c.strip())
+    dry_run = request.args.get("dry_run", "0") == "1"
+    umbral_nombre = float(request.args.get("umbral_nombre", "0.85"))
+
+    registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                    "auto_mapeo_v2",
+                    detalle=f"canales={canales_pedidos} dry_run={dry_run}")
+
+    log = [f"Auto-mapeo v2: canales={list(canales_pedidos)}, dry_run={dry_run}, umbral_nombre={umbral_nombre}"]
+
+    # 1. Cargar productos Lusync
+    from inventario import (cargar_productos, agregar_publicacion,
+                            obtener_publicaciones_canal)
+    productos_lusync = cargar_productos()
+    log.append(f"Productos Lusync: {len(productos_lusync)}")
+
+    # Diccionario {sku_normalizado: sku_lusync_real} para match exacto rápido
+    skus_norm = {}
+    for p in productos_lusync:
+        sku = (p.get("sku") or "").strip()
+        if sku:
+            skus_norm[sku.upper()] = sku
+
+    # 2. Para cada marketplace, traer publicaciones e insertar
+    resumen = {}
+    publicaciones_creadas = []
+
+    def _vincular_publicacion(canal, sku_canal, item_id_canal, titulo, precio, log_canal):
+        """Encuentra el SKU Lusync para una publicación e inserta en sku_mapeo_canal.
+
+        Estrategia:
+          1. Match exacto por SKU (sku_canal == sku Lusync)
+          2. Match por SKU contenido (ej: 'ODJM001-AZUL' contiene 'ODJM001')
+          3. Match por similitud de nombre (umbral configurable)
+        """
+        sku_canal_clean = (sku_canal or "").strip()
+        sku_lusync_match = None
+        razon = ""
+
+        # 1. Match exacto
+        if sku_canal_clean and sku_canal_clean.upper() in skus_norm:
+            sku_lusync_match = skus_norm[sku_canal_clean.upper()]
+            razon = "sku_exacto"
+
+        # 2. Match parcial: SKU Lusync contenido en sku_canal o título
+        if not sku_lusync_match and sku_canal_clean:
+            sku_canal_upper = sku_canal_clean.upper()
+            titulo_upper = (titulo or "").upper()
+            for sku_norm, sku_real in skus_norm.items():
+                if len(sku_norm) >= 4 and (sku_norm in sku_canal_upper or sku_norm in titulo_upper):
+                    sku_lusync_match = sku_real
+                    razon = "sku_parcial" if sku_norm in sku_canal_upper else "sku_en_titulo"
+                    break
+
+        # 3. Match por nombre (similitud)
+        if not sku_lusync_match and titulo:
+            mejor_sim = 0
+            mejor_sku = None
+            for p in productos_lusync:
+                nombre_p = p.get("nombre") or ""
+                if not nombre_p: continue
+                sim = _ratio_similitud(nombre_p, titulo)
+                if sim >= umbral_nombre and sim > mejor_sim:
+                    mejor_sim = sim
+                    mejor_sku = p.get("sku")
+            if mejor_sku:
+                sku_lusync_match = mejor_sku
+                razon = f"nombre_sim_{int(mejor_sim*100)}%"
+
+        if not sku_lusync_match:
+            log_canal.append(f"  [SIN MATCH] {sku_canal_clean or item_id_canal}: '{titulo[:50]}'")
+            return None
+
+        # Insertar en sku_mapeo_canal (idempotente — agregar_publicacion hace UPSERT)
+        if not dry_run:
+            try:
+                mapeo_id = agregar_publicacion(
+                    sku_lusync=sku_lusync_match,
+                    canal=canal,
+                    sku_canal=sku_canal_clean or sku_lusync_match,
+                    item_id_canal=item_id_canal,
+                    es_catalogo=False,
+                    notas=f"auto_v2:{razon}"
+                )
+                if mapeo_id:
+                    publicaciones_creadas.append({
+                        "canal": canal, "sku_lusync": sku_lusync_match,
+                        "sku_canal": sku_canal_clean, "item_id_canal": item_id_canal,
+                        "razon": razon
+                    })
+                    log_canal.append(f"  [{razon}] {sku_canal_clean or item_id_canal} → {sku_lusync_match}")
+                    return mapeo_id
+            except Exception as e:
+                log_canal.append(f"  [ERROR] {sku_canal_clean}: {e}")
+        else:
+            log_canal.append(f"  [DRY {razon}] {sku_canal_clean or item_id_canal} → {sku_lusync_match}")
+        return None
+
+    # ─── MERCADOLIBRE ───
+    if "mercadolibre" in canales_pedidos:
+        log_meli = []
+        try:
+            from mercadolibre import obtener_publicaciones_meli
+            todos_meli = []
+            offset = 0
+            for _ in range(20):  # max 1000 items
+                data = obtener_publicaciones_meli(limite=50, offset=offset)
+                if not data or not data.get("items"): break
+                todos_meli.extend(data["items"])
+                if len(data["items"]) < 50: break
+                offset += 50
+            log_meli.append(f"MELI: {len(todos_meli)} publicaciones obtenidas")
+
+            mapeados_ok = 0
+            sin_match = 0
+            for it in todos_meli:
+                item_id = it.get("item_id")
+                sku_seller = it.get("sku_seller", "")
+                titulo = it.get("title", "")
+                precio = it.get("price")
+                # MELI: usar sku_seller si existe, sino el item_id como sku_canal
+                sku_para_mapear = sku_seller if sku_seller else item_id
+                resultado = _vincular_publicacion(
+                    "mercadolibre", sku_para_mapear, item_id, titulo, precio, log_meli
+                )
+                if resultado: mapeados_ok += 1
+                elif not dry_run: sin_match += 1
+            resumen["mercadolibre"] = {
+                "publicaciones": len(todos_meli),
+                "mapeadas": mapeados_ok,
+                "sin_match": sin_match
+            }
+        except Exception as e:
+            log_meli.append(f"MELI ERROR: {e}")
+            resumen["mercadolibre"] = {"error": str(e)}
+        log.extend(log_meli[:50])  # primeras 50 líneas para no inundar
+
+    # ─── PARIS ───
+    if "paris" in canales_pedidos:
+        log_paris = []
+        try:
+            from paris import obtener_productos_paris
+            todos_paris = []
+            offset = 0
+            total_reportado = None
+            for _ in range(20):
+                data = obtener_productos_paris(limite=25, offset=offset)
+                if not data: break
+                if isinstance(data, dict):
+                    productos = data.get("results") or data.get("products") or []
+                    if total_reportado is None:
+                        total_reportado = data.get("total", 0)
+                else:
+                    productos = data if isinstance(data, list) else []
+                if not productos: break
+                todos_paris.extend(productos)
+                if len(productos) < 25: break
+                if total_reportado and len(todos_paris) >= total_reportado: break
+                offset += 25
+            log_paris.append(f"Paris: {len(todos_paris)} productos obtenidos")
+
+            mapeados_ok = 0
+            sin_match = 0
+            for p in todos_paris:
+                sku_paris = p.get("sellerSku") or p.get("partnerSku") or p.get("sku") or ""
+                titulo = p.get("name") or p.get("productName") or ""
+                precio = (p.get("price") or {}).get("normal") if isinstance(p.get("price"), dict) else p.get("price")
+                if not sku_paris and not titulo: continue
+                resultado = _vincular_publicacion(
+                    "paris", sku_paris, None, titulo, precio, log_paris
+                )
+                if resultado: mapeados_ok += 1
+                elif not dry_run: sin_match += 1
+            resumen["paris"] = {
+                "publicaciones": len(todos_paris),
+                "mapeadas": mapeados_ok,
+                "sin_match": sin_match
+            }
+        except Exception as e:
+            log_paris.append(f"Paris ERROR: {e}")
+            resumen["paris"] = {"error": str(e)}
+        log.extend(log_paris[:50])
+
+    # ─── WALMART ───
+    if "walmart" in canales_pedidos:
+        log_wm = []
+        try:
+            from walmart import obtener_productos_walmart
+            todos_wm = obtener_productos_walmart(limit=50, max_paginas=20)
+            log_wm.append(f"Walmart: {len(todos_wm)} productos obtenidos")
+
+            mapeados_ok = 0
+            sin_match = 0
+            for p in todos_wm:
+                sku_wm = p.get("sku", "")
+                titulo = p.get("productName", "")
+                precio = p.get("price")
+                wpid = p.get("wpid")
+                if not sku_wm and not titulo: continue
+                resultado = _vincular_publicacion(
+                    "walmart", sku_wm, wpid, titulo, precio, log_wm
+                )
+                if resultado: mapeados_ok += 1
+                elif not dry_run: sin_match += 1
+            resumen["walmart"] = {
+                "publicaciones": len(todos_wm),
+                "mapeadas": mapeados_ok,
+                "sin_match": sin_match
+            }
+        except Exception as e:
+            log_wm.append(f"Walmart ERROR: {e}")
+            resumen["walmart"] = {"error": str(e)}
+        log.extend(log_wm[:50])
+
+    # ─── FALABELLA ───
+    if "falabella" in canales_pedidos:
+        log_fa = []
+        try:
+            from falabella import obtener_productos_falabella
+            todos_fa = []
+            offset = 0
+            for _ in range(20):
+                productos = obtener_productos_falabella(limit=100, offset=offset, filter_status="all")
+                if not productos: break
+                todos_fa.extend(productos)
+                if len(productos) < 100: break
+                offset += 100
+            log_fa.append(f"Falabella: {len(todos_fa)} productos obtenidos")
+
+            mapeados_ok = 0
+            sin_match = 0
+            for p in todos_fa:
+                sku_fa = p.get("SellerSku") or p.get("sellerSku") or ""
+                titulo = p.get("Name") or p.get("name") or ""
+                shop_sku = p.get("ShopSku") or ""
+                precio = p.get("Price") or p.get("price")
+                if not sku_fa and not titulo: continue
+                resultado = _vincular_publicacion(
+                    "falabella", sku_fa, shop_sku, titulo, precio, log_fa
+                )
+                if resultado: mapeados_ok += 1
+                elif not dry_run: sin_match += 1
+            resumen["falabella"] = {
+                "publicaciones": len(todos_fa),
+                "mapeadas": mapeados_ok,
+                "sin_match": sin_match
+            }
+        except Exception as e:
+            log_fa.append(f"Falabella ERROR: {e}")
+            resumen["falabella"] = {"error": str(e)}
+        log.extend(log_fa[:50])
+
+    # ─── RIPLEY ───
+    if "ripley" in canales_pedidos:
+        log_rp = []
+        try:
+            from ripley import obtener_productos_ripley
+            todos_rp = obtener_productos_ripley(max_paginas=15, page_size=100)
+            log_rp.append(f"Ripley: {len(todos_rp)} ofertas obtenidas")
+
+            mapeados_ok = 0
+            sin_match = 0
+            for p in todos_rp:
+                sku_rp = p.get("shop_sku", "")
+                titulo = p.get("product_title", "")
+                product_sku = p.get("product_sku", "")
+                precio = p.get("price")
+                if not sku_rp and not titulo: continue
+                resultado = _vincular_publicacion(
+                    "ripley", sku_rp, product_sku, titulo, precio, log_rp
+                )
+                if resultado: mapeados_ok += 1
+                elif not dry_run: sin_match += 1
+            resumen["ripley"] = {
+                "publicaciones": len(todos_rp),
+                "mapeadas": mapeados_ok,
+                "sin_match": sin_match
+            }
+        except Exception as e:
+            log_rp.append(f"Ripley ERROR: {e}")
+            resumen["ripley"] = {"error": str(e)}
+        log.extend(log_rp[:50])
+
+    return jsonify({
+        "ok": True,
+        "dry_run": dry_run,
+        "resumen": resumen,
+        "publicaciones_creadas_total": len(publicaciones_creadas),
+        "ejemplos_creadas": publicaciones_creadas[:30],
+        "log": log
+    })
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# CRUD de sku_mapeo_canal (multi-publicación)
+# ────────────────────────────────────────────────────────────────────────────
+
+@app.route("/sku_mapeo_canal/listar")
+def ruta_sku_mapeo_canal_listar():
+    """Lista todos los mapeos en sku_mapeo_canal, agrupados por SKU Lusync.
+    Devuelve formato listo para UI multi-fila."""
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import listar_mapeos_canal, cargar_productos
+        canal = request.args.get("canal")  # opcional
+        sku_lusync = request.args.get("sku_lusync")  # opcional
+        mapeos = listar_mapeos_canal(canal=canal, sku_lusync=sku_lusync)
+
+        # Agrupar por sku_lusync para que UI los muestre en bloques
+        productos = {p["sku"]: p for p in cargar_productos()}
+        agrupado = {}
+        for m in mapeos:
+            sku = m["sku_lusync"]
+            if sku not in agrupado:
+                p = productos.get(sku, {})
+                agrupado[sku] = {
+                    "sku_lusync": sku,
+                    "nombre": p.get("nombre", ""),
+                    "publicaciones": []
+                }
+            agrupado[sku]["publicaciones"].append(m)
+
+        return jsonify({
+            "ok": True,
+            "total": len(mapeos),
+            "agrupado": list(agrupado.values()),
+            "mapeos": mapeos
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/sku_mapeo_canal/agregar", methods=["POST"])
+def ruta_sku_mapeo_canal_agregar():
+    """Agrega manualmente una publicación a sku_mapeo_canal.
+    Body JSON: {sku_lusync, canal, sku_canal, item_id_canal?, es_catalogo?, notas?}"""
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import agregar_publicacion
+        data = request.get_json() or {}
+        sku_lusync = (data.get("sku_lusync") or "").strip()
+        canal = (data.get("canal") or "").strip().lower()
+        sku_canal = (data.get("sku_canal") or "").strip()
+        item_id_canal = data.get("item_id_canal")
+        es_catalogo = bool(data.get("es_catalogo", False))
+        notas = data.get("notas")
+
+        if not (sku_lusync and canal and sku_canal):
+            return jsonify({"ok": False, "error": "Faltan parámetros: sku_lusync, canal, sku_canal"}), 400
+
+        mapeo_id = agregar_publicacion(sku_lusync, canal, sku_canal,
+                                       item_id_canal, es_catalogo, notas)
+        if mapeo_id:
+            registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                            "sku_mapeo_canal_agregar",
+                            detalle=f"{sku_lusync} → {canal}:{sku_canal} (id={mapeo_id})")
+            return jsonify({"ok": True, "mapeo_id": mapeo_id})
+        return jsonify({"ok": False, "error": "No se pudo guardar"}), 500
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/sku_mapeo_canal/eliminar", methods=["POST"])
+def ruta_sku_mapeo_canal_eliminar():
+    """Elimina (soft delete) una publicación de sku_mapeo_canal.
+    Body JSON: {mapeo_id}"""
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import eliminar_publicacion
+        data = request.get_json() or {}
+        mapeo_id = data.get("mapeo_id")
+        if not mapeo_id:
+            return jsonify({"ok": False, "error": "Falta mapeo_id"}), 400
+        ok = eliminar_publicacion(int(mapeo_id))
+        if ok:
+            registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                            "sku_mapeo_canal_eliminar", detalle=f"id={mapeo_id}")
+        return jsonify({"ok": ok})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/sku_mapeo_canal/contar")
+def ruta_sku_mapeo_canal_contar():
+    """Devuelve {sku_lusync: {canal: cantidad_publicaciones}} para UI."""
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import contar_publicaciones_por_sku
+        return jsonify({"ok": True, "datos": contar_publicaciones_por_sku()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":

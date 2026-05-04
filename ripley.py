@@ -132,6 +132,40 @@ def actualizar_stock_ripley(sku, cantidad):
         return False
 
 
+def actualizar_stock_ripley_lusync(sku_lusync, cantidad):
+    """Actualiza stock en Ripley para TODAS las publicaciones de un SKU Lusync.
+
+    Returns:
+        dict: {ok, total_publicaciones, exitosas, fallidas, log}
+    """
+    from inventario import obtener_publicaciones_canal
+    publicaciones = obtener_publicaciones_canal(sku_lusync, "ripley")
+    if not publicaciones:
+        try:
+            from inventario import get_sku_canal
+            sku_legacy = get_sku_canal(sku_lusync, "ripley")
+            if sku_legacy:
+                publicaciones = [{"id": None, "sku_canal": sku_legacy, "item_id_canal": None}]
+        except: pass
+        if not publicaciones:
+            publicaciones = [{"id": None, "sku_canal": sku_lusync, "item_id_canal": None}]
+
+    exitosas, fallidas = 0, 0
+    log = []
+    for pub in publicaciones:
+        sku_rp = (pub.get("sku_canal") or "").strip()
+        if not sku_rp:
+            fallidas += 1
+            continue
+        ok = actualizar_stock_ripley(sku_rp, cantidad)
+        if ok: exitosas += 1
+        else: fallidas += 1
+        log.append(f"  {sku_rp}: {'OK' if ok else 'FAIL'}")
+
+    return {"ok": exitosas > 0, "total_publicaciones": len(publicaciones),
+            "exitosas": exitosas, "fallidas": fallidas, "log": log}
+
+
 def actualizar_stocks_ripley_lote(skus_cantidades):
     """Actualiza múltiples SKUs en una sola llamada OF24.
 
@@ -687,14 +721,21 @@ def ripley_sync_ordenes():
                         if not sku_ripley:
                             continue
 
-                        # Buscar SKU Lusync en mapeo
-                        sku_lusync = sku_ripley
+                        # Buscar SKU Lusync: PRIORIDAD sku_mapeo_canal, fallback legacy
+                        sku_lusync = None
                         try:
-                            for fila in listar_sku_mapeo():
-                                if fila.get("sku_ripley") == sku_ripley:
-                                    sku_lusync = fila.get("sku_lusync")
-                                    break
+                            from inventario import obtener_sku_lusync_por_canal
+                            sku_lusync = obtener_sku_lusync_por_canal("ripley", sku_canal=sku_ripley)
                         except: pass
+                        if not sku_lusync:
+                            try:
+                                for fila in listar_sku_mapeo():
+                                    if fila.get("sku_ripley") == sku_ripley:
+                                        sku_lusync = fila.get("sku_lusync")
+                                        break
+                            except: pass
+                        if not sku_lusync:
+                            sku_lusync = sku_ripley  # último fallback
 
                         if sku_lusync not in productos_dict:
                             log.append(f"{order_id}: SKU '{sku_lusync}' no encontrado")

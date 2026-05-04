@@ -79,42 +79,74 @@ def paris_headers():
 
 # ── STOCK ──
 
-def actualizar_stock_paris(sku_seller, cantidad):
-    """Actualiza stock en París. Busca mapeo sku_lusync→paris antes de enviar."""
-    # Buscar SKU mapeado para París (Opción A: si no hay mapeo usa el mismo SKU)
-    sku_paris = None
-    try:
-        from inventario import get_sku_canal
-        sku_paris = get_sku_canal(sku_seller, "paris")
-        if sku_paris and sku_paris != sku_seller:
-            print(f"[Paris] Mapeo: {sku_seller} → {sku_paris}")
-    except Exception:
-        pass
+def actualizar_stock_paris(sku_lusync, cantidad):
+    """Actualiza stock en París para TODAS las publicaciones de un SKU Lusync.
 
-    # Fallback: usar sku_seller original si mapeo está vacío o es None
-    if not sku_paris or str(sku_paris).strip() == "":
-        sku_paris = sku_seller
+    Usa sku_mapeo_canal (multi-publicación). Si no hay mapeos, fallback legacy.
 
-    print(f"[Paris Stock] Enviando sku_seller='{sku_paris}' qty={cantidad}")
+    Returns:
+        dict: {ok, total_publicaciones, exitosas, fallidas, log}
+    """
+    from inventario import obtener_publicaciones_canal
 
-    try:
-        payload = {
-            "skus": [{
-                "sku_seller": str(sku_paris).strip(),
-                "quantity": int(cantidad)
-            }]
-        }
-        res = requests.post(
-            f"{PARIS_BASE_URL}/v1/stock/sku-seller",
-            headers=paris_headers(),
-            json=payload,
-            timeout=15
-        )
-        print(f"[Paris Stock] SKU:{sku_paris} Qty:{cantidad} Status:{res.status_code} Body:{res.text[:200]}")
-        return res.status_code in [200, 201]
-    except Exception as e:
-        print(f"[Paris] Error stock {sku_seller}: {e}")
-        return False
+    publicaciones = obtener_publicaciones_canal(sku_lusync, "paris")
+
+    # Fallback legacy si no hay mapeo nuevo
+    if not publicaciones:
+        try:
+            from inventario import get_sku_canal
+            sku_paris_legacy = get_sku_canal(sku_lusync, "paris")
+            if sku_paris_legacy:
+                publicaciones = [{"id": None, "sku_canal": sku_paris_legacy, "item_id_canal": None}]
+        except: pass
+        if not publicaciones:
+            # Último fallback: usar el mismo SKU
+            publicaciones = [{"id": None, "sku_canal": sku_lusync, "item_id_canal": None}]
+
+    exitosas = 0
+    fallidas = 0
+    log = []
+
+    for pub in publicaciones:
+        sku_paris = (pub.get("sku_canal") or "").strip()
+        if not sku_paris:
+            fallidas += 1
+            log.append(f"  Publicación sin sku_canal, skip")
+            continue
+
+        try:
+            payload = {
+                "skus": [{
+                    "sku_seller": sku_paris,
+                    "quantity": int(cantidad)
+                }]
+            }
+            res = requests.post(
+                f"{PARIS_BASE_URL}/v1/stock/sku-seller",
+                headers=paris_headers(),
+                json=payload,
+                timeout=15
+            )
+            ok = res.status_code in [200, 201]
+            print(f"[Paris Stock] SKU:{sku_paris} Qty:{cantidad} Status:{res.status_code}")
+            log.append(f"  {sku_paris}: status {res.status_code} {'OK' if ok else 'FAIL'}")
+            if ok:
+                exitosas += 1
+            else:
+                fallidas += 1
+                log.append(f"    body: {res.text[:200]}")
+        except Exception as e:
+            fallidas += 1
+            log.append(f"  {sku_paris}: error {e}")
+            print(f"[Paris] Error stock {sku_paris}: {e}")
+
+    return {
+        "ok": exitosas > 0,
+        "total_publicaciones": len(publicaciones),
+        "exitosas": exitosas,
+        "fallidas": fallidas,
+        "log": log
+    }
 
 
 def actualizar_stock_paris_v2(sku_marketplace, cantidad):
@@ -443,14 +475,21 @@ def paris_sync_ordenes():
                     if not sku_paris:
                         continue
 
-                    # Buscar SKU Lusync vía mapeo
-                    sku_lusync = sku_paris
+                    # Buscar SKU Lusync: PRIORIDAD sku_mapeo_canal, fallback legacy
+                    sku_lusync = None
                     try:
-                        for fila in listar_sku_mapeo():
-                            if fila.get("sku_paris") == sku_paris:
-                                sku_lusync = fila.get("sku_lusync")
-                                break
+                        from inventario import obtener_sku_lusync_por_canal
+                        sku_lusync = obtener_sku_lusync_por_canal("paris", sku_canal=sku_paris)
                     except: pass
+                    if not sku_lusync:
+                        try:
+                            for fila in listar_sku_mapeo():
+                                if fila.get("sku_paris") == sku_paris:
+                                    sku_lusync = fila.get("sku_lusync")
+                                    break
+                        except: pass
+                    if not sku_lusync:
+                        sku_lusync = sku_paris  # último fallback
 
                     if sku_lusync not in productos_dict:
                         log.append(f"{sub_order_num}: SKU '{sku_lusync}' no encontrado")
