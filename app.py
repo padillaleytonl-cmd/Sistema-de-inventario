@@ -5847,5 +5847,187 @@ def _generar_excel_propuesta(propuesta_mapeo, items_por_canal, log):
     )
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# DIAGNÓSTICO DE SKUs POR MARKETPLACE (ver qué devuelve cada API)
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/skus_marketplace/<canal>")
+def admin_skus_marketplace(canal):
+    """Devuelve la lista cruda de SKUs publicados en un marketplace específico.
+    Útil para ver QUÉ SKU exacto tiene cada item en cada marketplace.
+
+    canal: mercadolibre | paris | walmart | falabella | ripley
+    Query params:
+      ?formato=json (default) | excel
+      ?limite=200 (cantidad máxima a traer)
+    """
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+
+    canal_l = canal.lower().strip()
+    formato = request.args.get("formato", "json").lower()
+    limite_max = int(request.args.get("limite", 500))
+
+    items = []
+    log = []
+    error = None
+
+    try:
+        if canal_l in ("mercadolibre", "meli"):
+            from mercadolibre import obtener_publicaciones_meli
+            offset = 0
+            while len(items) < limite_max:
+                data = obtener_publicaciones_meli(limite=50, offset=offset)
+                if not data or not data.get("items"):
+                    break
+                for it in data["items"]:
+                    items.append({
+                        "item_id":         it.get("item_id"),
+                        "titulo":          it.get("title"),
+                        "sku_seller":      it.get("sku_seller", ""),
+                        "sku_origen":      it.get("sku_origen", ""),
+                        "variantes_skus":  it.get("variantes_skus", []),
+                        "stock":           it.get("stock"),
+                        "precio":          it.get("price"),
+                        "status":          it.get("status")
+                    })
+                if len(data["items"]) < 50:
+                    break
+                offset += 50
+            log.append(f"MELI: {len(items)} publicaciones obtenidas")
+
+        elif canal_l == "paris":
+            from paris import obtener_productos_paris
+            offset = 0
+            while len(items) < limite_max:
+                data = obtener_productos_paris(limite=25, offset=offset)
+                if not data:
+                    break
+                # París devuelve estructura: {products: [...]} o lista directa
+                if isinstance(data, dict):
+                    productos = data.get("products") or data.get("items") or []
+                elif isinstance(data, list):
+                    productos = data
+                else:
+                    productos = []
+                if not productos:
+                    log.append(f"  Paris offset {offset}: respuesta vacía o estructura inesperada")
+                    log.append(f"  data keys: {list(data.keys()) if isinstance(data, dict) else type(data).__name__}")
+                    break
+                for p in productos:
+                    items.append({
+                        "sku_paris":       p.get("sellerSku") or p.get("sku") or "",
+                        "titulo":          p.get("name") or p.get("productName") or "",
+                        "stock":           p.get("stock", 0),
+                        "precio":          (p.get("price") or {}).get("normal") if isinstance(p.get("price"), dict) else p.get("price"),
+                        "status":          p.get("status", ""),
+                        "raw_keys":        list(p.keys())[:10]  # primeras 10 keys del payload crudo
+                    })
+                if len(productos) < 25:
+                    break
+                offset += 25
+            log.append(f"Paris: {len(items)} productos obtenidos")
+
+        elif canal_l == "walmart":
+            from walmart import obtener_productos_walmart
+            items_raw = obtener_productos_walmart(limit=200, max_paginas=10)
+            for p in items_raw[:limite_max]:
+                items.append({
+                    "sku_walmart":   p.get("sku", ""),
+                    "wpid":          p.get("wpid", ""),
+                    "titulo":        p.get("productName", ""),
+                    "stock":         p.get("availableInventory", 0),
+                    "precio":        p.get("price"),
+                    "status":        p.get("status", "")
+                })
+            log.append(f"Walmart: {len(items)} productos obtenidos")
+
+        elif canal_l == "falabella":
+            from falabella import obtener_productos_falabella
+            offset = 0
+            while len(items) < limite_max:
+                productos = obtener_productos_falabella(limit=100, offset=offset, filter_status="all")
+                if not productos:
+                    break
+                for p in productos:
+                    items.append({
+                        "sku_falabella":    p.get("SellerSku") or p.get("sellerSku") or "",
+                        "shopSku":          p.get("ShopSku") or "",
+                        "titulo":           p.get("Name") or p.get("name") or "",
+                        "stock":            p.get("Quantity") or p.get("quantity") or 0,
+                        "precio":           p.get("Price") or p.get("price"),
+                        "status":           p.get("Status") or p.get("status", "")
+                    })
+                if len(productos) < 100:
+                    break
+                offset += 100
+            log.append(f"Falabella: {len(items)} productos obtenidos")
+
+        elif canal_l == "ripley":
+            from ripley import obtener_productos_ripley
+            items_raw = obtener_productos_ripley(max_paginas=15, page_size=100)
+            for p in items_raw[:limite_max]:
+                items.append({
+                    "shop_sku":      p.get("shop_sku", ""),
+                    "product_sku":   p.get("product_sku", ""),
+                    "titulo":        p.get("product_title", ""),
+                    "stock":         p.get("quantity", 0),
+                    "precio":        p.get("price"),
+                    "state_code":    p.get("state_code", ""),
+                    "active":        p.get("active", True)
+                })
+            log.append(f"Ripley: {len(items)} ofertas obtenidas")
+
+        else:
+            return jsonify({"error": f"Canal '{canal}' no válido. Usa: mercadolibre, paris, walmart, falabella, ripley"}), 400
+
+    except Exception as e:
+        import traceback
+        error = str(e)
+        log.append(f"ERROR: {error}")
+        log.append(traceback.format_exc())
+
+    if formato == "excel":
+        try:
+            import io, openpyxl
+            from openpyxl.styles import Font, PatternFill
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = f"SKUs {canal_l[:8]}"
+            if items:
+                headers = list(items[0].keys())
+                ws.append(headers)
+                for c in range(1, len(headers) + 1):
+                    cell = ws.cell(row=1, column=c)
+                    cell.font = Font(bold=True, color="FFFFFF")
+                    cell.fill = PatternFill(start_color="3C3489", end_color="3C3489", fill_type="solid")
+                for it in items:
+                    ws.append([str(it.get(h, "")) for h in headers])
+                for c in range(1, len(headers) + 1):
+                    ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width = 22
+                ws.freeze_panes = "A2"
+
+            ws_log = wb.create_sheet("Log")
+            for line in log:
+                ws_log.append([line])
+            ws_log.column_dimensions['A'].width = 100
+
+            buf = io.BytesIO()
+            wb.save(buf); buf.seek(0)
+            return send_file(buf, download_name=f"skus_{canal_l}.xlsx",
+                             as_attachment=True,
+                             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        except Exception as e:
+            return jsonify({"error": f"Error generando Excel: {e}", "items": items, "log": log}), 500
+
+    return jsonify({
+        "ok": error is None,
+        "canal": canal_l,
+        "total": len(items),
+        "log": log,
+        "error": error,
+        "items": items
+    })
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

@@ -187,7 +187,14 @@ def actualizar_stock_meli(sku_seller, cantidad):
 
 
 def obtener_publicaciones_meli(limite=50, offset=0):
-    """Lista las publicaciones del seller para que pueda mapearlas a SKUs Lusync."""
+    """Lista las publicaciones del seller para que pueda mapearlas a SKUs Lusync.
+
+    El SKU del seller en MELI puede estar en 3 lugares (en orden de prioridad moderna):
+      1. attributes[id="SELLER_SKU"].value_name  (forma actual, MELI 2023+)
+      2. variations[].attributes[id="SELLER_SKU"]  (si tiene variantes)
+      3. seller_custom_field  (legacy)
+      4. variations[].seller_custom_field (legacy con variantes)
+    """
     try:
         from inventario import get_meli_auth
         auth = get_meli_auth()
@@ -207,27 +214,74 @@ def obtener_publicaciones_meli(limite=50, offset=0):
         if not item_ids:
             return {"items": [], "total": 0}
 
+        def _extraer_sku_de_item(body):
+            """Recorre los 4 lugares posibles donde puede estar el SKU del seller."""
+            # 1. SELLER_SKU en attributes del item principal
+            for attr in body.get("attributes", []) or []:
+                if attr.get("id") == "SELLER_SKU":
+                    val = (attr.get("value_name") or attr.get("value_id") or "").strip()
+                    if val:
+                        return val, "attributes.SELLER_SKU"
+            # 2. seller_custom_field (legacy) del item principal
+            scf = (body.get("seller_custom_field") or "").strip()
+            if scf:
+                return scf, "seller_custom_field"
+            # 3. SELLER_SKU en la PRIMERA variación con stock (la más representativa)
+            variations = body.get("variations", []) or []
+            # Priorizar variation con available_quantity > 0
+            variations_ord = sorted(variations, key=lambda v: -(v.get("available_quantity") or 0))
+            for var in variations_ord:
+                for attr in var.get("attributes", []) or []:
+                    if attr.get("id") == "SELLER_SKU":
+                        val = (attr.get("value_name") or attr.get("value_id") or "").strip()
+                        if val:
+                            return val, f"variation.attributes.SELLER_SKU"
+                scf_var = (var.get("seller_custom_field") or "").strip()
+                if scf_var:
+                    return scf_var, "variation.seller_custom_field"
+            return "", ""
+
         # Detalle de cada item (lote de hasta 20 por llamada)
         items = []
         for i in range(0, len(item_ids), 20):
             batch = item_ids[i:i+20]
             ids_str = ",".join(batch)
+            # IMPORTANTE: pedir attributes y variations completos para extraer SELLER_SKU
             res2 = requests.get(
                 f"{MELI_API_URL}/items",
                 headers=meli_headers(),
-                params={"ids": ids_str, "attributes": "id,title,available_quantity,price,status,seller_custom_field"},
-                timeout=20
+                params={
+                    "ids": ids_str,
+                    "attributes": "id,title,available_quantity,price,status,seller_custom_field,attributes,variations"
+                },
+                timeout=25
             )
             if res2.status_code == 200:
                 for r in res2.json():
-                    body = r.get("body", {})
+                    body = r.get("body", {}) or {}
+                    sku_seller, sku_origen = _extraer_sku_de_item(body)
+                    # Lista de TODAS las variantes (por si hay multi-SKU)
+                    variantes_skus = []
+                    for var in body.get("variations", []) or []:
+                        for attr in var.get("attributes", []) or []:
+                            if attr.get("id") == "SELLER_SKU":
+                                v = (attr.get("value_name") or "").strip()
+                                if v:
+                                    variantes_skus.append(v)
+                                    break
+                        else:
+                            scf_var = (var.get("seller_custom_field") or "").strip()
+                            if scf_var:
+                                variantes_skus.append(scf_var)
                     items.append({
-                        "item_id":       body.get("id"),
-                        "title":         body.get("title"),
-                        "stock":         body.get("available_quantity", 0),
-                        "price":         body.get("price"),
-                        "status":        body.get("status"),
-                        "sku_seller":    body.get("seller_custom_field", "")
+                        "item_id":          body.get("id"),
+                        "title":            body.get("title"),
+                        "stock":            body.get("available_quantity", 0),
+                        "price":            body.get("price"),
+                        "status":           body.get("status"),
+                        "sku_seller":       sku_seller,
+                        "sku_origen":       sku_origen,
+                        "variantes_skus":   variantes_skus
                     })
         return {"items": items, "total": data.get("paging", {}).get("total", len(item_ids))}
     except Exception as e:
