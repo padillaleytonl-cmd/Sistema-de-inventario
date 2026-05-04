@@ -409,55 +409,229 @@ def agregar():
 
 @app.route("/importar_woo")
 def importar():
-    registrar_audit(session.get("usuario","Sistema"), request.remote_addr, "importar_woo", entidad="productos", detalle="Importación desde WooCommerce")
-    nuevos = 0
+    """Importa productos desde WooCommerce respetando el modelo padre/variante.
+
+    Reglas:
+    - Tipo 'simple'   → importa el producto directamente (es la unidad de stock)
+    - Tipo 'variable' → importa SOLO las variantes (el padre NO lleva stock en Woo)
+    - Tipo 'grouped'  → omite (es un grupo, no lleva stock propio)
+    - Tipo 'external' → omite (link externo, sin stock)
+
+    Para cada variante, prefiere el SKU manual configurado en Woo. Si una
+    variante no tiene SKU, se omite y se reporta en el log (para que el usuario
+    lo configure en Woo antes de re-intentar).
+    """
+    registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                    "importar_woo", entidad="productos",
+                    detalle="Importación desde WooCommerce")
+
     productos = cargar_productos()
     skus_existentes = {p["sku"] for p in productos}
 
-    res = requests.get(
-        "https://www.babymine.cl/wp-json/wc/v3/products",
-        params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET, "per_page": 100}
-    )
-    if res.status_code != 200:
-        return {"error": "Woo error"}
+    # Contadores
+    nuevos = 0
+    actualizados = 0
+    omitidos_padre_variable = 0
+    omitidos_sin_sku = 0
+    omitidos_tipo = 0
+    ya_existian = 0
+    errores = 0
+    detalle = []  # log producto por producto
 
-    for p in res.json():
-        if p["type"] == "simple":
-            sku = p.get("sku") or str(p.get("id"))
-            if sku not in skus_existentes:
-                pn = p.get("regular_price") or "0"
-                po = p.get("sale_price") or "0"
-                guardar_producto({
-                    "sku": sku,
-                    "nombre": p["name"],
-                    "stock": p.get("stock_quantity") or 0,
-                    "precio_normal": float(pn) if pn else 0,
-                    "precio_oferta": float(po) if po else 0
-                })
-                nuevos += 1
-
-        if p["type"] == "variable":
-            res_var = requests.get(
-                f"https://www.babymine.cl/wp-json/wc/v3/products/{p['id']}/variations",
-                params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET, "per_page": 100}
+    # ── Paginación: Woo limita a 100 por página, hay que pedir varias ──
+    page = 1
+    todos_productos = []
+    while True:
+        try:
+            res = requests.get(
+                "https://www.babymine.cl/wp-json/wc/v3/products",
+                params={
+                    "consumer_key": WC_KEY,
+                    "consumer_secret": WC_SECRET,
+                    "per_page": 100,
+                    "page": page,
+                    "status": "publish"  # solo productos publicados
+                },
+                timeout=30
             )
-            if res_var.status_code != 200:
+            if res.status_code != 200:
+                detalle.append(f"❌ Error HTTP {res.status_code} en página {page}: {res.text[:200]}")
+                break
+            lote = res.json()
+            if not lote:
+                break
+            todos_productos.extend(lote)
+            detalle.append(f"📥 Página {page}: {len(lote)} productos obtenidos")
+            if len(lote) < 100:
+                break
+            page += 1
+            if page > 50:  # safety: max 5000 productos
+                detalle.append("⚠ Límite de 50 páginas alcanzado, detengo paginación")
+                break
+        except Exception as e:
+            detalle.append(f"❌ Excepción en página {page}: {e}")
+            errores += 1
+            break
+
+    detalle.append(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    detalle.append(f"Total productos Woo a procesar: {len(todos_productos)}")
+    detalle.append(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+    # ── Helper: formatear nombre con atributos de variante ──
+    def _nombre_variante(producto_padre, variante):
+        """Construye nombre 'Coche Reversible Pro - Color: Azul, Talla: M' a partir
+        de los atributos de la variante."""
+        nombre_base = (producto_padre.get("name") or "").strip()
+        atributos = variante.get("attributes", []) or []
+        # attributes en variations: [{"id": 1, "name": "Color", "option": "Azul"}, ...]
+        partes = []
+        for a in atributos:
+            nombre_attr = a.get("name") or a.get("option_name") or ""
+            valor_attr = a.get("option") or a.get("value") or ""
+            if valor_attr:
+                if nombre_attr:
+                    partes.append(f"{nombre_attr}: {valor_attr}")
+                else:
+                    partes.append(valor_attr)
+        if partes:
+            return f"{nombre_base} - {', '.join(partes)}"
+        return nombre_base
+
+    # ── Procesar cada producto Woo ──
+    for p in todos_productos:
+        tipo = p.get("type", "")
+        woo_id = p.get("id", "?")
+        nombre_padre = (p.get("name") or "").strip()
+
+        # Caso 1: producto SIMPLE (sin variantes) → importar directo
+        if tipo == "simple":
+            sku = (p.get("sku") or "").strip()
+            if not sku:
+                omitidos_sin_sku += 1
+                detalle.append(f"⏭ [{woo_id}] '{nombre_padre[:50]}': SIMPLE sin SKU manual, omitido")
                 continue
-            for v in res_var.json():
-                sku = v.get("sku") or str(v.get("id"))
-                if sku not in skus_existentes:
-                    vn = v.get("regular_price") or "0"
-                    vo = v.get("sale_price") or "0"
+
+            stock = p.get("stock_quantity") or 0
+            pn = p.get("regular_price") or "0"
+            po = p.get("sale_price") or "0"
+            try:
+                precio_normal = float(pn) if pn else 0
+                precio_oferta = float(po) if po else 0
+            except: precio_normal, precio_oferta = 0, 0
+
+            try:
+                if sku in skus_existentes:
+                    ya_existian += 1
+                    detalle.append(f"= [{woo_id}] {sku} '{nombre_padre[:50]}': SIMPLE ya existe en Lusync, no se sobreescribe")
+                else:
                     guardar_producto({
                         "sku": sku,
-                        "nombre": f"{p['name']} - {sku}",
-                        "stock": v.get("stock_quantity") or 0,
-                        "precio_normal": float(vn) if vn else 0,
-                        "precio_oferta": float(vo) if vo else 0
+                        "nombre": nombre_padre,
+                        "stock": stock,
+                        "precio_normal": precio_normal,
+                        "precio_oferta": precio_oferta
                     })
+                    skus_existentes.add(sku)
                     nuevos += 1
+                    detalle.append(f"+ [{woo_id}] {sku} '{nombre_padre[:50]}': SIMPLE importado (stock={stock})")
+            except Exception as e:
+                errores += 1
+                detalle.append(f"❌ [{woo_id}] {sku} error: {e}")
 
-    return {"mensaje": f"{nuevos} productos importados"}
+        # Caso 2: producto VARIABLE → SOLO importar las variantes (NO el padre)
+        elif tipo == "variable":
+            omitidos_padre_variable += 1
+            detalle.append(f"📦 [{woo_id}] '{nombre_padre[:50]}': VARIABLE (padre NO se importa, busco variantes...)")
+
+            try:
+                res_var = requests.get(
+                    f"https://www.babymine.cl/wp-json/wc/v3/products/{p['id']}/variations",
+                    params={
+                        "consumer_key": WC_KEY,
+                        "consumer_secret": WC_SECRET,
+                        "per_page": 100
+                    },
+                    timeout=30
+                )
+                if res_var.status_code != 200:
+                    errores += 1
+                    detalle.append(f"  ❌ Error consultando variantes de {woo_id}: HTTP {res_var.status_code}")
+                    continue
+                variantes = res_var.json() or []
+                detalle.append(f"  ↳ {len(variantes)} variante{'s' if len(variantes)!=1 else ''} encontrada{'s' if len(variantes)!=1 else ''}")
+            except Exception as e:
+                errores += 1
+                detalle.append(f"  ❌ Excepción consultando variantes de {woo_id}: {e}")
+                continue
+
+            for v in variantes:
+                v_id = v.get("id", "?")
+                sku_v = (v.get("sku") or "").strip()
+                nombre_v = _nombre_variante(p, v)
+
+                # SKU manual obligatorio para variantes
+                if not sku_v:
+                    omitidos_sin_sku += 1
+                    detalle.append(f"  ⏭ Variante [{v_id}] '{nombre_v[:50]}': SIN SKU manual en Woo, omitida")
+                    continue
+
+                stock_v = v.get("stock_quantity") or 0
+                pn_v = v.get("regular_price") or "0"
+                po_v = v.get("sale_price") or "0"
+                try:
+                    precio_normal_v = float(pn_v) if pn_v else 0
+                    precio_oferta_v = float(po_v) if po_v else 0
+                except: precio_normal_v, precio_oferta_v = 0, 0
+
+                try:
+                    if sku_v in skus_existentes:
+                        ya_existian += 1
+                        detalle.append(f"  = [{v_id}] {sku_v} '{nombre_v[:50]}': variante ya existe en Lusync")
+                    else:
+                        guardar_producto({
+                            "sku": sku_v,
+                            "nombre": nombre_v,
+                            "stock": stock_v,
+                            "precio_normal": precio_normal_v,
+                            "precio_oferta": precio_oferta_v
+                        })
+                        skus_existentes.add(sku_v)
+                        nuevos += 1
+                        detalle.append(f"  + [{v_id}] {sku_v} '{nombre_v[:50]}': variante importada (stock={stock_v})")
+                except Exception as e:
+                    errores += 1
+                    detalle.append(f"  ❌ Variante [{v_id}] {sku_v} error: {e}")
+
+        # Caso 3: tipos no soportados (grouped, external, etc.)
+        else:
+            omitidos_tipo += 1
+            detalle.append(f"⏭ [{woo_id}] '{nombre_padre[:50]}': tipo '{tipo}' no soportado, omitido")
+
+    # ── Resumen ──
+    total_woo = len(todos_productos)
+    detalle.append(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    detalle.append(f"RESUMEN:")
+    detalle.append(f"  Productos en Woo:        {total_woo}")
+    detalle.append(f"  Importados nuevos:       {nuevos}")
+    detalle.append(f"  Ya existían en Lusync:   {ya_existian}")
+    detalle.append(f"  Padres 'variable' (no se importan, sólo variantes): {omitidos_padre_variable}")
+    detalle.append(f"  Omitidos sin SKU:        {omitidos_sin_sku}")
+    detalle.append(f"  Omitidos por tipo no soportado: {omitidos_tipo}")
+    detalle.append(f"  Errores:                 {errores}")
+
+    return jsonify({
+        "ok": True,
+        "mensaje": f"{nuevos} productos importados ({ya_existian} ya existían)",
+        "total_woo": total_woo,
+        "nuevos": nuevos,
+        "actualizados": actualizados,
+        "ya_existian": ya_existian,
+        "omitidos_padre_variable": omitidos_padre_variable,
+        "omitidos_sin_sku": omitidos_sin_sku,
+        "omitidos_tipo": omitidos_tipo,
+        "errores": errores,
+        "log": detalle
+    })
 
 @app.route("/sincronizar_precios_woo")
 def sincronizar_precios_woo():
