@@ -97,6 +97,82 @@ def actualizar_precio_walmart(sku, precio):
         print(f"[Walmart] Error precio {sku}: {e}")
         return False
 
+# ── PRODUCTOS / ITEMS (para auto-mapeo de SKUs) ──
+
+def obtener_productos_walmart(limit=200, max_paginas=5):
+    """Lista los productos publicados del seller en Walmart Chile.
+
+    Returns:
+        list de dicts con: sku, productName, price, availableInventory, status
+    """
+    try:
+        todas = []
+        next_cursor = None
+        pagina = 0
+
+        while pagina < max_paginas:
+            pagina += 1
+            params = {"limit": min(limit, 200)}
+            if next_cursor and next_cursor != "*":
+                params["nextCursor"] = next_cursor
+
+            res = requests.get(
+                f"{WALMART_BASE_URL}/v3/items",
+                headers=walmart_headers(),
+                params=params,
+                timeout=20
+            )
+            print(f"[Walmart Items] Página:{pagina} Status:{res.status_code}")
+
+            if res.status_code != 200:
+                print(f"[Walmart Items] Error: {res.text[:200]}")
+                break
+
+            data = res.json()
+            # La estructura suele ser:
+            # { "ItemResponse": [...], "totalItems": N, "nextCursor": "..." }
+            items = data.get("ItemResponse", []) or data.get("items", [])
+            if isinstance(items, dict):
+                items = [items]
+
+            for item in items:
+                # Walmart Chile devuelve estructura variada según versión
+                producto = {
+                    "sku":               item.get("sku") or item.get("itemSku") or "",
+                    "productName":       item.get("productName") or item.get("name") or "",
+                    "price":             None,
+                    "availableInventory": item.get("availableInventory") or 0,
+                    "status":            item.get("publishedStatus") or item.get("status") or "",
+                    "wpid":              item.get("wpid") or item.get("itemId") or ""
+                }
+                # Intentar extraer precio de distintas estructuras posibles
+                price_raw = item.get("price")
+                if isinstance(price_raw, dict):
+                    producto["price"] = price_raw.get("amount") or price_raw.get("currentPrice", {}).get("amount")
+                elif isinstance(price_raw, (int, float, str)):
+                    try:
+                        producto["price"] = float(price_raw)
+                    except: pass
+                # Algunas versiones lo ponen en .pricing
+                if producto["price"] is None:
+                    pricing = item.get("pricing") or {}
+                    cp = pricing.get("currentPrice") or {}
+                    producto["price"] = cp.get("amount")
+
+                todas.append(producto)
+
+            print(f"[Walmart Items] Página:{pagina} +{len(items)} Total:{len(todas)}")
+
+            next_cursor = data.get("nextCursor")
+            if not next_cursor or next_cursor == "*":
+                break
+
+        return todas
+    except Exception as e:
+        print(f"[Walmart] Error productos: {e}")
+        return []
+
+
 # ── ÓRDENES CON PAGINACIÓN ──
 
 def obtener_ordenes_walmart(estado="Created", fecha_desde=None, max_paginas=2, limit=50, dias=30):

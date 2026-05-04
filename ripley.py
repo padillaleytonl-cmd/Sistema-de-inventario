@@ -343,6 +343,66 @@ def actualizar_oferta_completa_ripley(sku, cantidad=None, precio_normal=None,
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# PRODUCTOS / OFERTAS (para auto-mapeo de SKUs)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def obtener_productos_ripley(max_paginas=10, page_size=100):
+    """Lista las ofertas (productos) del seller en Ripley con paginación.
+
+    Returns:
+        list de dicts con: shop_sku, product_title, price, quantity, state_code
+    """
+    try:
+        todas = []
+        offset = 0
+        pagina = 0
+
+        while pagina < max_paginas:
+            pagina += 1
+            res = requests.get(
+                f"{RIPLEY_BASE_URL}/api/offers",
+                headers={**ripley_headers(), "Content-Type": "application/json"},
+                params={"max": page_size, "offset": offset},
+                timeout=30
+            )
+            print(f"[Ripley Items] Página:{pagina} Offset:{offset} Status:{res.status_code}")
+
+            if res.status_code != 200:
+                print(f"[Ripley Items] Error: {res.text[:200]}")
+                break
+
+            data = res.json()
+            ofertas = data.get("offers", [])
+            if not ofertas:
+                break
+
+            for o in ofertas:
+                product = o.get("product") or {}
+                producto = {
+                    "shop_sku":       o.get("shop_sku", ""),
+                    "product_sku":    o.get("product_sku", ""),
+                    "product_title":  product.get("title") or o.get("product_title", ""),
+                    "price":          o.get("price"),
+                    "quantity":       o.get("quantity", 0),
+                    "state_code":     o.get("state_code", ""),
+                    "active":         o.get("active", True)
+                }
+                todas.append(producto)
+
+            print(f"[Ripley Items] Página:{pagina} +{len(ofertas)} Total:{len(todas)}")
+
+            # Si trajo menos de page_size, fin
+            if len(ofertas) < page_size:
+                break
+            offset += page_size
+
+        return todas
+    except Exception as e:
+        print(f"[Ripley] Error productos: {e}")
+        return []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # ÓRDENES
 # ═══════════════════════════════════════════════════════════════════════════
 

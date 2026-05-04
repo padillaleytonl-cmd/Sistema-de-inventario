@@ -2019,6 +2019,7 @@ tbody td {
           <option value="Prestashop">Prestashop</option>
           <option value="Jumpseller">Jumpseller</option>
         </select>
+        <button onclick="abrirAutoMapeo()" style="padding:7px 12px;border:0.5px solid #3C3489;background:#EEEDFE;color:#3C3489;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:500;" title="Trae los productos de los marketplaces y propone matches automáticos">⚙ Auto-mapear desde APIs</button>
         <button onclick="descargarExcelMapeo()" style="padding:7px 12px;border:0.5px solid var(--border);background:var(--bg);color:var(--text);border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">↓ Descargar Excel</button>
         <label style="padding:7px 12px;border:0.5px solid var(--border);background:var(--bg);color:var(--text);border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">
           ↑ Importar Excel
@@ -5233,6 +5234,318 @@ function importarExcelMapeo(input){
       }
       input.value = '';
     });
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// AUTO-MAPEO DESDE APIs DE LOS MARKETPLACES
+// ─────────────────────────────────────────────────────────────────────────
+
+function abrirAutoMapeo(){
+  // Modal con opciones
+  const ya = document.getElementById('modalAutoMapeo');
+  if(ya) ya.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modalAutoMapeo';
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;display:flex;align-items:center;justify-content:center;';
+  modal.innerHTML = `
+    <div style="background:var(--bg);border-radius:12px;padding:24px;max-width:520px;width:92%;max-height:90vh;overflow:auto;">
+      <div style="font-size:16px;font-weight:600;margin-bottom:8px;">⚙ Auto-mapeo de SKUs</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:18px;line-height:1.5;">
+        Voy a consultar las APIs de los marketplaces conectados, traer todos los productos publicados, y proponer matches con tus productos Lusync usando SKU exacto, similitud de nombre y precio.
+      </div>
+
+      <div style="font-size:11px;font-weight:500;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em;">Marketplaces a consultar</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px;">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;padding:8px;border:0.5px solid var(--border);border-radius:6px;">
+          <input type="checkbox" id="amML" checked> MercadoLibre
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;padding:8px;border:0.5px solid var(--border);border-radius:6px;">
+          <input type="checkbox" id="amPA" checked> París
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;padding:8px;border:0.5px solid var(--border);border-radius:6px;">
+          <input type="checkbox" id="amWM" checked> Walmart
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;padding:8px;border:0.5px solid var(--border);border-radius:6px;">
+          <input type="checkbox" id="amFA" checked> Falabella
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;padding:8px;border:0.5px solid var(--border);border-radius:6px;">
+          <input type="checkbox" id="amRP" checked> Ripley
+        </label>
+      </div>
+
+      <div style="font-size:11px;font-weight:500;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em;">Umbral score auto-guardado</div>
+      <div style="margin-bottom:18px;">
+        <input type="range" id="amUmbral" min="70" max="100" value="90" oninput="document.getElementById('amUmbralVal').textContent = this.value" style="width:100%;">
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:4px;">
+          <span>70 (más auto-matches, más errores)</span>
+          <span><b id="amUmbralVal">90</b></span>
+          <span>100 (solo SKU exacto)</span>
+        </div>
+      </div>
+
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:18px;cursor:pointer;">
+        <input type="checkbox" id="amGuardar"> Guardar automáticamente los matches con score ≥ umbral
+      </label>
+
+      <div style="background:#FFF4E0;border:0.5px solid #FCBA40;color:#7C4A03;font-size:11px;padding:10px;border-radius:6px;margin-bottom:18px;line-height:1.5;">
+        ⚠ Si activas "guardar automáticamente", los SKUs con match seguro (score ≥ umbral) se grabarán en la BD inmediatamente.<br>
+        Si lo dejas desactivado, solo te muestro la propuesta y tú decides después qué guardar.
+      </div>
+
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button onclick="document.getElementById('modalAutoMapeo').remove()" style="padding:8px 16px;border:0.5px solid var(--border);background:var(--bg);color:var(--text);border-radius:6px;font-size:13px;cursor:pointer;">Cancelar</button>
+        <button onclick="ejecutarAutoMapeo(false)" style="padding:8px 16px;border:0.5px solid var(--border);background:var(--bg);color:var(--text);border-radius:6px;font-size:13px;cursor:pointer;">Solo descargar Excel</button>
+        <button onclick="ejecutarAutoMapeo(true)" style="padding:8px 16px;border:none;background:#3C3489;color:white;border-radius:6px;font-size:13px;cursor:pointer;font-weight:500;">Ejecutar y mostrar</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+function _autoMapeoCanales(){
+  const canales = [];
+  if(document.getElementById('amML')?.checked) canales.push('mercadolibre');
+  if(document.getElementById('amPA')?.checked) canales.push('paris');
+  if(document.getElementById('amWM')?.checked) canales.push('walmart');
+  if(document.getElementById('amFA')?.checked) canales.push('falabella');
+  if(document.getElementById('amRP')?.checked) canales.push('ripley');
+  return canales;
+}
+
+function ejecutarAutoMapeo(mostrarPanel){
+  const canales = _autoMapeoCanales();
+  if(canales.length === 0){
+    toast('Selecciona al menos un marketplace');
+    return;
+  }
+  const guardar = document.getElementById('amGuardar')?.checked ? '1' : '0';
+  const umbral = document.getElementById('amUmbral')?.value || '90';
+
+  const formato = mostrarPanel ? 'json' : 'excel';
+  const url = `/admin/auto_mapeo_skus?canales=${canales.join(',')}&guardar=${guardar}&umbral_auto=${umbral}&formato=${formato}`;
+
+  if(formato === 'excel'){
+    document.getElementById('modalAutoMapeo')?.remove();
+    toast('Generando Excel... esto puede tomar 1-3 minutos');
+    window.location.href = url;
+    return;
+  }
+
+  // JSON: mostrar loading + cuando termine, mostrar resultados
+  const modal = document.getElementById('modalAutoMapeo');
+  if(modal){
+    modal.querySelector('div').innerHTML = `
+      <div style="text-align:center;padding:40px;">
+        <div style="font-size:32px;margin-bottom:12px;">⏳</div>
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px;">Consultando los marketplaces...</div>
+        <div style="font-size:12px;color:var(--muted);">Esto puede tomar 1-3 minutos. No cierres esta ventana.</div>
+      </div>`;
+  }
+
+  fetch(url).then(r=>r.json()).then(d=>{
+    if(!d.ok){
+      toast('Error: ' + (d.error || 'desconocido'));
+      document.getElementById('modalAutoMapeo')?.remove();
+      return;
+    }
+    mostrarResultadosAutoMapeo(d);
+  }).catch(e=>{
+    toast('Error: ' + e.message);
+    document.getElementById('modalAutoMapeo')?.remove();
+  });
+}
+
+function mostrarResultadosAutoMapeo(data){
+  const r = data.resumen || {};
+  const propuesta = data.propuesta || [];
+  const items = data.items_por_canal || {};
+
+  document.getElementById('modalAutoMapeo')?.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'modalAutoMapeoRes';
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;';
+
+  // Header con resumen
+  const headerHtml = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+      <div>
+        <div style="font-size:16px;font-weight:600;">Resultado de auto-mapeo</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px;">
+          Items obtenidos: ${Object.entries(items).map(([c,n])=>`${c}=${n}`).join(' · ')}
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+        <span style="font-size:11px;padding:4px 8px;background:#D4EDDA;color:#27500A;border-radius:6px;">${r.con_matches_seguros||0} match seguros</span>
+        <span style="font-size:11px;padding:4px 8px;background:#FFF3CD;color:#7C4A03;border-radius:6px;">${r.necesitan_revision||0} a revisar</span>
+        <span style="font-size:11px;padding:4px 8px;background:#F8D7DA;color:#721C24;border-radius:6px;">${r.sin_match||0} sin match</span>
+        <button onclick="document.getElementById('modalAutoMapeoRes').remove()" style="padding:6px 12px;border:0.5px solid var(--border);background:var(--bg);color:var(--text);border-radius:6px;font-size:12px;cursor:pointer;margin-left:8px;">Cerrar</button>
+      </div>
+    </div>`;
+
+  // Tabla de propuestas
+  const filtroHtml = `
+    <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;">
+      <input type="text" id="amrFiltroSku" placeholder="Filtrar por SKU o nombre..." oninput="renderTablaAutoMapeo()" style="padding:6px 10px;border:0.5px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text);flex:1;">
+      <select id="amrFiltroEstado" onchange="renderTablaAutoMapeo()" style="padding:6px 10px;border:0.5px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text);">
+        <option value="">Todos</option>
+        <option value="auto">Solo match seguros</option>
+        <option value="revisar">Solo a revisar</option>
+        <option value="sin_match">Solo sin match</option>
+      </select>
+      <button onclick="guardarMatchesSeleccionados()" style="padding:6px 12px;border:none;background:#3C3489;color:white;border-radius:6px;font-size:12px;cursor:pointer;font-weight:500;">Guardar seleccionados</button>
+    </div>`;
+
+  modal.innerHTML = `
+    <div style="background:var(--bg);border-radius:12px;padding:20px;width:96vw;max-width:1400px;max-height:92vh;display:flex;flex-direction:column;">
+      ${headerHtml}
+      ${filtroHtml}
+      <div id="amrTablaContainer" style="flex:1;overflow:auto;border:0.5px solid var(--border);border-radius:8px;"></div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  // Guardar propuesta global para acceder desde otros handlers
+  window._propuestaAutoMapeo = propuesta;
+  renderTablaAutoMapeo();
+}
+
+function renderTablaAutoMapeo(){
+  const propuesta = window._propuestaAutoMapeo || [];
+  const filtroSku = (document.getElementById('amrFiltroSku')?.value || '').toLowerCase();
+  const filtroEstado = document.getElementById('amrFiltroEstado')?.value || '';
+
+  const filtradas = propuesta.filter(f => {
+    if(filtroSku){
+      const txt = (f.sku_lusync + ' ' + f.nombre).toLowerCase();
+      if(!txt.includes(filtroSku)) return false;
+    }
+    if(filtroEstado){
+      const estados = Object.values(f.matches||{}).map(m=>m.estado);
+      if(filtroEstado === 'auto' && !estados.includes('auto')) return false;
+      if(filtroEstado === 'revisar' && !estados.some(e=>e==='revisar')) return false;
+      if(filtroEstado === 'sin_match' && !estados.every(e=>e==='sin_match')) return false;
+    }
+    return true;
+  });
+
+  const canales = ['mercadolibre','paris','walmart','falabella','ripley'];
+  const canalNombres = {mercadolibre:'MELI', paris:'PARIS', walmart:'WALMART', falabella:'FALABELLA', ripley:'RIPLEY'};
+
+  let html = `<table style="width:100%;border-collapse:collapse;font-size:11px;">
+    <thead style="position:sticky;top:0;background:var(--bg2);z-index:5;">
+      <tr style="border-bottom:0.5px solid var(--border);">
+        <th style="padding:8px;text-align:left;font-size:9px;color:var(--muted);text-transform:uppercase;width:32px;"><input type="checkbox" onchange="toggleAllMatches(this.checked)"></th>
+        <th style="padding:8px;text-align:left;font-size:9px;color:var(--muted);text-transform:uppercase;">SKU Lusync</th>
+        <th style="padding:8px;text-align:left;font-size:9px;color:var(--muted);text-transform:uppercase;">Producto</th>`;
+  canales.forEach(c => {
+    html += `<th style="padding:8px;text-align:left;font-size:9px;color:var(--muted);text-transform:uppercase;min-width:170px;">${canalNombres[c]}</th>`;
+  });
+  html += `</tr></thead><tbody>`;
+
+  filtradas.forEach((f, idx) => {
+    html += `<tr style="border-bottom:0.5px solid var(--border);">
+      <td style="padding:6px 8px;"><input type="checkbox" class="amrCheck" data-sku="${f.sku_lusync}" data-idx="${idx}"></td>
+      <td style="padding:6px 8px;font-family:'DM Mono',monospace;font-size:10px;">${f.sku_lusync}</td>
+      <td style="padding:6px 8px;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${f.nombre}">${f.nombre}<br><span style="font-size:9px;color:var(--hint);">$${(f.precio||0).toLocaleString('es-CL')}</span></td>`;
+
+    canales.forEach(c => {
+      const m = f.matches?.[c] || {};
+      const score = m.score || 0;
+      const estado = m.estado || 'sin_match';
+      const sku_prop = m.sku_propuesto || '';
+      const sku_actual = m.sku_actual_bd || '';
+      const titulo = m.titulo_mp || '';
+      const motivos = (m.motivos || []).join(', ');
+
+      let bgColor = '#F8D7DA', txtColor = '#721C24', borderColor = '#F1C2C7';
+      if(estado === 'auto'){ bgColor = '#D4EDDA'; txtColor = '#155724'; borderColor = '#C3E6CB'; }
+      else if(estado === 'revisar'){ bgColor = '#FFF3CD'; txtColor = '#856404'; borderColor = '#FCEAB6'; }
+
+      const sinCambio = sku_actual && sku_actual === sku_prop;
+      const yaTieneOtro = sku_actual && sku_actual !== sku_prop;
+
+      html += `<td style="padding:4px 6px;background:${bgColor};border:0.5px solid ${borderColor};vertical-align:top;">`;
+      if(sku_prop){
+        html += `<div style="font-family:'DM Mono',monospace;font-size:10px;color:${txtColor};font-weight:600;">${sku_prop}</div>`;
+        html += `<div style="font-size:9px;color:${txtColor};opacity:0.7;margin-top:2px;">score ${score} · ${motivos}</div>`;
+        if(titulo) html += `<div style="font-size:9px;color:${txtColor};opacity:0.6;margin-top:2px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${titulo}">${titulo}</div>`;
+        if(yaTieneOtro){
+          html += `<div style="font-size:9px;color:#7C1B30;margin-top:3px;">⚠ BD tiene: ${sku_actual}</div>`;
+        }
+        if(sinCambio){
+          html += `<div style="font-size:9px;color:#155724;margin-top:3px;">✓ ya en BD</div>`;
+        }
+      } else {
+        if(sku_actual){
+          html += `<div style="font-family:'DM Mono',monospace;font-size:10px;color:#155724;">${sku_actual}</div>`;
+          html += `<div style="font-size:9px;color:#155724;opacity:0.7;margin-top:2px;">(en BD, no encontrado en API)</div>`;
+        } else {
+          html += `<div style="font-size:10px;color:#721C24;">sin match</div>`;
+        }
+      }
+      html += `</td>`;
+    });
+    html += `</tr>`;
+  });
+  html += `</tbody></table>`;
+
+  if(filtradas.length === 0){
+    html = `<div style="padding:40px;text-align:center;color:var(--muted);font-size:13px;">Sin resultados con esos filtros</div>`;
+  }
+
+  document.getElementById('amrTablaContainer').innerHTML = html;
+  document.getElementById('amrTablaContainer').setAttribute('data-count', filtradas.length);
+}
+
+function toggleAllMatches(checked){
+  document.querySelectorAll('.amrCheck').forEach(c => c.checked = checked);
+}
+
+function guardarMatchesSeleccionados(){
+  const propuesta = window._propuestaAutoMapeo || [];
+  const checks = document.querySelectorAll('.amrCheck:checked');
+  if(checks.length === 0){
+    toast('Selecciona al menos una fila');
+    return;
+  }
+  const indices = Array.from(checks).map(c => parseInt(c.getAttribute('data-idx')));
+  const seleccionadas = indices.map(i => propuesta[i]).filter(Boolean);
+
+  if(!confirm(`¿Guardar mapeos para ${seleccionadas.length} productos? Solo se guardarán los SKUs propuestos por cada marketplace si la celda actual del BD está vacía.`)) return;
+
+  toast('Guardando...');
+  let guardados = 0, fallidos = 0, completados = 0;
+
+  seleccionadas.forEach(fila => {
+    const skus = {
+      web:          '',
+      walmart:      fila.matches?.walmart?.sku_propuesto || '',
+      paris:        fila.matches?.paris?.sku_propuesto || '',
+      falabella:    fila.matches?.falabella?.sku_propuesto || '',
+      ripley:       fila.matches?.ripley?.sku_propuesto || '',
+      mercadolibre: fila.matches?.mercadolibre?.sku_propuesto || '',
+      hites:        ''
+    };
+    fetch('/sku_mapeo/guardar', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({sku_lusync: fila.sku_lusync, ...skus})
+    }).then(r=>r.json()).then(d=>{
+      completados++;
+      if(d.ok) guardados++; else fallidos++;
+      if(completados === seleccionadas.length){
+        toast(`✓ ${guardados} guardados, ${fallidos} fallidos`);
+        cargarSkuMapeo();
+        if(fallidos === 0){
+          setTimeout(() => document.getElementById('modalAutoMapeoRes')?.remove(), 1200);
+        }
+      }
+    }).catch(e=>{
+      completados++;
+      fallidos++;
+    });
+  });
 }
 
 // [DESARROLLO] Borrar todos los movimientos

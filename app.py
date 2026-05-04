@@ -4991,5 +4991,861 @@ def admin_estado_reconstruccion():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# PLANTILLAS DE STOCK Y RESET CONTROLADO DE MOVIMIENTOS
+# ════════════════════════════════════════════════════════════════════════════
+# Endpoints para el flujo de "empezar limpio":
+#   1) /admin/plantilla_stock_central   → descarga Excel solo con CENTRAL
+#   2) /admin/plantilla_stock_fulfillment → descarga Excel con todas las
+#      bodegas fulfillment (MELI_FULL, PARIS_CD, etc.)
+#   3) /admin/reset_movimientos         → borra movimientos + ordenes_procesadas
+#      con confirmación obligatoria y backup automático
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/plantilla_stock_central")
+def admin_plantilla_stock_central():
+    """Descarga plantilla Excel con todos los SKUs de productos
+    + columna CENTRAL para que el usuario complete el stock.
+    Si el SKU ya tenía stock en CENTRAL, lo prellena para que sirva
+    también como exportación del estado actual."""
+    if not session.get("logged"): return redirect("/")
+    try:
+        import io, openpyxl
+        from inventario import cargar_productos, get_stock_bodega
+
+        productos = cargar_productos()
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Stock Central"
+
+        # Encabezados
+        headers = ["sku_lusync", "nombre", "CENTRAL"]
+        ws.append(headers)
+
+        # Estilo encabezado
+        from openpyxl.styles import Font, PatternFill
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="3C3489", end_color="3C3489", fill_type="solid")
+
+        # Datos: sku, nombre, stock actual en CENTRAL
+        for p in productos:
+            sku = p.get("sku", "")
+            stock_actual = 0
+            try:
+                stock_actual = get_stock_bodega(sku, "CENTRAL") or 0
+            except:
+                stock_actual = 0
+            ws.append([sku, p.get("nombre", ""), stock_actual])
+
+        # Hoja de instrucciones
+        ws2 = wb.create_sheet("Instrucciones")
+        instrucciones = [
+            ["INSTRUCCIONES — Plantilla de stock CENTRAL"],
+            [""],
+            ["1. Esta plantilla contiene TODOS los productos de tu sistema."],
+            ["2. La columna CENTRAL contiene el stock ACTUAL en bodega central."],
+            ["3. Edita los valores que necesites cambiar y guarda el archivo."],
+            ["4. Sube este archivo desde la sección Bodegas → Importar Excel."],
+            [""],
+            ["IMPORTANTE:"],
+            ["- NO borres ni cambies los nombres de las columnas (sku_lusync, nombre, CENTRAL)."],
+            ["- NO cambies los valores de la columna sku_lusync."],
+            ["- Si dejas una celda CENTRAL vacía, el sistema NO modifica ese SKU."],
+            ["- Si pones 0, el sistema dejará ese SKU con stock cero."],
+            [""],
+            ["Nombres de bodega válidos para esta plantilla: CENTRAL"]
+        ]
+        for fila in instrucciones:
+            ws2.append(fila)
+        ws2.column_dimensions['A'].width = 80
+
+        # Ajustar ancho columnas hoja principal
+        ws.column_dimensions['A'].width = 20
+        ws.column_dimensions['B'].width = 50
+        ws.column_dimensions['C'].width = 12
+
+        buf = io.BytesIO()
+        wb.save(buf); buf.seek(0)
+        return send_file(buf, download_name="plantilla_stock_central.xlsx",
+                         as_attachment=True,
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/admin/plantilla_stock_fulfillment")
+def admin_plantilla_stock_fulfillment():
+    """Descarga plantilla Excel con todos los SKUs + columnas para cada
+    bodega de fulfillment (MELI_FULL, PARIS_CD, WALMART_FBM, FALABELLA_FBM,
+    RIPLEY_FBM, HITES_FBM, WOO_DROP). Prellena con el stock actual."""
+    if not session.get("logged"): return redirect("/")
+    try:
+        import io, openpyxl
+        from inventario import cargar_productos, get_stock_bodega, listar_bodegas
+
+        productos = cargar_productos()
+
+        # Solo bodegas tipo fulfillment o dropship (excluye CENTRAL)
+        bodegas = [b for b in listar_bodegas() if b.get("tipo") in ("fulfillment", "dropship")]
+        bodegas_codigos = [b["codigo"] for b in bodegas]
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Stock Fulfillment"
+
+        # Encabezados: sku, nombre, + cada bodega fulfillment
+        headers = ["sku_lusync", "nombre"] + bodegas_codigos
+        ws.append(headers)
+
+        # Estilo encabezado
+        from openpyxl.styles import Font, PatternFill
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="7C4A03", end_color="7C4A03", fill_type="solid")
+
+        # Datos: sku, nombre, stock actual por cada fulfillment
+        for p in productos:
+            sku = p.get("sku", "")
+            row = [sku, p.get("nombre", "")]
+            for cod in bodegas_codigos:
+                try:
+                    row.append(get_stock_bodega(sku, cod) or 0)
+                except:
+                    row.append(0)
+            ws.append(row)
+
+        # Hoja de referencia con nombres legibles de cada bodega
+        ws_ref = wb.create_sheet("Referencia bodegas")
+        ws_ref.append(["Código", "Nombre legible", "Tipo", "Canal asociado"])
+        from openpyxl.styles import Font as _F
+        ws_ref.cell(row=1, column=1).font = _F(bold=True)
+        ws_ref.cell(row=1, column=2).font = _F(bold=True)
+        ws_ref.cell(row=1, column=3).font = _F(bold=True)
+        ws_ref.cell(row=1, column=4).font = _F(bold=True)
+        for b in bodegas:
+            ws_ref.append([b["codigo"], b.get("nombre",""),
+                           b.get("tipo",""), b.get("canal","") or "-"])
+        ws_ref.column_dimensions['A'].width = 18
+        ws_ref.column_dimensions['B'].width = 30
+        ws_ref.column_dimensions['C'].width = 15
+        ws_ref.column_dimensions['D'].width = 18
+
+        # Hoja de instrucciones
+        ws2 = wb.create_sheet("Instrucciones")
+        ws2.append(["INSTRUCCIONES — Plantilla de stock FULFILLMENT"])
+        ws2.append([""])
+        ws2.append(["Esta plantilla contiene una columna por cada bodega de fulfillment."])
+        ws2.append(["Las columnas pre-completadas tienen el stock ACTUAL en cada bodega."])
+        ws2.append([""])
+        ws2.append(["IMPORTANTE:"])
+        ws2.append(["- Solo edita las columnas de bodegas que necesites actualizar."])
+        ws2.append(["- Si una celda está vacía, el sistema NO toca ese SKU/bodega."])
+        ws2.append(["- Si pones 0, el sistema dejará ese SKU/bodega con stock cero."])
+        ws2.append(["- NO cambies los nombres de las columnas (sku_lusync, MELI_FULL, etc)."])
+        ws2.append([""])
+        ws2.append(["Para descargar plantilla solo de Bodega Central usa:"])
+        ws2.append(["/admin/plantilla_stock_central"])
+        ws2.column_dimensions['A'].width = 80
+
+        # Ajustar columnas principal
+        ws.column_dimensions['A'].width = 20
+        ws.column_dimensions['B'].width = 50
+        for i, _ in enumerate(bodegas_codigos):
+            col_letter = openpyxl.utils.get_column_letter(3 + i)
+            ws.column_dimensions[col_letter].width = 16
+
+        buf = io.BytesIO()
+        wb.save(buf); buf.seek(0)
+        return send_file(buf, download_name="plantilla_stock_fulfillment.xlsx",
+                         as_attachment=True,
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/admin/reset_movimientos", methods=["POST", "GET"])
+def admin_reset_movimientos():
+    """Borra TODOS los movimientos + las marcas de órdenes procesadas, para
+    permitir un sync limpio desde cero. Hace backup automático de movimientos
+    a una tabla temporal por si algo sale mal.
+
+    REQUIERE confirmación EXPLÍCITA: ?confirmar=SI_BORRAR_TODO
+
+    NO TOCA: productos, sku_mapeo, bodegas, stock_bodega, usuarios, audit_log,
+             devoluciones, alertas_config.
+
+    Después de ejecutar, los syncs de los marketplaces re-procesarán todas
+    las órdenes que todavía estén en sus listados (últimos 30 días típicamente)."""
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+
+    confirmar = request.args.get("confirmar", "")
+    if confirmar != "SI_BORRAR_TODO":
+        # Mostrar info de qué se va a borrar antes de ejecutar
+        try:
+            from inventario import get_conn
+            conn = get_conn(); cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM movimientos")
+            total_mov = cur.fetchone()[0]
+            try:
+                cur.execute("SELECT COUNT(*) FROM ordenes_procesadas")
+                total_ord = cur.fetchone()[0]
+            except:
+                total_ord = 0
+            cur.close(); conn.close()
+            return jsonify({
+                "ok": False,
+                "modo": "preview",
+                "mensaje": "Para confirmar la operación, agrega ?confirmar=SI_BORRAR_TODO a la URL",
+                "se_borrarian": {
+                    "movimientos": total_mov,
+                    "ordenes_procesadas": total_ord
+                },
+                "se_mantienen": [
+                    "productos", "sku_mapeo", "bodegas", "stock_bodega",
+                    "usuarios", "audit_log", "devoluciones", "alertas",
+                    "configuracion", "import_logs"
+                ],
+                "url_para_confirmar": "/admin/reset_movimientos?confirmar=SI_BORRAR_TODO"
+            })
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    # Ejecutar reset con backup
+    try:
+        from inventario import get_conn
+        from datetime import datetime as _dt
+        conn = get_conn(); cur = conn.cursor()
+
+        timestamp = _dt.now().strftime("%Y%m%d_%H%M%S")
+        backup_movimientos = f"movimientos_backup_{timestamp}"
+        backup_ordenes = f"ordenes_procesadas_backup_{timestamp}"
+
+        log = []
+
+        # 1. Backup de movimientos a tabla nueva
+        try:
+            cur.execute(f'CREATE TABLE "{backup_movimientos}" AS SELECT * FROM movimientos')
+            cur.execute(f'SELECT COUNT(*) FROM "{backup_movimientos}"')
+            count_mov = cur.fetchone()[0]
+            log.append(f"✓ Backup de movimientos creado: {backup_movimientos} ({count_mov} filas)")
+        except Exception as e:
+            log.append(f"⚠ Error creando backup movimientos: {e}")
+            conn.rollback()
+            return jsonify({"ok": False, "error": f"No se pudo crear backup: {e}", "log": log}), 500
+
+        # 2. Backup de ordenes_procesadas (si existe)
+        try:
+            cur.execute(f'CREATE TABLE "{backup_ordenes}" AS SELECT * FROM ordenes_procesadas')
+            cur.execute(f'SELECT COUNT(*) FROM "{backup_ordenes}"')
+            count_ord = cur.fetchone()[0]
+            log.append(f"✓ Backup de ordenes_procesadas creado: {backup_ordenes} ({count_ord} filas)")
+        except Exception as e:
+            log.append(f"  (ordenes_procesadas no existía o error: {e})")
+            conn.rollback()
+
+        # 3. Borrar movimientos
+        try:
+            cur.execute("DELETE FROM movimientos")
+            log.append(f"✓ Movimientos borrados")
+        except Exception as e:
+            conn.rollback()
+            return jsonify({"ok": False, "error": f"Error borrando movimientos: {e}", "log": log}), 500
+
+        # 4. Borrar ordenes_procesadas (si existe)
+        try:
+            cur.execute("DELETE FROM ordenes_procesadas")
+            log.append(f"✓ Ordenes_procesadas borradas")
+        except Exception as e:
+            log.append(f"  (no se pudo borrar ordenes_procesadas: {e})")
+            conn.rollback()
+            # Reintentar de nuevo el delete de movimientos
+            cur.execute("DELETE FROM movimientos")
+
+        conn.commit()
+
+        # 5. Audit log
+        try:
+            registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                            "RESET_MOVIMIENTOS", entidad="movimientos",
+                            detalle=f"backup={backup_movimientos}, ord_backup={backup_ordenes}")
+            log.append("✓ Audit log registrado")
+        except Exception as e:
+            log.append(f"  No se pudo registrar audit: {e}")
+
+        cur.close(); conn.close()
+
+        return jsonify({
+            "ok": True,
+            "mensaje": "Reset completado correctamente",
+            "tablas_backup": [backup_movimientos, backup_ordenes],
+            "instrucciones_siguientes": [
+                "1. Verifica que el panel de Movimientos esté vacío",
+                "2. Carga el stock CENTRAL via plantilla Excel (Bodegas → Importar Excel)",
+                "3. Carga el stock FULFILLMENT via segunda plantilla Excel",
+                "4. Ejecuta los syncs de cada marketplace para traer las órdenes recientes",
+                "5. Si algo sale mal, los datos están en las tablas backup mencionadas arriba"
+            ],
+            "para_recuperar_backup": (
+                f"INSERT INTO movimientos SELECT * FROM \"{backup_movimientos}\"; "
+                f"INSERT INTO ordenes_procesadas SELECT * FROM \"{backup_ordenes}\";"
+            ),
+            "log": log
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/admin/listar_backups")
+def admin_listar_backups():
+    """Lista todas las tablas de backup creadas por reset_movimientos.
+    Útil si necesitas recuperar datos o limpiar backups antiguos."""
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import get_conn
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("""
+            SELECT tablename FROM pg_tables
+            WHERE schemaname = 'public'
+              AND (tablename LIKE 'movimientos_backup_%'
+                OR tablename LIKE 'ordenes_procesadas_backup_%')
+            ORDER BY tablename DESC
+        """)
+        tablas = []
+        for (nombre,) in cur.fetchall():
+            try:
+                cur.execute(f'SELECT COUNT(*) FROM "{nombre}"')
+                cnt = cur.fetchone()[0]
+            except:
+                cnt = -1
+            tablas.append({"tabla": nombre, "filas": cnt})
+        cur.close(); conn.close()
+        return jsonify({"backups": tablas, "total": len(tablas)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# AUTO-MAPEO DE SKUs ENTRE LUSYNC Y MARKETPLACES
+# ════════════════════════════════════════════════════════════════════════════
+# Endpoints para traer productos de cada marketplace y matchearlos
+# automáticamente contra los productos Lusync por SKU, nombre y precio.
+# ════════════════════════════════════════════════════════════════════════════
+
+def _normalizar_texto(s):
+    """Normaliza un texto para comparación: lowercase, sin acentos, sin espacios extra."""
+    if not s: return ""
+    import unicodedata, re
+    s = str(s).lower().strip()
+    # Quitar acentos
+    s = ''.join(c for c in unicodedata.normalize('NFD', s)
+                if unicodedata.category(c) != 'Mn')
+    # Quitar caracteres no alfanuméricos
+    s = re.sub(r'[^a-z0-9\s]', ' ', s)
+    # Colapsar espacios
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+
+def _ratio_similitud(s1, s2):
+    """Calcula similitud entre dos strings (0.0 a 1.0) usando SequenceMatcher."""
+    from difflib import SequenceMatcher
+    if not s1 or not s2: return 0.0
+    return SequenceMatcher(None, _normalizar_texto(s1), _normalizar_texto(s2)).ratio()
+
+
+def _calcular_score_match(producto_lusync, item_marketplace, sku_field, title_field, price_field):
+    """Calcula score 0-100 de qué tan probable es que sean el mismo producto.
+
+    Prioridad:
+      1. SKU exacto del marketplace = SKU Lusync → 100 (match seguro)
+      2. SKU Lusync contenido en título o sku del marketplace → 85
+      3. Nombre normalizado idéntico → 80
+      4. Nombre similitud > 0.85 + precio cercano (±10%) → 70-90
+      5. Solo nombre similitud > 0.85 → 50-65
+      6. Nombre similitud > 0.70 → 30-50
+    """
+    sku_lusync = (producto_lusync.get("sku") or "").strip().upper()
+    nombre_lusync = producto_lusync.get("nombre") or ""
+    precio_lusync = producto_lusync.get("precio") or 0
+
+    sku_mp = str(item_marketplace.get(sku_field, "") or "").strip().upper()
+    title_mp = item_marketplace.get(title_field, "") or ""
+    price_mp = item_marketplace.get(price_field, 0) or 0
+    try: price_mp = float(price_mp)
+    except: price_mp = 0
+
+    motivos = []
+    score = 0
+
+    # 1. SKU exacto
+    if sku_lusync and sku_mp and sku_lusync == sku_mp:
+        return 100, ["sku_exacto"]
+
+    # 2. SKU Lusync contenido en sku del marketplace o en título
+    if sku_lusync and len(sku_lusync) >= 4:
+        if sku_mp and sku_lusync in sku_mp:
+            score = 85
+            motivos.append("sku_contenido_en_sku_mp")
+        elif sku_lusync in (title_mp or "").upper():
+            score = 80
+            motivos.append("sku_en_titulo")
+        if score >= 80:
+            return score, motivos
+
+    # 3. Nombre exacto normalizado
+    nl = _normalizar_texto(nombre_lusync)
+    nm = _normalizar_texto(title_mp)
+    if nl and nm and nl == nm:
+        score = 80
+        motivos.append("nombre_exacto")
+
+    # 4. Similitud de nombre
+    if not score:
+        sim = _ratio_similitud(nombre_lusync, title_mp)
+        if sim >= 0.85:
+            score = int(50 + sim * 30)  # 75-80
+            motivos.append(f"nombre_sim_{int(sim*100)}%")
+        elif sim >= 0.70:
+            score = int(30 + sim * 20)  # 44-44
+            motivos.append(f"nombre_sim_{int(sim*100)}%")
+
+    # 5. Bonus por precio cercano (si tenemos un score base)
+    if score > 0 and precio_lusync and price_mp:
+        try:
+            diff = abs(float(precio_lusync) - price_mp) / float(precio_lusync)
+            if diff < 0.05:  # ±5%
+                score += 15
+                motivos.append("precio_muy_cercano")
+            elif diff < 0.10:  # ±10%
+                score += 10
+                motivos.append("precio_cercano")
+            elif diff < 0.20:  # ±20%
+                score += 5
+                motivos.append("precio_aproximado")
+        except: pass
+
+    return min(score, 99), motivos  # 99 max sin SKU exacto
+
+
+def _buscar_mejor_match(producto_lusync, items_mp, sku_field, title_field, price_field):
+    """Para un producto Lusync, encuentra el item del marketplace con mejor score.
+    Devuelve (mejor_match_dict, score, motivos) o (None, 0, [])"""
+    if not items_mp:
+        return None, 0, []
+    mejor = None
+    mejor_score = 0
+    mejor_motivos = []
+    for item in items_mp:
+        score, motivos = _calcular_score_match(
+            producto_lusync, item, sku_field, title_field, price_field
+        )
+        if score > mejor_score:
+            mejor_score = score
+            mejor = item
+            mejor_motivos = motivos
+            if score >= 100:  # match perfecto, no seguir
+                break
+    return mejor, mejor_score, mejor_motivos
+
+
+@app.route("/admin/auto_mapeo_skus", methods=["GET", "POST"])
+def admin_auto_mapeo_skus():
+    """Trae productos publicados de los marketplaces conectados y propone
+    matches contra los productos Lusync.
+
+    Query params:
+      ?canales=mercadolibre,paris,walmart,falabella,ripley   (default: todos)
+      ?guardar=1   (si 1, guarda automáticamente los matches con score >= 90)
+      ?formato=json|excel   (default: json)
+
+    Returns:
+      JSON con la propuesta de mapeo, o un Excel descargable.
+    """
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+
+    canales_str = request.args.get("canales", "mercadolibre,paris,walmart,falabella,ripley")
+    canales_pedidos = set(c.strip().lower() for c in canales_str.split(",") if c.strip())
+    guardar_auto = request.args.get("guardar", "0") == "1"
+    formato = request.args.get("formato", "json").lower()
+    umbral_auto = int(request.args.get("umbral_auto", 90))  # score mínimo para auto-guardar
+
+    registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                    "auto_mapeo_skus",
+                    detalle=f"canales={canales_pedidos} guardar={guardar_auto}")
+
+    log = []
+
+    # ── 1. Cargar productos Lusync ──
+    from inventario import cargar_productos, listar_sku_mapeo
+    productos_lusync = cargar_productos()
+    log.append(f"Productos Lusync: {len(productos_lusync)}")
+
+    mapeo_actual = {}
+    try:
+        for fila in listar_sku_mapeo():
+            mapeo_actual[fila["sku_lusync"]] = fila
+    except Exception as e:
+        log.append(f"Error cargando mapeo actual: {e}")
+
+    # ── 2. Traer items de cada marketplace ──
+    items_por_canal = {}
+
+    if "mercadolibre" in canales_pedidos:
+        try:
+            from mercadolibre import obtener_publicaciones_meli
+            todos = []
+            offset = 0
+            for _ in range(20):  # max 20 páginas (1000 items)
+                data = obtener_publicaciones_meli(limite=50, offset=offset)
+                if not data or not data.get("items"):
+                    break
+                todos.extend(data["items"])
+                if len(data["items"]) < 50:
+                    break
+                offset += 50
+            items_por_canal["mercadolibre"] = todos
+            log.append(f"[MELI] {len(todos)} publicaciones obtenidas")
+        except Exception as e:
+            log.append(f"[MELI] ERROR: {e}")
+            items_por_canal["mercadolibre"] = []
+
+    if "paris" in canales_pedidos:
+        try:
+            from paris import obtener_productos_paris
+            todos = []
+            offset = 0
+            for _ in range(20):
+                data = obtener_productos_paris(limite=25, offset=offset)
+                if not data:
+                    break
+                productos = data.get("products", []) if isinstance(data, dict) else (data or [])
+                if isinstance(productos, dict):
+                    productos = [productos]
+                if not productos:
+                    break
+                # París devuelve formato distinto, normalizamos
+                for p in productos:
+                    items_paris = {
+                        "sellerSku":    p.get("sellerSku") or p.get("sku") or "",
+                        "name":         p.get("name") or p.get("productName") or "",
+                        "price":        (p.get("price") or {}).get("normal") if isinstance(p.get("price"), dict) else p.get("price"),
+                        "stock":        p.get("stock", 0),
+                        "status":       p.get("status", "")
+                    }
+                    todos.append(items_paris)
+                if len(productos) < 25:
+                    break
+                offset += 25
+            items_por_canal["paris"] = todos
+            log.append(f"[Paris] {len(todos)} productos obtenidos")
+        except Exception as e:
+            log.append(f"[Paris] ERROR: {e}")
+            items_por_canal["paris"] = []
+
+    if "walmart" in canales_pedidos:
+        try:
+            from walmart import obtener_productos_walmart
+            todos = obtener_productos_walmart(limit=200, max_paginas=5)
+            items_por_canal["walmart"] = todos
+            log.append(f"[Walmart] {len(todos)} productos obtenidos")
+        except Exception as e:
+            log.append(f"[Walmart] ERROR: {e}")
+            items_por_canal["walmart"] = []
+
+    if "falabella" in canales_pedidos:
+        try:
+            from falabella import obtener_productos_falabella
+            todos = []
+            offset = 0
+            for _ in range(20):
+                productos = obtener_productos_falabella(limit=100, offset=offset, filter_status="all")
+                if not productos:
+                    break
+                # Normalizar formato Falabella
+                for p in productos:
+                    item = {
+                        "sellerSku":  p.get("SellerSku") or p.get("sellerSku") or "",
+                        "name":       p.get("Name") or p.get("name") or "",
+                        "price":      p.get("Price") or p.get("price"),
+                        "quantity":   p.get("Quantity") or p.get("quantity") or 0,
+                        "status":     p.get("Status") or p.get("status", "")
+                    }
+                    try: item["price"] = float(item["price"]) if item["price"] else 0
+                    except: item["price"] = 0
+                    todos.append(item)
+                if len(productos) < 100:
+                    break
+                offset += 100
+            items_por_canal["falabella"] = todos
+            log.append(f"[Falabella] {len(todos)} productos obtenidos")
+        except Exception as e:
+            log.append(f"[Falabella] ERROR: {e}")
+            items_por_canal["falabella"] = []
+
+    if "ripley" in canales_pedidos:
+        try:
+            from ripley import obtener_productos_ripley
+            todos = obtener_productos_ripley(max_paginas=15, page_size=100)
+            items_por_canal["ripley"] = todos
+            log.append(f"[Ripley] {len(todos)} productos obtenidos")
+        except Exception as e:
+            log.append(f"[Ripley] ERROR: {e}")
+            items_por_canal["ripley"] = []
+
+    # ── 3. Para cada producto Lusync, buscar mejor match en cada marketplace ──
+    # Configuración de campos por canal
+    canal_config = {
+        "mercadolibre": {"sku_field": "sku_seller", "title": "title", "price": "price"},
+        "paris":        {"sku_field": "sellerSku", "title": "name", "price": "price"},
+        "walmart":      {"sku_field": "sku", "title": "productName", "price": "price"},
+        "falabella":    {"sku_field": "sellerSku", "title": "name", "price": "price"},
+        "ripley":       {"sku_field": "shop_sku", "title": "product_title", "price": "price"}
+    }
+
+    propuesta_mapeo = []
+    auto_guardados = 0
+    necesitan_revision = 0
+    sin_match = 0
+
+    for p in productos_lusync:
+        fila_propuesta = {
+            "sku_lusync": p.get("sku", ""),
+            "nombre":     p.get("nombre", ""),
+            "precio":     p.get("precio", 0),
+            "matches":    {}
+        }
+
+        # Mapeo actual (para no sobreescribir si ya existe match manual)
+        m_actual = mapeo_actual.get(p.get("sku", ""), {})
+
+        for canal, items in items_por_canal.items():
+            cfg = canal_config[canal]
+            mejor, score, motivos = _buscar_mejor_match(
+                p, items, cfg["sku_field"], cfg["title"], cfg["price"]
+            )
+
+            # Determinar el SKU del marketplace que se guardaría
+            sku_propuesto = ""
+            titulo_mp = ""
+            precio_mp = 0
+            if mejor:
+                sku_propuesto = str(mejor.get(cfg["sku_field"], "") or "").strip()
+                titulo_mp = mejor.get(cfg["title"], "") or ""
+                precio_mp = mejor.get(cfg["price"], 0) or 0
+
+            # Para MELI usamos item_id si no hay sku_seller
+            if canal == "mercadolibre" and mejor and not sku_propuesto:
+                sku_propuesto = str(mejor.get("item_id", "") or "")
+
+            # SKU actualmente en BD para este canal
+            campo_bd = {
+                "mercadolibre": "sku_mercadolibre",
+                "paris":        "sku_paris",
+                "walmart":      "sku_walmart",
+                "falabella":    "sku_falabella",
+                "ripley":       "sku_ripley"
+            }.get(canal, "")
+            sku_actual = m_actual.get(campo_bd, "") if campo_bd else ""
+
+            fila_propuesta["matches"][canal] = {
+                "sku_propuesto":  sku_propuesto,
+                "sku_actual_bd":  sku_actual,
+                "score":          score,
+                "motivos":        motivos,
+                "titulo_mp":      titulo_mp,
+                "precio_mp":      precio_mp,
+                "estado": (
+                    "auto" if score >= umbral_auto else
+                    "revisar" if score >= 50 else
+                    "sin_match"
+                )
+            }
+
+        # Contar resúmenes
+        algun_auto = any(m["estado"] == "auto" for m in fila_propuesta["matches"].values())
+        algun_revisar = any(m["estado"] == "revisar" for m in fila_propuesta["matches"].values())
+        if algun_auto:
+            auto_guardados += 1
+        elif algun_revisar:
+            necesitan_revision += 1
+        else:
+            sin_match += 1
+
+        propuesta_mapeo.append(fila_propuesta)
+
+    # ── 4. Guardar automáticamente los matches con score >= umbral_auto ──
+    if guardar_auto:
+        from inventario import guardar_sku_mapeo_fila
+        guardados_efectivos = 0
+        for fila in propuesta_mapeo:
+            sku_lus = fila["sku_lusync"]
+            m_actual = mapeo_actual.get(sku_lus, {})
+            skus_a_guardar = {
+                "web":          m_actual.get("sku_web", ""),
+                "walmart":      m_actual.get("sku_walmart", ""),
+                "paris":        m_actual.get("sku_paris", ""),
+                "falabella":    m_actual.get("sku_falabella", ""),
+                "ripley":       m_actual.get("sku_ripley", ""),
+                "mercadolibre": m_actual.get("sku_mercadolibre", ""),
+                "hites":        m_actual.get("sku_hites", "")
+            }
+            algun_cambio = False
+            for canal_name, match_data in fila["matches"].items():
+                if match_data["estado"] == "auto" and match_data["sku_propuesto"]:
+                    if not skus_a_guardar.get(canal_name):  # solo si no había nada antes
+                        skus_a_guardar[canal_name] = match_data["sku_propuesto"]
+                        algun_cambio = True
+            if algun_cambio:
+                try:
+                    guardar_sku_mapeo_fila(sku_lus, skus_a_guardar)
+                    guardados_efectivos += 1
+                except Exception as e:
+                    log.append(f"  ERROR guardando {sku_lus}: {e}")
+        log.append(f"Auto-guardados: {guardados_efectivos} mapeos actualizados en BD")
+
+    # ── 5. Devolver según formato ──
+    if formato == "excel":
+        return _generar_excel_propuesta(propuesta_mapeo, items_por_canal, log)
+
+    return jsonify({
+        "ok": True,
+        "resumen": {
+            "total_productos_lusync": len(productos_lusync),
+            "con_matches_seguros": auto_guardados,
+            "necesitan_revision": necesitan_revision,
+            "sin_match": sin_match,
+            "umbral_auto": umbral_auto
+        },
+        "items_por_canal": {c: len(v) for c, v in items_por_canal.items()},
+        "log": log,
+        "propuesta": propuesta_mapeo
+    })
+
+
+def _generar_excel_propuesta(propuesta_mapeo, items_por_canal, log):
+    """Genera un Excel descargable con la propuesta de mapeo."""
+    import io, openpyxl
+    from datetime import datetime
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    wb = openpyxl.Workbook()
+
+    # Hoja 1: Propuesta principal
+    ws = wb.active
+    ws.title = "Propuesta de Mapeo"
+    headers = [
+        "SKU Lusync", "Nombre Lusync", "Precio Lusync",
+        "MELI: SKU", "MELI: score", "MELI: título encontrado",
+        "PARIS: SKU", "PARIS: score", "PARIS: título encontrado",
+        "WALMART: SKU", "WALMART: score", "WALMART: título encontrado",
+        "FALABELLA: SKU", "FALABELLA: score", "FALABELLA: título encontrado",
+        "RIPLEY: SKU", "RIPLEY: score", "RIPLEY: título encontrado",
+    ]
+    ws.append(headers)
+    # Estilo header
+    for c in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=c)
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill(start_color="3C3489", end_color="3C3489", fill_type="solid")
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    # Colores por estado
+    fill_auto    = PatternFill(start_color="D4EDDA", end_color="D4EDDA", fill_type="solid")  # verde
+    fill_revisar = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")  # amarillo
+    fill_nada    = PatternFill(start_color="F8D7DA", end_color="F8D7DA", fill_type="solid")  # rojo
+
+    for fila in propuesta_mapeo:
+        row = [fila["sku_lusync"], fila["nombre"], fila["precio"]]
+        for canal in ["mercadolibre", "paris", "walmart", "falabella", "ripley"]:
+            m = fila["matches"].get(canal, {})
+            row.extend([
+                m.get("sku_propuesto", ""),
+                m.get("score", 0),
+                (m.get("titulo_mp", "") or "")[:80]
+            ])
+        ws.append(row)
+
+        # Aplicar color a las celdas de cada canal según estado
+        row_idx = ws.max_row
+        for i, canal in enumerate(["mercadolibre", "paris", "walmart", "falabella", "ripley"]):
+            m = fila["matches"].get(canal, {})
+            estado = m.get("estado", "sin_match")
+            fill = fill_auto if estado == "auto" else (fill_revisar if estado == "revisar" else fill_nada)
+            for offset in range(3):  # las 3 columnas de cada canal
+                col = 4 + (i * 3) + offset
+                ws.cell(row=row_idx, column=col).fill = fill
+
+    # Ajustar anchos
+    ws.column_dimensions['A'].width = 18
+    ws.column_dimensions['B'].width = 40
+    ws.column_dimensions['C'].width = 12
+    for letter in ['D', 'G', 'J', 'M', 'P']:  # SKU columns
+        ws.column_dimensions[letter].width = 18
+    for letter in ['E', 'H', 'K', 'N', 'Q']:  # score
+        ws.column_dimensions[letter].width = 8
+    for letter in ['F', 'I', 'L', 'O', 'R']:  # título
+        ws.column_dimensions[letter].width = 35
+    ws.row_dimensions[1].height = 30
+    ws.freeze_panes = "D2"
+
+    # Hoja 2: instrucciones
+    ws2 = wb.create_sheet("Instrucciones")
+    instr = [
+        ["INSTRUCCIONES — Auto-mapeo de SKUs"],
+        [""],
+        ["LEYENDA DE COLORES:"],
+        ["🟢 Verde:    Score ≥ 90 (match seguro, recomendado guardar)"],
+        ["🟡 Amarillo: Score 50-89 (revisar manualmente, puede ser correcto)"],
+        ["🔴 Rojo:     Score < 50 (probablemente no hay match, revisa el catálogo)"],
+        [""],
+        ["CÓMO USAR:"],
+        ["1. Revisa esta hoja, especialmente las celdas amarillas y rojas."],
+        ["2. Si un match es correcto, no hagas nada (ya está propuesto)."],
+        ["3. Si un match es incorrecto, edita la columna 'XXX: SKU' con el SKU correcto."],
+        ["4. Si no hay match para un canal, deja la celda vacía."],
+        ["5. Cuando termines, guarda este Excel."],
+        ["6. Súbelo desde el panel: sección 'Mapeo SKUs' → 'Importar Excel'."],
+        [""],
+        ["IMPORTANTE:"],
+        ["- NO cambies el SKU Lusync (columna A) ni los nombres de columnas."],
+        ["- El sistema solo considera la columna 'SKU' de cada canal al importar."],
+        ["- Las columnas 'score' y 'título encontrado' son informativas."],
+        [""],
+        ["LOG DE EJECUCIÓN:"],
+    ]
+    for i in instr:
+        ws2.append(i)
+    for line in log:
+        ws2.append([line])
+    ws2.column_dimensions['A'].width = 90
+
+    # Hoja 3: items crudos por canal (debug)
+    for canal, items in items_por_canal.items():
+        ws_c = wb.create_sheet(f"Items {canal[:8]}")
+        if items:
+            keys = list(items[0].keys())
+            ws_c.append(keys)
+            for it in items:
+                ws_c.append([str(it.get(k, ""))[:200] for k in keys])
+            for c in range(1, len(keys) + 1):
+                ws_c.cell(row=1, column=c).font = Font(bold=True)
+            ws_c.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf); buf.seek(0)
+    return send_file(
+        buf,
+        download_name=f"propuesta_mapeo_skus_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+        as_attachment=True,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
