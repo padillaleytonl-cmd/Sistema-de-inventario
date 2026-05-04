@@ -415,6 +415,20 @@ def paris_sync_ordenes():
                 continue
             marcar_orden_procesada_texto(paris_key)
 
+            # ── Extraer fecha real de compra del marketplace ────────
+            # París devuelve createdAt en ISO con timezone (ej: "2026-05-03T05:02:00.000Z" UTC)
+            fecha_compra_paris = None
+            try:
+                date_str = (so.get("createdAt") or so.get("created_at") or "")
+                if date_str:
+                    # Normalizar 'Z' a '+00:00' para fromisoformat
+                    date_str_clean = date_str.replace("Z", "+00:00")
+                    # Si el formato tiene milisegundos con '.', fromisoformat los soporta
+                    fecha_compra_paris = datetime.fromisoformat(date_str_clean)
+            except Exception as e:
+                log.append(f"  Sub-orden {sub_order_num}: no se pudo parsear createdAt: {e}")
+                fecha_compra_paris = None
+
             # Detectar Fulfillment vs Seller
             from bodegas_logic import detectar_fulfillment_paris
             es_cd = detectar_fulfillment_paris(so)
@@ -449,7 +463,9 @@ def paris_sync_ordenes():
                         canal="Paris",
                         fulfillment=es_cd,
                         orden_id=sub_order_num,
-                        motivo=f"Venta Paris {tipo_str}"
+                        motivo=f"Venta Paris {tipo_str}",
+                        fecha_compra_marketplace=fecha_compra_paris,
+                        origen_registro="sync_manual"
                     )
                     log.append(f"{sub_order_num} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado['bodega']}")
 

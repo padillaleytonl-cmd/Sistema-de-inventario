@@ -602,6 +602,19 @@ def ripley_sync_ordenes():
                         continue
                     marcar_orden_procesada_texto(ripley_key)
 
+                    # ── Extraer fecha real de compra del marketplace ────────
+                    # Mirakl/Ripley devuelve created_date en ISO con timezone UTC
+                    # Ej: "2026-05-03T18:32:15Z" o "2026-05-03T18:32:15+00:00"
+                    fecha_compra_ripley = None
+                    try:
+                        date_str = (o.get("created_date") or o.get("createdDate") or "")
+                        if date_str:
+                            date_str_clean = date_str.replace("Z", "+00:00")
+                            fecha_compra_ripley = datetime.fromisoformat(date_str_clean)
+                    except Exception as e:
+                        log.append(f"  Orden {order_id}: no se pudo parsear created_date: {e}")
+                        fecha_compra_ripley = None
+
                     # Detectar FBR vs Seller
                     from bodegas_logic import detectar_fulfillment_ripley
                     es_fbr = detectar_fulfillment_ripley(o)
@@ -633,7 +646,9 @@ def ripley_sync_ordenes():
                             canal="Ripley",
                             fulfillment=es_fbr,
                             orden_id=order_id,
-                            motivo=f"Venta Ripley {tipo_str}"
+                            motivo=f"Venta Ripley {tipo_str}",
+                            fecha_compra_marketplace=fecha_compra_ripley,
+                            origen_registro="sync_manual"
                         )
                         log.append(f"{order_id} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado['bodega']}")
 

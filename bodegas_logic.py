@@ -218,13 +218,22 @@ def detectar_fulfillment(canal, orden_data):
 # la decisión de qué bodega usar.
 
 def descontar_venta(sku, cantidad, canal, orden_data=None, fulfillment=None,
-                    orden_id=None, motivo=None, usuario="Sistema"):
+                    orden_id=None, motivo=None, usuario="Sistema",
+                    fecha_compra_marketplace=None,
+                    origen_registro="sync_manual"):
     """
     Función central para descontar stock de una venta.
 
     Puede recibir:
       - fulfillment=True/False explícito
       - orden_data: el payload de la orden, y el detector decide automáticamente
+
+    Args nuevos (trazabilidad):
+      - fecha_compra_marketplace: datetime real de la compra en el marketplace
+        (ej: orden.date_created en MELI, orden.createdAt en París, etc.). Si llega
+        con tzinfo se convierte automáticamente a Chile.
+      - origen_registro: 'sync_manual' (default), 'webhook', 'scheduler', 'manual',
+                         'import_excel', 'devolucion', 'pos', 'sistema'.
 
     Returns:
         dict: {ok, sku, cantidad_solicitada, cantidad_descontada,
@@ -246,7 +255,9 @@ def descontar_venta(sku, cantidad, canal, orden_data=None, fulfillment=None,
         fulfillment=fulfillment,
         orden_id=orden_id,
         motivo=motivo,
-        usuario=usuario
+        usuario=usuario,
+        fecha_compra_marketplace=fecha_compra_marketplace,
+        origen_registro=origen_registro
     )
 
 

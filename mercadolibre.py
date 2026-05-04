@@ -469,6 +469,19 @@ def _procesar_orden_webhook(resource):
 
         marcar_orden_procesada_texto(meli_key)
 
+        # ── Extraer fecha real de compra del marketplace ────────
+        # MELI devuelve date_created en ISO con timezone (ej: 2026-05-03T18:32:15.000-04:00)
+        from datetime import datetime as _dt
+        fecha_compra_meli = None
+        try:
+            date_str = orden.get("date_created", "") or ""
+            if date_str:
+                date_str_clean = date_str.replace("Z", "+00:00")
+                fecha_compra_meli = _dt.fromisoformat(date_str_clean)
+        except Exception as e:
+            print(f"[MELI Webhook] No se pudo parsear date_created: {e}")
+            fecha_compra_meli = None
+
         # ── Detectar si es venta Full o Seller ──
         es_full = detectar_fulfillment_meli(orden)
         tipo_str = "FULL" if es_full else "Seller"
@@ -528,7 +541,9 @@ def _procesar_orden_webhook(resource):
                 fulfillment=es_full,
                 orden_id=order_id,
                 motivo=f"Venta MercadoLibre{' Full' if es_full else ''}",
-                usuario="Sistema"
+                usuario="Sistema",
+                fecha_compra_marketplace=fecha_compra_meli,
+                origen_registro="webhook"
             )
             print(f"[MELI Webhook] {sku_lusync} -{qty} desde {resultado['bodega']} → {resultado['stock_despues']}")
 

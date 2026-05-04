@@ -4142,6 +4142,27 @@ def ruta_meli_sync_ordenes():
                         continue
                     marcar_orden_procesada_texto(meli_key)
 
+                    # ── Extraer fecha real de compra del marketplace ────────
+                    # MELI devuelve date_created en ISO con timezone (ej: 2026-05-03T18:32:15.000-04:00)
+                    # Lo parseamos y dejamos que descontar_venta_inteligente lo convierta a Chile
+                    fecha_compra_meli = None
+                    try:
+                        import pytz as _pytz
+                        date_str = o.get("date_created", "") or ""
+                        if date_str:
+                            # Manejar ambos formatos: con .000 milisegundos o sin
+                            if "." in date_str:
+                                # Formato: 2026-05-03T18:32:15.000-04:00
+                                date_str_clean = date_str.replace("Z", "+00:00")
+                                fecha_compra_meli = datetime.fromisoformat(date_str_clean)
+                            else:
+                                # Formato: 2026-05-03T18:32:15-04:00 o con Z
+                                date_str_clean = date_str.replace("Z", "+00:00")
+                                fecha_compra_meli = datetime.fromisoformat(date_str_clean)
+                    except Exception as e:
+                        log.append(f"  Orden {order_id}: no se pudo parsear date_created '{o.get('date_created','')}': {e}")
+                        fecha_compra_meli = None
+
                     # Detectar Full vs Seller
                     es_full = detectar_fulfillment_meli(o)
                     tipo_str = "FULL" if es_full else "Seller"
@@ -4194,7 +4215,9 @@ def ruta_meli_sync_ordenes():
                             fulfillment=es_full,
                             orden_id=order_id,
                             motivo=f"Venta MercadoLibre {tipo_str}",
-                            usuario="Sistema"
+                            usuario="Sistema",
+                            fecha_compra_marketplace=fecha_compra_meli,
+                            origen_registro="sync_manual"
                         )
                         log.append(f"{order_id} {tipo_str}: {sku_lusync} -{qty} desde {resultado['bodega']}")
 

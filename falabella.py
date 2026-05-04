@@ -564,6 +564,27 @@ def falabella_sync_ordenes():
                         continue
                     marcar_orden_procesada_texto(fb_key)
 
+                    # ── Extraer fecha real de compra del marketplace ────────
+                    # Falabella SellerCenter devuelve CreatedAt en formato:
+                    # "2026-05-03 14:32:15" (sin timezone, asume UTC)
+                    # o a veces "2026-05-03T14:32:15+0000"
+                    fecha_compra_falabella = None
+                    try:
+                        import pytz as _pytz
+                        date_str = (o.get("CreatedAt") or o.get("created_at") or "")
+                        if date_str:
+                            # Probar formato con T y zona
+                            try:
+                                date_str_clean = date_str.replace("Z", "+00:00")
+                                fecha_compra_falabella = datetime.fromisoformat(date_str_clean)
+                            except ValueError:
+                                # Fallback: formato "YYYY-MM-DD HH:MM:SS" sin tz, asumir UTC
+                                fecha_naive = datetime.strptime(date_str.strip(), "%Y-%m-%d %H:%M:%S")
+                                fecha_compra_falabella = _pytz.utc.localize(fecha_naive)
+                    except Exception as e:
+                        log.append(f"  Orden {order_id}: no se pudo parsear CreatedAt: {e}")
+                        fecha_compra_falabella = None
+
                     es_fbf = detectar_fulfillment_falabella(o)
                     tipo_str = "FBF" if es_fbf else "FBS"
 
@@ -593,7 +614,9 @@ def falabella_sync_ordenes():
                             canal="Falabella",
                             fulfillment=es_fbf,
                             orden_id=order_id,
-                            motivo=f"Venta Falabella {tipo_str}"
+                            motivo=f"Venta Falabella {tipo_str}",
+                            fecha_compra_marketplace=fecha_compra_falabella,
+                            origen_registro="sync_manual"
                         )
                         log.append(f"{order_id} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado['bodega']}")
 
@@ -852,6 +875,21 @@ def procesar_webhook_orden_creada(data):
             return
         marcar_orden_procesada_texto(fb_key)
 
+        # ── Extraer fecha real de compra del marketplace ────────
+        fecha_compra_falabella = None
+        try:
+            import pytz as _pytz
+            date_str = (data.get("CreatedAt") or data.get("created_at") or "")
+            if date_str:
+                try:
+                    date_str_clean = date_str.replace("Z", "+00:00")
+                    fecha_compra_falabella = datetime.fromisoformat(date_str_clean)
+                except ValueError:
+                    fecha_naive = datetime.strptime(date_str.strip(), "%Y-%m-%d %H:%M:%S")
+                    fecha_compra_falabella = _pytz.utc.localize(fecha_naive)
+        except Exception as e:
+            print(f"[Falabella WEBHOOK] No se pudo parsear CreatedAt: {e}")
+
         # Si el payload no trae items, los obtenemos por API
         items = data.get("Items") or data.get("OrderItems")
         if not items:
@@ -887,7 +925,9 @@ def procesar_webhook_orden_creada(data):
                 canal="Falabella",
                 fulfillment=es_fbf,
                 orden_id=order_id,
-                motivo=f"Webhook Falabella {tipo_str}"
+                motivo=f"Webhook Falabella {tipo_str}",
+                fecha_compra_marketplace=fecha_compra_falabella,
+                origen_registro="webhook"
             )
             print(f"[Falabella WEBHOOK] {order_id} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado.get('bodega')}")
 

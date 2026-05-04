@@ -1984,12 +1984,14 @@ tbody td {
       </div>
     </div>
     <div class="card" style="padding:0;overflow:hidden;display:flex;flex-direction:column;height:calc(100vh - 180px);">
-      <div style="display:grid;grid-template-columns:20px minmax(0,1fr) 130px 110px 96px 44px;align-items:center;gap:8px;padding:7px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);flex-shrink:0;">
+      <div style="display:grid;grid-template-columns:20px minmax(0,1fr) 110px 110px 100px 90px 110px 44px;align-items:center;gap:8px;padding:7px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);flex-shrink:0;">
         <div></div>
         <div style="font-size:10px;font-weight:500;color:var(--muted);">Producto · OC</div>
-        <div style="font-size:10px;font-weight:500;color:var(--muted);">Fecha compra · Canal</div>
-        <div style="font-size:10px;font-weight:500;color:var(--muted);">Importado</div>
-        <div style="font-size:10px;font-weight:500;color:var(--muted);">Origen</div>
+        <div style="font-size:10px;font-weight:500;color:var(--muted);">Fecha compra</div>
+        <div style="font-size:10px;font-weight:500;color:var(--muted);">Fecha import</div>
+        <div style="font-size:10px;font-weight:500;color:var(--muted);">Canal · Bodega</div>
+        <div style="font-size:10px;font-weight:500;color:var(--muted);">Stock</div>
+        <div style="font-size:10px;font-weight:500;color:var(--muted);">Usuario · Origen</div>
         <div style="font-size:10px;font-weight:500;color:var(--muted);text-align:right;">Cant.</div>
       </div>
       <div id="movimientosList" style="overflow-y:auto;flex:1;scrollbar-width:thin;scrollbar-color:var(--border) transparent;">
@@ -3492,23 +3494,86 @@ function cargarMovimientosFull(){
       return;
     }
 
-    const canalBadge = {
-      'WooCommerce': '<span style="display:inline-flex;align-items:center;font-size:10px;font-weight:500;padding:1px 6px;border-radius:20px;background:#E6F1FB;color:#0C447C;white-space:nowrap;">WC</span>',
-      'Walmart':     '<span style="display:inline-flex;align-items:center;font-size:10px;font-weight:500;padding:1px 6px;border-radius:20px;background:#E1F5EE;color:#085041;white-space:nowrap;">WM</span>',
-      'Paris':       '<span style="display:inline-flex;align-items:center;font-size:10px;font-weight:500;padding:1px 6px;border-radius:20px;background:#e0f2fe;color:#0369a1;white-space:nowrap;">PA</span>',
-      'Manual':      '<span style="display:inline-flex;align-items:center;font-size:10px;font-weight:500;padding:1px 6px;border-radius:20px;background:#F1EFE8;color:#444441;white-space:nowrap;">Manual</span>',
-      'Sistema':     '<span style="display:inline-flex;align-items:center;font-size:10px;font-weight:500;padding:1px 6px;border-radius:20px;background:#F1EFE8;color:#444441;white-space:nowrap;">Sistema</span>'
-    };
+    // ── Helper: badge de canal+bodega tipo "ML FULL" / "ML" / "PA FULL" / etc ──
+    // Usa el campo bodega devuelto por el backend para decidir si mostrar "FULL"
+    function badgeCanalBodega(canal, bodega){
+      // Estilo base
+      const base = 'display:inline-flex;align-items:center;font-size:10px;font-weight:600;padding:1px 6px;border-radius:20px;white-space:nowrap;letter-spacing:0.02em;';
 
-    function getBadge(canal){ return canalBadge[canal] || `<span style="display:inline-flex;align-items:center;font-size:10px;font-weight:500;padding:1px 6px;border-radius:20px;background:#F1EFE8;color:#444441;">${canal||'—'}</span>`; }
+      // Mapa: canal → {abrev, color}
+      const canalNorm = (canal || '').toLowerCase();
+      const map = {
+        'mercadolibre': { abrev: 'ML', bg: '#FFF4E0', fg: '#7C4A03' },
+        'meli':         { abrev: 'ML', bg: '#FFF4E0', fg: '#7C4A03' },
+        'paris':        { abrev: 'PA', bg: '#E0F2FE', fg: '#0369A1' },
+        'parís':        { abrev: 'PA', bg: '#E0F2FE', fg: '#0369A1' },
+        'walmart':      { abrev: 'WM', bg: '#E1F5EE', fg: '#085041' },
+        'falabella':    { abrev: 'FA', bg: '#E8F0E0', fg: '#3F5524' },
+        'ripley':       { abrev: 'RP', bg: '#F8E1E5', fg: '#7C1B30' },
+        'hites':        { abrev: 'HI', bg: '#FCE8DD', fg: '#7B3E12' },
+        'woocommerce':  { abrev: 'WC', bg: '#E6F1FB', fg: '#0C447C' },
+        'woo':          { abrev: 'WC', bg: '#E6F1FB', fg: '#0C447C' },
+        'pos':          { abrev: 'POS', bg: '#EDE3FA', fg: '#4C1D95' },
+        'manual':       { abrev: 'MAN', bg: '#F1EFE8', fg: '#444441' },
+        'sistema':      { abrev: 'SYS', bg: '#F1EFE8', fg: '#444441' }
+      };
+      const cfg = map[canalNorm] || { abrev: (canal||'—'), bg: '#F1EFE8', fg: '#444441' };
 
-    function getOrigenDot(usuario){
+      // ¿Es venta fulfillment? → bodega NO es CENTRAL y es de tipo *_FBM/_FULL/_CD
+      const bd = (bodega || '').toUpperCase();
+      const esFulfillment = bd && bd !== 'CENTRAL' && bd !== 'WOO_DROP' && (
+        bd.includes('FULL') || bd.includes('FBM') || bd.includes('CD') ||
+        bd.includes('FBR') || bd.includes('FBF')
+      );
+
+      const sufijo = esFulfillment ? ' FULL' : '';
+      const txt = `${cfg.abrev}${sufijo}`;
+      // Bodega legible (tooltip)
+      const bodegaLegible = bd || 'CENTRAL';
+      return `<span style="${base}background:${cfg.bg};color:${cfg.fg};" title="Bodega: ${bodegaLegible}">${txt}</span>`;
+    }
+
+    // ── Helper: dot de origen del registro ──
+    // origen: webhook/sync_manual/scheduler/manual/import_excel/devolucion/pos/sistema
+    function origenLabel(origen){
+      const o = (origen || 'sistema').toLowerCase();
+      const map = {
+        'webhook':       { txt: 'Webhook',  color: '#0369A1', bg: '#E0F2FE' },
+        'sync_manual':   { txt: 'Sync',     color: '#3C3489', bg: '#EEEDFE' },
+        'scheduler':     { txt: 'Auto',     color: '#085041', bg: '#E1F5EE' },
+        'manual':        { txt: 'Manual',   color: '#7C4A03', bg: '#FFF4E0' },
+        'import_excel':  { txt: 'Excel',    color: '#1E40AF', bg: '#DBEAFE' },
+        'devolucion':    { txt: 'Devol.',   color: '#7C1B30', bg: '#F8E1E5' },
+        'pos':           { txt: 'POS',      color: '#4C1D95', bg: '#EDE3FA' },
+        'sistema':       { txt: 'Sistema',  color: '#444441', bg: '#F1EFE8' }
+      };
+      const cfg = map[o] || map['sistema'];
+      return `<span style="display:inline-flex;align-items:center;font-size:9px;font-weight:500;padding:1px 5px;border-radius:10px;background:${cfg.bg};color:${cfg.color};white-space:nowrap;">${cfg.txt}</span>`;
+    }
+
+    // ── Helper: usuario + origen en una sola celda ──
+    function getUsuarioOrigen(usuario, origen){
       const isAuto = !usuario || usuario === 'Sistema';
       const dot = isAuto
         ? '<span style="width:14px;height:14px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:500;background:#EEEDFE;color:#3C3489;flex-shrink:0;">⚙</span>'
         : `<span style="width:14px;height:14px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:500;background:#FAEEDA;color:#633806;flex-shrink:0;">${(usuario||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase()}</span>`;
       const label = isAuto ? 'Sistema' : usuario;
-      return `<div style="display:flex;align-items:center;gap:3px;">${dot}<span style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${label}</span></div>`;
+      return `<div style="display:flex;flex-direction:column;gap:2px;min-width:0;">
+        <div style="display:flex;align-items:center;gap:4px;min-width:0;">
+          ${dot}
+          <span style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${label}</span>
+        </div>
+        <div>${origenLabel(origen)}</div>
+      </div>`;
+    }
+
+    // ── Helper: stock antes → después ──
+    function getStockChange(antes, despues){
+      if(antes === null || antes === undefined || despues === null || despues === undefined){
+        return '<span style="font-size:10px;color:var(--hint);">—</span>';
+      }
+      const flecha = '<span style="color:var(--hint);font-size:9px;">→</span>';
+      return `<span style="font-size:11px;font-family:'DM Mono',monospace;color:var(--muted);white-space:nowrap;">${antes} ${flecha} ${despues}</span>`;
     }
 
     el.innerHTML = movs.map((m, i) => {
@@ -3523,20 +3588,28 @@ function cargarMovimientosFull(){
         ? `<span style="font-size:11px;font-family:'DM Mono',monospace;color:#1E40AF;background:#DBEAFE;padding:2px 7px;border-radius:5px;border:0.5px solid #93C5FD;white-space:nowrap;font-weight:500;letter-spacing:0.02em;">OC-${m.orden_id}</span>`
         : `<span style="font-size:10px;font-family:monospace;color:var(--muted);background:var(--bg2);padding:1px 5px;border-radius:4px;border:0.5px solid var(--border);">—</span>`;
       const divider = i < movs.length - 1 ? '<div style="height:0.5px;background:var(--border);flex-shrink:0;"></div>' : '';
-      const importadoTxt = m.importado || '—';
 
-      return `<div style="display:grid;grid-template-columns:20px minmax(0,1fr) 130px 110px 96px 44px;align-items:center;gap:8px;padding:5px 14px;">
+      // Fecha de compra real (del marketplace) — si está vacía, muestra "—"
+      const fechaCompra = m.fecha_compra
+        ? `<div style="font-size:11px;color:var(--text);white-space:nowrap;">${m.fecha_compra}</div>`
+        : `<span style="font-size:10px;color:var(--hint);">—</span>`;
+
+      // Fecha de importación (cuándo entró a Lusync)
+      const fechaImport = (m.importado && m.importado !== '—')
+        ? `<div style="font-size:11px;color:var(--text);font-family:'DM Mono',monospace;white-space:nowrap;">${m.importado}</div>`
+        : `<div style="font-size:11px;color:var(--text);white-space:nowrap;">${m.fecha} ${m.hora}</div>`;
+
+      return `<div style="display:grid;grid-template-columns:20px minmax(0,1fr) 110px 110px 100px 90px 110px 44px;align-items:center;gap:8px;padding:5px 14px;">
         <div style="width:16px;height:16px;border-radius:50%;background:${dotBg};display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:500;color:${dotColor};flex-shrink:0;">${dotLetter}</div>
         <div style="min-width:0;">
           <div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${m.nombre}</div>
           <div style="display:flex;align-items:center;gap:6px;margin-top:3px;">${ocTag}<span style="font-size:10px;color:var(--hint);font-family:'DM Mono',monospace;">${m.sku}</span></div>
         </div>
-        <div>
-          <div style="font-size:11px;color:var(--text);">${m.fecha} ${m.hora}</div>
-          ${getBadge(m.canal)}
-        </div>
-        <div style="font-size:10px;color:var(--muted);font-family:'DM Mono',monospace;">${importadoTxt}</div>
-        ${getOrigenDot(m.usuario)}
+        <div>${fechaCompra}</div>
+        <div>${fechaImport}</div>
+        <div>${badgeCanalBodega(m.canal, m.bodega)}</div>
+        <div>${getStockChange(m.stock_antes, m.stock_despues)}</div>
+        <div>${getUsuarioOrigen(m.usuario, m.origen)}</div>
         <div style="text-align:right;">${qty}</div>
       </div>${divider}`;
     }).join('');

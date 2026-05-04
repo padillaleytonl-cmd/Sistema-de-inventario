@@ -55,6 +55,21 @@ def init_db():
     cur.execute("CREATE TABLE IF NOT EXISTS configuracion (clave TEXT PRIMARY KEY, valor TEXT)")
     cur.execute("ALTER TABLE productos ADD COLUMN IF NOT EXISTS lead_time INTEGER DEFAULT 45")
     cur.execute("ALTER TABLE productos ADD COLUMN IF NOT EXISTS ventas_dia NUMERIC(10,4) DEFAULT 0")
+
+    # ── COLUMNAS DE TRAZABILIDAD AVANZADA (no destructivas) ───────────────────
+    # fecha_compra_marketplace: fecha REAL en que el cliente compró en el marketplace
+    #                            (lo que viene en el payload: date_created/createdAt/etc).
+    #                            NULL para movimientos antiguos y para movimientos no-marketplace.
+    # origen_registro:           cómo entró el movimiento al sistema:
+    #                            'sync_manual', 'webhook', 'scheduler', 'manual',
+    #                            'import_excel', 'devolucion', 'pos', 'sistema'.
+    # stock_antes / stock_despues: snapshot del stock de la bodega antes y después
+    #                              del movimiento, para auditoría sin reconstruir.
+    cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_compra_marketplace TIMESTAMP")
+    cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS origen_registro TEXT DEFAULT 'sistema'")
+    cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS stock_antes INTEGER")
+    cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS stock_despues INTEGER")
+
     conn.commit()
     cur.close()
     conn.close()
@@ -159,6 +174,11 @@ def cargar_movimientos(limite=20):
     try:
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS usuario TEXT DEFAULT 'Sistema'")
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS canal TEXT DEFAULT 'Sistema'")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS bodega_codigo TEXT DEFAULT 'CENTRAL'")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_compra_marketplace TIMESTAMP")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS origen_registro TEXT DEFAULT 'sistema'")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS stock_antes INTEGER")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS stock_despues INTEGER")
         conn.commit()
     except:
         conn.rollback()
@@ -167,14 +187,25 @@ def cargar_movimientos(limite=20):
                TO_CHAR(fecha, 'DD/MM/YYYY'), TO_CHAR(fecha, 'HH24:MI'),
                COALESCE(usuario, 'Sistema'), COALESCE(canal, 'Sistema'),
                COALESCE(orden_id, ''),
-               TO_CHAR(fecha_importacion, 'DD/MM HH24:MI')
+               TO_CHAR(fecha_importacion, 'DD/MM HH24:MI'),
+               COALESCE(bodega_codigo, 'CENTRAL'),
+               TO_CHAR(fecha_compra_marketplace, 'DD/MM/YYYY HH24:MI'),
+               COALESCE(origen_registro, 'sistema'),
+               stock_antes,
+               stock_despues
         FROM movimientos ORDER BY fecha DESC LIMIT %s
     """, (limite,))
     rows = cur.fetchall()
     cur.close(); conn.close()
     return [{"tipo":r[0],"sku":r[1],"nombre":r[2],"cantidad":r[3],"motivo":r[4],
              "fecha":r[5],"hora":r[6],"usuario":r[7],"canal":r[8],
-             "orden_id":r[9],"importado":r[10] or ""} for r in rows]
+             "orden_id":r[9],"importado":r[10] or "",
+             "bodega":r[11] or "CENTRAL",
+             "fecha_compra":r[12] or "",
+             "origen":r[13] or "sistema",
+             "stock_antes": r[14] if r[14] is not None else None,
+             "stock_despues": r[15] if r[15] is not None else None
+             } for r in rows]
 
 
 def cargar_movimientos_hoy():
@@ -1291,7 +1322,9 @@ def determinar_bodega_para_canal(canal, fulfillment=False):
 # ── DESCUENTO INTELIGENTE POR BODEGA ────────────────────────────────────────
 
 def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None,
-                                 motivo=None, usuario="Sistema"):
+                                 motivo=None, usuario="Sistema",
+                                 fecha_compra_marketplace=None,
+                                 origen_registro="sync_manual"):
     """
     Función central que descuenta stock de la bodega correcta según el canal y tipo.
 
@@ -1303,6 +1336,13 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
         orden_id: número de orden del marketplace
         motivo: texto descriptivo de la venta
         usuario: quien registra el movimiento (default Sistema)
+        fecha_compra_marketplace: datetime real de la compra en el marketplace
+                                  (opcional, si se pasa se guarda en columna nueva).
+                                  Debe venir en zona Chile (sin tzinfo) o con tzinfo
+                                  (se convierte automáticamente).
+        origen_registro: cómo entró el movimiento al sistema:
+                         'sync_manual' (default), 'webhook', 'scheduler',
+                         'manual', 'import_excel', 'devolucion', 'pos', 'sistema'.
 
     Returns:
         dict con: {ok, bodega_codigo, stock_bodega_antes, stock_bodega_despues, sku, cantidad}
@@ -1323,9 +1363,29 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
 
     stock_despues = get_stock_bodega(sku, bodega)
 
-    # Registrar movimiento con la bodega
+    # Normalizar fecha de compra del marketplace (si llegó con tz, pasar a Chile sin tz)
+    fecha_compra_clean = None
+    if fecha_compra_marketplace:
+        try:
+            if hasattr(fecha_compra_marketplace, 'tzinfo') and fecha_compra_marketplace.tzinfo:
+                fecha_compra_clean = fecha_compra_marketplace.astimezone(TZ_CHILE).replace(tzinfo=None)
+            else:
+                fecha_compra_clean = fecha_compra_marketplace
+        except Exception as e:
+            print(f"[Bodegas] No se pudo normalizar fecha_compra_marketplace: {e}")
+            fecha_compra_clean = None
+
+    # Registrar movimiento con la bodega y trazabilidad completa
     try:
         conn = get_conn(); cur = conn.cursor()
+        # Asegurar columnas (idempotente)
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_importacion TIMESTAMP")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_compra_marketplace TIMESTAMP")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS origen_registro TEXT DEFAULT 'sistema'")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS stock_antes INTEGER")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS stock_despues INTEGER")
+        conn.commit()
+
         # Buscar nombre del producto
         cur.execute("SELECT nombre FROM productos WHERE sku=%s LIMIT 1", (sku,))
         r = cur.fetchone()
@@ -1333,10 +1393,16 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
 
         motivo_final = motivo or f"Venta {canal}{' (Fulfillment)' if fulfillment else ''}"
 
+        ahora_chile = now_chile().replace(tzinfo=None)
+
         cur.execute("""INSERT INTO movimientos
-            (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id, bodega_codigo)
-            VALUES ('salida', %s, %s, %s, %s, %s, %s, NOW(), %s, %s)""",
-            (sku, nombre, descontar, motivo_final, usuario, canal, orden_id, bodega))
+            (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id,
+             bodega_codigo, fecha_importacion, fecha_compra_marketplace,
+             origen_registro, stock_antes, stock_despues)
+            VALUES ('salida', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (sku, nombre, descontar, motivo_final, usuario, canal,
+             ahora_chile, orden_id, bodega, ahora_chile,
+             fecha_compra_clean, origen_registro, stock_antes, stock_despues))
         conn.commit()
         cur.close(); conn.close()
     except Exception as e:
