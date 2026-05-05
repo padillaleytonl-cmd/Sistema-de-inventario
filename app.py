@@ -7947,20 +7947,193 @@ def admin_limpiar_duplicados_mapeo():
 # ════════════════════════════════════════════════════════════════════════════
 # IMPORTAR STOCK MELI FULL DESDE EXCEL
 # ════════════════════════════════════════════════════════════════════════════
-# Procesa el reporte de stock que MELI exporta (formato exacto del usuario):
+# Procesa el reporte de stock que MELI exporta:
 #  - Columna "SKU"                → identificador del producto
 #  - Columna "Aptas para vender"  → stock REAL en MELI Full (vendible)
 #  - Columna "En camino a Full"   → stock en tránsito (entrará pronto)
 #
-# Lógica:
-#  1. Lee el Excel/CSV
-#  2. Para cada SKU que matchee con tu Lusync:
-#     - SET stock en MELI_FULL = "Aptas para vender"
-#     - SET stock en MELI_FULL_TRANSITO = "En camino a Full"
-#  3. Reporta SKUs no matched
-#  4. NO toca BODEGA_CENTRAL (es separado)
-#  5. NO sincroniza a otros marketplaces (Full no afecta Central)
+# UI amigable: /admin/cargar_full_meli_ui (formulario web)
+# API directa: /admin/importar_stock_full_meli (POST con JSON o archivo)
 # ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/cargar_full_meli_ui", methods=["GET"])
+def admin_cargar_full_meli_ui():
+    """UI HTML para cargar stock Full MELI fácilmente desde el navegador."""
+    html = """<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cargar Stock MELI Full · Lusync</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    margin: 0; padding: 20px; background: #f5f4ed; color: #2c2c2c; line-height: 1.5;
+  }
+  .container { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 22px; font-weight: 600; margin-bottom: 6px; }
+  .subtitle { color: #888; font-size: 13px; margin-bottom: 24px; }
+  .card {
+    background: #fff; border: 1px solid #e8e6dc; border-radius: 12px;
+    padding: 20px; margin-bottom: 16px;
+  }
+  label { display: block; font-size: 12px; font-weight: 600; color: #555; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+  input[type="text"], textarea {
+    width: 100%; padding: 10px 12px; font-size: 13px;
+    border: 1px solid #ddd; border-radius: 6px; font-family: ui-monospace, monospace;
+    background: #fafaf6;
+  }
+  textarea { min-height: 280px; resize: vertical; }
+  input[type="text"]:focus, textarea:focus { outline: 2px solid #6366f1; }
+  .btn {
+    padding: 12px 20px; font-size: 14px; font-weight: 600; border: none;
+    border-radius: 8px; cursor: pointer; margin-right: 8px; margin-top: 12px;
+    transition: opacity 0.2s;
+  }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-test { background: #fff3cd; color: #856404; border: 1px solid #ffc107; }
+  .btn-real { background: #155724; color: #fff; }
+  .btn:hover:not(:disabled) { opacity: 0.85; }
+  .resultado {
+    background: #fafaf6; border-left: 3px solid #6366f1; padding: 16px;
+    border-radius: 6px; font-size: 13px; margin-top: 16px; display: none;
+  }
+  .resultado.ok { border-left-color: #155724; background: #d4edda; }
+  .resultado.error { border-left-color: #dc3545; background: #f8d7da; }
+  .resultado pre { background: rgba(0,0,0,0.05); padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 11px; }
+  .stat { display: inline-block; padding: 6px 12px; background: #fff; border-radius: 99px; margin: 4px; font-size: 12px; border: 1px solid #ddd; }
+  .help { font-size: 12px; color: #888; margin-top: 8px; }
+  .badge-warn { background: #fff3cd; color: #856404; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>📦 Cargar Stock MELI Full</h1>
+  <p class="subtitle">Importa el stock real de MercadoLibre Full a Lusync. Separa "Aptas para vender" y "En camino a Full" en bodegas distintas.</p>
+
+  <div class="card">
+    <label>🔑 Token de acceso</label>
+    <input type="text" id="token" placeholder="Pega aquí tu token..." value="lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw">
+    <p class="help">Token para acceder al endpoint sin login. Cambialo en Render como variable ADMIN_BYPASS_TOKEN si quieres.</p>
+  </div>
+
+  <div class="card">
+    <label>📋 Datos a cargar (JSON con SKUs)</label>
+    <textarea id="datos">{
+  "items": [
+    {"sku": "CDBUCVN001", "aptas": 0,  "transito": 2},
+    {"sku": "ODJ3NR001",  "aptas": 9,  "transito": 5},
+    {"sku": "CDBRWD001",  "aptas": 2,  "transito": 0},
+    {"sku": "CCCN001",    "aptas": 10, "transito": 0},
+    {"sku": "ODJ4N001",   "aptas": 9,  "transito": 10},
+    {"sku": "ODJM001",    "aptas": 0,  "transito": 30},
+    {"sku": "CTSECNSB001","aptas": 0,  "transito": 2},
+    {"sku": "CDBRWN001",  "aptas": 8,  "transito": 0},
+    {"sku": "ODJ3NA001",  "aptas": 8,  "transito": 5},
+    {"sku": "ODJ3N001",   "aptas": 26, "transito": 20},
+    {"sku": "CDBRWB001",  "aptas": 1,  "transito": 0},
+    {"sku": "CBSNBPN001", "aptas": 3,  "transito": 0},
+    {"sku": "ODJA001",    "aptas": 1,  "transito": 5},
+    {"sku": "GPPLA001",   "aptas": 1,  "transito": 0},
+    {"sku": "SDCEMR001",  "aptas": 0,  "transito": 1},
+    {"sku": "SDCEG001",   "aptas": 2,  "transito": 0},
+    {"sku": "SDCED001",   "aptas": 3,  "transito": 0},
+    {"sku": "PBEAMR001",  "aptas": 7,  "transito": 3},
+    {"sku": "GPPLR001",   "aptas": 1,  "transito": 2},
+    {"sku": "CBRMSCN001", "aptas": 7,  "transito": 0},
+    {"sku": "SDCER001",   "aptas": 2,  "transito": 0},
+    {"sku": "EDLABA001",  "aptas": 4,  "transito": 0},
+    {"sku": "EDLABR001",  "aptas": 2,  "transito": 0},
+    {"sku": "MAD003",     "aptas": 8,  "transito": 0},
+    {"sku": "MAD005",     "aptas": 10, "transito": 5},
+    {"sku": "MAD006",     "aptas": 19, "transito": 0},
+    {"sku": "MAD004",     "aptas": 12, "transito": 8},
+    {"sku": "CBRMLRR001", "aptas": 6,  "transito": 0},
+    {"sku": "PBEAMG001",  "aptas": 0,  "transito": 3},
+    {"sku": "SDCR2021",   "aptas": 34, "transito": 0}
+  ]
+}</textarea>
+    <p class="help">
+      <span class="badge-warn">PRE-CARGADO</span> Estos son tus 30 SKUs Full. Puedes editarlos si necesitas.
+      <strong>aptas</strong> = stock vendible HOY · <strong>transito</strong> = en camino a Full.
+    </p>
+
+    <button class="btn btn-test" onclick="ejecutar(true)">⚠️ Probar primero (sin escribir)</button>
+    <button class="btn btn-real" onclick="ejecutar(false)" id="btnReal" disabled>✅ Cargar de verdad</button>
+    <p class="help">Primero prueba (dry-run). Si todo se ve bien, se habilita el botón verde.</p>
+  </div>
+
+  <div class="resultado" id="resultado"></div>
+</div>
+
+<script>
+function ejecutar(dryRun) {
+  const token = document.getElementById('token').value.trim();
+  const datosTxt = document.getElementById('datos').value.trim();
+  const resultado = document.getElementById('resultado');
+  const btnReal = document.getElementById('btnReal');
+
+  if (!token) { alert('Falta el token'); return; }
+  let datos;
+  try { datos = JSON.parse(datosTxt); }
+  catch(e) { alert('JSON inválido: ' + e.message); return; }
+
+  resultado.style.display = 'block';
+  resultado.className = 'resultado';
+  resultado.innerHTML = '<strong>⏳ Procesando...</strong>';
+
+  const url = '/admin/importar_stock_full_meli?token=' + encodeURIComponent(token) + (dryRun ? '&dry_run=1' : '');
+
+  fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: datosTxt
+  })
+  .then(r => r.json())
+  .then(res => {
+    if (res.ok) {
+      resultado.className = 'resultado ok';
+      let html = dryRun
+        ? '<strong>✅ Prueba OK (sin escribir nada)</strong><br><br>'
+        : '<strong>✅ ¡CARGA REAL EXITOSA!</strong><br><br>';
+      const r = res.resumen;
+      html += '<div>';
+      html += '<span class="stat">📦 Items procesados: <strong>' + r.items_en_excel + '</strong></span>';
+      html += '<span class="stat">✓ Matched: <strong>' + r.matched_con_lusync + '</strong></span>';
+      html += '<span class="stat">⚠️ No matched: <strong>' + r.no_matched + '</strong></span>';
+      html += '<span class="stat">📊 Stock Aptas: <strong>' + r.stock_aptas_total + '</strong> u.</span>';
+      html += '<span class="stat">🚚 Stock Tránsito: <strong>' + r.stock_transito_total + '</strong> u.</span>';
+      html += '</div>';
+      if (res.no_matched && res.no_matched.length > 0) {
+        html += '<br><strong>SKUs que no matchean (revisar):</strong><pre>' + JSON.stringify(res.no_matched, null, 2) + '</pre>';
+      }
+      if (res.errores && res.errores.length > 0) {
+        html += '<br><strong>Errores:</strong><pre>' + JSON.stringify(res.errores, null, 2) + '</pre>';
+      }
+      if (dryRun) {
+        html += '<br><strong>👉 Si todo se ve bien, presiona "✅ Cargar de verdad"</strong>';
+        btnReal.disabled = false;
+      } else {
+        html += '<br><strong>🎉 Stock cargado correctamente. Ya puedes cerrar esta página.</strong>';
+        html += '<br><br>Verifica en: <a href="/bodegas">Bodegas</a> · <a href="/productos">Productos</a>';
+      }
+      resultado.innerHTML = html;
+    } else {
+      resultado.className = 'resultado error';
+      resultado.innerHTML = '<strong>❌ Error:</strong> ' + (res.error || 'desconocido') + '<br><pre>' + JSON.stringify(res, null, 2) + '</pre>';
+    }
+  })
+  .catch(err => {
+    resultado.className = 'resultado error';
+    resultado.innerHTML = '<strong>❌ Error de conexión:</strong> ' + err.message;
+  });
+}
+</script>
+</body>
+</html>"""
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
 
 @app.route("/admin/importar_stock_full_meli", methods=["GET", "POST"])
 def admin_importar_stock_full_meli():
