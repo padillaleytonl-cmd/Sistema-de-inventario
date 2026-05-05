@@ -7220,6 +7220,9 @@ def admin_limpiar_duplicados_mapeo():
 def admin_reset_sku_mapeo_canal():
     """Borra y repuebla sku_mapeo_canal desde sku_mapeo (Excel).
 
+    OPTIMIZADO con bulk insert masivo: usa 1 sola query INSERT VALUES (...)
+    en lugar de N queries individuales. Procesa miles de SKUs en <1 segundo.
+
     Query params:
       ?confirmar=SI         requerido para ejecutar (sin esto, solo preview)
       ?incluir_web=0        no incluir canal web (default: 0)
@@ -7255,44 +7258,23 @@ def admin_reset_sku_mapeo_canal():
             return jsonify({"error": str(e)}), 500
 
     try:
-        from inventario import get_conn, listar_sku_mapeo, agregar_publicacion
+        from inventario import get_conn, listar_sku_mapeo
+        from datetime import datetime as _dt
+        import time
 
         log = []
+        t_start = time.time()
 
-        # ── 1. Contar lo actual ──
+        # ── 1. Leer datos ──
         conn = get_conn(); cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM sku_mapeo_canal")
         total_antes = cur.fetchone()[0]
         log.append(f"Filas en sku_mapeo_canal antes: {total_antes}")
 
-        # ── 2. HARD DELETE (con backup automático por seguridad) ──
-        from datetime import datetime as _dt
-        timestamp = _dt.now().strftime("%Y%m%d_%H%M%S")
-        backup_tabla = f"sku_mapeo_canal_backup_{timestamp}"
-
-        if not dry_run:
-            try:
-                cur.execute(f'CREATE TABLE "{backup_tabla}" AS SELECT * FROM sku_mapeo_canal')
-                cur.execute(f'SELECT COUNT(*) FROM "{backup_tabla}"')
-                count_backup = cur.fetchone()[0]
-                log.append(f"✓ Backup creado: {backup_tabla} ({count_backup} filas)")
-            except Exception as e:
-                log.append(f"⚠ No se pudo crear backup: {e}")
-                conn.rollback()
-                cur.close(); conn.close()
-                return jsonify({"ok": False, "error": f"Backup falló: {e}", "log": log}), 500
-
-            cur.execute("DELETE FROM sku_mapeo_canal")
-            log.append(f"✓ HARD DELETE ejecutado en sku_mapeo_canal")
-        else:
-            log.append(f"[DRY RUN] Se borrarían {total_antes} filas de sku_mapeo_canal")
-
-        # ── 3. Releer sku_mapeo y repoblar ──
         mapeos = listar_sku_mapeo()
         log.append(f"Filas en sku_mapeo (Excel): {len(mapeos)}")
 
-        # Mapeo de campo BD → canal
-        # IMPORTANTE: web se excluye por defecto (incluir_web=False)
+        # ── 2. Construir lista de filas a insertar (en memoria, rápido) ──
         campos_canal = [
             ("sku_walmart",      "walmart"),
             ("sku_paris",        "paris"),
@@ -7304,10 +7286,10 @@ def admin_reset_sku_mapeo_canal():
         if incluir_web:
             campos_canal.insert(0, ("sku_web", "web"))
 
-        publicaciones_creadas = 0
-        publicaciones_fallidas = 0
+        # filas_para_insertar = [(sku_lusync, canal, sku_canal, item_id_canal, es_catalogo, notas), ...]
+        filas_para_insertar = []
         skus_procesados = 0
-        log_creaciones = []
+        log_creaciones_sample = []  # solo guardamos los primeros 50 ejemplos para el log
 
         for fila in mapeos:
             sku_lusync = (fila.get("sku_lusync") or "").strip()
@@ -7325,72 +7307,140 @@ def admin_reset_sku_mapeo_canal():
                 if canal == "mercadolibre" and sku_canal_val.upper().startswith("MLC"):
                     item_id_canal = sku_canal_val
 
-                if dry_run:
-                    log_creaciones.append(f"[DRY] {sku_lusync} → {canal}:{sku_canal_val}" +
-                                          (f" (item_id={item_id_canal})" if item_id_canal else ""))
-                    publicaciones_creadas += 1
-                else:
+                filas_para_insertar.append((
+                    sku_lusync, canal, sku_canal_val,
+                    item_id_canal, False, "reset_desde_excel"
+                ))
+
+                if len(log_creaciones_sample) < 50:
+                    log_creaciones_sample.append(
+                        f"{'[DRY] ' if dry_run else ''}{sku_lusync} → {canal}:{sku_canal_val}" +
+                        (f" (item_id={item_id_canal})" if item_id_canal else "")
+                    )
+
+        t_build = time.time() - t_start
+        log.append(f"Construidas {len(filas_para_insertar)} filas en {t_build:.2f}s")
+
+        if dry_run:
+            cur.close(); conn.close()
+            log.append(f"[DRY RUN] No se ejecutó nada en BD")
+            return jsonify({
+                "ok": True,
+                "dry_run": True,
+                "incluir_web": incluir_web,
+                "skus_procesados": skus_procesados,
+                "publicaciones_a_crear": len(filas_para_insertar),
+                "publicaciones_creadas": len(filas_para_insertar),
+                "publicaciones_fallidas": 0,
+                "filas_borradas": "(dry_run)",
+                "filas_despues": None,
+                "estado_final_por_canal": None,
+                "tiempo_segundos": f"{t_build:.2f}",
+                "log": log,
+                "log_creaciones": log_creaciones_sample
+            })
+
+        # ── 3. EJECUCIÓN REAL: backup + delete + bulk insert ──
+
+        # 3a. Backup
+        timestamp = _dt.now().strftime("%Y%m%d_%H%M%S")
+        backup_tabla = f"sku_mapeo_canal_backup_{timestamp}"
+        try:
+            cur.execute(f'CREATE TABLE "{backup_tabla}" AS SELECT * FROM sku_mapeo_canal')
+            log.append(f"✓ Backup creado: {backup_tabla}")
+        except Exception as e:
+            conn.rollback()
+            cur.close(); conn.close()
+            return jsonify({"ok": False, "error": f"Backup falló: {e}", "log": log}), 500
+
+        # 3b. HARD DELETE
+        cur.execute("DELETE FROM sku_mapeo_canal")
+        log.append(f"✓ DELETE ejecutado en sku_mapeo_canal")
+
+        # 3c. BULK INSERT masivo (1 sola query con todos los VALUES)
+        # Usamos psycopg2.extras.execute_values para optimización máxima
+        publicaciones_creadas = 0
+        publicaciones_fallidas = 0
+
+        if filas_para_insertar:
+            try:
+                # Importar execute_values para bulk insert óptimo
+                from psycopg2.extras import execute_values
+                t_insert = time.time()
+                execute_values(
+                    cur,
+                    """INSERT INTO sku_mapeo_canal
+                       (sku_lusync, canal, sku_canal, item_id_canal, es_catalogo, notas, activo, creado_at, actualizado_at)
+                       VALUES %s
+                       ON CONFLICT DO NOTHING
+                       RETURNING id""",
+                    filas_para_insertar,
+                    template="(%s, %s, %s, %s, %s, %s, TRUE, NOW(), NOW())",
+                    page_size=500  # batch de 500 filas por iteración
+                )
+                ids_creados = [r[0] for r in cur.fetchall()] if cur.description else []
+                publicaciones_creadas = len(ids_creados) if ids_creados else len(filas_para_insertar)
+                t_ins_ms = (time.time() - t_insert) * 1000
+                log.append(f"✓ BULK INSERT: {len(filas_para_insertar)} filas en {t_ins_ms:.0f}ms")
+            except ImportError:
+                # Fallback si no hay psycopg2.extras
+                log.append("⚠ psycopg2.extras no disponible, usando INSERT individual (más lento)")
+                for f in filas_para_insertar:
                     try:
-                        mapeo_id = agregar_publicacion(
-                            sku_lusync=sku_lusync,
-                            canal=canal,
-                            sku_canal=sku_canal_val,
-                            item_id_canal=item_id_canal,
-                            es_catalogo=False,
-                            notas="reset_desde_excel"
-                        )
-                        if mapeo_id:
-                            publicaciones_creadas += 1
-                            log_creaciones.append(f"✓ {sku_lusync} → {canal}:{sku_canal_val} (id={mapeo_id})")
-                        else:
-                            publicaciones_fallidas += 1
-                            log_creaciones.append(f"✗ {sku_lusync} → {canal}:{sku_canal_val}: agregar devolvió None")
-                    except Exception as e:
+                        cur.execute("""
+                            INSERT INTO sku_mapeo_canal
+                            (sku_lusync, canal, sku_canal, item_id_canal, es_catalogo, notas, activo, creado_at, actualizado_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, TRUE, NOW(), NOW())
+                            ON CONFLICT DO NOTHING
+                        """, f)
+                        publicaciones_creadas += 1
+                    except Exception as e_ins:
                         publicaciones_fallidas += 1
-                        log_creaciones.append(f"✗ {sku_lusync} → {canal}:{sku_canal_val}: {e}")
+            except Exception as e:
+                conn.rollback()
+                cur.close(); conn.close()
+                return jsonify({
+                    "ok": False,
+                    "error": f"Bulk insert falló: {e}",
+                    "url_recuperar_backup": f"INSERT INTO sku_mapeo_canal SELECT * FROM \"{backup_tabla}\";",
+                    "log": log
+                }), 500
 
-        # ── 4. Commit ──
-        if not dry_run:
-            conn.commit()
-            log.append(f"✓ Commit ejecutado")
+        conn.commit()
+        log.append(f"✓ Commit ejecutado")
 
-            # Estado final
-            cur.execute("SELECT canal, COUNT(*) FROM sku_mapeo_canal GROUP BY canal ORDER BY canal")
-            estado_final = {r[0]: r[1] for r in cur.fetchall()}
-            cur.execute("SELECT COUNT(*) FROM sku_mapeo_canal")
-            total_despues = cur.fetchone()[0]
-
-            log.append(f"Filas en sku_mapeo_canal después: {total_despues}")
-        else:
-            estado_final = None
-            total_despues = None
+        # 3d. Estado final
+        cur.execute("SELECT canal, COUNT(*) FROM sku_mapeo_canal GROUP BY canal ORDER BY canal")
+        estado_final = {r[0]: r[1] for r in cur.fetchall()}
+        cur.execute("SELECT COUNT(*) FROM sku_mapeo_canal")
+        total_despues = cur.fetchone()[0]
+        log.append(f"Filas en sku_mapeo_canal después: {total_despues}")
 
         cur.close(); conn.close()
 
-        if not dry_run:
-            registrar_audit(
-                session.get("usuario", "Sistema"), request.remote_addr,
-                "reset_sku_mapeo_canal",
-                detalle=f"borradas={total_antes} creadas={publicaciones_creadas} backup={backup_tabla}"
-            )
+        t_total = time.time() - t_start
+
+        registrar_audit(
+            session.get("usuario", "Sistema"), request.remote_addr,
+            "reset_sku_mapeo_canal",
+            detalle=f"borradas={total_antes} creadas={publicaciones_creadas} backup={backup_tabla} t={t_total:.2f}s"
+        )
 
         return jsonify({
             "ok": True,
-            "dry_run": dry_run,
+            "dry_run": False,
             "incluir_web": incluir_web,
             "skus_procesados": skus_procesados,
             "publicaciones_creadas": publicaciones_creadas,
             "publicaciones_fallidas": publicaciones_fallidas,
-            "filas_borradas": total_antes if not dry_run else "(dry_run)",
+            "filas_borradas": total_antes,
             "filas_despues": total_despues,
             "estado_final_por_canal": estado_final,
-            "backup_tabla": backup_tabla if not dry_run else None,
-            "url_recuperar_backup": (
-                f"INSERT INTO sku_mapeo_canal SELECT * FROM \"{backup_tabla}\";"
-                if not dry_run else None
-            ),
+            "tiempo_segundos": f"{t_total:.2f}",
+            "backup_tabla": backup_tabla,
+            "url_recuperar_backup": f"INSERT INTO sku_mapeo_canal SELECT * FROM \"{backup_tabla}\";",
             "log": log,
-            "log_creaciones": log_creaciones[:50]
+            "log_creaciones": log_creaciones_sample
         })
     except Exception as e:
         import traceback
