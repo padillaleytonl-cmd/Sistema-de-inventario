@@ -7975,8 +7975,20 @@ def admin_importar_stock_full_meli():
     
     Query params:
     - dry_run=1: simula sin escribir
+    - token=XXX: bypass de login (para carga inicial via curl/script)
+              Token configurable via env ADMIN_BYPASS_TOKEN
+              Default: lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw
     """
-    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    # Verificación: login normal O token válido
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    token_recibido = request.args.get("token", "")
+    autorizado = session.get("logged") or (token_recibido and token_recibido == bypass_token)
+    
+    if not autorizado:
+        return jsonify({
+            "error": "no autorizado",
+            "como_autenticarse": "logueate en /login O agrega ?token=TU_TOKEN al URL"
+        }), 401
     
     dry_run = request.args.get("dry_run", "0") == "1"
     
