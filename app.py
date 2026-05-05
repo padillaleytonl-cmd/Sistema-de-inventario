@@ -7637,12 +7637,47 @@ def admin_enriquecer_item_ids():
                             break
                     log.append(f"[Paris] {len(productos_pa)} productos en API")
 
+                    # DIAGNÓSTICO: muestra las keys del primer producto para ver estructura real
+                    if productos_pa:
+                        sample_keys = list(productos_pa[0].keys()) if isinstance(productos_pa[0], dict) else []
+                        log.append(f"[Paris DEBUG] Keys del 1er producto: {sample_keys[:15]}")
+                        # Sample de los primeros 3 SKUs detectados
+                        for i, p in enumerate(productos_pa[:3]):
+                            sku_intentos = {
+                                "sellerSku": p.get("sellerSku"),
+                                "sku": p.get("sku"),
+                                "partnerSku": p.get("partnerSku"),
+                                "offerId": p.get("offerId"),
+                                "id": p.get("id"),
+                                "sellerProductId": p.get("sellerProductId"),
+                                "productCode": p.get("productCode"),
+                            }
+                            sku_intentos = {k: v for k, v in sku_intentos.items() if v is not None}
+                            log.append(f"[Paris DEBUG] Producto {i}: {sku_intentos}")
+
                     updates = []
+                    no_match_ejemplos = []
                     for prod in productos_pa:
-                        # París: el sellerSku es el SKU del seller (= sku_canal en BD)
-                        # El item_id distinto puede ser partnerSku o offerId
-                        seller_sku = (prod.get("sellerSku") or prod.get("sku") or "").strip()
-                        item_id_paris = (str(prod.get("offerId") or prod.get("partnerSku") or seller_sku)).strip()
+                        # París: probar MÚLTIPLES nombres de SKU posibles
+                        seller_sku = (
+                            prod.get("sellerSku") or
+                            prod.get("sku") or
+                            prod.get("partnerSku") or
+                            prod.get("sellerProductId") or
+                            prod.get("productCode") or
+                            prod.get("id") or
+                            ""
+                        )
+                        seller_sku = str(seller_sku).strip()
+
+                        # item_id distinto (si lo hay): offerId, partnerSku, etc.
+                        item_id_paris = (
+                            str(prod.get("offerId") or
+                                prod.get("partnerSku") or
+                                prod.get("id") or
+                                seller_sku)
+                        ).strip()
+
                         if not seller_sku:
                             continue
                         if seller_sku.upper() in pendientes:
@@ -7650,6 +7685,9 @@ def admin_enriquecer_item_ids():
                             # Solo actualizamos si el item_id es DIFERENTE al sku_canal
                             if item_id_paris and item_id_paris != sku_canal_orig:
                                 updates.append((item_id_paris, sku_lusync, sku_canal_orig))
+                        else:
+                            if len(no_match_ejemplos) < 5:
+                                no_match_ejemplos.append({"sku": seller_sku, "item_id": item_id_paris})
 
                     actualizados = _aplicar_updates("paris", updates)
                     resumen_por_canal["paris"] = {
@@ -7657,6 +7695,7 @@ def admin_enriquecer_item_ids():
                         "pendientes_sin_item_id": len(pendientes),
                         "match_con_item_id_distinto": len(updates),
                         "actualizados": actualizados,
+                        "ejemplos_sin_match": no_match_ejemplos,
                         "nota": "Paris: si item_id == sku_canal, no se actualiza (es redundante)",
                         "tiempo_seg": f"{time.time()-t_canal:.2f}"
                     }
