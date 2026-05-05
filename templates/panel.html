@@ -6399,16 +6399,16 @@ function cargarSyncCanal(){
         ? '<span style="color:#1e40af;font-weight:600;background:#dbeafe;padding:2px 8px;border-radius:99px;font-size:11px;">→ '+pend+'</span>'
         : '<span style="color:var(--muted);">—</span>';
 
-      html += '<tr style="border-bottom:0.5px solid var(--border);">';
+      html += '<tr data-sync-fila="'+r.sku_lusync+'" style="border-bottom:0.5px solid var(--border);">';
       html += '<td style="padding:8px 10px;font-family:ui-monospace,monospace;font-size:11px;">'+r.sku_lusync+'</td>';
       html += '<td style="padding:8px 10px;font-family:ui-monospace,monospace;font-size:11px;">'+skuMkt+'</td>';
       html += '<td style="padding:8px 10px;color:var(--muted);">'+nombre+'</td>';
       html += '<td style="padding:8px 10px;text-align:right;font-weight:600;">'+r.stock_lusync+'</td>';
-      html += '<td style="padding:8px 10px;text-align:right;font-weight:600;">'+stockMkt+'</td>';
-      html += '<td style="padding:8px 10px;text-align:right;">'+pendienteCell+'</td>';
-      html += '<td style="padding:8px 10px;color:'+color+';font-weight:500;font-size:11px;">'+label+'</td>';
+      html += '<td data-sync-stock-mkt="'+r.sku_lusync+'" style="padding:8px 10px;text-align:right;font-weight:600;">'+stockMkt+'</td>';
+      html += '<td data-sync-pendiente="'+r.sku_lusync+'" style="padding:8px 10px;text-align:right;">'+pendienteCell+'</td>';
+      html += '<td data-sync-estado="'+r.sku_lusync+'" style="padding:8px 10px;color:'+color+';font-weight:500;font-size:11px;">'+label+'</td>';
       html += '<td style="padding:8px 10px;text-align:right;">';
-      html += '<button onclick="forzarSyncSkuCanal(\''+r.sku_lusync+'\')" style="font-size:10px;padding:4px 8px;border:0.5px solid var(--border);background:transparent;border-radius:6px;cursor:pointer;color:var(--text);">↑ Reenviar</button>';
+      html += '<button data-sync-btn="'+r.sku_lusync+'" onclick="forzarSyncSkuCanal(\''+r.sku_lusync+'\')" style="font-size:10px;padding:4px 8px;border:0.5px solid var(--border);background:transparent;border-radius:6px;cursor:pointer;color:var(--text);">↑ Reenviar</button>';
       html += '</td>';
       html += '</tr>';
     });
@@ -6422,40 +6422,138 @@ function cargarSyncCanal(){
 
 function forzarSyncSkuCanal(sku){
   var urls = window._syncCanalUrls || {};
+  // ── 1. Update OPTIMISTA: feedback inmediato sin esperar API ──
+  var btn = document.querySelector('button[data-sync-btn="'+sku+'"]');
+  var celdaEstado = document.querySelector('td[data-sync-estado="'+sku+'"]');
+  var celdaPendiente = document.querySelector('td[data-sync-pendiente="'+sku+'"]');
+
+  if(btn){
+    btn.disabled = true;
+    btn.innerHTML = '⏳ Enviando…';
+    btn.style.background = '#fff3cd';
+    btn.style.borderColor = '#ffc107';
+  }
+  if(celdaEstado){
+    celdaEstado.style.color = '#856404';
+    celdaEstado.innerHTML = '⏳ Enviando a '+(urls.nombre||'marketplace');
+  }
+
+  // ── 2. Llamar al backend ──
   fetch(urls.forzarSku, {
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body: JSON.stringify({sku_lusync: sku})
   }).then(r=>r.json()).then(res=>{
     if(res.ok){
-      // Guardar en pendientes y mostrar banner persistente
+      // ── 3. Update SOLO de la fila (sin reload de tabla) ──
       if(!_pendientesSync[urls.id]) _pendientesSync[urls.id] = {};
       _pendientesSync[urls.id][sku] = res.stock_enviado;
-      mostrarBannerSync('Stock <strong>'+res.stock_enviado+'</strong> enviado a '+urls.nombre+' para <strong>'+sku+'</strong>. <em>'+urls.nombre+' tarda 5–15 minutos en reflejar el cambio.</em> Pulsa ↻ Refrescar en unos minutos para ver si ya se confirmó.', 'info');
-      setTimeout(cargarSyncCanal, 1000);
+
+      if(celdaEstado){
+        celdaEstado.style.color = '#155724';
+        celdaEstado.innerHTML = '✓ Enviado<br><small style="color:var(--muted);">Esperando confirmación marketplace</small>';
+      }
+      if(celdaPendiente){
+        celdaPendiente.innerHTML = '<span style="color:#1e40af;font-weight:600;background:#dbeafe;padding:2px 8px;border-radius:99px;font-size:11px;">→ '+res.stock_enviado+'</span>';
+      }
+      if(btn){
+        btn.disabled = false;
+        btn.innerHTML = '↺ Reenviar';
+        btn.style.background = 'transparent';
+        btn.style.borderColor = 'var(--border)';
+      }
+      mostrarBannerSync('Stock <strong>'+res.stock_enviado+'</strong> enviado a '+urls.nombre+' para <strong>'+sku+'</strong>. <em>Tarda 5–15 min en reflejar.</em>', 'info');
     } else {
-      mostrarBannerSync('Error al enviar '+sku+': '+(res.error||'desconocido'), 'error');
+      // ── Error: solo afecta esta fila ──
+      if(celdaEstado){
+        celdaEstado.style.color = '#721C24';
+        celdaEstado.innerHTML = '✗ Error: '+(res.error||'desconocido').substring(0,50);
+      }
+      if(btn){
+        btn.disabled = false;
+        btn.innerHTML = '↺ Reintentar';
+        btn.style.background = '#f8d7da';
+        btn.style.borderColor = '#dc3545';
+      }
     }
   }).catch(function(e){
-    mostrarBannerSync('Error de conexión al enviar '+sku+': '+e.message, 'error');
+    if(celdaEstado){
+      celdaEstado.style.color = '#721C24';
+      celdaEstado.innerHTML = '✗ Error conexión';
+    }
+    if(btn){
+      btn.disabled = false;
+      btn.innerHTML = '↺ Reintentar';
+      btn.style.background = '#f8d7da';
+      btn.style.borderColor = '#dc3545';
+    }
   });
 }
 
 function forzarSyncTodosCanal(){
   var urls = window._syncCanalUrls || {};
-  if(!confirm('¿Reenviar stock de TODOS los SKUs mapeados a '+urls.nombre+'?')) return;
+  if(!confirm('¿Reenviar stock de TODOS los SKUs mapeados a '+urls.nombre+'?\n\nEsta operación puede tardar varios segundos por SKU.')) return;
+
   var btn = document.getElementById('btnForzarSync');
-  btn.disabled = true; btn.textContent = 'Enviando…';
+  btn.disabled = true;
+  btn.innerHTML = '⏳ Procesando…';
+  btn.style.opacity = '0.7';
+
+  // ── Marcar TODAS las filas como "en cola" ──
+  document.querySelectorAll('button[data-sync-btn]').forEach(function(b){
+    b.disabled = true;
+    b.innerHTML = '⏳ En cola';
+    b.style.background = '#f1efe8';
+    b.style.opacity = '0.6';
+  });
+  document.querySelectorAll('td[data-sync-estado]').forEach(function(c){
+    c.style.color = '#856404';
+    c.innerHTML = '⏳ En cola';
+  });
+
   fetch(urls.forzarTodos, {method:'POST'}).then(r=>r.json()).then(res=>{
-    btn.disabled = false; btn.textContent = '↑ Forzar sync de todos';
+    btn.disabled = false;
+    btn.style.opacity = '1';
     if(res.ok){
-      mostrarBannerSync('<strong>'+res.enviados+'</strong> SKUs enviados a '+urls.nombre+', <strong>'+res.fallidos+'</strong> fallidos. <em>'+urls.nombre+' tarda 5–15 minutos en reflejar los cambios.</em>', 'info');
-      setTimeout(cargarSyncCanal, 1000);
+      btn.innerHTML = '✓ '+res.enviados+' enviados, '+res.fallidos+' fallidos';
+      mostrarBannerSync('<strong>'+res.enviados+'</strong> SKUs enviados a '+urls.nombre+', <strong>'+res.fallidos+'</strong> fallidos. <em>Tarda 5–15 min en reflejar.</em>', 'info');
+      // Restaurar botones de filas
+      document.querySelectorAll('button[data-sync-btn]').forEach(function(b){
+        b.disabled = false;
+        b.innerHTML = '↺ Reenviar';
+        b.style.background = 'transparent';
+        b.style.opacity = '1';
+      });
+      document.querySelectorAll('td[data-sync-estado]').forEach(function(c){
+        c.style.color = '#155724';
+        c.innerHTML = '✓ Enviado';
+      });
+      // Restaurar texto del botón principal después de 3s
+      setTimeout(function(){
+        btn.innerHTML = '↑ Forzar sync de todos';
+      }, 3000);
     } else {
+      btn.innerHTML = '↑ Forzar sync de todos';
       mostrarBannerSync('Error: '+(res.error||'desconocido'), 'error');
+      // Restaurar botones de filas
+      document.querySelectorAll('button[data-sync-btn]').forEach(function(b){
+        b.disabled = false;
+        b.innerHTML = '↺ Reenviar';
+        b.style.background = 'transparent';
+        b.style.opacity = '1';
+      });
     }
   }).catch(function(e){
+    btn.disabled = false;
+    btn.style.opacity = '1';
+    btn.innerHTML = '↑ Forzar sync de todos';
     mostrarBannerSync('Error de conexión: '+e.message, 'error');
+    document.querySelectorAll('button[data-sync-btn]').forEach(function(b){
+      b.disabled = false;
+      b.innerHTML = '↺ Reenviar';
+      b.style.background = 'transparent';
+      b.style.opacity = '1';
+    });
   });
 }
 
@@ -6505,16 +6603,16 @@ function cargarSyncParis(){
       var stockParis = r.stock_paris === null ? '—' : r.stock_paris;
       var nombre = (r.nombre || '').length > 50 ? r.nombre.substring(0,50)+'…' : (r.nombre||'');
 
-      html += '<tr style="border-bottom:0.5px solid var(--border);">';
+      html += '<tr data-sync-paris-fila="'+r.sku_lusync+'" style="border-bottom:0.5px solid var(--border);">';
       html += '<td style="padding:8px 10px;font-family:ui-monospace,monospace;font-size:11px;">'+r.sku_lusync+'</td>';
       html += '<td style="padding:8px 10px;font-family:ui-monospace,monospace;font-size:11px;">'+r.sku_paris+'</td>';
       html += '<td style="padding:8px 10px;color:var(--muted);">'+nombre+'</td>';
       html += '<td style="padding:8px 10px;text-align:right;font-weight:600;">'+r.stock_lusync+'</td>';
-      html += '<td style="padding:8px 10px;text-align:right;font-weight:600;">'+stockParis+'</td>';
+      html += '<td data-sync-paris-stock="'+r.sku_lusync+'" style="padding:8px 10px;text-align:right;font-weight:600;">'+stockParis+'</td>';
       html += '<td style="padding:8px 10px;color:var(--muted);font-size:10px;">'+(r.ultima_actualizacion_paris||'—')+'</td>';
-      html += '<td style="padding:8px 10px;color:'+color+';font-weight:500;font-size:11px;">'+label+'</td>';
+      html += '<td data-sync-paris-estado="'+r.sku_lusync+'" style="padding:8px 10px;color:'+color+';font-weight:500;font-size:11px;">'+label+'</td>';
       html += '<td style="padding:8px 10px;text-align:right;">';
-      html += '<button onclick="forzarSyncSkuParis(\''+r.sku_lusync+'\')" style="font-size:10px;padding:4px 8px;border:0.5px solid var(--border);background:transparent;border-radius:6px;cursor:pointer;color:var(--text);">↑ Reenviar</button>';
+      html += '<button data-sync-paris-btn="'+r.sku_lusync+'" onclick="forzarSyncSkuParis(\''+r.sku_lusync+'\')" style="font-size:10px;padding:4px 8px;border:0.5px solid var(--border);background:transparent;border-radius:6px;cursor:pointer;color:var(--text);">↑ Reenviar</button>';
       html += '</td>';
       html += '</tr>';
     });
@@ -6527,35 +6625,123 @@ function cargarSyncParis(){
 }
 
 function forzarSyncSkuParis(sku){
+  // ── 1. Update OPTIMISTA ──
+  var btn = document.querySelector('button[data-sync-paris-btn="'+sku+'"]');
+  var celdaEstado = document.querySelector('td[data-sync-paris-estado="'+sku+'"]');
+
+  if(btn){
+    btn.disabled = true;
+    btn.innerHTML = '⏳ Enviando…';
+    btn.style.background = '#fff3cd';
+    btn.style.borderColor = '#ffc107';
+  }
+  if(celdaEstado){
+    celdaEstado.style.color = '#856404';
+    celdaEstado.innerHTML = '⏳ Enviando a París';
+  }
+
   fetch('/paris/forzar_sync_sku', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body: JSON.stringify({sku_lusync: sku})
   }).then(r=>r.json()).then(res=>{
     if(res.ok){
-      alert('✓ Stock '+res.stock_enviado+' enviado a París para '+sku+'\n\nLa actualización tarda 15min–1h en reflejar.');
-      setTimeout(cargarSyncParis, 1000);
+      if(celdaEstado){
+        celdaEstado.style.color = '#155724';
+        celdaEstado.innerHTML = '✓ Enviado<br><small style="color:var(--muted);">Espera 15min–1h</small>';
+      }
+      if(btn){
+        btn.disabled = false;
+        btn.innerHTML = '↺ Reenviar';
+        btn.style.background = 'transparent';
+        btn.style.borderColor = 'var(--border)';
+      }
+      mostrarBannerSync('Stock <strong>'+res.stock_enviado+'</strong> enviado a París para <strong>'+sku+'</strong>. <em>Tarda 15min–1h en reflejar.</em>', 'info');
     } else {
-      alert('Error: '+(res.error||'desconocido'));
+      if(celdaEstado){
+        celdaEstado.style.color = '#721C24';
+        celdaEstado.innerHTML = '✗ Error: '+(res.error||'desconocido').substring(0,50);
+      }
+      if(btn){
+        btn.disabled = false;
+        btn.innerHTML = '↺ Reintentar';
+        btn.style.background = '#f8d7da';
+        btn.style.borderColor = '#dc3545';
+      }
     }
-  }).catch(()=>alert('Error de conexión'));
+  }).catch(function(e){
+    if(celdaEstado){
+      celdaEstado.style.color = '#721C24';
+      celdaEstado.innerHTML = '✗ Error conexión';
+    }
+    if(btn){
+      btn.disabled = false;
+      btn.innerHTML = '↺ Reintentar';
+      btn.style.background = '#f8d7da';
+      btn.style.borderColor = '#dc3545';
+    }
+  });
 }
 
 function forzarSyncTodosParis(){
-  if(!confirm('¿Reenviar stock de TODOS los SKUs mapeados a París?')) return;
+  if(!confirm('¿Reenviar stock de TODOS los SKUs mapeados a París?\n\nPuede tardar varios segundos.')) return;
   var btn = document.getElementById('btnForzarSync');
-  btn.disabled = true; btn.textContent = 'Enviando…';
+  btn.disabled = true;
+  btn.innerHTML = '⏳ Procesando…';
+  btn.style.opacity = '0.7';
+
+  // Marcar TODAS las filas París
+  document.querySelectorAll('button[data-sync-paris-btn]').forEach(function(b){
+    b.disabled = true;
+    b.innerHTML = '⏳ En cola';
+    b.style.background = '#f1efe8';
+    b.style.opacity = '0.6';
+  });
+  document.querySelectorAll('td[data-sync-paris-estado]').forEach(function(c){
+    c.style.color = '#856404';
+    c.innerHTML = '⏳ En cola';
+  });
+
   fetch('/paris/forzar_sync_todos', {method:'POST'}).then(r=>r.json()).then(res=>{
-    btn.disabled = false; btn.textContent = '↑ Forzar sync de todos';
+    btn.disabled = false;
+    btn.style.opacity = '1';
     if(res.ok){
-      alert('✓ '+res.enviados+' SKUs enviados, '+res.fallidos+' fallidos\n\nLa actualización tarda 15min–1h en reflejar.');
-      setTimeout(cargarSyncParis, 1000);
+      btn.innerHTML = '✓ '+res.enviados+' enviados, '+res.fallidos+' fallidos';
+      mostrarBannerSync('<strong>'+res.enviados+'</strong> SKUs enviados a París, <strong>'+res.fallidos+'</strong> fallidos. <em>Tarda 15min–1h en reflejar.</em>', 'info');
+      document.querySelectorAll('button[data-sync-paris-btn]').forEach(function(b){
+        b.disabled = false;
+        b.innerHTML = '↺ Reenviar';
+        b.style.background = 'transparent';
+        b.style.opacity = '1';
+      });
+      document.querySelectorAll('td[data-sync-paris-estado]').forEach(function(c){
+        c.style.color = '#155724';
+        c.innerHTML = '✓ Enviado';
+      });
+      setTimeout(function(){
+        btn.innerHTML = '↑ Forzar sync de todos';
+      }, 3000);
     } else {
-      alert('Error: '+(res.error||'desconocido'));
+      btn.innerHTML = '↑ Forzar sync de todos';
+      mostrarBannerSync('Error: '+(res.error||'desconocido'), 'error');
+      document.querySelectorAll('button[data-sync-paris-btn]').forEach(function(b){
+        b.disabled = false;
+        b.innerHTML = '↺ Reenviar';
+        b.style.background = 'transparent';
+        b.style.opacity = '1';
+      });
     }
-  }).catch(function(){
-    btn.disabled = false; btn.textContent = '↑ Forzar sync de todos';
-    alert('Error de conexión');
+  }).catch(function(e){
+    btn.disabled = false;
+    btn.style.opacity = '1';
+    btn.innerHTML = '↑ Forzar sync de todos';
+    mostrarBannerSync('Error de conexión: '+e.message, 'error');
+    document.querySelectorAll('button[data-sync-paris-btn]').forEach(function(b){
+      b.disabled = false;
+      b.innerHTML = '↺ Reenviar';
+      b.style.background = 'transparent';
+      b.style.opacity = '1';
+    });
   });
 }
 
