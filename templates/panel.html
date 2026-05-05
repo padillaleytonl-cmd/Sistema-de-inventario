@@ -2950,13 +2950,124 @@ function sincronizarPrecios(){
 
 // ── IMPORTAR WOO
 function importarWoo(){
-  toast('Importando desde WooCommerce...');
+  // Modal de loading con feedback en vivo
+  const ya = document.getElementById('modalImportWoo');
+  if(ya) ya.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modalImportWoo';
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;';
+  modal.innerHTML = `
+    <div style="background:var(--bg);border-radius:12px;padding:24px;max-width:520px;width:92%;text-align:center;">
+      <div style="font-size:32px;margin-bottom:12px;">⏳</div>
+      <div style="font-size:14px;font-weight:600;margin-bottom:6px;">Importando desde WooCommerce...</div>
+      <div style="font-size:12px;color:var(--muted);">Esto puede tomar 30-90 segundos según la cantidad de productos</div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
   fetch('/importar_woo')
     .then(r => r.json())
     .then(d => {
-      toast(d.mensaje || d.error || 'Listo');
+      mostrarResultadoImportWoo(d);
       cargar();
+    })
+    .catch(e => {
+      document.getElementById('modalImportWoo')?.remove();
+      toast('Error: ' + e.message, 'error');
     });
+}
+
+function mostrarResultadoImportWoo(d){
+  document.getElementById('modalImportWoo')?.remove();
+
+  if(!d.ok){
+    toast('Error: ' + (d.error || 'desconocido'), 'error');
+    return;
+  }
+
+  const log = d.log || [];
+
+  // Construir tarjetas de resumen
+  const cards = [
+    {label: 'Productos en Woo', valor: d.total_woo || 0, color: '#3C3489', bg: '#EEEDFE'},
+    {label: 'Importados', valor: d.nuevos || 0, color: '#155724', bg: '#D4EDDA'},
+    {label: 'Ya existían', valor: d.ya_existian || 0, color: '#856404', bg: '#FFF3CD'},
+    {label: 'Padres "variable"\n(no se importan)', valor: d.omitidos_padre_variable || 0, color: '#666', bg: '#F1EFE8'},
+    {label: 'Sin SKU\n(omitidos)', valor: d.omitidos_sin_sku || 0, color: '#721C24', bg: '#F8D7DA'},
+    {label: 'Errores', valor: d.errores || 0, color: '#721C24', bg: '#F8D7DA'}
+  ];
+  const cardsHtml = cards.map(c => `
+    <div style="background:${c.bg};border-radius:8px;padding:10px;text-align:center;">
+      <div style="font-size:22px;font-weight:600;color:${c.color};line-height:1;">${c.valor}</div>
+      <div style="font-size:10px;color:${c.color};margin-top:4px;line-height:1.3;white-space:pre-line;">${c.label}</div>
+    </div>
+  `).join('');
+
+  // Filtros del log
+  const filtroHtml = `
+    <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center;">
+      <span style="font-size:11px;color:var(--muted);">Filtrar:</span>
+      <button onclick="filtrarLogImportWoo('all')" data-f="all" class="filtro-log-woo" style="padding:4px 10px;border:0.5px solid var(--border);background:var(--bg2);border-radius:6px;font-size:11px;cursor:pointer;">Todo</button>
+      <button onclick="filtrarLogImportWoo('+')" data-f="+" class="filtro-log-woo" style="padding:4px 10px;border:0.5px solid #C3E6CB;background:#D4EDDA;color:#155724;border-radius:6px;font-size:11px;cursor:pointer;">+ Importados</button>
+      <button onclick="filtrarLogImportWoo('=')" data-f="=" class="filtro-log-woo" style="padding:4px 10px;border:0.5px solid #FCEAB6;background:#FFF3CD;color:#856404;border-radius:6px;font-size:11px;cursor:pointer;">= Ya existen</button>
+      <button onclick="filtrarLogImportWoo('⏭')" data-f="⏭" class="filtro-log-woo" style="padding:4px 10px;border:0.5px solid #F1C2C7;background:#F8D7DA;color:#721C24;border-radius:6px;font-size:11px;cursor:pointer;">⏭ Omitidos</button>
+      <button onclick="filtrarLogImportWoo('❌')" data-f="❌" class="filtro-log-woo" style="padding:4px 10px;border:0.5px solid #F1C2C7;background:#F8D7DA;color:#721C24;border-radius:6px;font-size:11px;cursor:pointer;">❌ Errores</button>
+      <button onclick="filtrarLogImportWoo('📦')" data-f="📦" class="filtro-log-woo" style="padding:4px 10px;border:0.5px solid var(--border);background:var(--bg2);border-radius:6px;font-size:11px;cursor:pointer;">📦 Padres variable</button>
+    </div>
+  `;
+
+  const modal = document.createElement('div');
+  modal.id = 'modalResImportWoo';
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;';
+  modal.innerHTML = `
+    <div style="background:var(--bg);border-radius:12px;padding:20px;width:92vw;max-width:900px;max-height:92vh;display:flex;flex-direction:column;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+        <div>
+          <div style="font-size:16px;font-weight:600;">✓ Importación WooCommerce completada</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px;">${d.mensaje}</div>
+        </div>
+        <button onclick="document.getElementById('modalResImportWoo').remove()" style="padding:6px 12px;border:0.5px solid var(--border);background:var(--bg);color:var(--text);border-radius:6px;font-size:12px;cursor:pointer;">Cerrar</button>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:14px;">
+        ${cardsHtml}
+      </div>
+
+      ${filtroHtml}
+
+      <div id="logImportWoo" style="flex:1;overflow:auto;border:0.5px solid var(--border);border-radius:6px;padding:8px;font-family:monospace;font-size:11px;line-height:1.6;background:var(--bg2);">
+        ${log.map(l => `<div data-line="${l.replace(/"/g, '&quot;')}" style="padding:2px 0;">${escaparHtmlWoo(l)}</div>`).join('')}
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+function escaparHtmlWoo(s){
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function filtrarLogImportWoo(filtro){
+  const cont = document.getElementById('logImportWoo');
+  if(!cont) return;
+  const lineas = cont.querySelectorAll('div[data-line]');
+  lineas.forEach(d => {
+    const linea = d.getAttribute('data-line') || '';
+    if(filtro === 'all'){
+      d.style.display = '';
+    } else {
+      d.style.display = linea.includes(filtro) ? '' : 'none';
+    }
+  });
+  // Resaltar botón activo
+  document.querySelectorAll('.filtro-log-woo').forEach(b => {
+    if(b.getAttribute('data-f') === filtro){
+      b.style.outline = '2px solid var(--text)';
+      b.style.outlineOffset = '1px';
+    } else {
+      b.style.outline = 'none';
+    }
+  });
 }
 
 // ── SYNC ÓRDENES
@@ -5129,13 +5240,24 @@ function cargarSkuMapeo(){
     fetch('/sku_mapeo').then(r=>r.json()),
     fetch('/sku_mapeo_canal/contar').then(r=>r.json()).catch(()=>({datos:{}}))
   ]).then(([d, c])=>{
-    _mapeoCache = d.mapeos || [];
+    // /sku_mapeo puede devolver:
+    //  - Array directo (formato actual): [...]
+    //  - Objeto con .mapeos (formato futuro): {mapeos: [...], plataforma_web: "..."}
+    if(Array.isArray(d)){
+      _mapeoCache = d;
+    } else {
+      _mapeoCache = d.mapeos || [];
+      const sel = document.getElementById('selPlataformaWeb');
+      if(sel && d.plataforma_web) sel.value = d.plataforma_web;
+      const thWeb = document.getElementById('thWeb');
+      if(thWeb && d.plataforma_web) thWeb.textContent = `SKU ${d.plataforma_web}`;
+    }
     _conteoPublicaciones = c.datos || {};
-    const sel = document.getElementById('selPlataformaWeb');
-    if(sel && d.plataforma_web) sel.value = d.plataforma_web;
-    const thWeb = document.getElementById('thWeb');
-    if(thWeb && d.plataforma_web) thWeb.textContent = `SKU ${d.plataforma_web}`;
     renderTablaSkuMapeo();
+  }).catch(err => {
+    console.error('Error cargando mapeo:', err);
+    const body = document.getElementById('bodySkuMapeo');
+    if(body) body.innerHTML = `<tr><td colspan="9" style="padding:40px;text-align:center;color:#721C24;font-size:12px;">Error cargando mapeo: ${err.message}</td></tr>`;
   });
 }
 
