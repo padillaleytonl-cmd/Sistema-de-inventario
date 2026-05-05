@@ -5240,13 +5240,24 @@ function cargarSkuMapeo(){
     fetch('/sku_mapeo').then(r=>r.json()),
     fetch('/sku_mapeo_canal/contar').then(r=>r.json()).catch(()=>({datos:{}}))
   ]).then(([d, c])=>{
-    _mapeoCache = d.mapeos || [];
+    // /sku_mapeo puede devolver:
+    //  - Array directo (formato actual): [...]
+    //  - Objeto con .mapeos (formato futuro): {mapeos: [...], plataforma_web: "..."}
+    if(Array.isArray(d)){
+      _mapeoCache = d;
+    } else {
+      _mapeoCache = d.mapeos || [];
+      const sel = document.getElementById('selPlataformaWeb');
+      if(sel && d.plataforma_web) sel.value = d.plataforma_web;
+      const thWeb = document.getElementById('thWeb');
+      if(thWeb && d.plataforma_web) thWeb.textContent = `SKU ${d.plataforma_web}`;
+    }
     _conteoPublicaciones = c.datos || {};
-    const sel = document.getElementById('selPlataformaWeb');
-    if(sel && d.plataforma_web) sel.value = d.plataforma_web;
-    const thWeb = document.getElementById('thWeb');
-    if(thWeb && d.plataforma_web) thWeb.textContent = `SKU ${d.plataforma_web}`;
     renderTablaSkuMapeo();
+  }).catch(err => {
+    console.error('Error cargando mapeo:', err);
+    const body = document.getElementById('bodySkuMapeo');
+    if(body) body.innerHTML = `<tr><td colspan="9" style="padding:40px;text-align:center;color:#721C24;font-size:12px;">Error cargando mapeo: ${err.message}</td></tr>`;
   });
 }
 
