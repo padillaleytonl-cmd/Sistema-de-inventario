@@ -2378,9 +2378,28 @@ def ruta_exportar_excel():
 
 @app.route("/sku_mapeo/importar_excel", methods=["POST"])
 def ruta_importar_excel():
+    """Importa mapeo SKU → marketplaces desde Excel.
+
+    Estructura esperada (columnas):
+      A: SKU Lusync
+      B: Producto (nombre, ignorado)
+      C: SKU Web
+      D: SKU Walmart
+      E: SKU Paris
+      F: SKU Falabella
+      G: SKU Ripley
+      H: SKU MercadoLibre
+      I: SKU Hites
+
+    Pobla DOS tablas:
+      1. sku_mapeo (legacy 1:1) — para compatibilidad
+      2. sku_mapeo_canal (nuevo multi-publicación) — para que UI muestre badges
+    """
     if not session.get("logged"): return jsonify({"ok": False, "error": "no autorizado"}), 401
     try:
         import io, openpyxl
+        from inventario import agregar_publicacion
+
         archivo = request.files.get("archivo")
         if not archivo:
             return jsonify({"ok": False, "error": "No se recibio archivo"})
@@ -2389,30 +2408,102 @@ def ruta_importar_excel():
         rows = list(ws.iter_rows(values_only=True))
         if len(rows) < 2:
             return jsonify({"ok": False, "error": "Archivo vacio o sin datos"})
+
         importados = 0
+        publicaciones_agregadas = 0
+        publicaciones_fallidas = 0
         errores = []
+        log = []
+
+        # Mapeo de columna → canal (índice de columna en el Excel)
+        # Col A=0 sku_lusync, B=1 producto, C=2 web, D=3 walmart, E=4 paris,
+        # F=5 falabella, G=6 ripley, H=7 mercadolibre, I=8 hites
+        canales_columnas = [
+            (2, "web"),
+            (3, "walmart"),
+            (4, "paris"),
+            (5, "falabella"),
+            (6, "ripley"),
+            (7, "mercadolibre"),
+            (8, "hites"),
+        ]
+
         for i, row in enumerate(rows[1:], start=2):
             try:
                 sku_lusync = str(row[0]).strip() if row[0] else ""
                 if not sku_lusync or sku_lusync == "None":
                     continue
+
+                # 1. Tabla legacy sku_mapeo (1:1)
                 skus = {
-                    "web":          str(row[2]).strip() if len(row)>2 and row[2] else "",
-                    "walmart":      str(row[3]).strip() if len(row)>3 and row[3] else "",
-                    "paris":        str(row[4]).strip() if len(row)>4 and row[4] else "",
-                    "falabella":    str(row[5]).strip() if len(row)>5 and row[5] else "",
-                    "ripley":       str(row[6]).strip() if len(row)>6 and row[6] else "",
-                    "mercadolibre": str(row[7]).strip() if len(row)>7 and row[7] else "",
-                    "hites":        str(row[8]).strip() if len(row)>8 and row[8] else "",
+                    "web":          str(row[2]).strip() if len(row) > 2 and row[2] else "",
+                    "walmart":      str(row[3]).strip() if len(row) > 3 and row[3] else "",
+                    "paris":        str(row[4]).strip() if len(row) > 4 and row[4] else "",
+                    "falabella":    str(row[5]).strip() if len(row) > 5 and row[5] else "",
+                    "ripley":       str(row[6]).strip() if len(row) > 6 and row[6] else "",
+                    "mercadolibre": str(row[7]).strip() if len(row) > 7 and row[7] else "",
+                    "hites":        str(row[8]).strip() if len(row) > 8 and row[8] else "",
                 }
                 guardar_sku_mapeo_fila(sku_lusync, skus)
                 importados += 1
+
+                # 2. Tabla nueva sku_mapeo_canal (multi-publicación)
+                # Para cada canal con SKU, agregamos UNA publicación
+                for col_idx, canal in canales_columnas:
+                    if col_idx < len(row) and row[col_idx]:
+                        sku_canal_val = str(row[col_idx]).strip()
+                        if sku_canal_val and sku_canal_val.lower() not in ("none", "nan", "null", ""):
+                            # Para MELI: si el SKU empieza con MLC, es item_id; sino es seller_sku
+                            item_id_canal = None
+                            sku_para_guardar = sku_canal_val
+                            if canal == "mercadolibre" and sku_canal_val.upper().startswith("MLC"):
+                                item_id_canal = sku_canal_val
+                                # Pero también guardamos el SKU canal como referencia
+                                sku_para_guardar = sku_canal_val
+                            try:
+                                mapeo_id = agregar_publicacion(
+                                    sku_lusync=sku_lusync,
+                                    canal=canal,
+                                    sku_canal=sku_para_guardar,
+                                    item_id_canal=item_id_canal,
+                                    es_catalogo=False,
+                                    notas="import_excel"
+                                )
+                                if mapeo_id:
+                                    publicaciones_agregadas += 1
+                                else:
+                                    publicaciones_fallidas += 1
+                                    log.append(f"Fila {i} {sku_lusync} → {canal}:{sku_canal_val}: agregar_publicacion devolvió None")
+                            except Exception as e_pub:
+                                publicaciones_fallidas += 1
+                                log.append(f"Fila {i} {sku_lusync} → {canal}:{sku_canal_val}: {e_pub}")
+
             except Exception as e:
                 errores.append(f"Fila {i}: {str(e)}")
-        registrar_importacion_mapeo(session.get("usuario","Sistema"), archivo.filename, importados, [{"fila": i, "error": e} for i, e in enumerate(errores)])
-        return jsonify({"ok": True, "importados": importados, "errores": errores})
+
+        registrar_importacion_mapeo(
+            session.get("usuario", "Sistema"),
+            archivo.filename,
+            importados,
+            [{"fila": i, "error": e} for i, e in enumerate(errores)]
+        )
+        registrar_audit(
+            session.get("usuario", "Sistema"), request.remote_addr,
+            "importar_mapeo_excel",
+            detalle=f"importados={importados} pubs={publicaciones_agregadas} pubs_fallidas={publicaciones_fallidas}"
+        )
+
+        return jsonify({
+            "ok": True,
+            "importados": importados,
+            "publicaciones_agregadas": publicaciones_agregadas,
+            "publicaciones_fallidas": publicaciones_fallidas,
+            "errores": errores,
+            "log_publicaciones": log[:50]  # primeros 50 errores de pub
+        })
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        import traceback
+        return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
 
 
 
@@ -6666,6 +6757,107 @@ def ruta_sku_mapeo_canal_contar():
         return jsonify({"ok": True, "datos": contar_publicaciones_por_sku()})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# MIGRACIÓN: sku_mapeo (legacy) → sku_mapeo_canal (nuevo multi-publicación)
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/migrar_sku_mapeo_a_canal", methods=["GET", "POST"])
+def admin_migrar_sku_mapeo_a_canal():
+    """Lee la tabla legacy sku_mapeo (1:1) y crea filas en sku_mapeo_canal.
+
+    Para cada fila de sku_mapeo, crea hasta 7 filas en sku_mapeo_canal
+    (una por cada canal con SKU no vacío).
+
+    Es idempotente: si una publicación ya existe en sku_mapeo_canal, la actualiza
+    pero no la duplica (gracias al UNIQUE de la tabla).
+
+    Query params:
+      ?dry_run=1   simula sin escribir
+    """
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+
+    dry_run = request.args.get("dry_run", "0") == "1"
+
+    try:
+        from inventario import listar_sku_mapeo, agregar_publicacion
+
+        mapeos = listar_sku_mapeo()
+        log = []
+        publicaciones_creadas = 0
+        publicaciones_fallidas = 0
+        skus_procesados = 0
+
+        # Mapeo campo BD → canal
+        campos_canal = [
+            ("sku_web",          "web"),
+            ("sku_walmart",      "walmart"),
+            ("sku_paris",        "paris"),
+            ("sku_falabella",    "falabella"),
+            ("sku_ripley",       "ripley"),
+            ("sku_mercadolibre", "mercadolibre"),
+            ("sku_hites",        "hites"),
+        ]
+
+        for fila in mapeos:
+            sku_lusync = (fila.get("sku_lusync") or "").strip()
+            if not sku_lusync:
+                continue
+            skus_procesados += 1
+
+            for campo_bd, canal in campos_canal:
+                sku_canal_val = (fila.get(campo_bd) or "").strip()
+                if not sku_canal_val or sku_canal_val.lower() in ("none", "nan", "null"):
+                    continue
+
+                # Para MELI: detectar si es item_id (MLC...) o seller_sku
+                item_id_canal = None
+                if canal == "mercadolibre" and sku_canal_val.upper().startswith("MLC"):
+                    item_id_canal = sku_canal_val
+
+                if dry_run:
+                    log.append(f"[DRY] {sku_lusync} → {canal}:{sku_canal_val}" +
+                               (f" (item_id={item_id_canal})" if item_id_canal else ""))
+                    publicaciones_creadas += 1
+                else:
+                    try:
+                        mapeo_id = agregar_publicacion(
+                            sku_lusync=sku_lusync,
+                            canal=canal,
+                            sku_canal=sku_canal_val,
+                            item_id_canal=item_id_canal,
+                            es_catalogo=False,
+                            notas="migracion_legacy"
+                        )
+                        if mapeo_id:
+                            publicaciones_creadas += 1
+                            log.append(f"✓ {sku_lusync} → {canal}:{sku_canal_val} (id={mapeo_id})")
+                        else:
+                            publicaciones_fallidas += 1
+                            log.append(f"✗ {sku_lusync} → {canal}:{sku_canal_val}: agregar devolvió None")
+                    except Exception as e:
+                        publicaciones_fallidas += 1
+                        log.append(f"✗ {sku_lusync} → {canal}:{sku_canal_val}: {e}")
+
+        if not dry_run:
+            registrar_audit(
+                session.get("usuario", "Sistema"), request.remote_addr,
+                "migrar_sku_mapeo_a_canal",
+                detalle=f"skus={skus_procesados} pubs_creadas={publicaciones_creadas} fallidas={publicaciones_fallidas}"
+            )
+
+        return jsonify({
+            "ok": True,
+            "dry_run": dry_run,
+            "skus_procesados": skus_procesados,
+            "publicaciones_creadas": publicaciones_creadas,
+            "publicaciones_fallidas": publicaciones_fallidas,
+            "log": log[:200]  # primeras 200 líneas
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
 
 
 if __name__ == "__main__":
