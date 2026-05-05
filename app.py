@@ -821,7 +821,11 @@ def _sync_ripley_automatico():
 
 
 def _sync_woo_automatico():
-    """Sync órdenes + cancelaciones WooCommerce cada 10 min."""
+    """Sync órdenes + cancelaciones WooCommerce cada 10 min.
+    
+    Si el sitio Woo (babymine.cl) tiene problemas SSL/timeout, sale rápido sin afectar
+    los syncs de otros marketplaces.
+    """
     if _sync_locks["woo"]["running"]:
         print("[Scheduler Woo] Ya hay un sync corriendo, salto")
         return
@@ -832,21 +836,36 @@ def _sync_woo_automatico():
         canceladas = 0
         errores = []
 
-        # Órdenes en estado processing (= pagadas)
+        # Fecha UTC moderna (datetime.utcnow() está deprecated en Python 3.12+)
+        from datetime import timezone as _tz
+        fecha_corte = (datetime.now(_tz.utc) - timedelta(days=2)).isoformat()
+
+        # Órdenes nuevas (processing/completed)
+        ordenes_nuevas = []
         try:
             res = requests.get(
                 "https://www.babymine.cl/wp-json/wc/v3/orders",
                 params={
                     "consumer_key": WC_KEY, "consumer_secret": WC_SECRET,
                     "status": "processing,completed", "per_page": 50,
-                    "after": (datetime.utcnow() - timedelta(days=2)).isoformat()
+                    "after": fecha_corte
                 },
-                timeout=15
+                timeout=10  # Timeout corto: si Woo está lento o caído, abortamos rápido
             )
-            ordenes_nuevas = res.json() if res.status_code == 200 else []
+            if res.status_code == 200:
+                ordenes_nuevas = res.json() or []
+            else:
+                print(f"[Scheduler Woo] HTTP {res.status_code} consultando órdenes nuevas")
+        except requests.exceptions.SSLError as e:
+            print(f"[Scheduler Woo] SSL error en babymine.cl (sitio Woo no responde): {str(e)[:120]}")
+            print(f"[Scheduler Woo] Saltando sync Woo esta vez. Verificar certificado SSL del sitio.")
+            return  # Salir limpio, otros marketplaces siguen
+        except requests.exceptions.Timeout:
+            print(f"[Scheduler Woo] Timeout consultando Woo (>10s) — sitio lento. Saltando.")
+            return
         except Exception as e:
             print(f"[Scheduler Woo] Error obteniendo nuevas: {e}")
-            ordenes_nuevas = []
+            return
 
         for o in ordenes_nuevas:
             try:
@@ -880,18 +899,25 @@ def _sync_woo_automatico():
             except Exception as e:
                 errores.append(f"Woo orden: {e}")
 
-        # Órdenes canceladas
+        # Órdenes canceladas (mismo manejo de errores robusto)
+        ordenes_canc = []
         try:
             res_c = requests.get(
                 "https://www.babymine.cl/wp-json/wc/v3/orders",
                 params={
                     "consumer_key": WC_KEY, "consumer_secret": WC_SECRET,
                     "status": "cancelled,refunded,failed", "per_page": 50,
-                    "after": (datetime.utcnow() - timedelta(days=2)).isoformat()
+                    "after": fecha_corte
                 },
-                timeout=15
+                timeout=10
             )
-            ordenes_canc = res_c.json() if res_c.status_code == 200 else []
+            if res_c.status_code == 200:
+                ordenes_canc = res_c.json() or []
+            else:
+                print(f"[Scheduler Woo] HTTP {res_c.status_code} consultando canceladas")
+        except (requests.exceptions.SSLError, requests.exceptions.Timeout) as e:
+            print(f"[Scheduler Woo] Saltando canceladas por error red: {str(e)[:80]}")
+            ordenes_canc = []
         except Exception as e:
             print(f"[Scheduler Woo] Error obteniendo canceladas: {e}")
             ordenes_canc = []
@@ -7917,6 +7943,242 @@ def admin_limpiar_duplicados_mapeo():
 #   - Walmart: wpid o productId por sku del seller
 #   - París: el sellerSku ES el SKU mismo, raramente hay item_id distinto
 # ════════════════════════════════════════════════════════════════════════════
+
+# ════════════════════════════════════════════════════════════════════════════
+# IMPORTAR STOCK MELI FULL DESDE EXCEL
+# ════════════════════════════════════════════════════════════════════════════
+# Procesa el reporte de stock que MELI exporta (formato exacto del usuario):
+#  - Columna "SKU"                → identificador del producto
+#  - Columna "Aptas para vender"  → stock REAL en MELI Full (vendible)
+#  - Columna "En camino a Full"   → stock en tránsito (entrará pronto)
+#
+# Lógica:
+#  1. Lee el Excel/CSV
+#  2. Para cada SKU que matchee con tu Lusync:
+#     - SET stock en MELI_FULL = "Aptas para vender"
+#     - SET stock en MELI_FULL_TRANSITO = "En camino a Full"
+#  3. Reporta SKUs no matched
+#  4. NO toca BODEGA_CENTRAL (es separado)
+#  5. NO sincroniza a otros marketplaces (Full no afecta Central)
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/importar_stock_full_meli", methods=["GET", "POST"])
+def admin_importar_stock_full_meli():
+    """Importa stock MELI Full desde el Excel oficial de MELI.
+    
+    Acepta:
+    - GET: muestra instrucciones / preview de SKUs en Lusync
+    - POST con archivo: importa
+      - file=<archivo.xlsx o .csv>
+    - POST con JSON: importa desde lista
+      - {"items": [{"sku": "ODJM001", "aptas": 0, "transito": 30}, ...]}
+    
+    Query params:
+    - dry_run=1: simula sin escribir
+    """
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    
+    dry_run = request.args.get("dry_run", "0") == "1"
+    
+    # GET → instrucciones
+    if request.method == "GET":
+        productos = cargar_productos()
+        return jsonify({
+            "instrucciones": [
+                "Sube el Excel exportado de MELI Full (botón 'Exportar' en la sección Stock Full)",
+                "El Excel debe tener las columnas: SKU, Aptas para vender, En camino a Full",
+                "POST este endpoint con archivo en form-data 'file' o JSON {items: [...]}"
+            ],
+            "skus_lusync_disponibles": len(productos),
+            "skus_ejemplo": [p["sku"] for p in productos[:10]],
+            "agregar_dry_run": "?dry_run=1 para simular sin escribir"
+        })
+    
+    # POST → procesar
+    items_a_procesar = []
+    
+    try:
+        # ── Modo 1: archivo subido ──
+        if "file" in request.files:
+            file = request.files["file"]
+            filename = (file.filename or "").lower()
+            
+            try:
+                if filename.endswith((".xlsx", ".xls")):
+                    import openpyxl
+                    from io import BytesIO
+                    wb = openpyxl.load_workbook(BytesIO(file.read()), data_only=True)
+                    ws = wb.active
+                    
+                    # Encontrar columnas por nombre (case-insensitive, con/sin acentos)
+                    headers_row = None
+                    for row_idx in range(1, 6):  # buscar headers en primeras 5 filas
+                        row = [str(c.value or "").strip() for c in ws[row_idx]]
+                        if any("sku" in h.lower() for h in row) and any("apta" in h.lower() for h in row):
+                            headers_row = row_idx
+                            break
+                    
+                    if headers_row is None:
+                        return jsonify({"ok": False, "error": "No se encontró fila de headers con 'SKU' y 'Aptas'"}), 400
+                    
+                    headers = [str(c.value or "").strip().lower() for c in ws[headers_row]]
+                    
+                    # Identificar índices de columnas
+                    col_sku = next((i for i, h in enumerate(headers) if h == "sku"), None)
+                    col_aptas = next((i for i, h in enumerate(headers) if "apta" in h and "vender" in h), None)
+                    col_transito = next((i for i, h in enumerate(headers) if "camino" in h and "full" in h), None)
+                    
+                    if col_sku is None or col_aptas is None:
+                        return jsonify({
+                            "ok": False,
+                            "error": "Columnas requeridas no encontradas",
+                            "headers_detectados": headers,
+                            "necesarias": ["SKU", "Aptas para vender (en Unidades en Full)"]
+                        }), 400
+                    
+                    # Leer filas
+                    for row in ws.iter_rows(min_row=headers_row+1, values_only=True):
+                        if not row or not row[col_sku]: continue
+                        sku = str(row[col_sku]).strip()
+                        if not sku: continue
+                        try:
+                            aptas = int(row[col_aptas] or 0)
+                        except (ValueError, TypeError):
+                            aptas = 0
+                        try:
+                            transito = int(row[col_transito] or 0) if col_transito is not None else 0
+                        except (ValueError, TypeError):
+                            transito = 0
+                        items_a_procesar.append({"sku": sku, "aptas": aptas, "transito": transito})
+                
+                elif filename.endswith(".csv") or filename.endswith(".tsv"):
+                    import csv
+                    from io import StringIO
+                    sep = "\t" if filename.endswith(".tsv") else ","
+                    text = file.read().decode("utf-8-sig")
+                    reader = csv.DictReader(StringIO(text), delimiter=sep)
+                    for row in reader:
+                        # Normalizar keys
+                        row_norm = {k.lower().strip(): v for k, v in row.items() if k}
+                        sku = (row_norm.get("sku") or "").strip()
+                        if not sku: continue
+                        # Buscar columnas con nombre flexible
+                        aptas_val = None
+                        transito_val = None
+                        for k, v in row_norm.items():
+                            if "apta" in k and "vender" in k:
+                                aptas_val = v
+                            elif "camino" in k and "full" in k:
+                                transito_val = v
+                        try: aptas = int(aptas_val or 0)
+                        except: aptas = 0
+                        try: transito = int(transito_val or 0)
+                        except: transito = 0
+                        items_a_procesar.append({"sku": sku, "aptas": aptas, "transito": transito})
+                else:
+                    return jsonify({"ok": False, "error": "Formato no soportado. Usa .xlsx, .xls, .csv o .tsv"}), 400
+            except Exception as e:
+                import traceback
+                return jsonify({
+                    "ok": False, "error": f"Error parseando archivo: {e}",
+                    "trace": traceback.format_exc()
+                }), 400
+        
+        # ── Modo 2: JSON directo ──
+        elif request.is_json:
+            data = request.get_json()
+            items_a_procesar = data.get("items", [])
+        
+        else:
+            return jsonify({"ok": False, "error": "Sube file=<archivo> o JSON con items[]"}), 400
+        
+        if not items_a_procesar:
+            return jsonify({"ok": False, "error": "No se encontraron items para procesar"}), 400
+        
+        # ── Verificar bodegas existen ──
+        from inventario import (init_bodegas, set_stock_bodega, listar_bodegas,
+                                cargar_productos as _cp)
+        init_bodegas()  # Crea MELI_FULL y MELI_FULL_TRANSITO si faltan
+        
+        # ── Procesar items ──
+        productos_lusync = {p["sku"].upper(): p for p in _cp()}
+        
+        resultados = {
+            "matched": [],
+            "no_matched": [],
+            "actualizados_full": 0,
+            "actualizados_transito": 0,
+            "total_aptas": 0,
+            "total_transito": 0,
+            "errores": []
+        }
+        
+        for item in items_a_procesar:
+            sku = (item.get("sku") or "").strip()
+            aptas = int(item.get("aptas", 0) or 0)
+            transito = int(item.get("transito", 0) or 0)
+            
+            if not sku: continue
+            
+            # Match exacto (case-insensitive)
+            sku_upper = sku.upper()
+            if sku_upper not in productos_lusync:
+                resultados["no_matched"].append({
+                    "sku_excel": sku, "aptas": aptas, "transito": transito
+                })
+                continue
+            
+            sku_real = productos_lusync[sku_upper]["sku"]
+            
+            try:
+                if not dry_run:
+                    # Stock APTAS PARA VENDER → MELI_FULL
+                    set_stock_bodega(sku_real, "MELI_FULL", aptas)
+                    resultados["actualizados_full"] += 1
+                    # Stock EN CAMINO → MELI_FULL_TRANSITO
+                    set_stock_bodega(sku_real, "MELI_FULL_TRANSITO", transito)
+                    resultados["actualizados_transito"] += 1
+                
+                resultados["matched"].append({
+                    "sku": sku_real,
+                    "aptas": aptas,
+                    "transito": transito
+                })
+                resultados["total_aptas"] += aptas
+                resultados["total_transito"] += transito
+            except Exception as e:
+                resultados["errores"].append(f"SKU {sku_real}: {str(e)[:80]}")
+        
+        # ── Audit log ──
+        if not dry_run:
+            registrar_audit(
+                session.get("usuario", "Sistema"), request.remote_addr,
+                "importar_stock_full_meli",
+                detalle=f"matched={len(resultados['matched'])} no_match={len(resultados['no_matched'])} aptas={resultados['total_aptas']} transito={resultados['total_transito']}"
+            )
+        
+        return jsonify({
+            "ok": True,
+            "dry_run": dry_run,
+            "resumen": {
+                "items_en_excel": len(items_a_procesar),
+                "matched_con_lusync": len(resultados["matched"]),
+                "no_matched": len(resultados["no_matched"]),
+                "stock_aptas_total": resultados["total_aptas"],
+                "stock_transito_total": resultados["total_transito"],
+            },
+            "matched": resultados["matched"][:50],  # Limitar para no saturar response
+            "no_matched": resultados["no_matched"],
+            "errores": resultados["errores"]
+        })
+    
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "ok": False, "error": str(e),
+            "trace": traceback.format_exc()
+        }), 500
+
 
 @app.route("/admin/enriquecer_item_ids", methods=["GET", "POST"])
 def admin_enriquecer_item_ids():

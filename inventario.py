@@ -1343,14 +1343,15 @@ def stats_kpis_dashboard(fecha_desde, fecha_hasta):
 # (independiente de si usa fulfillment o no).
 BODEGAS_DEFAULT = [
     # (codigo, nombre, tipo, canal_asociado)
-    ("CENTRAL",      "Bodega Central",         "propia",      None),
-    ("MELI_FULL",    "MercadoLibre Full",      "fulfillment", "mercadolibre"),
-    ("PARIS_CD",     "París Fulfillment",      "fulfillment", "paris"),
-    ("WALMART_FBM",  "Walmart Fulfillment",    "fulfillment", "walmart"),
-    ("FALABELLA_FBM","Falabella Fulfillment",  "fulfillment", "falabella"),
-    ("RIPLEY_FBM",   "Ripley Fulfillment",     "fulfillment", "ripley"),
-    ("HITES_FBM",    "Hites Fulfillment",      "fulfillment", "hites"),
-    ("WOO_DROP",     "WooCommerce Dropship",   "dropship",    "woocommerce"),
+    ("CENTRAL",          "Bodega Central",            "propia",      None),
+    ("MELI_FULL",        "MercadoLibre Full",         "fulfillment", "mercadolibre"),
+    ("MELI_FULL_TRANSITO","En camino a MELI Full",    "transito",    "mercadolibre"),
+    ("PARIS_CD",         "París Fulfillment",         "fulfillment", "paris"),
+    ("WALMART_FBM",      "Walmart Fulfillment",       "fulfillment", "walmart"),
+    ("FALABELLA_FBM",    "Falabella Fulfillment",     "fulfillment", "falabella"),
+    ("RIPLEY_FBM",       "Ripley Fulfillment",        "fulfillment", "ripley"),
+    ("HITES_FBM",        "Hites Fulfillment",         "fulfillment", "hites"),
+    ("WOO_DROP",         "WooCommerce Dropship",      "dropship",    "woocommerce"),
 ]
 
 
