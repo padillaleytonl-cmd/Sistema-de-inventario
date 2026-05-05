@@ -7216,6 +7216,685 @@ def admin_limpiar_duplicados_mapeo():
 #   - Para MELI: si el SKU empieza con MLC, lo guarda como item_id_canal
 # ════════════════════════════════════════════════════════════════════════════
 
+# ════════════════════════════════════════════════════════════════════════════
+# ENRIQUECIMIENTO DE item_id_canal (los IDs específicos de cada marketplace)
+# ════════════════════════════════════════════════════════════════════════════
+# Después del reset+repoblar desde Excel, todas las publicaciones tienen
+# item_id_canal=NULL porque el Excel solo tiene SKUs.
+#
+# Este endpoint llena los item_id consultando cada marketplace y haciendo match
+# por SKU EXACTO (sin similitud por nombre, evitando falsos positivos).
+#
+# Por canal:
+#   - MELI: SELLER_SKU del attribute → item_id es el MLC...
+#   - Falabella: shop_sku numérico (ej: 116363873) por SellerSku
+#   - Ripley: product_id Mirakl por shop_sku
+#   - Walmart: wpid o productId por sku del seller
+#   - París: el sellerSku ES el SKU mismo, raramente hay item_id distinto
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/enriquecer_item_ids", methods=["GET", "POST"])
+def admin_enriquecer_item_ids():
+    """Enriquece sku_mapeo_canal con los item_ids específicos de cada marketplace.
+
+    NO crea filas nuevas. Solo UPDATEa las que tienen item_id_canal=NULL.
+    Match SOLO por SKU exacto (case-insensitive). Sin similitud de nombre.
+
+    Query params:
+      ?canales=mercadolibre,falabella,ripley,walmart,paris  (default: todos)
+      ?dry_run=1   simula sin escribir
+    """
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+
+    canales_str = request.args.get("canales", "mercadolibre,falabella,ripley,walmart,paris")
+    canales_pedidos = [c.strip().lower() for c in canales_str.split(",") if c.strip()]
+    dry_run = request.args.get("dry_run", "0") == "1"
+
+    try:
+        from inventario import get_conn
+        from psycopg2.extras import execute_values
+        import time
+
+        t_start = time.time()
+        log = []
+        resumen_por_canal = {}
+
+        # ── Helper: aplicar updates en bulk ──
+        def _aplicar_updates(canal, updates):
+            """updates = [(item_id, sku_lusync, sku_canal), ...]"""
+            if not updates:
+                return 0
+            if dry_run:
+                return len(updates)
+            conn = get_conn(); cur = conn.cursor()
+            actualizados = 0
+            try:
+                # Para cada update, hacer UPDATE puntual (porque los registros tienen sku distintos)
+                # Usamos batch via execute_batch o simplemente loop
+                for item_id, sku_lusync, sku_canal in updates:
+                    cur.execute("""
+                        UPDATE sku_mapeo_canal
+                        SET item_id_canal = %s,
+                            actualizado_at = NOW(),
+                            notas = COALESCE(notas, '') || ' | enriquecido_' || %s
+                        WHERE canal = %s
+                          AND sku_lusync = %s
+                          AND sku_canal = %s
+                          AND item_id_canal IS NULL
+                          AND activo = TRUE
+                    """, (item_id, canal, canal, sku_lusync, sku_canal))
+                    if cur.rowcount > 0:
+                        actualizados += 1
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                log.append(f"❌ Error aplicando updates de {canal}: {e}")
+                actualizados = 0
+            finally:
+                cur.close(); conn.close()
+            return actualizados
+
+        # ── Helper: obtener mapeos pendientes (sin item_id) por canal ──
+        def _obtener_mapeos_sin_item(canal):
+            conn = get_conn(); cur = conn.cursor()
+            cur.execute("""
+                SELECT sku_lusync, sku_canal FROM sku_mapeo_canal
+                WHERE canal = %s AND item_id_canal IS NULL AND activo = TRUE
+            """, (canal,))
+            rows = cur.fetchall()
+            cur.close(); conn.close()
+            # Diccionario: {sku_canal_upper: (sku_lusync, sku_canal_original)}
+            return {r[1].upper(): (r[0], r[1]) for r in rows}
+
+        # ╔════════════════════════════════════════════════════════════╗
+        # ║ MERCADOLIBRE                                               ║
+        # ╚════════════════════════════════════════════════════════════╝
+        if "mercadolibre" in canales_pedidos:
+            t_canal = time.time()
+            try:
+                from mercadolibre import get_meli_token
+                from inventario import get_meli_auth
+                import requests
+
+                pendientes = _obtener_mapeos_sin_item("mercadolibre")
+                log.append(f"[MELI] {len(pendientes)} pendientes sin item_id")
+
+                if pendientes:
+                    token = get_meli_token()
+                    auth = get_meli_auth() or {}
+                    seller_id = auth.get("user_id")
+                    if not seller_id:
+                        r_user = requests.get("https://api.mercadolibre.com/users/me",
+                                              headers={"Authorization": f"Bearer {token}"}, timeout=10)
+                        seller_id = r_user.json().get("id") if r_user.status_code == 200 else None
+
+                    if not seller_id:
+                        log.append(f"[MELI] ❌ No se pudo obtener seller_id")
+                        resumen_por_canal["mercadolibre"] = {"error": "sin seller_id", "actualizados": 0}
+                    else:
+                        # Obtener item_ids del seller
+                        item_ids = []
+                        offset = 0
+                        while True:
+                            r_search = requests.get(
+                                f"https://api.mercadolibre.com/users/{seller_id}/items/search",
+                                params={"limit": 50, "offset": offset},
+                                headers={"Authorization": f"Bearer {token}"},
+                                timeout=15
+                            )
+                            if r_search.status_code != 200: break
+                            d = r_search.json()
+                            ids_lote = d.get("results", []) or []
+                            if not ids_lote: break
+                            item_ids.extend(ids_lote)
+                            offset += len(ids_lote)
+                            if offset >= d.get("paging", {}).get("total", 0) or len(item_ids) >= 5000:
+                                break
+
+                        log.append(f"[MELI] {len(item_ids)} publicaciones en MELI")
+
+                        # Obtener detalle (con SELLER_SKU) en lotes de 20
+                        updates = []
+                        meli_multi_pubs = {}  # sku_canal_upper → [item_ids]
+                        for i in range(0, len(item_ids), 20):
+                            ids_param = ",".join(item_ids[i:i+20])
+                            r_items = requests.get(
+                                "https://api.mercadolibre.com/items",
+                                params={"ids": ids_param, "attributes": "id,attributes,seller_custom_field"},
+                                headers={"Authorization": f"Bearer {token}"},
+                                timeout=20
+                            )
+                            if r_items.status_code != 200: continue
+                            for item_resp in r_items.json():
+                                if item_resp.get("code") != 200: continue
+                                body = item_resp.get("body", {})
+                                item_id_meli = body.get("id", "")
+                                seller_sku = ""
+                                for attr in body.get("attributes", []) or []:
+                                    if attr.get("id") == "SELLER_SKU":
+                                        seller_sku = (attr.get("value_name") or "").strip()
+                                        break
+                                if not seller_sku:
+                                    seller_sku = (body.get("seller_custom_field") or "").strip()
+                                if not seller_sku:
+                                    continue
+                                seller_sku_upper = seller_sku.upper()
+
+                                if seller_sku_upper in pendientes:
+                                    sku_lusync, sku_canal_orig = pendientes[seller_sku_upper]
+                                    # Si ya hay otro item_id para este SKU, lo guardamos en meli_multi_pubs
+                                    # para crearlo como fila nueva (multi-publicación)
+                                    if seller_sku_upper not in meli_multi_pubs:
+                                        meli_multi_pubs[seller_sku_upper] = []
+                                    meli_multi_pubs[seller_sku_upper].append({
+                                        "item_id": item_id_meli,
+                                        "sku_lusync": sku_lusync,
+                                        "sku_canal": sku_canal_orig
+                                    })
+
+                        # Para MELI: la primera publicación → UPDATE de la fila existente
+                        # Las adicionales (2da, 3ra...) → INSERT nuevas filas (multi-pub)
+                        actualizados = 0
+                        nuevas_multipub = 0
+
+                        for sku_upper, pubs in meli_multi_pubs.items():
+                            if not pubs:
+                                continue
+                            primera = pubs[0]
+                            updates.append((
+                                primera["item_id"],
+                                primera["sku_lusync"],
+                                primera["sku_canal"]
+                            ))
+                            # Las demás se insertan como nuevas filas
+                            if len(pubs) > 1 and not dry_run:
+                                conn = get_conn(); cur = conn.cursor()
+                                filas_nuevas = [
+                                    (p["sku_lusync"], "mercadolibre", p["sku_canal"],
+                                     p["item_id"], False, "enriquecimiento_multi_pub")
+                                    for p in pubs[1:]
+                                ]
+                                try:
+                                    execute_values(
+                                        cur,
+                                        """INSERT INTO sku_mapeo_canal
+                                           (sku_lusync, canal, sku_canal, item_id_canal, es_catalogo, notas, activo, creado_at, actualizado_at)
+                                           VALUES %s
+                                           ON CONFLICT DO NOTHING""",
+                                        filas_nuevas,
+                                        template="(%s, %s, %s, %s, %s, %s, TRUE, NOW(), NOW())",
+                                        page_size=200
+                                    )
+                                    nuevas_multipub += cur.rowcount
+                                    conn.commit()
+                                except Exception as e:
+                                    conn.rollback()
+                                    log.append(f"[MELI] Error insertando multi-pub: {e}")
+                                finally:
+                                    cur.close(); conn.close()
+                            elif len(pubs) > 1 and dry_run:
+                                nuevas_multipub += len(pubs) - 1
+
+                        actualizados = _aplicar_updates("mercadolibre", updates)
+
+                        resumen_por_canal["mercadolibre"] = {
+                            "publicaciones_meli": len(item_ids),
+                            "pendientes_sin_item_id": len(pendientes),
+                            "match_exacto_skus": len(meli_multi_pubs),
+                            "actualizados": actualizados,
+                            "multi_pubs_creadas": nuevas_multipub,
+                            "tiempo_seg": f"{time.time()-t_canal:.2f}"
+                        }
+                        log.append(f"[MELI] ✓ Actualizados: {actualizados} | Multi-pubs nuevas: {nuevas_multipub}")
+            except Exception as e:
+                log.append(f"[MELI] ❌ {e}")
+                resumen_por_canal["mercadolibre"] = {"error": str(e)}
+
+        # ╔════════════════════════════════════════════════════════════╗
+        # ║ FALABELLA                                                  ║
+        # ╚════════════════════════════════════════════════════════════╝
+        if "falabella" in canales_pedidos:
+            t_canal = time.time()
+            try:
+                from falabella import obtener_productos_falabella
+
+                pendientes = _obtener_mapeos_sin_item("falabella")
+                log.append(f"[Falabella] {len(pendientes)} pendientes sin item_id")
+
+                if pendientes:
+                    # Falabella tiene paginación: traer todos los productos
+                    productos_fa = []
+                    offset = 0
+                    while True:
+                        try:
+                            r = obtener_productos_falabella(limit=100, offset=offset, filter_status="all")
+                            if not r.get("ok"): break
+                            lote = r.get("productos", []) or []
+                            if not lote: break
+                            productos_fa.extend(lote)
+                            offset += len(lote)
+                            if len(lote) < 100 or offset >= 5000: break
+                        except Exception as e:
+                            log.append(f"[Falabella] Error en offset {offset}: {e}")
+                            break
+                    log.append(f"[Falabella] {len(productos_fa)} productos en API")
+
+                    updates = []
+                    for prod in productos_fa:
+                        seller_sku = (prod.get("SellerSku") or prod.get("sku") or "").strip()
+                        shop_sku = (str(prod.get("ShopSku") or prod.get("shop_sku") or "")).strip()
+                        if not seller_sku or not shop_sku:
+                            continue
+                        if seller_sku.upper() in pendientes:
+                            sku_lusync, sku_canal_orig = pendientes[seller_sku.upper()]
+                            updates.append((shop_sku, sku_lusync, sku_canal_orig))
+
+                    actualizados = _aplicar_updates("falabella", updates)
+                    resumen_por_canal["falabella"] = {
+                        "productos_api": len(productos_fa),
+                        "pendientes_sin_item_id": len(pendientes),
+                        "match_exacto": len(updates),
+                        "actualizados": actualizados,
+                        "tiempo_seg": f"{time.time()-t_canal:.2f}"
+                    }
+                    log.append(f"[Falabella] ✓ Actualizados: {actualizados}")
+            except Exception as e:
+                log.append(f"[Falabella] ❌ {e}")
+                resumen_por_canal["falabella"] = {"error": str(e)}
+
+        # ╔════════════════════════════════════════════════════════════╗
+        # ║ RIPLEY                                                     ║
+        # ╚════════════════════════════════════════════════════════════╝
+        if "ripley" in canales_pedidos:
+            t_canal = time.time()
+            try:
+                from ripley import obtener_productos_ripley
+
+                pendientes = _obtener_mapeos_sin_item("ripley")
+                log.append(f"[Ripley] {len(pendientes)} pendientes sin item_id")
+
+                if pendientes:
+                    r = obtener_productos_ripley(max_paginas=20, page_size=100)
+                    if not r.get("ok"):
+                        log.append(f"[Ripley] Error API: {r.get('error', '?')}")
+                        resumen_por_canal["ripley"] = {"error": r.get("error")}
+                    else:
+                        productos_rp = r.get("productos", []) or []
+                        log.append(f"[Ripley] {len(productos_rp)} productos en API")
+
+                        updates = []
+                        for prod in productos_rp:
+                            # Ripley/Mirakl: el SKU es shop_sku, item_id es product_id o offer_id
+                            shop_sku = (prod.get("shop_sku") or prod.get("sku") or "").strip()
+                            product_id = (str(prod.get("product_id") or prod.get("id") or "")).strip()
+                            if not shop_sku or not product_id:
+                                continue
+                            if shop_sku.upper() in pendientes:
+                                sku_lusync, sku_canal_orig = pendientes[shop_sku.upper()]
+                                updates.append((product_id, sku_lusync, sku_canal_orig))
+
+                        actualizados = _aplicar_updates("ripley", updates)
+                        resumen_por_canal["ripley"] = {
+                            "productos_api": len(productos_rp),
+                            "pendientes_sin_item_id": len(pendientes),
+                            "match_exacto": len(updates),
+                            "actualizados": actualizados,
+                            "tiempo_seg": f"{time.time()-t_canal:.2f}"
+                        }
+                        log.append(f"[Ripley] ✓ Actualizados: {actualizados}")
+            except Exception as e:
+                log.append(f"[Ripley] ❌ {e}")
+                resumen_por_canal["ripley"] = {"error": str(e)}
+
+        # ╔════════════════════════════════════════════════════════════╗
+        # ║ WALMART                                                    ║
+        # ╚════════════════════════════════════════════════════════════╝
+        if "walmart" in canales_pedidos:
+            t_canal = time.time()
+            try:
+                from walmart import obtener_productos_walmart
+
+                pendientes = _obtener_mapeos_sin_item("walmart")
+                log.append(f"[Walmart] {len(pendientes)} pendientes sin item_id")
+
+                if pendientes:
+                    r = obtener_productos_walmart(limit=50, max_paginas=20)
+                    if not r.get("ok"):
+                        log.append(f"[Walmart] Error API: {r.get('error', '?')}")
+                        resumen_por_canal["walmart"] = {"error": r.get("error")}
+                    else:
+                        productos_wm = r.get("productos", []) or []
+                        log.append(f"[Walmart] {len(productos_wm)} productos en API")
+
+                        updates = []
+                        for prod in productos_wm:
+                            # Walmart: sku es seller_sku, item_id es wpid o productId
+                            seller_sku = (prod.get("sku") or "").strip()
+                            wpid = (str(prod.get("wpid") or prod.get("productId") or prod.get("mart_item_id") or "")).strip()
+                            if not seller_sku or not wpid:
+                                continue
+                            if seller_sku.upper() in pendientes:
+                                sku_lusync, sku_canal_orig = pendientes[seller_sku.upper()]
+                                updates.append((wpid, sku_lusync, sku_canal_orig))
+
+                        actualizados = _aplicar_updates("walmart", updates)
+                        resumen_por_canal["walmart"] = {
+                            "productos_api": len(productos_wm),
+                            "pendientes_sin_item_id": len(pendientes),
+                            "match_exacto": len(updates),
+                            "actualizados": actualizados,
+                            "tiempo_seg": f"{time.time()-t_canal:.2f}"
+                        }
+                        log.append(f"[Walmart] ✓ Actualizados: {actualizados}")
+            except Exception as e:
+                log.append(f"[Walmart] ❌ {e}")
+                resumen_por_canal["walmart"] = {"error": str(e)}
+
+        # ╔════════════════════════════════════════════════════════════╗
+        # ║ PARIS                                                      ║
+        # ╚════════════════════════════════════════════════════════════╝
+        if "paris" in canales_pedidos:
+            t_canal = time.time()
+            try:
+                from paris import obtener_stock_paris
+
+                pendientes = _obtener_mapeos_sin_item("paris")
+                log.append(f"[Paris] {len(pendientes)} pendientes sin item_id")
+
+                if pendientes:
+                    # París: el endpoint stock devuelve productos con su sellerSku
+                    productos_pa = []
+                    offset = 0
+                    while True:
+                        try:
+                            r = obtener_stock_paris(limite=100, offset=offset)
+                            if not r.get("ok"): break
+                            lote = r.get("productos", []) or r.get("results", []) or []
+                            if not lote: break
+                            productos_pa.extend(lote)
+                            offset += len(lote)
+                            if len(lote) < 100 or offset >= 5000: break
+                        except Exception as e:
+                            log.append(f"[Paris] Error en offset {offset}: {e}")
+                            break
+                    log.append(f"[Paris] {len(productos_pa)} productos en API")
+
+                    updates = []
+                    for prod in productos_pa:
+                        seller_sku = (prod.get("sellerSku") or prod.get("sku") or "").strip()
+                        # París: el sellerSku ES el item_id (no hay un id separado)
+                        # Pero por consistencia guardamos el partnerSku/offerId si existe
+                        item_id = (str(prod.get("offerId") or prod.get("partnerSku") or seller_sku)).strip()
+                        if not seller_sku or not item_id:
+                            continue
+                        if seller_sku.upper() in pendientes:
+                            sku_lusync, sku_canal_orig = pendientes[seller_sku.upper()]
+                            # Solo actualizamos si el item_id es DIFERENTE al sku_canal
+                            # (sino sería redundante guardar item_id == sku_canal)
+                            if item_id != sku_canal_orig:
+                                updates.append((item_id, sku_lusync, sku_canal_orig))
+
+                    actualizados = _aplicar_updates("paris", updates)
+                    resumen_por_canal["paris"] = {
+                        "productos_api": len(productos_pa),
+                        "pendientes_sin_item_id": len(pendientes),
+                        "match_con_item_id_distinto": len(updates),
+                        "actualizados": actualizados,
+                        "nota": "Paris: si item_id == sku_canal, no se actualiza (es redundante)",
+                        "tiempo_seg": f"{time.time()-t_canal:.2f}"
+                    }
+                    log.append(f"[Paris] ✓ Actualizados: {actualizados}")
+            except Exception as e:
+                log.append(f"[Paris] ❌ {e}")
+                resumen_por_canal["paris"] = {"error": str(e)}
+
+        # ── Resumen final ──
+        t_total = time.time() - t_start
+        total_actualizados = sum(
+            v.get("actualizados", 0) for v in resumen_por_canal.values()
+            if isinstance(v, dict)
+        )
+
+        if not dry_run:
+            registrar_audit(
+                session.get("usuario", "Sistema"), request.remote_addr,
+                "enriquecer_item_ids",
+                detalle=f"canales={canales_pedidos} actualizados={total_actualizados} t={t_total:.1f}s"
+            )
+
+        return jsonify({
+            "ok": True,
+            "dry_run": dry_run,
+            "canales_procesados": canales_pedidos,
+            "tiempo_total_seg": f"{t_total:.2f}",
+            "total_actualizados": total_actualizados,
+            "resumen_por_canal": resumen_por_canal,
+            "log": log
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/admin/auto_mapeo_meli_seguro", methods=["GET", "POST"])
+def admin_auto_mapeo_meli_seguro():
+    """Auto-mapeo SEGURO para MercadoLibre con match SOLO por SKU exacto.
+
+    Diferencias con auto_mapeo_v2 (que es genérico):
+      - Solo procesa MELI
+      - Solo hace match por SKU EXACTO (sin similitud de nombre)
+      - Captura publicaciones múltiples (varios MLC con mismo SELLER_SKU)
+      - Tiene blindaje: no duplica si ya existe (canal, item_id_canal)
+      - Optimizado con bulk insert
+
+    Useful después de un reset desde Excel: agrega las publicaciones múltiples
+    MELI sin contaminar con falsos positivos.
+
+    Query params:
+      ?dry_run=1   simula sin escribir
+    """
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+
+    dry_run = request.args.get("dry_run", "0") == "1"
+
+    try:
+        from inventario import get_conn, cargar_productos, get_meli_auth
+        from mercadolibre import get_meli_token
+        import time
+
+        t_start = time.time()
+        log = []
+
+        # ── 1. Cargar productos Lusync para hacer match exacto ──
+        productos = cargar_productos()
+        skus_lusync = set((p.get("sku") or "").strip().upper() for p in productos if p.get("sku"))
+        log.append(f"Productos Lusync: {len(skus_lusync)}")
+
+        # ── 2. Obtener token y publicaciones MELI ──
+        try:
+            token = get_meli_token()
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"No hay token MELI válido: {e}"}), 401
+
+        # Obtener seller_id desde la tabla auth (más confiable)
+        auth = get_meli_auth()
+        seller_id = auth.get("user_id") if auth else None
+
+        # Si no está en auth, lo obtenemos via /users/me
+        if not seller_id:
+            import requests
+            r_user = requests.get("https://api.mercadolibre.com/users/me",
+                                  headers={"Authorization": f"Bearer {token}"}, timeout=10)
+            if r_user.status_code != 200:
+                return jsonify({"ok": False, "error": f"No se pudo obtener seller_id: {r_user.status_code}"}), 500
+            seller_id = r_user.json().get("id")
+
+        log.append(f"Seller ID MELI: {seller_id}")
+
+        import requests
+
+        # Obtener todas las publicaciones del seller
+        item_ids = []
+        offset = 0
+        while True:
+            r_search = requests.get(
+                f"https://api.mercadolibre.com/users/{seller_id}/items/search",
+                params={"limit": 50, "offset": offset},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=15
+            )
+            if r_search.status_code != 200:
+                log.append(f"Error en search offset={offset}: {r_search.status_code}")
+                break
+            datos = r_search.json()
+            ids_lote = datos.get("results", []) or []
+            if not ids_lote:
+                break
+            item_ids.extend(ids_lote)
+            total = datos.get("paging", {}).get("total", 0)
+            log.append(f"  offset={offset}: {len(ids_lote)} ids (total: {total})")
+            offset += len(ids_lote)
+            if offset >= total or len(item_ids) >= 5000:  # safety
+                break
+
+        log.append(f"Total publicaciones MELI: {len(item_ids)}")
+
+        # ── 3. Para cada item, obtener detalle (con SELLER_SKU) en lotes de 20 ──
+        publicaciones_a_insertar = []  # (sku_lusync, sku_canal, item_id, titulo)
+        sin_match = []
+        sin_sku = []
+
+        for i in range(0, len(item_ids), 20):
+            lote = item_ids[i:i+20]
+            ids_param = ",".join(lote)
+            r_items = requests.get(
+                "https://api.mercadolibre.com/items",
+                params={"ids": ids_param, "attributes": "id,title,attributes,seller_custom_field"},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=20
+            )
+            if r_items.status_code != 200:
+                log.append(f"Error obteniendo detalle lote {i}: {r_items.status_code}")
+                continue
+
+            for item_resp in r_items.json():
+                if item_resp.get("code") != 200:
+                    continue
+                body = item_resp.get("body", {})
+                item_id = body.get("id", "")
+                titulo = body.get("title", "")
+
+                # Buscar SELLER_SKU en attributes
+                seller_sku = ""
+                for attr in body.get("attributes", []) or []:
+                    if attr.get("id") == "SELLER_SKU":
+                        seller_sku = (attr.get("value_name") or "").strip()
+                        break
+
+                # Fallback: seller_custom_field
+                if not seller_sku:
+                    seller_sku = (body.get("seller_custom_field") or "").strip()
+
+                if not seller_sku:
+                    sin_sku.append({"item_id": item_id, "titulo": titulo[:50]})
+                    continue
+
+                # Match EXACTO contra productos Lusync
+                if seller_sku.upper() in skus_lusync:
+                    publicaciones_a_insertar.append({
+                        "sku_lusync": seller_sku,  # ya está en mayúsculas exacto
+                        "sku_canal": seller_sku,
+                        "item_id_canal": item_id,
+                        "titulo": titulo
+                    })
+                else:
+                    sin_match.append({"item_id": item_id, "seller_sku": seller_sku, "titulo": titulo[:50]})
+
+        log.append(f"Publicaciones con match exacto: {len(publicaciones_a_insertar)}")
+        log.append(f"Publicaciones sin SELLER_SKU: {len(sin_sku)}")
+        log.append(f"Publicaciones sin match: {len(sin_match)}")
+
+        # ── 4. Blindaje: filtrar las que ya están en sku_mapeo_canal ──
+        if not dry_run and publicaciones_a_insertar:
+            conn = get_conn(); cur = conn.cursor()
+            # Obtener todos los item_id ya registrados para MELI
+            cur.execute("""
+                SELECT item_id_canal FROM sku_mapeo_canal
+                WHERE canal='mercadolibre' AND item_id_canal IS NOT NULL AND activo=TRUE
+            """)
+            item_ids_existentes = set(r[0] for r in cur.fetchall())
+            cur.close(); conn.close()
+
+            antes_filtro = len(publicaciones_a_insertar)
+            publicaciones_a_insertar = [
+                p for p in publicaciones_a_insertar
+                if p["item_id_canal"] not in item_ids_existentes
+            ]
+            ya_existian = antes_filtro - len(publicaciones_a_insertar)
+            log.append(f"Ya existían (saltadas): {ya_existian}")
+            log.append(f"Nuevas a insertar: {len(publicaciones_a_insertar)}")
+
+        # ── 5. Bulk insert ──
+        publicaciones_creadas = 0
+        if not dry_run and publicaciones_a_insertar:
+            try:
+                from psycopg2.extras import execute_values
+                conn = get_conn(); cur = conn.cursor()
+                filas = [
+                    (p["sku_lusync"], "mercadolibre", p["sku_canal"], p["item_id_canal"],
+                     False, "auto_mapeo_meli_seguro")
+                    for p in publicaciones_a_insertar
+                ]
+                t_ins = time.time()
+                execute_values(
+                    cur,
+                    """INSERT INTO sku_mapeo_canal
+                       (sku_lusync, canal, sku_canal, item_id_canal, es_catalogo, notas, activo, creado_at, actualizado_at)
+                       VALUES %s
+                       ON CONFLICT DO NOTHING""",
+                    filas,
+                    template="(%s, %s, %s, %s, %s, %s, TRUE, NOW(), NOW())",
+                    page_size=500
+                )
+                publicaciones_creadas = cur.rowcount
+                conn.commit()
+                cur.close(); conn.close()
+                log.append(f"✓ BULK INSERT: {publicaciones_creadas} filas en {(time.time()-t_ins)*1000:.0f}ms")
+            except Exception as e:
+                log.append(f"❌ Error en bulk insert: {e}")
+                return jsonify({"ok": False, "error": str(e), "log": log}), 500
+
+        t_total = time.time() - t_start
+
+        if not dry_run:
+            registrar_audit(
+                session.get("usuario", "Sistema"), request.remote_addr,
+                "auto_mapeo_meli_seguro",
+                detalle=f"creadas={publicaciones_creadas} t={t_total:.2f}s"
+            )
+
+        return jsonify({
+            "ok": True,
+            "dry_run": dry_run,
+            "total_publicaciones_meli": len(item_ids),
+            "con_match_exacto": len(publicaciones_a_insertar) if dry_run else publicaciones_creadas,
+            "ya_existian": (antes_filtro - len(publicaciones_a_insertar)) if (not dry_run and 'antes_filtro' in dir()) else 0,
+            "sin_seller_sku": len(sin_sku),
+            "sin_match_exacto": len(sin_match),
+            "tiempo_segundos": f"{t_total:.2f}",
+            "log": log,
+            "ejemplos_sin_match": sin_match[:20],
+            "ejemplos_sin_seller_sku": sin_sku[:20],
+            "ejemplos_publicaciones_creadas": [
+                {"sku_lusync": p["sku_lusync"], "item_id": p["item_id_canal"], "titulo": p["titulo"][:60]}
+                for p in publicaciones_a_insertar[:30]
+            ]
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+
+
 @app.route("/admin/reset_sku_mapeo_canal", methods=["GET", "POST"])
 def admin_reset_sku_mapeo_canal():
     """Borra y repuebla sku_mapeo_canal desde sku_mapeo (Excel).
