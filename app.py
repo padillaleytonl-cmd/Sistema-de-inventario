@@ -7200,5 +7200,202 @@ def admin_limpiar_duplicados_mapeo():
         return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# RESET DE sku_mapeo_canal Y REPOBLAR DESDE EL EXCEL (sku_mapeo legacy)
+# ════════════════════════════════════════════════════════════════════════════
+# Borra TODAS las publicaciones de sku_mapeo_canal y las regenera SOLO desde
+# lo que está en sku_mapeo (la tabla legacy poblada por el import de Excel).
+#
+# Esto garantiza que el mapeo refleje EXACTAMENTE lo que el usuario cargó
+# en el Excel — sin contaminación del auto-mapeo por similitud de nombre.
+#
+# Reglas:
+#   - HARD DELETE de sku_mapeo_canal (no soft delete, queremos limpieza total)
+#   - Para cada fila de sku_mapeo, crear UNA fila por canal con SKU no vacío
+#   - EXCLUIR canal 'web' (ya decidiste que es redundante)
+#   - Para MELI: si el SKU empieza con MLC, lo guarda como item_id_canal
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/reset_sku_mapeo_canal", methods=["GET", "POST"])
+def admin_reset_sku_mapeo_canal():
+    """Borra y repuebla sku_mapeo_canal desde sku_mapeo (Excel).
+
+    Query params:
+      ?confirmar=SI         requerido para ejecutar (sin esto, solo preview)
+      ?incluir_web=0        no incluir canal web (default: 0)
+      ?dry_run=1            simular sin ejecutar
+    """
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+
+    confirmar = request.args.get("confirmar", "")
+    dry_run = request.args.get("dry_run", "0") == "1"
+    incluir_web = request.args.get("incluir_web", "0") == "1"
+
+    # Sin confirmación, solo preview
+    if confirmar != "SI" and not dry_run:
+        try:
+            from inventario import get_conn
+            conn = get_conn(); cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM sku_mapeo_canal WHERE activo = TRUE")
+            actuales = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM sku_mapeo")
+            mapeo_legacy = cur.fetchone()[0]
+            cur.close(); conn.close()
+            return jsonify({
+                "ok": False,
+                "modo": "preview",
+                "mensaje": "Para confirmar, agrega ?confirmar=SI a la URL",
+                "se_borrarian_de_sku_mapeo_canal": actuales,
+                "se_recrearian_desde_sku_mapeo": mapeo_legacy,
+                "incluir_web": incluir_web,
+                "url_dry_run": "/admin/reset_sku_mapeo_canal?dry_run=1",
+                "url_para_confirmar": f"/admin/reset_sku_mapeo_canal?confirmar=SI{'&incluir_web=1' if incluir_web else ''}"
+            })
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    try:
+        from inventario import get_conn, listar_sku_mapeo, agregar_publicacion
+
+        log = []
+
+        # ── 1. Contar lo actual ──
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM sku_mapeo_canal")
+        total_antes = cur.fetchone()[0]
+        log.append(f"Filas en sku_mapeo_canal antes: {total_antes}")
+
+        # ── 2. HARD DELETE (con backup automático por seguridad) ──
+        from datetime import datetime as _dt
+        timestamp = _dt.now().strftime("%Y%m%d_%H%M%S")
+        backup_tabla = f"sku_mapeo_canal_backup_{timestamp}"
+
+        if not dry_run:
+            try:
+                cur.execute(f'CREATE TABLE "{backup_tabla}" AS SELECT * FROM sku_mapeo_canal')
+                cur.execute(f'SELECT COUNT(*) FROM "{backup_tabla}"')
+                count_backup = cur.fetchone()[0]
+                log.append(f"✓ Backup creado: {backup_tabla} ({count_backup} filas)")
+            except Exception as e:
+                log.append(f"⚠ No se pudo crear backup: {e}")
+                conn.rollback()
+                cur.close(); conn.close()
+                return jsonify({"ok": False, "error": f"Backup falló: {e}", "log": log}), 500
+
+            cur.execute("DELETE FROM sku_mapeo_canal")
+            log.append(f"✓ HARD DELETE ejecutado en sku_mapeo_canal")
+        else:
+            log.append(f"[DRY RUN] Se borrarían {total_antes} filas de sku_mapeo_canal")
+
+        # ── 3. Releer sku_mapeo y repoblar ──
+        mapeos = listar_sku_mapeo()
+        log.append(f"Filas en sku_mapeo (Excel): {len(mapeos)}")
+
+        # Mapeo de campo BD → canal
+        # IMPORTANTE: web se excluye por defecto (incluir_web=False)
+        campos_canal = [
+            ("sku_walmart",      "walmart"),
+            ("sku_paris",        "paris"),
+            ("sku_falabella",    "falabella"),
+            ("sku_ripley",       "ripley"),
+            ("sku_mercadolibre", "mercadolibre"),
+            ("sku_hites",        "hites"),
+        ]
+        if incluir_web:
+            campos_canal.insert(0, ("sku_web", "web"))
+
+        publicaciones_creadas = 0
+        publicaciones_fallidas = 0
+        skus_procesados = 0
+        log_creaciones = []
+
+        for fila in mapeos:
+            sku_lusync = (fila.get("sku_lusync") or "").strip()
+            if not sku_lusync:
+                continue
+            skus_procesados += 1
+
+            for campo_bd, canal in campos_canal:
+                sku_canal_val = (fila.get(campo_bd) or "").strip()
+                if not sku_canal_val or sku_canal_val.lower() in ("none", "nan", "null"):
+                    continue
+
+                # Para MELI: detectar si es item_id (MLC...) o seller_sku
+                item_id_canal = None
+                if canal == "mercadolibre" and sku_canal_val.upper().startswith("MLC"):
+                    item_id_canal = sku_canal_val
+
+                if dry_run:
+                    log_creaciones.append(f"[DRY] {sku_lusync} → {canal}:{sku_canal_val}" +
+                                          (f" (item_id={item_id_canal})" if item_id_canal else ""))
+                    publicaciones_creadas += 1
+                else:
+                    try:
+                        mapeo_id = agregar_publicacion(
+                            sku_lusync=sku_lusync,
+                            canal=canal,
+                            sku_canal=sku_canal_val,
+                            item_id_canal=item_id_canal,
+                            es_catalogo=False,
+                            notas="reset_desde_excel"
+                        )
+                        if mapeo_id:
+                            publicaciones_creadas += 1
+                            log_creaciones.append(f"✓ {sku_lusync} → {canal}:{sku_canal_val} (id={mapeo_id})")
+                        else:
+                            publicaciones_fallidas += 1
+                            log_creaciones.append(f"✗ {sku_lusync} → {canal}:{sku_canal_val}: agregar devolvió None")
+                    except Exception as e:
+                        publicaciones_fallidas += 1
+                        log_creaciones.append(f"✗ {sku_lusync} → {canal}:{sku_canal_val}: {e}")
+
+        # ── 4. Commit ──
+        if not dry_run:
+            conn.commit()
+            log.append(f"✓ Commit ejecutado")
+
+            # Estado final
+            cur.execute("SELECT canal, COUNT(*) FROM sku_mapeo_canal GROUP BY canal ORDER BY canal")
+            estado_final = {r[0]: r[1] for r in cur.fetchall()}
+            cur.execute("SELECT COUNT(*) FROM sku_mapeo_canal")
+            total_despues = cur.fetchone()[0]
+
+            log.append(f"Filas en sku_mapeo_canal después: {total_despues}")
+        else:
+            estado_final = None
+            total_despues = None
+
+        cur.close(); conn.close()
+
+        if not dry_run:
+            registrar_audit(
+                session.get("usuario", "Sistema"), request.remote_addr,
+                "reset_sku_mapeo_canal",
+                detalle=f"borradas={total_antes} creadas={publicaciones_creadas} backup={backup_tabla}"
+            )
+
+        return jsonify({
+            "ok": True,
+            "dry_run": dry_run,
+            "incluir_web": incluir_web,
+            "skus_procesados": skus_procesados,
+            "publicaciones_creadas": publicaciones_creadas,
+            "publicaciones_fallidas": publicaciones_fallidas,
+            "filas_borradas": total_antes if not dry_run else "(dry_run)",
+            "filas_despues": total_despues,
+            "estado_final_por_canal": estado_final,
+            "backup_tabla": backup_tabla if not dry_run else None,
+            "url_recuperar_backup": (
+                f"INSERT INTO sku_mapeo_canal SELECT * FROM \"{backup_tabla}\";"
+                if not dry_run else None
+            ),
+            "log": log,
+            "log_creaciones": log_creaciones[:50]
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
