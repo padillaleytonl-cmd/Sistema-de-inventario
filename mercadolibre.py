@@ -564,8 +564,10 @@ def procesar_webhook_meli(payload):
 
 
 def _procesar_orden_webhook(resource):
-    """Cuando llega una orden nueva o cambia de estado, descontamos stock si es venta confirmada.
-    Detecta automáticamente si es Full o Seller envía y descuenta de la bodega correcta."""
+    """Procesa orden o cambio de estado vía webhook.
+    Detecta automáticamente si es Full o Seller envía y descuenta de la bodega correcta.
+    Maneja TANTO ventas como cancelaciones.
+    """
     try:
         order_id = resource.split("/")[-1]
         orden = obtener_orden_meli(order_id)
@@ -573,31 +575,115 @@ def _procesar_orden_webhook(resource):
             return False
 
         estado = orden.get("status", "")
-        # Solo procesar órdenes pagadas/confirmadas, no canceladas
+
+        from inventario import (orden_ya_procesada_texto, marcar_orden_procesada_texto,
+                                descontar_venta_inteligente, detectar_fulfillment_meli,
+                                listar_sku_mapeo, cargar_productos, guardar_producto,
+                                registrar_movimiento, crear_alerta)
+
+        meli_key = f"MELI-{order_id}"
+        cancel_key = f"MELI-CANCEL-{order_id}"
+
+        # ── ÓRDENES CANCELADAS — reintegrar stock ──
+        if estado in ("cancelled", "canceled"):
+            # Si esta cancelación ya se procesó, salir
+            if orden_ya_procesada_texto(cancel_key):
+                print(f"[MELI Webhook] Cancelación {order_id} ya procesada")
+                return True
+            # Si la venta NUNCA se procesó, no hay nada que reintegrar
+            if not orden_ya_procesada_texto(meli_key):
+                print(f"[MELI Webhook] Cancelación {order_id} sin venta previa, marcando")
+                marcar_orden_procesada_texto(cancel_key)
+                return True
+
+            print(f"[MELI Webhook] Cancelación {order_id} — reintegrando stock")
+            es_full = detectar_fulfillment_meli(orden)
+            items_reintegrados = []
+            ultimo_sku = None
+
+            for item in orden.get("order_items", []):
+                item_data = item.get("item", {})
+                item_id = item_data.get("id", "")
+                sku_meli = (
+                    (item_data.get("seller_sku") or "").strip()
+                    or (item_data.get("seller_custom_field") or "").strip()
+                )
+                if not sku_meli and item_id:
+                    sku_resuelto = obtener_sku_de_item_meli(item_id)
+                    if sku_resuelto:
+                        sku_meli = sku_resuelto
+                if not sku_meli:
+                    sku_meli = item_id
+
+                qty = int(item.get("quantity", 1))
+
+                # Buscar SKU Lusync vía mapeo
+                sku_lusync = sku_meli
+                try:
+                    for fila in listar_sku_mapeo():
+                        sku_mapped = (fila.get("sku_mercadolibre") or "").strip()
+                        if sku_mapped and (sku_mapped == sku_meli or sku_mapped == item_id):
+                            sku_lusync = fila.get("sku_lusync")
+                            break
+                except: pass
+
+                # Reintegrar stock
+                productos = cargar_productos()
+                for p in productos:
+                    if p["sku"] == sku_lusync:
+                        # Si es Full, el stock se reintegra en bodega FULL_MELI
+                        # Si es Seller, en CENTRAL (la "stock" del producto)
+                        # Por simplicidad usamos el campo stock principal (CENTRAL)
+                        if not es_full:
+                            p["stock"] += qty
+                            guardar_producto(p)
+                        registrar_movimiento(
+                            "entrada", p["sku"], p["nombre"], qty,
+                            f"Cancelación MELI orden {order_id}",
+                            usuario="Sistema", canal="MercadoLibre", orden_id=order_id
+                        )
+                        ultimo_sku = sku_lusync
+                        items_reintegrados.append(f"{p['nombre']} (SKU: {sku_lusync}) x{qty}")
+
+                        # Sync a los 6 marketplaces si fue Seller (Central cambió)
+                        if not es_full:
+                            try:
+                                from app import sincronizar_stock_marketplaces
+                                sincronizar_stock_marketplaces(
+                                    sku_lusync, p["stock"],
+                                    contexto="meli_webhook_cancelacion"
+                                )
+                            except Exception as e_sync:
+                                print(f"[MELI Webhook Cancel] Error sync: {e_sync}")
+                        break
+
+            # Crear alerta visible
+            if items_reintegrados:
+                try:
+                    crear_alerta(
+                        tipo="cancelacion",
+                        titulo=f"Orden cancelada en MercadoLibre: {order_id}",
+                        mensaje="Stock reintegrado:<br>" + "<br>".join(f"• {it}" for it in items_reintegrados),
+                        sku=ultimo_sku
+                    )
+                except: pass
+
+            marcar_orden_procesada_texto(cancel_key)
+            print(f"[MELI Webhook] Cancelación {order_id} procesada — {len(items_reintegrados)} items reintegrados")
+            return True
+
+        # ── ÓRDENES PAGADAS/CONFIRMADAS — descontar stock ──
         if estado not in ("paid", "confirmed", "payment_required"):
             print(f"[MELI Webhook] Orden {order_id} en estado {estado}, no se procesa")
             return True
 
-        from inventario import (orden_ya_procesada_texto, marcar_orden_procesada_texto,
-                                descontar_venta_inteligente, detectar_fulfillment_meli,
-                                listar_sku_mapeo, cargar_productos)
-        from woo import actualizar_stock_woo
-        try:
-            from walmart import actualizar_stock_walmart
-        except: actualizar_stock_walmart = None
-        try:
-            from paris import actualizar_stock_paris
-        except: actualizar_stock_paris = None
-
-        meli_key = f"MELI-{order_id}"
         if orden_ya_procesada_texto(meli_key):
             print(f"[MELI Webhook] Orden {order_id} ya procesada")
             return True
 
         marcar_orden_procesada_texto(meli_key)
 
-        # ── Extraer fecha real de compra del marketplace ────────
-        # MELI devuelve date_created en ISO con timezone (ej: 2026-05-03T18:32:15.000-04:00)
+        # ── Extraer fecha real de compra ──
         from datetime import datetime as _dt
         fecha_compra_meli = None
         try:
@@ -609,7 +695,7 @@ def _procesar_orden_webhook(resource):
             print(f"[MELI Webhook] No se pudo parsear date_created: {e}")
             fecha_compra_meli = None
 
-        # ── Detectar si es venta Full o Seller ──
+        # ── Detectar Full vs Seller ──
         es_full = detectar_fulfillment_meli(orden)
         tipo_str = "FULL" if es_full else "Seller"
         print(f"[MELI Webhook] Orden {order_id} tipo: {tipo_str}")
@@ -621,32 +707,21 @@ def _procesar_orden_webhook(resource):
             item_data = item.get("item", {})
             item_id = item_data.get("id", "")
 
-            # MELI puede tener el SKU en varios campos. Probamos por orden de confiabilidad:
-            #   1. item.seller_sku        → el campo directo más nuevo del API
-            #   2. item.seller_custom_field → campo legacy
-            #   3. CONSULTAR el detalle del item (cuando los anteriores vienen vacíos)
-            #   4. item.id                 → fallback al item_id MLC...
             sku_meli = (
                 (item_data.get("seller_sku") or "").strip()
                 or (item_data.get("seller_custom_field") or "").strip()
             )
-
-            # Si los campos directos están vacíos, consultar el detalle del item
             if not sku_meli and item_id:
-                print(f"[MELI Webhook] SKU vacío en orden, consultando /items/{item_id}...")
+                print(f"[MELI Webhook] SKU vacío, consultando /items/{item_id}...")
                 sku_resuelto = obtener_sku_de_item_meli(item_id)
                 if sku_resuelto:
                     sku_meli = sku_resuelto
-                    print(f"[MELI Webhook] SKU resuelto desde item detail: {sku_meli}")
-
-            # Último fallback: usar el item_id como SKU
+                    print(f"[MELI Webhook] SKU resuelto: {sku_meli}")
             if not sku_meli:
                 sku_meli = item_id
 
             qty = int(item.get("quantity", 1))
 
-            # Buscar SKU Lusync correspondiente vía mapeo
-            # Buscar por sku_meli O por item_id (cualquiera que esté en el mapeo)
             sku_lusync = sku_meli
             try:
                 for fila in listar_sku_mapeo():
@@ -660,7 +735,7 @@ def _procesar_orden_webhook(resource):
                 print(f"[MELI Webhook] SKU '{sku_lusync}' no encontrado en inventario")
                 continue
 
-            # ── Descontar de la bodega correcta ──
+            # Descontar de la bodega correcta
             resultado = descontar_venta_inteligente(
                 sku=sku_lusync,
                 cantidad=qty,
@@ -674,22 +749,20 @@ def _procesar_orden_webhook(resource):
             )
             print(f"[MELI Webhook] {sku_lusync} -{qty} desde {resultado['bodega']} → {resultado['stock_despues']}")
 
-            # Sync stock a otros canales SOLO si fue venta Seller (Central afectada)
-            # Si fue Full, la bodega central no cambia, así que no hay que sincronizar
+            # Sync a los 6 marketplaces SOLO si fue Seller (Central afectada)
             if not es_full:
-                p = productos_dict[sku_lusync]
-                # Recargar stock total después del descuento
-                from inventario import cargar_productos as _cp
-                productos_actualizados = _cp()
-                stock_total = next((pp["stock"] for pp in productos_actualizados if pp["sku"] == sku_lusync), 0)
-                try: actualizar_stock_woo(sku_lusync, stock_total)
-                except: pass
-                if actualizar_stock_walmart:
-                    try: actualizar_stock_walmart(sku_lusync, stock_total)
-                    except: pass
-                if actualizar_stock_paris:
-                    try: actualizar_stock_paris(sku_lusync, stock_total)
-                    except: pass
+                try:
+                    from inventario import cargar_productos as _cp
+                    productos_actualizados = _cp()
+                    stock_total = next((pp["stock"] for pp in productos_actualizados if pp["sku"] == sku_lusync), 0)
+                    # Importar el helper centralizado desde app.py (sync 6 marketplaces resiliente)
+                    from app import sincronizar_stock_marketplaces
+                    sincronizar_stock_marketplaces(
+                        sku_lusync, stock_total,
+                        contexto="meli_webhook_venta"
+                    )
+                except Exception as e_sync:
+                    print(f"[MELI Webhook] Error sync 6mkts: {e_sync}")
         return True
     except Exception as e:
         print(f"[MELI Webhook] Error procesando orden: {e}")
