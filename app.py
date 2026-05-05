@@ -7463,14 +7463,14 @@ def admin_enriquecer_item_ids():
 
                 if pendientes:
                     # Falabella tiene paginación: traer todos los productos
+                    # obtener_productos_falabella devuelve LIST directa, no dict
                     productos_fa = []
                     offset = 0
                     while True:
                         try:
-                            r = obtener_productos_falabella(limit=100, offset=offset, filter_status="all")
-                            if not r.get("ok"): break
-                            lote = r.get("productos", []) or []
-                            if not lote: break
+                            lote = obtener_productos_falabella(limit=100, offset=offset, filter_status="all")
+                            if not lote or not isinstance(lote, list):
+                                break
                             productos_fa.extend(lote)
                             offset += len(lote)
                             if len(lote) < 100 or offset >= 5000: break
@@ -7514,34 +7514,34 @@ def admin_enriquecer_item_ids():
                 log.append(f"[Ripley] {len(pendientes)} pendientes sin item_id")
 
                 if pendientes:
-                    r = obtener_productos_ripley(max_paginas=20, page_size=100)
-                    if not r.get("ok"):
-                        log.append(f"[Ripley] Error API: {r.get('error', '?')}")
-                        resumen_por_canal["ripley"] = {"error": r.get("error")}
-                    else:
-                        productos_rp = r.get("productos", []) or []
-                        log.append(f"[Ripley] {len(productos_rp)} productos en API")
+                    # obtener_productos_ripley devuelve LIST directa
+                    productos_rp = obtener_productos_ripley(max_paginas=20, page_size=100)
+                    if not isinstance(productos_rp, list):
+                        productos_rp = []
+                    log.append(f"[Ripley] {len(productos_rp)} productos en API")
 
-                        updates = []
-                        for prod in productos_rp:
-                            # Ripley/Mirakl: el SKU es shop_sku, item_id es product_id o offer_id
-                            shop_sku = (prod.get("shop_sku") or prod.get("sku") or "").strip()
-                            product_id = (str(prod.get("product_id") or prod.get("id") or "")).strip()
-                            if not shop_sku or not product_id:
-                                continue
-                            if shop_sku.upper() in pendientes:
-                                sku_lusync, sku_canal_orig = pendientes[shop_sku.upper()]
-                                updates.append((product_id, sku_lusync, sku_canal_orig))
+                    updates = []
+                    for prod in productos_rp:
+                        # Ripley/Mirakl: el SKU es shop_sku, item_id es product_id u offer_id
+                        shop_sku = (prod.get("shop_sku") or prod.get("sku") or "").strip()
+                        # El "item_id" único en Ripley es el offer_id (string como "10001846714")
+                        # o product_id (puede ser numérico). Preferimos offer_id si existe.
+                        product_id = (str(prod.get("offer_id") or prod.get("product_id") or prod.get("id") or "")).strip()
+                        if not shop_sku or not product_id:
+                            continue
+                        if shop_sku.upper() in pendientes:
+                            sku_lusync, sku_canal_orig = pendientes[shop_sku.upper()]
+                            updates.append((product_id, sku_lusync, sku_canal_orig))
 
-                        actualizados = _aplicar_updates("ripley", updates)
-                        resumen_por_canal["ripley"] = {
-                            "productos_api": len(productos_rp),
-                            "pendientes_sin_item_id": len(pendientes),
-                            "match_exacto": len(updates),
-                            "actualizados": actualizados,
-                            "tiempo_seg": f"{time.time()-t_canal:.2f}"
-                        }
-                        log.append(f"[Ripley] ✓ Actualizados: {actualizados}")
+                    actualizados = _aplicar_updates("ripley", updates)
+                    resumen_por_canal["ripley"] = {
+                        "productos_api": len(productos_rp),
+                        "pendientes_sin_item_id": len(pendientes),
+                        "match_exacto": len(updates),
+                        "actualizados": actualizados,
+                        "tiempo_seg": f"{time.time()-t_canal:.2f}"
+                    }
+                    log.append(f"[Ripley] ✓ Actualizados: {actualizados}")
             except Exception as e:
                 log.append(f"[Ripley] ❌ {e}")
                 resumen_por_canal["ripley"] = {"error": str(e)}
@@ -7558,34 +7558,32 @@ def admin_enriquecer_item_ids():
                 log.append(f"[Walmart] {len(pendientes)} pendientes sin item_id")
 
                 if pendientes:
-                    r = obtener_productos_walmart(limit=50, max_paginas=20)
-                    if not r.get("ok"):
-                        log.append(f"[Walmart] Error API: {r.get('error', '?')}")
-                        resumen_por_canal["walmart"] = {"error": r.get("error")}
-                    else:
-                        productos_wm = r.get("productos", []) or []
-                        log.append(f"[Walmart] {len(productos_wm)} productos en API")
+                    # obtener_productos_walmart devuelve LIST directa (a menos que debug=True)
+                    productos_wm = obtener_productos_walmart(limit=50, max_paginas=20)
+                    if not isinstance(productos_wm, list):
+                        productos_wm = []
+                    log.append(f"[Walmart] {len(productos_wm)} productos en API")
 
-                        updates = []
-                        for prod in productos_wm:
-                            # Walmart: sku es seller_sku, item_id es wpid o productId
-                            seller_sku = (prod.get("sku") or "").strip()
-                            wpid = (str(prod.get("wpid") or prod.get("productId") or prod.get("mart_item_id") or "")).strip()
-                            if not seller_sku or not wpid:
-                                continue
-                            if seller_sku.upper() in pendientes:
-                                sku_lusync, sku_canal_orig = pendientes[seller_sku.upper()]
-                                updates.append((wpid, sku_lusync, sku_canal_orig))
+                    updates = []
+                    for prod in productos_wm:
+                        # Walmart: sku es seller_sku, item_id es wpid o productId o mart_item_id
+                        seller_sku = (prod.get("sku") or "").strip()
+                        wpid = (str(prod.get("wpid") or prod.get("productId") or prod.get("mart_item_id") or "")).strip()
+                        if not seller_sku or not wpid:
+                            continue
+                        if seller_sku.upper() in pendientes:
+                            sku_lusync, sku_canal_orig = pendientes[seller_sku.upper()]
+                            updates.append((wpid, sku_lusync, sku_canal_orig))
 
-                        actualizados = _aplicar_updates("walmart", updates)
-                        resumen_por_canal["walmart"] = {
-                            "productos_api": len(productos_wm),
-                            "pendientes_sin_item_id": len(pendientes),
-                            "match_exacto": len(updates),
-                            "actualizados": actualizados,
-                            "tiempo_seg": f"{time.time()-t_canal:.2f}"
-                        }
-                        log.append(f"[Walmart] ✓ Actualizados: {actualizados}")
+                    actualizados = _aplicar_updates("walmart", updates)
+                    resumen_por_canal["walmart"] = {
+                        "productos_api": len(productos_wm),
+                        "pendientes_sin_item_id": len(pendientes),
+                        "match_exacto": len(updates),
+                        "actualizados": actualizados,
+                        "tiempo_seg": f"{time.time()-t_canal:.2f}"
+                    }
+                    log.append(f"[Walmart] ✓ Actualizados: {actualizados}")
             except Exception as e:
                 log.append(f"[Walmart] ❌ {e}")
                 resumen_por_canal["walmart"] = {"error": str(e)}
@@ -7602,14 +7600,21 @@ def admin_enriquecer_item_ids():
                 log.append(f"[Paris] {len(pendientes)} pendientes sin item_id")
 
                 if pendientes:
-                    # París: el endpoint stock devuelve productos con su sellerSku
+                    # obtener_stock_paris devuelve el JSON directo del API (dict o None)
                     productos_pa = []
                     offset = 0
                     while True:
                         try:
-                            r = obtener_stock_paris(limite=100, offset=offset)
-                            if not r.get("ok"): break
-                            lote = r.get("productos", []) or r.get("results", []) or []
+                            data = obtener_stock_paris(limite=100, offset=offset)
+                            if not data:
+                                break
+                            # París devuelve estructura tipo: {"results": [...], ...} o array directo
+                            if isinstance(data, dict):
+                                lote = data.get("results") or data.get("productos") or data.get("data") or []
+                            elif isinstance(data, list):
+                                lote = data
+                            else:
+                                lote = []
                             if not lote: break
                             productos_pa.extend(lote)
                             offset += len(lote)
@@ -7621,9 +7626,9 @@ def admin_enriquecer_item_ids():
 
                     updates = []
                     for prod in productos_pa:
-                        seller_sku = (prod.get("sellerSku") or prod.get("sku") or "").strip()
+                        seller_sku = (prod.get("sellerSku") or prod.get("sku") or prod.get("offerId") or "").strip()
                         # París: el sellerSku ES el item_id (no hay un id separado)
-                        # Pero por consistencia guardamos el partnerSku/offerId si existe
+                        # Pero por consistencia guardamos el partnerSku/offerId si existe y es distinto
                         item_id = (str(prod.get("offerId") or prod.get("partnerSku") or seller_sku)).strip()
                         if not seller_sku or not item_id:
                             continue
