@@ -2448,7 +2448,7 @@ def ruta_importar_excel():
                 importados += 1
 
                 # 2. Tabla nueva sku_mapeo_canal (multi-publicación)
-                # Para cada canal con SKU, agregamos UNA publicación
+                # Para cada canal con SKU, agregamos UNA publicación (idempotente)
                 for col_idx, canal in canales_columnas:
                     if col_idx < len(row) and row[col_idx]:
                         sku_canal_val = str(row[col_idx]).strip()
@@ -2458,8 +2458,31 @@ def ruta_importar_excel():
                             sku_para_guardar = sku_canal_val
                             if canal == "mercadolibre" and sku_canal_val.upper().startswith("MLC"):
                                 item_id_canal = sku_canal_val
-                                # Pero también guardamos el SKU canal como referencia
                                 sku_para_guardar = sku_canal_val
+
+                            # ── BLINDAJE: verificar si ya existe ANTES de insertar ──
+                            # Esto evita los duplicados que se crean cuando se re-importa
+                            # el Excel sobre un dataset que ya fue procesado por auto_mapeo_v2
+                            try:
+                                from inventario import get_conn
+                                conn_check = get_conn(); cur_check = conn_check.cursor()
+                                cur_check.execute("""
+                                    SELECT COUNT(*) FROM sku_mapeo_canal
+                                    WHERE canal = %s
+                                      AND sku_lusync = %s
+                                      AND sku_canal = %s
+                                      AND activo = TRUE
+                                """, (canal, sku_lusync, sku_para_guardar))
+                                ya_existe = cur_check.fetchone()[0] > 0
+                                cur_check.close(); conn_check.close()
+                            except Exception as e_check:
+                                ya_existe = False
+                                log.append(f"Fila {i} {sku_lusync}/{canal}: error chequeando existencia: {e_check}")
+
+                            if ya_existe:
+                                log.append(f"Fila {i} {sku_lusync} → {canal}:{sku_canal_val}: ya existe, skip (blindaje anti-duplicado)")
+                                continue
+
                             try:
                                 mapeo_id = agregar_publicacion(
                                     sku_lusync=sku_lusync,
@@ -6816,6 +6839,26 @@ def admin_migrar_sku_mapeo_a_canal():
                 if canal == "mercadolibre" and sku_canal_val.upper().startswith("MLC"):
                     item_id_canal = sku_canal_val
 
+                # ── BLINDAJE: verificar si ya existe ANTES de insertar ──
+                if not dry_run:
+                    try:
+                        from inventario import get_conn
+                        conn_check = get_conn(); cur_check = conn_check.cursor()
+                        cur_check.execute("""
+                            SELECT COUNT(*) FROM sku_mapeo_canal
+                            WHERE canal = %s
+                              AND sku_lusync = %s
+                              AND sku_canal = %s
+                              AND activo = TRUE
+                        """, (canal, sku_lusync, sku_canal_val))
+                        ya_existe = cur_check.fetchone()[0] > 0
+                        cur_check.close(); conn_check.close()
+                    except:
+                        ya_existe = False
+                    if ya_existe:
+                        log.append(f"⏭ {sku_lusync} → {canal}:{sku_canal_val}: ya existe, skip")
+                        continue
+
                 if dry_run:
                     log.append(f"[DRY] {sku_lusync} → {canal}:{sku_canal_val}" +
                                (f" (item_id={item_id_canal})" if item_id_canal else ""))
@@ -6854,6 +6897,303 @@ def admin_migrar_sku_mapeo_a_canal():
             "publicaciones_creadas": publicaciones_creadas,
             "publicaciones_fallidas": publicaciones_fallidas,
             "log": log[:200]  # primeras 200 líneas
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/admin/estado_tablas")
+def admin_estado_tablas():
+    """Devuelve el conteo de filas de las tablas principales para diagnóstico rápido.
+
+    Útil para saber si los productos están cargados, si el mapeo está poblado,
+    si las publicaciones existen, etc.
+    """
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import get_conn
+        conn = get_conn(); cur = conn.cursor()
+
+        info = {}
+
+        # Productos
+        try:
+            cur.execute("SELECT COUNT(*) FROM productos")
+            info["productos"] = {"total": cur.fetchone()[0]}
+            cur.execute("SELECT sku, nombre FROM productos ORDER BY sku LIMIT 5")
+            info["productos"]["primeros_5"] = [{"sku": r[0], "nombre": r[1]} for r in cur.fetchall()]
+        except Exception as e:
+            info["productos"] = {"error": str(e)}
+
+        # sku_mapeo (legacy)
+        try:
+            cur.execute("SELECT COUNT(*) FROM sku_mapeo")
+            info["sku_mapeo_legacy"] = {"total": cur.fetchone()[0]}
+            cur.execute("SELECT sku_lusync, sku_paris, sku_mercadolibre FROM sku_mapeo ORDER BY sku_lusync LIMIT 5")
+            info["sku_mapeo_legacy"]["primeros_5"] = [
+                {"sku_lusync": r[0], "sku_paris": r[1], "sku_mercadolibre": r[2]}
+                for r in cur.fetchall()
+            ]
+        except Exception as e:
+            info["sku_mapeo_legacy"] = {"error": str(e)}
+
+        # sku_mapeo_canal (nuevo)
+        try:
+            cur.execute("SELECT COUNT(*) FROM sku_mapeo_canal WHERE activo = TRUE")
+            info["sku_mapeo_canal"] = {"total": cur.fetchone()[0]}
+            cur.execute("SELECT canal, COUNT(*) FROM sku_mapeo_canal WHERE activo = TRUE GROUP BY canal")
+            info["sku_mapeo_canal"]["por_canal"] = {r[0]: r[1] for r in cur.fetchall()}
+        except Exception as e:
+            info["sku_mapeo_canal"] = {"error": str(e)}
+
+        # Bodegas y stock
+        try:
+            cur.execute("SELECT COUNT(*) FROM bodegas")
+            info["bodegas"] = {"total": cur.fetchone()[0]}
+            cur.execute("SELECT COUNT(*) FROM stock_bodega WHERE cantidad > 0")
+            info["stock_bodega_con_stock"] = cur.fetchone()[0]
+        except Exception as e:
+            info["bodegas"] = {"error": str(e)}
+
+        # Movimientos
+        try:
+            cur.execute("SELECT COUNT(*) FROM movimientos")
+            info["movimientos"] = {"total": cur.fetchone()[0]}
+        except Exception as e:
+            info["movimientos"] = {"error": str(e)}
+
+        # Diagnóstico cruzado: ¿cuántos sku_mapeo NO tienen producto correspondiente?
+        try:
+            cur.execute("""
+                SELECT COUNT(DISTINCT m.sku_lusync)
+                FROM sku_mapeo m
+                LEFT JOIN productos p ON p.sku = m.sku_lusync
+                WHERE p.sku IS NULL
+            """)
+            huerfanos = cur.fetchone()[0]
+            info["mapeos_huerfanos"] = {
+                "cantidad": huerfanos,
+                "explicacion": "SKUs en sku_mapeo que NO tienen producto en tabla 'productos'"
+            }
+            if huerfanos > 0:
+                cur.execute("""
+                    SELECT m.sku_lusync FROM sku_mapeo m
+                    LEFT JOIN productos p ON p.sku = m.sku_lusync
+                    WHERE p.sku IS NULL LIMIT 10
+                """)
+                info["mapeos_huerfanos"]["ejemplos"] = [r[0] for r in cur.fetchall()]
+        except Exception as e:
+            info["mapeos_huerfanos"] = {"error": str(e)}
+
+        # Tablas de backup (si has hecho reset)
+        try:
+            cur.execute("""
+                SELECT tablename FROM pg_tables
+                WHERE schemaname = 'public'
+                  AND (tablename LIKE 'productos_backup_%'
+                    OR tablename LIKE 'movimientos_backup_%')
+                ORDER BY tablename DESC
+                LIMIT 10
+            """)
+            info["backups"] = [r[0] for r in cur.fetchall()]
+        except Exception as e:
+            info["backups"] = {"error": str(e)}
+
+        cur.close(); conn.close()
+
+        # Diagnóstico automático
+        diagnostico = []
+        prod_total = info.get("productos", {}).get("total", 0)
+        mapeo_total = info.get("sku_mapeo_legacy", {}).get("total", 0)
+        canal_total = info.get("sku_mapeo_canal", {}).get("total", 0)
+        huerfanos = info.get("mapeos_huerfanos", {}).get("cantidad", 0)
+
+        if prod_total == 0:
+            diagnostico.append("⚠ Tabla 'productos' está VACÍA. Ejecuta /importar_woo para poblar.")
+        if mapeo_total > 0 and prod_total == 0:
+            diagnostico.append(f"⚠ Tienes {mapeo_total} mapeos en sku_mapeo pero 0 productos. Por eso la UI muestra vacío.")
+        if huerfanos > 0:
+            diagnostico.append(f"⚠ {huerfanos} mapeos están huérfanos (sin producto en BD).")
+        if canal_total > 0 and prod_total == 0:
+            diagnostico.append(f"ℹ {canal_total} publicaciones en sku_mapeo_canal listas. Solo falta importar productos.")
+        if not diagnostico:
+            diagnostico.append("✓ Todo en orden")
+
+        return jsonify({
+            "ok": True,
+            "tablas": info,
+            "diagnostico": diagnostico
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# LIMPIEZA DE DUPLICADOS EN sku_mapeo_canal
+# ════════════════════════════════════════════════════════════════════════════
+# Detecta y elimina (soft delete) duplicados generados cuando se ejecutó
+# auto_mapeo_v2 + migración Excel sobre el mismo dataset.
+#
+# Reglas:
+#   1. Por cada (sku_lusync, canal, sku_canal): si hay 2+ filas, mantener la(s)
+#      que tienen item_id_canal y borrar las que no lo tienen.
+#   2. Si ninguna tiene item_id, mantener la primera y borrar las demás.
+#   3. Por separado: borrar TODAS las entradas del canal 'web' (son redundantes
+#      porque el SKU Lusync ya es el SKU Web en este sistema basado en Woo).
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/limpiar_duplicados_mapeo", methods=["GET", "POST"])
+def admin_limpiar_duplicados_mapeo():
+    """Limpia duplicados en sku_mapeo_canal usando soft delete (activo=FALSE).
+
+    Query params:
+      ?dry_run=1     simula sin borrar
+      ?incluir_web=0 NO borrar entradas del canal web (default: 1, sí borra)
+    """
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+
+    dry_run = request.args.get("dry_run", "0") == "1"
+    incluir_web = request.args.get("incluir_web", "1") == "1"
+
+    try:
+        from inventario import get_conn
+
+        conn = get_conn(); cur = conn.cursor()
+
+        log = []
+        a_borrar_duplicados = []  # ids de filas a marcar como inactivas (duplicados)
+        a_borrar_web = []          # ids de filas del canal web a marcar como inactivas
+        mantener = []              # ids de filas que sobreviven
+
+        # ── 1. Detectar duplicados por (sku_lusync, canal, sku_canal) ──
+        cur.execute("""
+            SELECT sku_lusync, canal, sku_canal,
+                   ARRAY_AGG(id ORDER BY id) AS ids,
+                   ARRAY_AGG(item_id_canal ORDER BY id) AS item_ids,
+                   COUNT(*) AS cantidad
+            FROM sku_mapeo_canal
+            WHERE activo = TRUE
+            GROUP BY sku_lusync, canal, sku_canal
+            HAVING COUNT(*) > 1
+            ORDER BY sku_lusync, canal
+        """)
+        grupos_duplicados = cur.fetchall()
+        log.append(f"Grupos de duplicados encontrados (mismo sku_lusync+canal+sku_canal): {len(grupos_duplicados)}")
+
+        for sku_lusync, canal, sku_canal, ids, item_ids, cantidad in grupos_duplicados:
+            # Separar en "con item_id" y "sin item_id"
+            con_item = []
+            sin_item = []
+            for i, mapeo_id in enumerate(ids):
+                if item_ids[i]:
+                    con_item.append((mapeo_id, item_ids[i]))
+                else:
+                    sin_item.append(mapeo_id)
+
+            if con_item and sin_item:
+                # Caso típico: 1+ con item_id (de auto-mapeo) + 1+ sin item_id (de Excel)
+                # Mantener todas las con item_id, borrar las sin item_id
+                for mapeo_id in sin_item:
+                    a_borrar_duplicados.append({
+                        "id": mapeo_id, "sku_lusync": sku_lusync, "canal": canal,
+                        "sku_canal": sku_canal, "razon": "duplicado_sin_item_id"
+                    })
+                for mapeo_id, iid in con_item:
+                    mantener.append({
+                        "id": mapeo_id, "sku_lusync": sku_lusync, "canal": canal,
+                        "sku_canal": sku_canal, "item_id": iid
+                    })
+                log.append(f"  {sku_lusync}/{canal}/{sku_canal}: mantengo {len(con_item)} con item_id, borro {len(sin_item)} sin item_id")
+            elif con_item:
+                # Solo con item_id, todos distintos → mantener todos (son publicaciones reales)
+                for mapeo_id, iid in con_item:
+                    mantener.append({
+                        "id": mapeo_id, "sku_lusync": sku_lusync, "canal": canal,
+                        "sku_canal": sku_canal, "item_id": iid
+                    })
+                log.append(f"  {sku_lusync}/{canal}/{sku_canal}: {len(con_item)} todas con item_id distintos, mantengo todas")
+            elif sin_item:
+                # Solo sin item_id: mantener primera, borrar resto
+                mantener.append({
+                    "id": sin_item[0], "sku_lusync": sku_lusync, "canal": canal,
+                    "sku_canal": sku_canal, "item_id": None
+                })
+                for mapeo_id in sin_item[1:]:
+                    a_borrar_duplicados.append({
+                        "id": mapeo_id, "sku_lusync": sku_lusync, "canal": canal,
+                        "sku_canal": sku_canal, "razon": "duplicado_sin_item_id_resto"
+                    })
+                log.append(f"  {sku_lusync}/{canal}/{sku_canal}: {len(sin_item)} sin item_id, mantengo 1 borro {len(sin_item)-1}")
+
+        # ── 2. Borrar entradas del canal 'web' (todas son redundantes) ──
+        if incluir_web:
+            cur.execute("""
+                SELECT id, sku_lusync, sku_canal
+                FROM sku_mapeo_canal
+                WHERE activo = TRUE AND canal = 'web'
+            """)
+            for r in cur.fetchall():
+                a_borrar_web.append({
+                    "id": r[0], "sku_lusync": r[1], "sku_canal": r[2],
+                    "razon": "canal_web_redundante"
+                })
+            log.append(f"Entradas del canal 'web' a borrar: {len(a_borrar_web)} (redundantes con SKU Lusync)")
+        else:
+            log.append("Canal 'web' preservado (incluir_web=0)")
+
+        total_a_borrar = len(a_borrar_duplicados) + len(a_borrar_web)
+
+        # ── 3. Ejecutar el soft delete (si no es dry_run) ──
+        if not dry_run and total_a_borrar > 0:
+            ids_a_borrar = [d["id"] for d in a_borrar_duplicados] + [d["id"] for d in a_borrar_web]
+            # Soft delete por lotes de 100 para no hacer query gigante
+            for i in range(0, len(ids_a_borrar), 100):
+                lote = ids_a_borrar[i:i+100]
+                cur.execute(f"""
+                    UPDATE sku_mapeo_canal
+                    SET activo = FALSE, actualizado_at = NOW(),
+                        notas = COALESCE(notas, '') || ' | limpieza_duplicados'
+                    WHERE id = ANY(%s)
+                """, (lote,))
+            conn.commit()
+            log.append(f"✓ Soft delete ejecutado para {total_a_borrar} filas")
+        elif dry_run:
+            log.append(f"DRY RUN: no se ejecutó delete (se borrarían {total_a_borrar} filas)")
+        else:
+            log.append("No hay nada que borrar")
+
+        # ── 4. Estado final ──
+        cur.execute("SELECT COUNT(*) FROM sku_mapeo_canal WHERE activo = TRUE")
+        activos_despues = cur.fetchone()[0]
+
+        cur.execute("SELECT canal, COUNT(*) FROM sku_mapeo_canal WHERE activo = TRUE GROUP BY canal")
+        por_canal_despues = {r[0]: r[1] for r in cur.fetchall()}
+
+        cur.close(); conn.close()
+
+        if not dry_run:
+            registrar_audit(
+                session.get("usuario", "Sistema"), request.remote_addr,
+                "limpiar_duplicados_mapeo",
+                detalle=f"borrados={total_a_borrar} (dups={len(a_borrar_duplicados)} web={len(a_borrar_web)})"
+            )
+
+        return jsonify({
+            "ok": True,
+            "dry_run": dry_run,
+            "incluir_web": incluir_web,
+            "resumen": {
+                "duplicados_a_borrar": len(a_borrar_duplicados),
+                "web_a_borrar": len(a_borrar_web),
+                "total_a_borrar": total_a_borrar,
+                "publicaciones_que_quedan": activos_despues if not dry_run else "(dry_run no actualiza)",
+                "por_canal_despues": por_canal_despues if not dry_run else None
+            },
+            "duplicados_a_borrar": a_borrar_duplicados[:30],
+            "web_a_borrar_ejemplos": a_borrar_web[:30],
+            "log": log[:80]
         })
     except Exception as e:
         import traceback
