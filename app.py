@@ -496,11 +496,18 @@ def _sync_falabella_automatico():
         # Pendientes y nuevas
         try:
             ordenes = obtener_ordenes_falabella(estado=None, dias=2, limit=50, offset=0)
+            # Defensa: asegurar que es una lista
+            if not isinstance(ordenes, list):
+                print(f"[Scheduler Falabella] Respuesta inesperada: {type(ordenes).__name__}")
+                ordenes = []
         except Exception as e:
             print(f"[Scheduler Falabella] Error obteniendo órdenes: {e}")
             return
 
         for o in ordenes:
+            # Defensa: si por algún motivo el item no es dict, saltar
+            if not isinstance(o, dict):
+                continue
             try:
                 order_id = str(o.get("OrderId") or o.get("orderId") or o.get("id") or "")
                 estado_orden = (o.get("Status") or o.get("status") or "").lower()

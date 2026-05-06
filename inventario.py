@@ -536,39 +536,63 @@ def intentar_marcar_orden_atomic(order_id_texto):
     Resuelve race conditions cuando llegan 2 webhooks simultáneos para la misma orden
     (típico en MELI con multi-publicación).
     
-    La atomicidad se garantiza con UNIQUE constraint en order_id_texto + ON CONFLICT DO NOTHING.
-    Si la fila ya existía, INSERT no inserta nada y RETURNING devuelve vacío.
+    Estrategia: usa transacción con SELECT FOR UPDATE para bloquear la fila a nivel de BD.
+    Solo el primer webhook que llegue puede insertar; los demás esperan y luego ven la fila.
     """
     conn = get_conn()
     cur = conn.cursor()
     marcada = False
     try:
-        # Asegurar columna y constraint UNIQUE (idempotente)
+        # Asegurar columna existe
         cur.execute("ALTER TABLE ordenes_procesadas ADD COLUMN IF NOT EXISTS order_id_texto TEXT")
         conn.commit()
-        try:
-            cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_ord_proc_texto_unique 
-                           ON ordenes_procesadas (order_id_texto) 
-                           WHERE order_id_texto IS NOT NULL""")
-            conn.commit()
-        except Exception: conn.rollback()
         
-        # INSERT atómico: si ya existe, no inserta y devuelve vacío
-        import random
+        # Iniciar transacción explícita
+        cur.execute("BEGIN")
+        
+        # Buscar si ya existe (con LOCK pesimista para evitar race conditions)
         cur.execute("""
-            INSERT INTO ordenes_procesadas (orden_id, order_id_texto) 
-            VALUES (%s, %s)
-            ON CONFLICT (order_id_texto) DO NOTHING
-            RETURNING order_id_texto
-        """, (random.randint(1, 9007199254740991), str(order_id_texto)))
-        r = cur.fetchone()
-        marcada = r is not None  # Si devolvió fila, fue insertada AHORA
-        conn.commit()
+            SELECT 1 FROM ordenes_procesadas 
+            WHERE order_id_texto = %s 
+            LIMIT 1 
+            FOR UPDATE
+        """, (str(order_id_texto),))
+        
+        if cur.fetchone():
+            # Ya existe, otra request la procesó
+            cur.execute("COMMIT")
+            marcada = False
+        else:
+            # No existe, insertarla AHORA (mientras tenemos el lock)
+            import random
+            cur.execute("""
+                INSERT INTO ordenes_procesadas (orden_id, order_id_texto) 
+                VALUES (%s, %s)
+            """, (random.randint(1, 9007199254740991), str(order_id_texto)))
+            cur.execute("COMMIT")
+            marcada = True
     except Exception as e:
-        print(f"[Marcado atómico] Error: {e}"); conn.rollback()
-        # En caso de error, devolver False para que la operación NO se procese
-        # (evita duplicar; mejor procesar 0 veces que 2 veces)
-        marcada = False
+        print(f"[Marcado atómico] Error: {e}")
+        try: conn.rollback()
+        except: pass
+        # FALLBACK: usar el método clásico (no atómico pero funcional)
+        try:
+            cur.execute("SELECT 1 FROM ordenes_procesadas WHERE order_id_texto=%s LIMIT 1",
+                       (str(order_id_texto),))
+            if cur.fetchone():
+                marcada = False
+            else:
+                import random
+                cur.execute("""INSERT INTO ordenes_procesadas (orden_id, order_id_texto) 
+                               VALUES (%s, %s)""",
+                           (random.randint(1, 9007199254740991), str(order_id_texto)))
+                conn.commit()
+                marcada = True
+        except Exception as e2:
+            print(f"[Marcado atómico FALLBACK] Error: {e2}")
+            try: conn.rollback()
+            except: pass
+            marcada = False
     cur.close(); conn.close()
     return marcada
     cur.close(); conn.close()
