@@ -524,6 +524,53 @@ def marcar_orden_procesada_texto(order_id_texto):
         conn.commit()
     except Exception as e:
         print(f"[Marcado] Error: {e}"); conn.rollback()
+
+
+def intentar_marcar_orden_atomic(order_id_texto):
+    """Marca una orden como procesada DE FORMA ATÓMICA. 
+    
+    Devuelve:
+    - True si fue marcada AHORA (esta llamada es la "primera")
+    - False si ya estaba marcada (otra llamada concurrente la procesó primero)
+    
+    Resuelve race conditions cuando llegan 2 webhooks simultáneos para la misma orden
+    (típico en MELI con multi-publicación).
+    
+    La atomicidad se garantiza con UNIQUE constraint en order_id_texto + ON CONFLICT DO NOTHING.
+    Si la fila ya existía, INSERT no inserta nada y RETURNING devuelve vacío.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    marcada = False
+    try:
+        # Asegurar columna y constraint UNIQUE (idempotente)
+        cur.execute("ALTER TABLE ordenes_procesadas ADD COLUMN IF NOT EXISTS order_id_texto TEXT")
+        conn.commit()
+        try:
+            cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_ord_proc_texto_unique 
+                           ON ordenes_procesadas (order_id_texto) 
+                           WHERE order_id_texto IS NOT NULL""")
+            conn.commit()
+        except Exception: conn.rollback()
+        
+        # INSERT atómico: si ya existe, no inserta y devuelve vacío
+        import random
+        cur.execute("""
+            INSERT INTO ordenes_procesadas (orden_id, order_id_texto) 
+            VALUES (%s, %s)
+            ON CONFLICT (order_id_texto) DO NOTHING
+            RETURNING order_id_texto
+        """, (random.randint(1, 9007199254740991), str(order_id_texto)))
+        r = cur.fetchone()
+        marcada = r is not None  # Si devolvió fila, fue insertada AHORA
+        conn.commit()
+    except Exception as e:
+        print(f"[Marcado atómico] Error: {e}"); conn.rollback()
+        # En caso de error, devolver False para que la operación NO se procese
+        # (evita duplicar; mejor procesar 0 veces que 2 veces)
+        marcada = False
+    cur.close(); conn.close()
+    return marcada
     cur.close(); conn.close()
 
 def orden_ya_procesada(orden_id):

@@ -5636,10 +5636,11 @@ def procesar_webhook_fbm(payload):
         print(f"[FBM Webhook] operation_id vacío, ignorando")
         return False
     
-    # ── Idempotencia: si ya procesamos esta operación, salir ──
+    # ── Idempotencia ATÓMICA: si otra request ya procesó esta operación, salir ──
     fbm_key = f"FBM-OP-{operation_id}"
-    if orden_ya_procesada_texto(fbm_key):
-        print(f"[FBM Webhook] Operación {operation_id} ya procesada")
+    from inventario import intentar_marcar_orden_atomic
+    if not intentar_marcar_orden_atomic(fbm_key):
+        print(f"[FBM Webhook] Operación {operation_id} ya procesada (atomic)")
         return True
     
     # ── Consultar el detalle de la operación a MELI ──

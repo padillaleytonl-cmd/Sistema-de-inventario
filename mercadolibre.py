@@ -586,14 +586,14 @@ def _procesar_orden_webhook(resource):
 
         # ── ÓRDENES CANCELADAS — reintegrar stock ──
         if estado in ("cancelled", "canceled"):
-            # Si esta cancelación ya se procesó, salir
-            if orden_ya_procesada_texto(cancel_key):
-                print(f"[MELI Webhook] Cancelación {order_id} ya procesada")
+            # Marcado atómico de cancelación (race-condition safe)
+            from inventario import intentar_marcar_orden_atomic
+            if not intentar_marcar_orden_atomic(cancel_key):
+                print(f"[MELI Webhook] Cancelación {order_id} ya procesada (atomic)")
                 return True
             # Si la venta NUNCA se procesó, no hay nada que reintegrar
             if not orden_ya_procesada_texto(meli_key):
-                print(f"[MELI Webhook] Cancelación {order_id} sin venta previa, marcando")
-                marcar_orden_procesada_texto(cancel_key)
+                print(f"[MELI Webhook] Cancelación {order_id} sin venta previa, marcada")
                 return True
 
             print(f"[MELI Webhook] Cancelación {order_id} — reintegrando stock")
@@ -677,11 +677,11 @@ def _procesar_orden_webhook(resource):
             print(f"[MELI Webhook] Orden {order_id} en estado {estado}, no se procesa")
             return True
 
-        if orden_ya_procesada_texto(meli_key):
-            print(f"[MELI Webhook] Orden {order_id} ya procesada")
+        # Marcado ATÓMICO contra race conditions (multi-publicación, webhooks simultáneos)
+        from inventario import intentar_marcar_orden_atomic
+        if not intentar_marcar_orden_atomic(meli_key):
+            print(f"[MELI Webhook] Orden {order_id} ya procesada (atomic check)")
             return True
-
-        marcar_orden_procesada_texto(meli_key)
 
         # ── Extraer fecha real de compra ──
         from datetime import datetime as _dt
