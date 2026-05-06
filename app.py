@@ -5407,18 +5407,42 @@ def ruta_meli_forzar_todos():
 
 @app.route("/mercadolibre/webhook", methods=["GET", "POST"])
 def ruta_meli_webhook():
-    """Endpoint para que MercadoLibre envíe notificaciones automáticas (sin auth)."""
+    """Endpoint receptor de TODAS las notificaciones de MercadoLibre.
+    
+    MELI envía todas las notificaciones (orders_v2, fbm_stock_operations, items, etc.)
+    a esta URL única configurada en DevCenter. Aquí ruteamos según el topic.
+    """
     # GET solo para que MELI valide que la URL responde
     if request.method == "GET":
         return jsonify({"status": "ok"}), 200
+    
     try:
-        from mercadolibre import procesar_webhook_meli
         payload = request.json or {}
-        ok = procesar_webhook_meli(payload)
+        topic = (payload.get("topic") or "").lower()
+        
+        # ── ROUTING POR TOPIC ──
+        if topic in ("orders_v2", "orders"):
+            # Órdenes de venta y cancelaciones (lo que ya teníamos)
+            from mercadolibre import procesar_webhook_meli
+            ok = procesar_webhook_meli(payload)
+        elif topic in ("fbm_stock_operations", "marketplace_fbm_stock"):
+            # Cambios de stock en MELI Full (inbound, damaged, lost, returns)
+            try:
+                ok = procesar_webhook_fbm(payload)
+            except Exception as e:
+                import traceback
+                print(f"[FBM Webhook] Error: {e}")
+                print(traceback.format_exc())
+                ok = False
+        else:
+            # Otros topics (items, questions, claims, etc.) → loguear pero no procesar
+            print(f"[MELI Webhook] Topic '{topic}' recibido, no procesado (resource: {payload.get('resource', '?')})")
+            ok = True
+        
         # MELI espera 200 rápido; si tarda mucho reintenta
         return jsonify({"ok": ok}), 200
     except Exception as e:
-        print(f"[MELI Webhook] Error: {e}")
+        print(f"[MELI Webhook] Error general: {e}")
         # Importante: devolver 200 igual para que MELI no reintente infinito
         return jsonify({"ok": False, "error": str(e)}), 200
 
