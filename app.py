@@ -8538,6 +8538,115 @@ function ejecutar(dryRun) {
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# DIAGNÓSTICO DE STOCK POR SKU
+# ════════════════════════════════════════════════════════════════════════════
+# Te dice TODO sobre el stock de un SKU:
+#  - Stock legacy (campo productos.stock)
+#  - Stock por bodega (CENTRAL, MELI_FULL, etc.)
+#  - Suma de bodegas vs legacy (¿son consistentes?)
+#  - Últimos 20 movimientos (con stock_antes, stock_despues, bodega)
+#
+# Uso: /admin/diagnostico_stock?sku=GPPLA001&token=TU_TOKEN
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/diagnostico_stock", methods=["GET"])
+def admin_diagnostico_stock():
+    """Diagnóstico completo del stock de un SKU."""
+    # Bypass por token (igual que importar)
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    token_recibido = request.args.get("token", "")
+    autorizado = session.get("logged") or (token_recibido and token_recibido == bypass_token)
+    if not autorizado:
+        return jsonify({"error": "no autorizado"}), 401
+    
+    sku = (request.args.get("sku") or "").strip().upper()
+    if not sku:
+        return jsonify({"error": "Falta parámetro ?sku=XXX"}), 400
+    
+    try:
+        from inventario import get_conn, listar_bodegas, get_stock_bodega
+        
+        conn = get_conn(); cur = conn.cursor()
+        
+        # ── 1. Datos del producto ──
+        cur.execute("SELECT sku, nombre, stock FROM productos WHERE UPPER(sku)=%s LIMIT 1", (sku,))
+        r = cur.fetchone()
+        if not r:
+            cur.close(); conn.close()
+            return jsonify({"error": f"SKU '{sku}' no existe en productos"}), 404
+        
+        sku_real, nombre, stock_legacy = r
+        
+        # ── 2. Stock por bodega ──
+        bodegas_info = {}
+        suma_bodegas = 0
+        try:
+            for b in listar_bodegas(solo_activas=False):
+                cant = get_stock_bodega(sku_real, b["codigo"]) or 0
+                bodegas_info[b["codigo"]] = {
+                    "nombre": b["nombre"],
+                    "tipo": b.get("tipo", "?"),
+                    "stock": cant
+                }
+                suma_bodegas += cant
+        except Exception as e:
+            bodegas_info["error"] = str(e)
+        
+        # ── 3. Últimos movimientos ──
+        cur.execute("""
+            SELECT fecha, tipo, cantidad, motivo, canal, bodega_codigo, 
+                   stock_antes, stock_despues, orden_id, usuario, origen_registro
+            FROM movimientos 
+            WHERE sku=%s 
+            ORDER BY fecha DESC 
+            LIMIT 20
+        """, (sku_real,))
+        movimientos = []
+        for m in cur.fetchall():
+            movimientos.append({
+                "fecha": m[0].strftime("%Y-%m-%d %H:%M:%S") if m[0] else None,
+                "tipo": m[1],
+                "cantidad": m[2],
+                "motivo": m[3],
+                "canal": m[4],
+                "bodega": m[5],
+                "stock_antes": m[6],
+                "stock_despues": m[7],
+                "orden_id": m[8],
+                "usuario": m[9],
+                "origen": m[10]
+            })
+        
+        cur.close(); conn.close()
+        
+        # ── 4. Análisis de consistencia ──
+        consistente = (suma_bodegas == stock_legacy)
+        
+        return jsonify({
+            "sku": sku_real,
+            "nombre": nombre,
+            "stock_legacy_productos": stock_legacy,
+            "stock_total_bodegas": suma_bodegas,
+            "consistente": consistente,
+            "diferencia": stock_legacy - suma_bodegas,
+            "bodegas": bodegas_info,
+            "ultimos_20_movimientos": movimientos,
+            "ayuda": {
+                "stock_legacy_productos": "Campo `stock` en tabla productos (sistema viejo)",
+                "stock_total_bodegas": "Suma de stock_bodega para todas las bodegas",
+                "consistente": "True si ambos suman lo mismo (deberían)",
+                "stock_antes/stock_despues": "Snapshot de bodega ANTES y DESPUÉS del movimiento"
+            }
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "error": str(e),
+            "trace": traceback.format_exc()
+        }), 500
+
+
 @app.route("/admin/importar_stock_full_meli", methods=["GET", "POST"])
 def admin_importar_stock_full_meli():
     """Importa stock MELI Full desde el Excel oficial de MELI.
