@@ -993,6 +993,103 @@ scheduler.add_job(_sync_ripley_automatico, "interval", minutes=10, id="ripley_sy
 scheduler.add_job(_sync_woo_automatico, "interval", minutes=10, id="woo_sync",
                   next_run_time=(datetime.now() + timedelta(seconds=600)))
 
+
+# ════════════════════════════════════════════════════════════════════════════
+# SCHEDULER DIARIO DE RESPALDO — VERIFICAR STOCK MELI FULL vs API
+# ════════════════════════════════════════════════════════════════════════════
+# Cada 24h consulta API MELI y compara con Lusync.
+# Si hay desfase (webhook FBM perdido, error de red, etc.), Lusync se ajusta.
+# Esta es la "red de seguridad" del sistema FBM automático.
+# ════════════════════════════════════════════════════════════════════════════
+
+def _sync_full_meli_diario():
+    """Verifica stock MELI Full real vs Lusync. Ajusta si hay diferencias."""
+    if _sync_locks.get("full_meli", {}).get("running"):
+        print("[Scheduler Full MELI] Ya hay un sync corriendo, salto")
+        return
+    if "full_meli" not in _sync_locks:
+        _sync_locks["full_meli"] = {"running": False}
+    _sync_locks["full_meli"]["running"] = True
+    try:
+        print("[Scheduler Full MELI] Iniciando verificación diaria contra API...")
+        from mercadolibre import obtener_stock_full_real_meli
+        from inventario import (get_stock_bodega, ajustar_stock_bodega,
+                                cargar_productos as _cp, crear_alerta)
+        
+        stock_real_meli = obtener_stock_full_real_meli()
+        if stock_real_meli is None:
+            print("[Scheduler Full MELI] No se pudo obtener stock real, salto")
+            return
+        
+        if not stock_real_meli:
+            print("[Scheduler Full MELI] Sin publicaciones Full activas")
+            return
+        
+        ajustes = []
+        productos_dict = {p["sku"]: p for p in _cp()}
+        
+        for sku_lusync, datos_meli in stock_real_meli.items():
+            if sku_lusync not in productos_dict:
+                continue
+            
+            stock_meli_available = datos_meli.get("available", 0)
+            stock_meli_transit = datos_meli.get("in_transit", 0)
+            
+            # Comparar con Lusync
+            stock_lusync_full = get_stock_bodega(sku_lusync, "MELI_FULL") or 0
+            stock_lusync_transit = get_stock_bodega(sku_lusync, "MELI_FULL_TRANSITO") or 0
+            
+            diff_full = stock_meli_available - stock_lusync_full
+            diff_transit = stock_meli_transit - stock_lusync_transit
+            
+            # Si hay diferencia significativa, ajustar
+            if diff_full != 0:
+                try:
+                    ajustar_stock_bodega(sku_lusync, "MELI_FULL", diff_full)
+                    ajustes.append(f"{sku_lusync}: FULL {stock_lusync_full}→{stock_meli_available} (diff {diff_full:+d})")
+                except Exception as e:
+                    print(f"[Scheduler Full MELI] Error ajustando {sku_lusync} FULL: {e}")
+            
+            if diff_transit != 0:
+                try:
+                    ajustar_stock_bodega(sku_lusync, "MELI_FULL_TRANSITO", diff_transit)
+                    ajustes.append(f"{sku_lusync}: TRANSITO {stock_lusync_transit}→{stock_meli_transit} (diff {diff_transit:+d})")
+                except Exception as e:
+                    print(f"[Scheduler Full MELI] Error ajustando {sku_lusync} TRANSITO: {e}")
+        
+        # ── Reporte ──
+        if ajustes:
+            print(f"[Scheduler Full MELI] {len(ajustes)} ajustes aplicados:")
+            for a in ajustes[:20]:
+                print(f"  • {a}")
+            
+            # Crear alerta si hay muchos ajustes (puede indicar webhook perdido)
+            if len(ajustes) >= 3:
+                try:
+                    crear_alerta(
+                        tipo="full_resync",
+                        titulo=f"⚙️ Sync diario Full MELI: {len(ajustes)} ajustes",
+                        mensaje=f"Se detectaron diferencias entre stock MELI Full real y Lusync.<br>"
+                               f"Sistema ajustó automáticamente.<br><br>"
+                               f"Primeros ajustes:<br>" + "<br>".join(f"• {a}" for a in ajustes[:5]),
+                        canal="mercadolibre"
+                    )
+                except: pass
+        else:
+            print(f"[Scheduler Full MELI] OK — Stock Lusync coincide con MELI ({len(stock_real_meli)} SKUs verificados)")
+    except Exception as e:
+        import traceback
+        print(f"[Scheduler Full MELI] Error general: {e}")
+        print(traceback.format_exc())
+    finally:
+        _sync_locks["full_meli"]["running"] = False
+
+
+# Registrar scheduler diario (cada 24 horas, primera ejecución a las 6h después del arranque)
+# Tiempo elegido: 6h después de arrancar para no saturar el deploy inicial
+scheduler.add_job(_sync_full_meli_diario, "interval", hours=24, id="full_meli_diario",
+                  next_run_time=(datetime.now() + timedelta(hours=6)))
+
 scheduler.start()
 atexit.register(lambda: scheduler.shutdown(wait=False))
 

@@ -803,3 +803,149 @@ def _procesar_envio_webhook(resource):
     """Cuando cambia el estado de un envío."""
     print(f"[MELI Webhook] Envío: {resource}")
     return True
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# CONSULTAR STOCK FULL REAL DESDE LA API DE MELI
+# ════════════════════════════════════════════════════════════════════════════
+# Usado por el scheduler diario de respaldo para verificar si el stock Full
+# en Lusync coincide con el real de MELI. Si hay desfase (webhook perdido),
+# Lusync se ajusta automáticamente.
+# ════════════════════════════════════════════════════════════════════════════
+
+def obtener_stock_full_real_meli(sku_lusync=None, max_publicaciones=200):
+    """Consulta el stock Full REAL de MELI vía API.
+    
+    Args:
+        sku_lusync: si se especifica, solo consulta ese SKU. Si None, todos los Full.
+        max_publicaciones: límite para evitar loops infinitos.
+    
+    Returns:
+        dict {sku_lusync: {"available": int, "in_transit": int, "total": int}}
+        o None si hay error.
+    
+    Estrategia:
+        1. Lista publicaciones del seller que ofrecen Full (logistic_type="fulfillment")
+        2. Para cada una, consulta /inventories/{inv_id}/stock/fulfillment
+        3. Devuelve dict por SKU
+    """
+    try:
+        token = get_meli_token()
+        if not token:
+            print(f"[StockFullAPI] No hay token MELI")
+            return None
+        
+        from inventario import get_meli_auth, listar_sku_mapeo
+        auth = get_meli_auth() or {}
+        seller_id = auth.get("user_id")
+        if not seller_id:
+            r_user = requests.get(
+                "https://api.mercadolibre.com/users/me",
+                headers={"Authorization": f"Bearer {token}"}, timeout=10
+            )
+            seller_id = r_user.json().get("id") if r_user.status_code == 200 else None
+        
+        if not seller_id:
+            print(f"[StockFullAPI] No se pudo obtener seller_id")
+            return None
+        
+        # Mapeo SKU MELI → SKU Lusync
+        sku_meli_to_lusync = {}
+        try:
+            for fila in listar_sku_mapeo():
+                sku_meli = (fila.get("sku_mercadolibre") or "").strip()
+                sku_lus = (fila.get("sku_lusync") or "").strip()
+                if sku_meli and sku_lus:
+                    sku_meli_to_lusync[sku_meli] = sku_lus
+        except: pass
+        
+        # ── 1. Listar publicaciones del seller ──
+        item_ids = []
+        offset = 0
+        while len(item_ids) < max_publicaciones:
+            r = requests.get(
+                f"https://api.mercadolibre.com/users/{seller_id}/items/search",
+                params={"limit": 50, "offset": offset, "logistic_type": "fulfillment"},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=15
+            )
+            if r.status_code != 200:
+                print(f"[StockFullAPI] HTTP {r.status_code} listando items Full")
+                break
+            data = r.json()
+            ids_lote = data.get("results", []) or []
+            if not ids_lote: break
+            item_ids.extend(ids_lote)
+            offset += len(ids_lote)
+            if offset >= data.get("paging", {}).get("total", 0):
+                break
+        
+        print(f"[StockFullAPI] {len(item_ids)} publicaciones Full encontradas")
+        
+        # ── 2. Para cada item, obtener inventory_id + SKU + stock fulfillment ──
+        resultado = {}
+        
+        # Procesar items en lotes de 20 (multi-get)
+        for i in range(0, len(item_ids), 20):
+            ids_param = ",".join(item_ids[i:i+20])
+            r_items = requests.get(
+                "https://api.mercadolibre.com/items",
+                params={"ids": ids_param, "attributes": "id,attributes,inventory_id,seller_custom_field"},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=20
+            )
+            if r_items.status_code != 200: continue
+            
+            for item_resp in r_items.json():
+                if item_resp.get("code") != 200: continue
+                body = item_resp.get("body", {})
+                inventory_id = body.get("inventory_id", "")
+                if not inventory_id: continue
+                
+                # SKU del seller
+                sku_meli = ""
+                for attr in body.get("attributes", []) or []:
+                    if attr.get("id") == "SELLER_SKU":
+                        sku_meli = (attr.get("value_name") or "").strip()
+                        break
+                if not sku_meli:
+                    sku_meli = (body.get("seller_custom_field") or "").strip()
+                if not sku_meli: continue
+                
+                # Mapear a SKU Lusync
+                sku_lus = sku_meli_to_lusync.get(sku_meli, sku_meli)
+                
+                # Si filtramos por un SKU específico
+                if sku_lusync and sku_lus != sku_lusync:
+                    continue
+                
+                # ── 3. Consultar stock fulfillment del inventory ──
+                try:
+                    r_stock = requests.get(
+                        f"https://api.mercadolibre.com/inventories/{inventory_id}/stock/fulfillment",
+                        headers={"Authorization": f"Bearer {token}"},
+                        timeout=10
+                    )
+                    if r_stock.status_code == 200:
+                        stock_data = r_stock.json()
+                        # Estructura típica: {"total": N, "available": N, "in_transit": N, ...}
+                        available = int(stock_data.get("available_quantity", 0) or stock_data.get("available", 0) or 0)
+                        in_transit = int(stock_data.get("in_transit", 0) or stock_data.get("in_transfer", 0) or 0)
+                        total = int(stock_data.get("total", available + in_transit) or 0)
+                        
+                        # Acumular si el SKU tiene multi-publicación
+                        if sku_lus not in resultado:
+                            resultado[sku_lus] = {"available": 0, "in_transit": 0, "total": 0}
+                        resultado[sku_lus]["available"] += available
+                        resultado[sku_lus]["in_transit"] += in_transit
+                        resultado[sku_lus]["total"] += total
+                except Exception as e:
+                    print(f"[StockFullAPI] Error consultando inventory {inventory_id}: {e}")
+                    continue
+        
+        return resultado
+    except Exception as e:
+        import traceback
+        print(f"[StockFullAPI] Error general: {e}")
+        print(traceback.format_exc())
+        return None
