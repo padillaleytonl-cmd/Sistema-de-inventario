@@ -8558,6 +8558,142 @@ function ejecutar(dryRun) {
 # Uso: /admin/diagnostico_stock?sku=GPPLA001&token=TU_TOKEN
 # ════════════════════════════════════════════════════════════════════════════
 
+# ════════════════════════════════════════════════════════════════════════════
+# REPROCESAR ÓRDENES ESPECÍFICAS (recuperación manual)
+# ════════════════════════════════════════════════════════════════════════════
+# Permite forzar el procesamiento de órdenes que se perdieron por algún motivo
+# (bug, caída de servidor, webhook perdido, etc.).
+#
+# Funciona así:
+# 1. Recibe una lista de orden_ids + canal (meli, walmart, etc.)
+# 2. Borra la marca "ya_procesada" de cada una
+# 3. Llama al scheduler del canal correspondiente para que las re-procese
+#
+# Uso desde browser:
+#   /admin/reprocesar_ordenes?canal=meli&order_ids=2000012841095175,2000012839784797&token=XXX
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/reprocesar_ordenes", methods=["GET", "POST"])
+def admin_reprocesar_ordenes():
+    """Borra marcas de órdenes específicas para que el scheduler las re-procese."""
+    # Bypass por token
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    token_recibido = request.args.get("token", "")
+    autorizado = session.get("logged") or (token_recibido and token_recibido == bypass_token)
+    if not autorizado:
+        return jsonify({"error": "no autorizado"}), 401
+    
+    # Acepta GET con query params o POST con JSON
+    if request.method == "POST" and request.is_json:
+        data = request.get_json()
+        canal = (data.get("canal") or "").lower().strip()
+        order_ids_raw = data.get("order_ids") or ""
+    else:
+        canal = (request.args.get("canal") or "").lower().strip()
+        order_ids_raw = request.args.get("order_ids") or ""
+    
+    # Parsear orden_ids (separados por coma)
+    if isinstance(order_ids_raw, list):
+        order_ids = [str(x).strip() for x in order_ids_raw if x]
+    else:
+        order_ids = [s.strip() for s in str(order_ids_raw).split(",") if s.strip()]
+    
+    if not canal or not order_ids:
+        return jsonify({
+            "error": "Faltan parámetros",
+            "uso": {
+                "canal": "meli, walmart, falabella, paris, ripley, woo",
+                "order_ids": "lista separada por comas (ej: 2000012841095175,2000012839784797)",
+                "ejemplo_url": "/admin/reprocesar_ordenes?canal=meli&order_ids=12345,67890&token=XXX"
+            }
+        }), 400
+    
+    # Mapeo de canales a prefijos de keys
+    prefijos = {
+        "meli":      ["MELI-", "MELI-CANCEL-"],
+        "walmart":   ["WM-", "WM-CANCEL-"],
+        "falabella": ["FA-", "FA-CANCEL-"],
+        "paris":     ["PA-", "PA-CANCEL-"],
+        "ripley":    ["RP-", "RP-CANCEL-"],
+        "woo":       ["WOO-", "WOO-CANCEL-"],
+    }
+    
+    if canal not in prefijos:
+        return jsonify({
+            "error": f"Canal '{canal}' no reconocido",
+            "validos": list(prefijos.keys())
+        }), 400
+    
+    # ── Borrar marcas de cada orden ──
+    from inventario import get_conn
+    conn = get_conn()
+    cur = conn.cursor()
+    
+    resultados = {
+        "canal": canal,
+        "order_ids_solicitadas": order_ids,
+        "marcas_borradas": [],
+        "errores": []
+    }
+    
+    try:
+        for order_id in order_ids:
+            order_id_clean = str(order_id).strip()
+            for prefijo in prefijos[canal]:
+                key = f"{prefijo}{order_id_clean}"
+                try:
+                    cur.execute("""
+                        DELETE FROM ordenes_procesadas 
+                        WHERE order_id_texto = %s
+                        RETURNING order_id_texto
+                    """, (key,))
+                    r = cur.fetchall()
+                    if r:
+                        resultados["marcas_borradas"].append(key)
+                except Exception as e:
+                    resultados["errores"].append(f"{key}: {str(e)[:80]}")
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        cur.close(); conn.close()
+        return jsonify({"error": f"Error general: {e}"}), 500
+    
+    cur.close(); conn.close()
+    
+    # ── Disparar el scheduler correspondiente ──
+    schedulers = {
+        "meli":      _sync_meli_automatico,
+        "walmart":   _sync_walmart_automatico,
+        "falabella": _sync_falabella_automatico,
+        "paris":     _sync_paris_automatico,
+        "ripley":    _sync_ripley_automatico,
+        "woo":       _sync_woo_automatico,
+    }
+    
+    scheduler_func = schedulers.get(canal)
+    if scheduler_func:
+        try:
+            # Ejecutar en thread para no bloquear la respuesta
+            import threading
+            t = threading.Thread(target=scheduler_func, daemon=True)
+            t.start()
+            resultados["scheduler_ejecutado"] = True
+            resultados["mensaje"] = f"Scheduler {canal} ejecutándose en background. Las órdenes serán procesadas en los próximos segundos."
+        except Exception as e:
+            resultados["errores"].append(f"Scheduler: {str(e)[:80]}")
+    
+    # Audit log
+    try:
+        registrar_audit(
+            session.get("usuario", "Sistema (token)"), request.remote_addr,
+            "reprocesar_ordenes",
+            detalle=f"canal={canal} ordenes={','.join(order_ids[:10])} marcas_borradas={len(resultados['marcas_borradas'])}"
+        )
+    except: pass
+    
+    return jsonify(resultados)
+
+
 @app.route("/admin/diagnostico_stock", methods=["GET"])
 def admin_diagnostico_stock():
     """Diagnóstico completo del stock de un SKU."""
