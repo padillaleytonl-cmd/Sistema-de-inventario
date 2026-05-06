@@ -1712,6 +1712,92 @@ def reintegrar_stock_bodega(sku, cantidad, bodega_codigo, motivo, canal=None, or
         print(f"[Bodegas] Error registrando entrada: {e}")
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# AJUSTAR STOCK POR DEVOLUCIÓN (usado por endpoints de devoluciones avanzadas)
+# ════════════════════════════════════════════════════════════════════════════
+# Cuando se procesa una devolución (cliente devuelve un producto en buen estado),
+# el stock vuelve a la bodega CENTRAL y se registra el movimiento.
+#
+# También suma al campo `stock` total del producto (legacy) para mantener
+# consistencia con la lógica vieja del sistema.
+# ════════════════════════════════════════════════════════════════════════════
+
+def ajustar_stock_dev(sku, cantidad, dev_id, motivo_codigo="reintegro_buen_estado"):
+    """Ajusta stock por devolución: suma a CENTRAL + registra movimiento.
+    
+    Args:
+        sku: SKU Lusync del producto
+        cantidad: cantidad a reintegrar (positiva)
+        dev_id: ID de la devolución (para trazabilidad)
+        motivo_codigo: código de motivo (reintegro_buen_estado, etc.)
+    
+    Returns:
+        dict con {ok: bool, stock_anterior, stock_nuevo, mensaje}
+    """
+    try:
+        cantidad = int(cantidad)
+        if cantidad <= 0:
+            return {"ok": False, "error": "cantidad debe ser > 0"}
+        
+        # ── 1. Actualizar stock_bodega CENTRAL (modelo nuevo) ──
+        try:
+            ajustar_stock_bodega(sku, "CENTRAL", cantidad)
+        except Exception as e:
+            print(f"[ajustar_stock_dev] Error stock_bodega CENTRAL: {e}")
+        
+        # ── 2. Actualizar campo stock del producto (modelo legacy compatible) ──
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("SELECT stock, nombre FROM productos WHERE sku=%s LIMIT 1", (sku,))
+        r = cur.fetchone()
+        if not r:
+            cur.close(); conn.close()
+            return {"ok": False, "error": f"SKU '{sku}' no encontrado"}
+        
+        stock_anterior = int(r[0] or 0)
+        nombre = r[1] or sku
+        stock_nuevo = stock_anterior + cantidad
+        
+        cur.execute("UPDATE productos SET stock=%s WHERE sku=%s", (stock_nuevo, sku))
+        
+        # ── 3. Registrar movimiento ──
+        motivo_texto = {
+            "reintegro_buen_estado": f"Devolución {dev_id} - reintegrado a stock",
+            "reintegro_reparable":   f"Devolución {dev_id} - reparable reintegrado",
+            "ajuste":                f"Devolución {dev_id} - ajuste de stock",
+        }.get(motivo_codigo, f"Devolución {dev_id}")
+        
+        cur.execute("""INSERT INTO movimientos
+            (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, bodega_codigo)
+            VALUES ('entrada', %s, %s, %s, %s, %s, %s, NOW(), %s)""",
+            (sku, nombre, cantidad, motivo_texto, "Sistema (Devolución)", "Devolución", "CENTRAL"))
+        
+        conn.commit()
+        cur.close(); conn.close()
+        
+        # ── 4. Sincronizar a los 6 marketplaces (resiliente) ──
+        # Importamos el helper desde app.py si está disponible
+        try:
+            from app import sincronizar_stock_marketplaces
+            sincronizar_stock_marketplaces(sku, stock_nuevo, contexto=f"devolucion_{dev_id}")
+        except Exception as e_sync:
+            print(f"[ajustar_stock_dev] Warning: no se pudo sincronizar marketplaces: {e_sync}")
+        
+        print(f"[ajustar_stock_dev] OK — {sku} +{cantidad} (dev {dev_id}) → stock {stock_anterior}→{stock_nuevo}")
+        return {
+            "ok": True,
+            "stock_anterior": stock_anterior,
+            "stock_nuevo": stock_nuevo,
+            "mensaje": f"Reintegrado +{cantidad} a CENTRAL (stock: {stock_anterior}→{stock_nuevo})"
+        }
+    except Exception as e:
+        import traceback
+        print(f"[ajustar_stock_dev] Error: {e}")
+        print(traceback.format_exc())
+        try: conn.rollback(); cur.close(); conn.close()
+        except: pass
+        return {"ok": False, "error": str(e)}
+
+
 def detectar_fulfillment_meli(orden_data):
     """Detecta si una orden MercadoLibre es Full o Seller envía.
     AUTORITATIVO: consulta /shipments/{id} porque la orden no trae logistic_type."""
