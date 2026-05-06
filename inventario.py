@@ -1490,25 +1490,44 @@ def set_stock_bodega(sku, bodega_codigo, cantidad):
 
 
 def ajustar_stock_bodega(sku, bodega_codigo, delta):
-    """Suma o resta delta al stock de un SKU en una bodega. Retorna nuevo total."""
+    """Suma o resta delta al stock de un SKU en una bodega. Retorna nuevo total.
+    
+    Importante: si la fila no existe, se inserta con max(0, delta).
+    Si ya existe, se suma delta (puede ser negativo) y se aplica GREATEST(0,...)
+    para no permitir stock negativo.
+    
+    BUG FIX (2026-05-06): Antes el EXCLUDED.cantidad usaba GREATEST(0, %s) en el VALUES,
+    lo que convertía deltas negativos a 0 y NO descontaba stock al UPDATE.
+    Ahora pasamos el delta REAL y aplicamos GREATEST solo en la lógica de upsert.
+    """
     conn = get_conn(); cur = conn.cursor()
     nuevo = 0
     try:
-        cur.execute("""INSERT INTO stock_bodega (sku, bodega_codigo, cantidad, actualizado_at)
-                       VALUES (%s, %s, GREATEST(0, %s), NOW())
-                       ON CONFLICT (sku, bodega_codigo)
-                       DO UPDATE SET cantidad=GREATEST(0, stock_bodega.cantidad + EXCLUDED.cantidad),
-                                     actualizado_at=NOW()
-                       RETURNING cantidad""",
-                    (sku, bodega_codigo, max(0, int(delta)) if delta > 0 else int(delta)))
-        # NOTE: el INSERT inicial usa GREATEST(0, delta) por si se intenta restar de bodega vacía
-        # En el UPDATE se respeta el GREATEST(0, current+delta)
+        delta_int = int(delta)
+        # Para INSERT inicial: si la fila no existe y delta es negativo, no podemos
+        # tener stock negativo, así que insertamos 0 (después se sumará delta si llega más).
+        # Para UPDATE: sumamos el delta REAL (puede ser negativo) al stock existente.
+        
+        valor_inicial = max(0, delta_int)  # 0 si delta es negativo, delta si positivo
+        
+        cur.execute("""
+            INSERT INTO stock_bodega (sku, bodega_codigo, cantidad, actualizado_at)
+            VALUES (%s, %s, %s, NOW())
+            ON CONFLICT (sku, bodega_codigo)
+            DO UPDATE SET cantidad = GREATEST(0, stock_bodega.cantidad + %s),
+                          actualizado_at = NOW()
+            RETURNING cantidad
+        """, (sku, bodega_codigo, valor_inicial, delta_int))
+        # Pasamos delta_int como segundo parámetro para el UPDATE.
+        # Así el UPDATE suma el delta REAL (positivo o negativo).
+        
         r = cur.fetchone()
         if r: nuevo = int(r[0] or 0)
         conn.commit()
         _recalcular_stock_total(sku)
     except Exception as e:
-        print(f"[Bodegas] ajustar_stock_bodega: {e}"); conn.rollback()
+        print(f"[Bodegas] ajustar_stock_bodega ERROR sku={sku} bodega={bodega_codigo} delta={delta}: {e}")
+        conn.rollback()
     cur.close(); conn.close()
     return nuevo
 
