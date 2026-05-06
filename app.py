@@ -5423,6 +5423,288 @@ def ruta_meli_webhook():
         return jsonify({"ok": False, "error": str(e)}), 200
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# WEBHOOK FBM (FULFILLMENT BY MERCADOLIBRE) - OPERACIONES DE STOCK FULL
+# ════════════════════════════════════════════════════════════════════════════
+# MELI notifica cambios en el stock Full vía topic "fbm_stock_operations".
+# Tipos de operación que procesa este webhook:
+#
+#   📦 inbound_reception  → MELI recibió tu envío. Mover MELI_FULL_TRANSITO → MELI_FULL
+#   🔄 inbound_returns    → Devolución del comprador llegó a MELI. Sumar a MELI_FULL
+#   ⚠️ damaged            → Mercadería dañada en bodega MELI. Restar de MELI_FULL + alerta
+#   ⚠️ lost               → Mercadería extraviada. Restar de MELI_FULL + alerta
+#
+# NO procesa sale_confirmation (eso ya lo maneja /mercadolibre/webhook con orders_v2)
+#
+# Idempotencia: cada operación tiene operation_id único.
+# Si MELI manda 2 veces la misma, solo procesa la primera.
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/mercadolibre/webhook_fbm", methods=["GET", "POST"])
+def ruta_meli_webhook_fbm():
+    """Webhook receptor de notificaciones FBM (stock Full)."""
+    # GET solo para que MELI valide que la URL responde
+    if request.method == "GET":
+        return jsonify({"status": "ok", "endpoint": "fbm_stock_operations"}), 200
+    
+    try:
+        payload = request.json or {}
+        # Procesar de forma resiliente: si algo falla, devolver 200 igual
+        # (MELI reintenta cada 5min hasta 7 días si recibe error)
+        try:
+            ok = procesar_webhook_fbm(payload)
+        except Exception as e:
+            import traceback
+            print(f"[FBM Webhook] Error procesando: {e}")
+            print(traceback.format_exc())
+            ok = False
+        
+        return jsonify({"ok": ok}), 200
+    except Exception as e:
+        print(f"[FBM Webhook] Error general: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 200
+
+
+def procesar_webhook_fbm(payload):
+    """Procesa una notificación FBM de cambio de stock Full.
+    
+    Estructura típica del payload (según docs MELI):
+    {
+      "topic": "fbm_stock_operations",
+      "resource": "/inventories/{INVENTORY_ID}/stock/fulfillment/operations/{OPERATION_ID}",
+      "user_id": 123456789,
+      "application_id": 12345,
+      "sent": "2026-05-05T10:00:00Z",
+      "received": "2026-05-05T10:00:00Z"
+    }
+    
+    Procesa:
+    - inbound_reception: TRANSITO → FULL
+    - damaged/lost: resta FULL + alerta
+    - inbound_returns: suma FULL
+    """
+    from inventario import (orden_ya_procesada_texto, marcar_orden_procesada_texto,
+                            ajustar_stock_bodega, get_stock_bodega, crear_alerta,
+                            cargar_productos as _cp)
+    from mercadolibre import get_meli_token
+    import requests as _req
+    
+    topic = payload.get("topic", "")
+    resource = payload.get("resource", "")
+    
+    print(f"[FBM Webhook] Recibido: topic={topic} resource={resource}")
+    
+    if topic != "fbm_stock_operations":
+        print(f"[FBM Webhook] Topic no relevante: {topic} - ignorando")
+        return True
+    
+    # Extraer operation_id del resource: /inventories/{INV}/stock/fulfillment/operations/{OP_ID}
+    operation_id = ""
+    inventory_id = ""
+    try:
+        parts = resource.strip("/").split("/")
+        # parts: ["inventories", "{INV}", "stock", "fulfillment", "operations", "{OP_ID}"]
+        if len(parts) >= 6:
+            inventory_id = parts[1]
+            operation_id = parts[5]
+    except Exception as e:
+        print(f"[FBM Webhook] No se pudo parsear resource: {e}")
+        return False
+    
+    if not operation_id:
+        print(f"[FBM Webhook] operation_id vacío, ignorando")
+        return False
+    
+    # ── Idempotencia: si ya procesamos esta operación, salir ──
+    fbm_key = f"FBM-OP-{operation_id}"
+    if orden_ya_procesada_texto(fbm_key):
+        print(f"[FBM Webhook] Operación {operation_id} ya procesada")
+        return True
+    
+    # ── Consultar el detalle de la operación a MELI ──
+    # Necesitamos saber: tipo, SKU, cantidad
+    try:
+        token = get_meli_token()
+        url = f"https://api.mercadolibre.com{resource}"
+        r = _req.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
+        if r.status_code != 200:
+            print(f"[FBM Webhook] HTTP {r.status_code} consultando operación {operation_id}")
+            print(f"[FBM Webhook] Body: {r.text[:200]}")
+            return False
+        operacion = r.json()
+    except Exception as e:
+        print(f"[FBM Webhook] Error consultando detalle de operación: {e}")
+        return False
+    
+    # ── Extraer datos de la operación ──
+    # Estructura típica del response:
+    # {
+    #   "id": "operation_id",
+    #   "type": "inbound_reception" | "damaged" | "lost" | "sale_confirmation" | ...
+    #   "date_created": "...",
+    #   "items": [
+    #     {"sku": "MLBxxx", "quantity": 5, "seller_sku": "ODJM001", ...}
+    #   ]
+    # }
+    
+    op_type = (operacion.get("type") or operacion.get("operation_type") or "").lower()
+    items = operacion.get("items", []) or []
+    
+    print(f"[FBM Webhook] Tipo: {op_type}, Items: {len(items)}")
+    
+    # ── Filtrar tipos que NO procesa este webhook ──
+    # sale_confirmation lo maneja /mercadolibre/webhook con orders_v2
+    if op_type in ("sale_confirmation", "sale", "outbound"):
+        print(f"[FBM Webhook] Tipo {op_type} es manejado por webhook orders_v2, ignorando")
+        marcar_orden_procesada_texto(fbm_key)  # Marcar para no re-evaluarla
+        return True
+    
+    # ── Procesar según tipo ──
+    items_procesados = []
+    
+    for item in items:
+        # MELI puede usar varios nombres para el SKU del seller
+        seller_sku = (
+            (item.get("seller_sku") or "").strip()
+            or (item.get("seller_custom_field") or "").strip()
+            or (item.get("sku") or "").strip()
+        )
+        cantidad = int(item.get("quantity") or item.get("qty") or 0)
+        
+        if not seller_sku or cantidad <= 0:
+            continue
+        
+        # Buscar SKU Lusync vía mapeo (por si MELI usa item_id en vez de SKU)
+        sku_lusync = seller_sku
+        try:
+            from inventario import listar_sku_mapeo
+            for fila in listar_sku_mapeo():
+                sku_meli_mapped = (fila.get("sku_mercadolibre") or "").strip()
+                if sku_meli_mapped == seller_sku:
+                    sku_lusync = fila.get("sku_lusync") or seller_sku
+                    break
+        except: pass
+        
+        # Verificar que el SKU exista en productos
+        productos = _cp()
+        producto = next((p for p in productos if p["sku"] == sku_lusync), None)
+        if not producto:
+            print(f"[FBM Webhook] SKU '{sku_lusync}' no existe en Lusync, saltando")
+            continue
+        
+        # ╔══════════════════════════════════════════════════════════╗
+        # ║ INBOUND_RECEPTION → MELI recibió tu envío                ║
+        # ║ Mover de MELI_FULL_TRANSITO a MELI_FULL                  ║
+        # ╚══════════════════════════════════════════════════════════╝
+        if op_type == "inbound_reception":
+            try:
+                # Obtener stock actual de TRANSITO
+                stock_transito_actual = get_stock_bodega(sku_lusync, "MELI_FULL_TRANSITO") or 0
+                # Cantidad a mover: mínimo entre lo recibido y lo que está en tránsito
+                # Esto evita números negativos si hay desfase con el reporte Excel
+                cantidad_a_mover = min(cantidad, stock_transito_actual) if stock_transito_actual > 0 else cantidad
+                
+                # Restar de TRANSITO (si había)
+                if stock_transito_actual > 0:
+                    ajustar_stock_bodega(sku_lusync, "MELI_FULL_TRANSITO", -cantidad_a_mover)
+                
+                # Sumar a FULL
+                ajustar_stock_bodega(sku_lusync, "MELI_FULL", cantidad)
+                
+                # Registrar movimiento
+                registrar_movimiento(
+                    "entrada", sku_lusync, producto["nombre"], cantidad,
+                    f"Ingreso a MELI Full confirmado (op {operation_id})",
+                    usuario="Sistema (Webhook FBM)", canal="MercadoLibre",
+                    orden_id=operation_id
+                )
+                
+                # Crear alerta visible en panel
+                try:
+                    crear_alerta(
+                        tipo="full_ingreso",
+                        titulo=f"📦 {sku_lusync} ingresó a MELI Full",
+                        mensaje=f"<strong>{cantidad}</strong> unidades de <strong>{producto['nombre']}</strong> ya están aptas para vender en MELI Full. Operación: {operation_id}",
+                        sku=sku_lusync, canal="mercadolibre"
+                    )
+                except: pass
+                
+                items_procesados.append(f"{sku_lusync} +{cantidad} a Full (de tránsito)")
+                print(f"[FBM Webhook] inbound_reception: {sku_lusync} +{cantidad} → MELI_FULL")
+            except Exception as e:
+                print(f"[FBM Webhook] Error inbound_reception {sku_lusync}: {e}")
+        
+        # ╔══════════════════════════════════════════════════════════╗
+        # ║ DAMAGED / LOST → Mercadería perdida o dañada en MELI    ║
+        # ║ Restar de MELI_FULL + alerta de pérdida                  ║
+        # ╚══════════════════════════════════════════════════════════╝
+        elif op_type in ("damaged", "lost", "loss", "destruction"):
+            try:
+                ajustar_stock_bodega(sku_lusync, "MELI_FULL", -cantidad)
+                
+                registrar_movimiento(
+                    "salida", sku_lusync, producto["nombre"], cantidad,
+                    f"Mercadería {op_type} en MELI Full (op {operation_id})",
+                    usuario="Sistema (Webhook FBM)", canal="MercadoLibre",
+                    orden_id=operation_id
+                )
+                
+                try:
+                    crear_alerta(
+                        tipo="full_perdida",
+                        titulo=f"⚠️ Pérdida en MELI Full: {sku_lusync}",
+                        mensaje=f"MELI reportó <strong>{cantidad}</strong> unidades de <strong>{producto['nombre']}</strong> como <strong>{op_type}</strong>. Operación: {operation_id}",
+                        sku=sku_lusync, canal="mercadolibre"
+                    )
+                except: pass
+                
+                items_procesados.append(f"{sku_lusync} -{cantidad} ({op_type})")
+                print(f"[FBM Webhook] {op_type}: {sku_lusync} -{cantidad} de MELI_FULL")
+            except Exception as e:
+                print(f"[FBM Webhook] Error {op_type} {sku_lusync}: {e}")
+        
+        # ╔══════════════════════════════════════════════════════════╗
+        # ║ INBOUND_RETURNS → Devolución del comprador               ║
+        # ║ Sumar a MELI_FULL (vuelve a estar disponible)            ║
+        # ╚══════════════════════════════════════════════════════════╝
+        elif op_type in ("inbound_returns", "return", "customer_return"):
+            try:
+                ajustar_stock_bodega(sku_lusync, "MELI_FULL", cantidad)
+                
+                registrar_movimiento(
+                    "entrada", sku_lusync, producto["nombre"], cantidad,
+                    f"Devolución cliente MELI Full (op {operation_id})",
+                    usuario="Sistema (Webhook FBM)", canal="MercadoLibre",
+                    orden_id=operation_id
+                )
+                
+                try:
+                    crear_alerta(
+                        tipo="full_devolucion",
+                        titulo=f"🔄 Devolución MELI Full: {sku_lusync}",
+                        mensaje=f"<strong>{cantidad}</strong> unidades de <strong>{producto['nombre']}</strong> volvieron a Full por devolución. Operación: {operation_id}",
+                        sku=sku_lusync, canal="mercadolibre"
+                    )
+                except: pass
+                
+                items_procesados.append(f"{sku_lusync} +{cantidad} (devolución)")
+                print(f"[FBM Webhook] inbound_returns: {sku_lusync} +{cantidad} → MELI_FULL")
+            except Exception as e:
+                print(f"[FBM Webhook] Error inbound_returns {sku_lusync}: {e}")
+        
+        # ╔══════════════════════════════════════════════════════════╗
+        # ║ Otros tipos: solo loguear (no procesar)                  ║
+        # ╚══════════════════════════════════════════════════════════╝
+        else:
+            print(f"[FBM Webhook] Tipo {op_type} no procesado (no implementado)")
+    
+    # Marcar operación como procesada (idempotencia)
+    marcar_orden_procesada_texto(fbm_key)
+    
+    print(f"[FBM Webhook] OK — Operación {operation_id} ({op_type}): {len(items_procesados)} items procesados")
+    return True
+
+
 @app.route("/debug/meli_test_conexion")
 def debug_meli_test():
     """Diagnóstico de conexión con MercadoLibre."""
