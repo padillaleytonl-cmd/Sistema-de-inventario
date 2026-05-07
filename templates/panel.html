@@ -1719,7 +1719,7 @@ tbody td {
         <div class="metric-value" id="kpiAlertas">—</div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
           <span style="font-size:11px;color:var(--muted);cursor:pointer;" onclick="abrirAlertas()">Ver alertas →</span>
-          <span style="font-size:11px;color:var(--muted);cursor:pointer;" onclick="showSection('canales', document.querySelector('.nav-btn:nth-child(6)'))">Ver canales →</span>
+          <button class="btn-ver-mas" onclick="abrirModalKpi('canales')">Canales</button>
         </div>
       </div>
     </div>
@@ -2389,7 +2389,52 @@ tbody td {
         <div class="page-date">Estado, sincronización y configuración de tus marketplaces</div>
       </div>
       <div class="header-actions">
+        <label style="padding:7px 12px;border:0.5px solid #FFDB33;background:#FFF9E6;color:#7a5c00;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:600;" title="Importa el Excel de MercadoLibre Seller Center para mapear SKUs por variante">
+          📥 Importar Excel MELI
+          <input type="file" accept=".xlsx" onchange="importarExcelMeli(this)" style="display:none;">
+        </label>
         <button class="btn-secondary" onclick="cargarCanales()">↻ Refrescar</button>
+      </div>
+    </div>
+
+    <!-- Modal importar Excel MELI -->
+    <div id="modalImportarMeli" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:none;align-items:center;justify-content:center;">
+      <div style="background:var(--bg);border-radius:16px;padding:28px;max-width:600px;width:90%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+          <div>
+            <div style="font-size:16px;font-weight:700;color:var(--text);">📥 Importar Excel MercadoLibre</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:2px;">Seller Center → Publicaciones → Modificar desde Excel</div>
+          </div>
+          <button onclick="cerrarModalMeli()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--muted);">×</button>
+        </div>
+        <div id="meliImportStatus" style="font-size:13px;color:var(--muted);margin-bottom:16px;">Procesando archivo…</div>
+        <div id="meliImportReporte" style="display:none;">
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px;">
+            <div style="background:var(--bg2);border-radius:10px;padding:14px;text-align:center;">
+              <div style="font-size:22px;font-weight:700;color:#059669;" id="meliNuevos">—</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:2px;">Nuevos mapeos</div>
+            </div>
+            <div style="background:var(--bg2);border-radius:10px;padding:14px;text-align:center;">
+              <div style="font-size:22px;font-weight:700;color:#2563eb;" id="meliYaMapeados">—</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:2px;">Ya mapeados</div>
+            </div>
+            <div style="background:var(--bg2);border-radius:10px;padding:14px;text-align:center;">
+              <div style="font-size:22px;font-weight:700;color:#f59e0b;" id="meliNoEnLusync">—</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:2px;">SKU no en Lusync</div>
+            </div>
+          </div>
+          <div id="meliDetalleNuevos" style="display:none;margin-bottom:12px;">
+            <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;">✅ Nuevos mapeos guardados:</div>
+            <div id="meliListaNuevos" style="font-size:11px;color:var(--muted);max-height:150px;overflow-y:auto;background:var(--bg2);border-radius:8px;padding:10px;"></div>
+          </div>
+          <div id="meliDetalleNoLusync" style="display:none;margin-bottom:12px;">
+            <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;">⚠️ SKUs del Excel no encontrados en Lusync:</div>
+            <div id="meliListaNoLusync" style="font-size:11px;color:var(--muted);max-height:150px;overflow-y:auto;background:var(--bg2);border-radius:8px;padding:10px;"></div>
+          </div>
+          <div id="meliBtnEjecutar" style="display:none;margin-top:12px;">
+            <button onclick="confirmarImportarMeli()" style="width:100%;padding:11px;background:#059669;color:white;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;">✅ Confirmar y guardar mapeos</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -6760,37 +6805,21 @@ document.getElementById('syncParisModal').addEventListener('click', function(e){
 // DASHBOARD NUEVO - GRÁFICOS DINÁMICOS CON CHART.JS
 // ════════════════════════════════════════════════════════════════
 
-// Normaliza cualquier variante de nombre de canal al nombre canónico
-function normalizarCanal(c) {
-  if (!c) return c;
-  const m = {
-    'mercadolibre': 'MercadoLibre', 'meli': 'MercadoLibre', 'mercado libre': 'MercadoLibre',
-    'falabella': 'Falabella',
-    'paris': 'Paris', 'parís': 'Paris',
-    'ripley': 'Ripley',
-    'walmart': 'Walmart',
-    'woocommerce': 'Web', 'woo': 'Web', 'web': 'Web',
-    'hites': 'Hites',
-    'manual': 'Manual', 'sistema': 'Sistema'
-  };
-  return m[c.toLowerCase().trim()] || c;
-}
-
 const COLORES_CANAL = {
   // Colores oficiales de cada marketplace
-  Web: '#7F54B3', WooCommerce: '#7F54B3', WC: '#7F54B3',
-  Walmart: '#0071CE',     WM: '#0071CE',
-  Paris: '#0F265C',       PA: '#0F265C', 'París': '#0F265C',
-  Falabella: '#00B25E',   FA: '#00B25E',
-  Ripley: '#A01B7A',      RP: '#A01B7A',
-  MercadoLibre: '#FFE600', ML: '#FFE600',
-  Hites: '#E30613',       HI: '#E30613',
+  WooCommerce: '#7F54B3', WC: '#7F54B3',  // morado oficial WooCommerce
+  Walmart: '#0071CE',     WM: '#0071CE',  // azul oficial Walmart
+  Paris: '#0F265C',       PA: '#0F265C', 'París': '#0F265C',  // azul oscuro París
+  Falabella: '#00B25E',   FA: '#00B25E',  // verde oficial Falabella
+  Ripley: '#A01B7A',      RP: '#A01B7A',  // rosa/púrpura oficial Ripley
+  MercadoLibre: '#FFE600', ML: '#FFE600', // amarillo oficial MercadoLibre
+  Hites: '#E30613',       HI: '#E30613',  // rojo oficial Hites
   Manual: '#6b7280',
   Sistema: '#6b7280'
 };
 
 // Lista de canales que SIEMPRE deben aparecer en el gráfico de ventas
-const TODOS_LOS_CANALES = ['Web', 'Walmart', 'Paris', 'MercadoLibre', 'Falabella', 'Ripley', 'Hites'];
+const TODOS_LOS_CANALES = ['WooCommerce', 'Walmart', 'Paris', 'MercadoLibre', 'Falabella', 'Ripley', 'Hites'];
 
 let _charts = {};
 
@@ -6881,8 +6910,7 @@ async function cargarKPIs() {
     // Calcular ventas totales por canal (en unidades)
     const ventasPorCanal = {};
     resVentas.forEach(v => {
-      const cNorm = normalizarCanal(v.canal);
-      ventasPorCanal[cNorm] = (ventasPorCanal[cNorm] || 0) + v.total;
+      ventasPorCanal[v.canal] = (ventasPorCanal[v.canal] || 0) + v.total;
     });
 
     // Pintar KPI Ventas: monto + badges
@@ -8385,6 +8413,102 @@ function bodegasFiltrar(){
 function bodegasDescargarPlantilla(){
   window.location.href = '/bodegas/descargar_plantilla';
   toast('Descargando plantilla…');
+}
+
+
+// ─── Importar Excel MELI ───────────────────────────────────────────────────
+let _meliArchivoActual = null;
+
+async function importarExcelMeli(input) {
+  const file = input.files[0];
+  if (!file) return;
+  _meliArchivoActual = file;
+
+  // Abrir modal
+  const modal = document.getElementById('modalImportarMeli');
+  modal.style.display = 'flex';
+  document.getElementById('meliImportReporte').style.display = 'none';
+  document.getElementById('meliImportStatus').textContent = 'Analizando archivo…';
+
+  const fd = new FormData();
+  fd.append('archivo', file);
+
+  try {
+    const r = await fetch('/admin/importar_excel_meli?token=' + ADMIN_TOKEN, {
+      method: 'POST', body: fd
+    });
+    const data = await r.json();
+
+    if (data.error) {
+      document.getElementById('meliImportStatus').textContent = '❌ ' + data.error;
+      return;
+    }
+
+    const s = data.stats;
+    document.getElementById('meliImportStatus').textContent =
+      data.modo + ' — ' + s.total_filas_con_sku + ' variantes con SKU encontradas';
+    document.getElementById('meliNuevos').textContent = s.nuevos_mapeados;
+    document.getElementById('meliYaMapeados').textContent = s.ya_estaban_mapeados;
+    document.getElementById('meliNoEnLusync').textContent = s.sku_no_en_lusync;
+
+    // Detalle nuevos
+    if (data.nuevos_mapeados && data.nuevos_mapeados.length > 0) {
+      document.getElementById('meliDetalleNuevos').style.display = 'block';
+      document.getElementById('meliListaNuevos').innerHTML = data.nuevos_mapeados
+        .map(m => `<div style="padding:2px 0;border-bottom:0.5px solid var(--border);">${m.sku_meli} → ${m.sku_lusync} <span style="color:var(--hint);">(${m.item_id})</span></div>`)
+        .join('');
+      document.getElementById('meliBtnEjecutar').style.display = 'block';
+    } else {
+      document.getElementById('meliDetalleNuevos').style.display = 'none';
+      document.getElementById('meliBtnEjecutar').style.display = 'none';
+    }
+
+    // Detalle no en Lusync
+    if (data.no_en_lusync && data.no_en_lusync.length > 0) {
+      document.getElementById('meliDetalleNoLusync').style.display = 'block';
+      document.getElementById('meliListaNoLusync').innerHTML = data.no_en_lusync
+        .map(m => `<div style="padding:2px 0;border-bottom:0.5px solid var(--border);">${m.sku_meli} — ${m.titulo || m.item_id}</div>`)
+        .join('');
+    } else {
+      document.getElementById('meliDetalleNoLusync').style.display = 'none';
+    }
+
+    document.getElementById('meliImportReporte').style.display = 'block';
+
+  } catch(e) {
+    document.getElementById('meliImportStatus').textContent = '❌ Error: ' + e.message;
+  }
+
+  // Resetear input para permitir subir el mismo archivo de nuevo
+  input.value = '';
+}
+
+async function confirmarImportarMeli() {
+  if (!_meliArchivoActual) return;
+  document.getElementById('meliImportStatus').textContent = 'Guardando mapeos…';
+  document.getElementById('meliBtnEjecutar').style.display = 'none';
+
+  const fd = new FormData();
+  fd.append('archivo', _meliArchivoActual);
+
+  try {
+    const r = await fetch('/admin/importar_excel_meli?token=' + ADMIN_TOKEN + '&ejecutar=1', {
+      method: 'POST', body: fd
+    });
+    const data = await r.json();
+    const s = data.stats;
+    document.getElementById('meliImportStatus').textContent =
+      '✅ ' + s.nuevos_mapeados + ' mapeos guardados correctamente';
+    document.getElementById('meliNuevos').textContent = s.nuevos_mapeados;
+    _meliArchivoActual = null;
+  } catch(e) {
+    document.getElementById('meliImportStatus').textContent = '❌ Error al guardar: ' + e.message;
+  }
+}
+
+function cerrarModalMeli() {
+  document.getElementById('modalImportarMeli').style.display = 'none';
+  _meliArchivoActual = null;
 }
 
 // ─── Importar Excel ───
