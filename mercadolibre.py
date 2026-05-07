@@ -664,6 +664,7 @@ def _procesar_orden_webhook(resource):
 
                 # Buscar SKU Lusync vía mapeo
                 sku_lusync = sku_meli
+                # Intento 1: tabla vieja sku_mapeo
                 try:
                     for fila in listar_sku_mapeo():
                         sku_mapped = (fila.get("sku_mercadolibre") or "").strip()
@@ -671,6 +672,14 @@ def _procesar_orden_webhook(resource):
                             sku_lusync = fila.get("sku_lusync")
                             break
                 except: pass
+                # Intento 2: tabla nueva sku_mapeo_canal
+                if sku_lusync == sku_meli:
+                    try:
+                        from inventario import obtener_sku_lusync_por_canal
+                        sku_traducido = obtener_sku_lusync_por_canal("mercadolibre", sku_canal=sku_meli, item_id_canal=item_id)
+                        if sku_traducido:
+                            sku_lusync = sku_traducido
+                    except: pass
 
                 # Reintegrar stock
                 productos = cargar_productos()
@@ -768,6 +777,7 @@ def _procesar_orden_webhook(resource):
             qty = int(item.get("quantity", 1))
 
             sku_lusync = sku_meli
+            # Intento 1: tabla vieja sku_mapeo (columna sku_mercadolibre)
             try:
                 for fila in listar_sku_mapeo():
                     sku_mapped = (fila.get("sku_mercadolibre") or "").strip()
@@ -775,6 +785,16 @@ def _procesar_orden_webhook(resource):
                         sku_lusync = fila.get("sku_lusync")
                         break
             except: pass
+            # Intento 2: tabla nueva sku_mapeo_canal (multi-publicación)
+            if sku_lusync == sku_meli:
+                try:
+                    from inventario import obtener_sku_lusync_por_canal
+                    sku_traducido = obtener_sku_lusync_por_canal("mercadolibre", sku_canal=sku_meli, item_id_canal=item_id)
+                    if sku_traducido:
+                        sku_lusync = sku_traducido
+                        print(f"[MELI Webhook] SKU traducido vía sku_mapeo_canal: {sku_meli} → {sku_lusync}")
+                except Exception as e:
+                    print(f"[MELI Webhook] Error obtener_sku_lusync_por_canal: {e}")
 
             if sku_lusync not in productos_dict:
                 print(f"[MELI Webhook] SKU '{sku_lusync}' no encontrado en inventario")

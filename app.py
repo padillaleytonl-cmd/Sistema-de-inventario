@@ -395,28 +395,35 @@ def _sync_meli_automatico():
                         if not sku_seller:
                             continue
 
+                        # Traducir SKU canal MELI a SKU Lusync (ej: ODJ3N001 → ODJ3NB001)
+                        try:
+                            from inventario import obtener_sku_lusync_por_canal
+                            sku_lusync = obtener_sku_lusync_por_canal("mercadolibre", sku_canal=sku_seller, item_id_canal=item_id) or sku_seller
+                        except Exception:
+                            sku_lusync = sku_seller
+
                         # Descuento inteligente (Full vs Central)
                         try:
                             descontar_venta_inteligente(
-                                sku_lusync=sku_seller,
+                                sku_lusync=sku_lusync,
                                 cantidad=cantidad,
                                 canal="mercadolibre",
                                 orden_id=order_id,
                                 es_fulfillment=es_full,
                                 fecha_compra_marketplace=fecha_compra
                             )
-                            items_descontados.append((sku_seller, cantidad))
+                            items_descontados.append((sku_lusync, cantidad))
 
                             # Sync a otros canales SOLO si fue Seller (Full no afecta otras bodegas)
                             if not es_full:
-                                p_actual = next((pp for pp in cargar_productos() if pp["sku"] == sku_seller), None)
+                                p_actual = next((pp for pp in cargar_productos() if pp["sku"] == sku_lusync), None)
                                 if p_actual:
                                     sincronizar_stock_marketplaces(
-                                        sku_seller, p_actual["stock"],
+                                        sku_lusync, p_actual["stock"],
                                         contexto="meli_orden_bg"
                                     )
                         except Exception as e:
-                            errores.append(f"MELI {order_id}/{sku_seller}: {e}")
+                            errores.append(f"MELI {order_id}/{sku_seller}→{sku_lusync}: {e}")
 
                     if items_descontados:
                         marcar_orden_procesada_texto(meli_key)
@@ -434,6 +441,7 @@ def _sync_meli_automatico():
                     items_reintegrados = []
                     for item in o.get("order_items", []):
                         item_data = item.get("item", {})
+                        item_id_canc = item_data.get("id", "")
                         sku_seller = (
                             (item_data.get("seller_sku") or "").strip()
                             or (item_data.get("seller_custom_field") or "").strip()
@@ -441,9 +449,16 @@ def _sync_meli_automatico():
                         cantidad = int(item.get("quantity", 1))
                         if not sku_seller: continue
 
+                        # Traducir SKU canal a Lusync
+                        try:
+                            from inventario import obtener_sku_lusync_por_canal
+                            sku_lusync = obtener_sku_lusync_por_canal("mercadolibre", sku_canal=sku_seller, item_id_canal=item_id_canc) or sku_seller
+                        except Exception:
+                            sku_lusync = sku_seller
+
                         productos = cargar_productos()
                         for p in productos:
-                            if p["sku"] == sku_seller:
+                            if p["sku"] == sku_lusync:
                                 p["stock"] += cantidad
                                 guardar_producto(p)
                                 registrar_movimiento(
@@ -455,7 +470,7 @@ def _sync_meli_automatico():
                                     p["sku"], p["stock"],
                                     contexto="meli_cancelacion_bg"
                                 )
-                                items_reintegrados.append(f"{p['nombre']} (SKU: {sku_seller}) x{cantidad}")
+                                items_reintegrados.append(f"{p['nombre']} (SKU: {sku_seller}→{sku_lusync}) x{cantidad}")
                                 break
 
                     if items_reintegrados:
@@ -464,7 +479,7 @@ def _sync_meli_automatico():
                                 tipo="cancelacion",
                                 titulo=f"Orden cancelada en MercadoLibre: {order_id}",
                                 mensaje="Stock reintegrado:<br>" + "<br>".join(f"• {it}" for it in items_reintegrados),
-                                sku=sku_seller
+                                sku=sku_lusync
                             )
                         except: pass
                         canceladas += 1
