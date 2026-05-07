@@ -8694,6 +8694,121 @@ def admin_reprocesar_ordenes():
     return jsonify(resultados)
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# ENDPOINT: MOVIMIENTOS POR RANGO DE FECHAS
+# ════════════════════════════════════════════════════════════════════════════
+# Devuelve TODOS los movimientos en un rango de fechas (sin tope de 200/300).
+# Útil para auditoría cruzada con Excels exportados de marketplaces.
+#
+# Uso desde browser:
+#   /admin/movimientos_por_fecha?desde=2026-05-01&hasta=2026-05-06&token=XXX
+#   /admin/movimientos_por_fecha?desde=2026-05-01&hasta=2026-05-06&canal=mercadolibre&token=XXX
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/movimientos_por_fecha", methods=["GET"])
+def admin_movimientos_por_fecha():
+    """Devuelve movimientos filtrados por rango de fechas (sin tope)."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    token_recibido = request.args.get("token", "")
+    autorizado = session.get("logged") or (token_recibido and token_recibido == bypass_token)
+    if not autorizado:
+        return jsonify({"error": "no autorizado"}), 401
+    
+    desde = request.args.get("desde", "")  # YYYY-MM-DD
+    hasta = request.args.get("hasta", "")  # YYYY-MM-DD
+    canal_filtro = (request.args.get("canal") or "").strip().lower()
+    
+    if not desde or not hasta:
+        return jsonify({
+            "error": "Faltan parámetros desde/hasta",
+            "uso": {
+                "desde": "fecha desde formato YYYY-MM-DD (ej: 2026-05-01)",
+                "hasta": "fecha hasta formato YYYY-MM-DD (ej: 2026-05-06)",
+                "canal": "(opcional) filtrar por canal: mercadolibre, walmart, falabella, paris, ripley, web",
+                "ejemplo": "/admin/movimientos_por_fecha?desde=2026-05-01&hasta=2026-05-06&token=XXX"
+            }
+        }), 400
+    
+    from inventario import get_conn
+    conn = get_conn()
+    cur = conn.cursor()
+    
+    try:
+        # Asegurar columnas
+        try:
+            cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS bodega_codigo TEXT DEFAULT 'CENTRAL'")
+            cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_compra_marketplace TIMESTAMP")
+            cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS origen_registro TEXT DEFAULT 'sistema'")
+            cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS stock_antes INTEGER")
+            cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS stock_despues INTEGER")
+            conn.commit()
+        except: conn.rollback()
+        
+        # Query con filtro de fechas
+        query = """
+            SELECT tipo, sku, nombre, cantidad, motivo,
+                   TO_CHAR(fecha, 'DD/MM/YYYY'),
+                   TO_CHAR(fecha, 'HH24:MI'),
+                   COALESCE(usuario, 'Sistema'),
+                   COALESCE(canal, 'Sistema'),
+                   COALESCE(orden_id, ''),
+                   COALESCE(bodega_codigo, 'CENTRAL'),
+                   TO_CHAR(fecha_compra_marketplace, 'DD/MM/YYYY HH24:MI'),
+                   COALESCE(origen_registro, 'sistema'),
+                   stock_antes,
+                   stock_despues,
+                   TO_CHAR(fecha, 'YYYY-MM-DD HH24:MI:SS')
+            FROM movimientos
+            WHERE fecha::date >= %s::date AND fecha::date <= %s::date
+        """
+        params = [desde, hasta]
+        
+        if canal_filtro:
+            query += " AND LOWER(COALESCE(canal, '')) LIKE %s"
+            params.append(f"%{canal_filtro}%")
+        
+        query += " ORDER BY fecha DESC"
+        
+        cur.execute(query, params)
+        rows = cur.fetchall()
+        
+        movimientos = []
+        for r in rows:
+            movimientos.append({
+                "tipo": r[0], "sku": r[1], "nombre": r[2], "cantidad": r[3],
+                "motivo": r[4], "fecha": r[5], "hora": r[6], "usuario": r[7],
+                "canal": r[8], "orden_id": r[9] or "", "bodega": r[10],
+                "fecha_compra": r[11] or "", "origen": r[12],
+                "stock_antes": r[13], "stock_despues": r[14], "fecha_iso": r[15]
+            })
+        
+        # Estadísticas
+        canales_count = {}
+        ids_por_canal = {}
+        for m in movimientos:
+            c = m["canal"]
+            canales_count[c] = canales_count.get(c, 0) + 1
+            if c not in ids_por_canal: ids_por_canal[c] = set()
+            if m["orden_id"]: ids_por_canal[c].add(m["orden_id"])
+        
+        ids_por_canal_lista = {k: sorted(list(v)) for k, v in ids_por_canal.items()}
+        
+        cur.close(); conn.close()
+        
+        return jsonify({
+            "rango": {"desde": desde, "hasta": hasta, "canal": canal_filtro or "todos"},
+            "total_movimientos": len(movimientos),
+            "movimientos_por_canal": canales_count,
+            "ordenes_unicas_por_canal": {k: len(v) for k, v in ids_por_canal.items()},
+            "ids_por_canal": ids_por_canal_lista,
+            "movimientos": movimientos
+        })
+    except Exception as e:
+        try: cur.close(); conn.close()
+        except: pass
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/admin/diagnostico_stock", methods=["GET"])
 def admin_diagnostico_stock():
     """Diagnóstico completo del stock de un SKU."""
