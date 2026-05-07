@@ -11088,33 +11088,57 @@ def admin_autodescubrir_publicaciones():
             """
             Cruza publicaciones del canal con SKUs Lusync.
             Retorna dict con cruzados, no_cruzados y plan de acción.
+
+            REGLAS DE CRUCE (en orden de prioridad):
+              1. SKU vacío → siempre no_cruzado, NUNCA se asigna automáticamente
+              2. Match exacto SKU canal == SKU Lusync → cruzado confiable
+              3. Match parcial con longitud mínima 6 chars → cruzado con advertencia
+              4. Sin match → no_cruzado con plan de acción
             """
             cruzados = []
             no_cruzados = []
             ya_mapeados = []
             errores_guardado = []
+            sin_sku = []
 
             for pub in publicaciones_canal:
-                sku_canal   = pub.get("sku_canal", "")
+                sku_canal   = str(pub.get("sku_canal") or "").strip()
                 item_id     = pub.get("item_id_canal")
                 nombre_pub  = pub.get("nombre", "")
                 extra       = pub.get("extra", {})
 
+                # FIX BUG 1: SKU vacío, None, "None", "nan" → NUNCA cruzar automáticamente
+                # Antes cruzaba al primer SKU que encontraba — generaba falsos positivos masivos
+                if not sku_canal or sku_canal.lower() in ("none", "nan", "null", "0", ""):
+                    sin_sku.append({
+                        "item_id": item_id,
+                        "nombre": nombre_pub,
+                        "extra": extra,
+                        "razon": "Publicación sin SKU interno — debe asignarse manualmente"
+                    })
+                    continue
+
                 sku_norm = _normalizar_sku(sku_canal)
                 sku_lusync_match = skus_lusync.get(sku_norm)
+                razon_match = "exacto"
 
-                if not sku_lusync_match:
-                    # Intentar match parcial (sin sufijos de color/variante)
+                # FIX BUG 2: Match parcial solo si:
+                #   - longitud mínima 6 caracteres (evita que "E10" cruce con "E10E11E12")
+                #   - el SKU canal EMPIEZA CON el SKU Lusync (no al revés — evita falsos)
+                #   - no es un prefijo genérico de 1-3 chars
+                if not sku_lusync_match and len(sku_norm) >= 6:
                     for sk_up, sk_real in skus_lusync.items():
-                        if sku_norm.startswith(sk_up) or sk_up.startswith(sku_norm):
+                        if len(sk_up) >= 6 and sku_norm.startswith(sk_up):
                             sku_lusync_match = sk_real
+                            razon_match = "parcial"
                             break
 
                 if sku_lusync_match:
-                    # Verificar si ya está mapeado
+                    # Verificar si ya está mapeado (por sku_canal O por item_id)
                     pubs_existentes = obtener_publicaciones_canal(sku_lusync_match, canal_nombre) or []
                     ya_existe = any(
-                        p.get("sku_canal") == sku_canal or p.get("item_id_canal") == item_id
+                        (p.get("sku_canal") == sku_canal) or
+                        (item_id and p.get("item_id_canal") == item_id)
                         for p in pubs_existentes
                     )
 
@@ -11131,7 +11155,8 @@ def admin_autodescubrir_publicaciones():
                             "sku_canal": sku_canal,
                             "item_id": item_id,
                             "nombre_pub": nombre_pub,
-                            "nombre_lusync": nombres_lusync.get(sku_lusync_match, "")
+                            "nombre_lusync": nombres_lusync.get(sku_lusync_match, ""),
+                            "razon_match": razon_match
                         })
                         if ejecutar:
                             try:
@@ -11140,7 +11165,7 @@ def admin_autodescubrir_publicaciones():
                                     canal=canal_nombre,
                                     sku_canal=sku_canal,
                                     item_id_canal=item_id,
-                                    notas="auto_descubrimiento"
+                                    notas=f"auto_descubrimiento_{razon_match}"
                                 )
                             except Exception as e:
                                 errores_guardado.append(f"{sku_canal}: {e}")
@@ -11151,6 +11176,24 @@ def admin_autodescubrir_publicaciones():
                         "nombre": nombre_pub,
                         "extra": extra
                     })
+
+            return {
+                "cruzados": cruzados,
+                "ya_mapeados": ya_mapeados,
+                "no_cruzados": no_cruzados,
+                "sin_sku": sin_sku,
+                "errores_guardado": errores_guardado,
+                "stats": {
+                    "total_descargadas": len(publicaciones_canal),
+                    "cruzadas_nuevas": len(cruzados),
+                    "ya_estaban_mapeadas": len(ya_mapeados),
+                    "no_cruzadas": len(no_cruzados),
+                    "sin_sku_requieren_accion_manual": len(sin_sku),
+                    "porcentaje_exito_confiable": round(
+                        (len(cruzados) + len(ya_mapeados)) / max(len(publicaciones_canal), 1) * 100, 1
+                    )
+                }
+            }
 
             return {
                 "cruzados": cruzados,
@@ -11267,21 +11310,48 @@ def admin_autodescubrir_publicaciones():
                     lote = obtener_productos_paris(limite=25, offset=offset)
                     if not lote:
                         break
-                    items = lote if isinstance(lote, list) else lote.get("products", lote.get("items", []))
+                    # Paris API puede devolver:
+                    # {"products": [...]} o {"items": [...]} o lista directa o dict con "content"
+                    if isinstance(lote, list):
+                        items = lote
+                    elif isinstance(lote, dict):
+                        items = (
+                            lote.get("products") or lote.get("items") or
+                            lote.get("content") or lote.get("data") or []
+                        )
+                    else:
+                        items = []
+
                     for p in (items or []):
-                        seller_sku = p.get("sellerSku") or p.get("sku") or p.get("refId") or ""
-                        pubs_raw.append({
-                            "sku_canal": str(seller_sku),
-                            "item_id_canal": p.get("id") or p.get("productId"),
-                            "nombre": p.get("name") or p.get("title") or "",
-                            "extra": {}
-                        })
+                        # Paris puede usar sellerSku, sku, refId o identifier
+                        seller_sku = (
+                            p.get("sellerSku") or p.get("seller_sku") or
+                            p.get("sku") or p.get("refId") or
+                            p.get("identifier") or ""
+                        )
+                        if seller_sku:
+                            pubs_raw.append({
+                                "sku_canal": str(seller_sku).strip(),
+                                "item_id_canal": p.get("id") or p.get("productId"),
+                                "nombre": p.get("name") or p.get("title") or p.get("description") or "",
+                                "extra": {"status": p.get("status") or p.get("state")}
+                            })
                     if not items or len(items) < 25:
                         break
                     offset += 25
                     if offset > 2000:
                         break
-                reporte_global["canales"]["Paris"] = _cruzar_y_guardar("paris", pubs_raw)
+
+                if not pubs_raw:
+                    reporte_global["canales"]["Paris"] = {
+                        "error": "API Paris devolvió 0 productos — puede ser error de credenciales o API no soporta listar catálogo",
+                        "cruzados": [], "ya_mapeados": [], "no_cruzados": [], "sin_sku": [],
+                        "stats": {"total_descargadas": 0, "cruzadas_nuevas": 0,
+                                  "ya_estaban_mapeadas": 0, "no_cruzadas": 0,
+                                  "sin_sku_requieren_accion_manual": 0, "porcentaje_exito_confiable": 0}
+                    }
+                else:
+                    reporte_global["canales"]["Paris"] = _cruzar_y_guardar("paris", pubs_raw)
             except Exception as e:
                 reporte_global["canales"]["Paris"] = {"error": str(e)}
 
@@ -11292,100 +11362,145 @@ def admin_autodescubrir_publicaciones():
                 from ripley import ripley_headers, RIPLEY_BASE_URL
                 pubs_raw = []
                 offset = 0
+                # Ripley Mirakl: endpoint correcto es /api/offers (no /api/products)
+                # /api/products da catálogo del marketplace, /api/offers son las ofertas del seller
                 while True:
                     res = _req.get(
-                        f"{RIPLEY_BASE_URL}/api/products",
+                        f"{RIPLEY_BASE_URL}/api/offers",
                         headers=ripley_headers(),
-                        params={"max": 50, "offset": offset},
+                        params={"max": 100, "offset": offset},
                         timeout=20
                     )
                     if res.status_code != 200:
-                        break
+                        # Intentar fallback con /api/products
+                        res2 = _req.get(
+                            f"{RIPLEY_BASE_URL}/api/products",
+                            headers=ripley_headers(),
+                            params={"max": 100, "offset": offset},
+                            timeout=20
+                        )
+                        if res2.status_code != 200:
+                            reporte_global["canales"]["Ripley"] = {
+                                "error": f"API Ripley status {res.status_code}: {res.text[:200]}"
+                            }
+                            break
+                        res = res2
+
                     data = res.json()
-                    items = data if isinstance(data, list) else data.get("products", data.get("items", []))
+                    # Mirakl puede devolver: {"offers": [...]} o {"products": [...]} o lista directa
+                    items = (
+                        data.get("offers") or
+                        data.get("products") or
+                        data.get("items") or
+                        (data if isinstance(data, list) else [])
+                    )
                     for p in (items or []):
-                        seller_sku = p.get("shop_sku") or p.get("offer_id") or p.get("sku") or ""
-                        pubs_raw.append({
-                            "sku_canal": str(seller_sku),
-                            "item_id_canal": None,
-                            "nombre": p.get("title") or p.get("description") or "",
-                            "extra": {}
-                        })
-                    if not items or len(items) < 50:
+                        seller_sku = (
+                            p.get("offer_sku") or p.get("shop_sku") or
+                            p.get("offer_id") or p.get("sku") or ""
+                        )
+                        if seller_sku:
+                            pubs_raw.append({
+                                "sku_canal": str(seller_sku).strip(),
+                                "item_id_canal": None,
+                                "nombre": p.get("title") or p.get("description") or p.get("name") or "",
+                                "extra": {"state": p.get("state_code") or p.get("status")}
+                            })
+                    if not items or len(items) < 100:
                         break
-                    offset += 50
+                    offset += 100
                     if offset > 5000:
                         break
-                reporte_global["canales"]["Ripley"] = _cruzar_y_guardar("ripley", pubs_raw)
+
+                if pubs_raw or "Ripley" not in reporte_global["canales"]:
+                    reporte_global["canales"]["Ripley"] = _cruzar_y_guardar("ripley", pubs_raw)
             except Exception as e:
                 reporte_global["canales"]["Ripley"] = {"error": str(e)}
 
-        # ── PLAN DE ACCIÓN para los no cruzados ──
+        # ── PLAN DE ACCIÓN para los no cruzados y sin SKU ──
         plan = []
         for canal_n, data in reporte_global["canales"].items():
             if "error" in data:
                 plan.append({
                     "canal": canal_n,
                     "prioridad": "🔴 CRÍTICO",
+                    "tipo": "error_api",
                     "problema": f"Error al conectar con la API: {data['error']}",
                     "accion": "Verificar credenciales del canal en Configuración → Canales",
                     "impacto": "Sin conexión no hay sincronización de stock ni órdenes"
                 })
                 continue
 
-            no_cruzados = data.get("no_cruzados", [])
-            stats = data.get("stats", {})
+            # FIX 3A: Publicaciones sin SKU — ir al marketplace a agregar el SKU
+            for ns in data.get("sin_sku", []):
+                nombre_c = ns.get("nombre", "")
+                item_id  = ns.get("item_id", "")
+                plan.append({
+                    "canal": canal_n,
+                    "prioridad": "🔴 CRÍTICO",
+                    "tipo": "sin_sku",
+                    "sku_canal": "",
+                    "item_id": item_id,
+                    "nombre_publicacion": nombre_c,
+                    "causa": "Publicación creada en el marketplace SIN SKU interno — Lusync no puede identificarla",
+                    "accion": f"Ir a {canal_n} → editar publicación '{nombre_c}' (ID: {item_id}) → campo SKU/Código Interno → agregar el SKU Lusync → re-ejecutar auto-descubrimiento"
+                })
 
-            if not no_cruzados:
-                continue
-
-            for nc in no_cruzados:
-                sku_c = nc.get("sku_canal", "")
+            # FIX 3B: No cruzados — SKU existe en marketplace pero no en Lusync
+            for nc in data.get("no_cruzados", []):
+                sku_c    = nc.get("sku_canal", "")
                 nombre_c = nc.get("nombre", "")
+                item_id  = nc.get("item_id", "")
 
-                # Detectar causa más probable
-                if not sku_c or sku_c in ("None", "null", ""):
-                    causa = "Publicación sin SKU — el producto fue creado en el marketplace sin SKU interno"
-                    accion = f"Ir al marketplace → editar el producto '{nombre_c}' → agregar SKU interno → volver a ejecutar auto-descubrimiento"
-                    prioridad = "🔴 CRÍTICO"
-                elif any(sku_c.upper() == sk for sk in skus_lusync):
-                    causa = "SKU encontrado pero con diferencia de mayúsculas/minúsculas"
-                    accion = f"Ir a Mapeo SKUs → agregar manualmente: SKU Lusync = '{skus_lusync.get(sku_c.upper(), sku_c)}' → Canal {canal_n} → '{sku_c}'"
-                    prioridad = "🟡 MEDIO"
-                else:
-                    causa = f"SKU '{sku_c}' del {canal_n} no existe en Lusync"
-                    accion = f"OPCIÓN A: Agregar el producto '{nombre_c}' en Inventario con SKU '{sku_c}' → re-ejecutar auto-descubrimiento. OPCIÓN B: Ir a Mapeo SKUs → vincular manualmente '{sku_c}' al SKU Lusync correspondiente"
-                    prioridad = "🟠 IMPORTANTE"
+                if not sku_c:
+                    continue  # ya manejado en sin_sku
 
                 plan.append({
                     "canal": canal_n,
-                    "prioridad": prioridad,
+                    "prioridad": "🟠 IMPORTANTE",
+                    "tipo": "sku_no_en_lusync",
                     "sku_canal": sku_c,
+                    "item_id": item_id,
                     "nombre_publicacion": nombre_c,
-                    "causa": causa,
-                    "accion": accion,
-                    "item_id": nc.get("item_id")
+                    "causa": f"SKU '{sku_c}' existe en {canal_n} pero no está cargado en Lusync",
+                    "accion": f"OPCIÓN A (recomendada): Agregar '{nombre_c}' en Inventario con SKU '{sku_c}' → re-ejecutar auto-descubrimiento. OPCIÓN B: Mapeo SKUs → vincular '{sku_c}' al SKU Lusync que corresponda"
                 })
 
-        reporte_global["plan_accion"] = sorted(plan, key=lambda x: x["prioridad"])
+        # Ordenar: 🔴 primero, 🟠 después
+        reporte_global["plan_accion"] = sorted(
+            plan,
+            key=lambda x: (0 if "🔴" in x["prioridad"] else 1, x["canal"])
+        )
+
+        # Resumen del plan
+        criticos  = sum(1 for p in plan if "🔴" in p["prioridad"])
+        importantes = sum(1 for p in plan if "🟠" in p["prioridad"])
+        reporte_global["resumen_plan"] = {
+            "criticos_sin_sku": criticos,
+            "importantes_sku_no_en_lusync": importantes,
+            "total_acciones": len(plan)
+        }
 
         # ── Resumen global ──
-        total_desc = sum(d.get("stats", {}).get("total_descargadas", 0) for d in reporte_global["canales"].values() if "stats" in d)
-        total_cruz = sum(d.get("stats", {}).get("cruzadas_nuevas", 0) for d in reporte_global["canales"].values() if "stats" in d)
-        total_ya   = sum(d.get("stats", {}).get("ya_estaban_mapeadas", 0) for d in reporte_global["canales"].values() if "stats" in d)
-        total_fail = sum(d.get("stats", {}).get("no_cruzadas", 0) for d in reporte_global["canales"].values() if "stats" in d)
+        total_desc  = sum(d.get("stats", {}).get("total_descargadas", 0) for d in reporte_global["canales"].values() if "stats" in d)
+        total_cruz  = sum(d.get("stats", {}).get("cruzadas_nuevas", 0) for d in reporte_global["canales"].values() if "stats" in d)
+        total_ya    = sum(d.get("stats", {}).get("ya_estaban_mapeadas", 0) for d in reporte_global["canales"].values() if "stats" in d)
+        total_fail  = sum(d.get("stats", {}).get("no_cruzadas", 0) for d in reporte_global["canales"].values() if "stats" in d)
+        total_sin_sku = sum(d.get("stats", {}).get("sin_sku_requieren_accion_manual", 0) for d in reporte_global["canales"].values() if "stats" in d)
 
         reporte_global["resumen_global"] = {
             "total_publicaciones_descargadas": total_desc,
-            "cruzadas_automaticamente": total_cruz,
+            "cruzadas_automaticamente_nuevas": total_cruz,
             "ya_estaban_mapeadas": total_ya,
-            "no_cruzadas_requieren_accion": total_fail,
-            "porcentaje_exito": round((total_cruz + total_ya) / max(total_desc, 1) * 100, 1),
+            "no_cruzadas_sku_no_en_lusync": total_fail,
+            "sin_sku_requieren_accion_en_marketplace": total_sin_sku,
+            "total_requieren_accion": total_fail + total_sin_sku,
+            "porcentaje_exito_confiable": round((total_cruz + total_ya) / max(total_desc, 1) * 100, 1),
             "mapeos_guardados": ejecutar,
             "siguiente_paso": (
                 "✅ Todo mapeado — sincronización activa en todos los canales"
-                if total_fail == 0
-                else f"⚠️ {total_fail} publicaciones requieren acción manual — revisa el plan_accion"
+                if (total_fail + total_sin_sku) == 0
+                else f"⚠️ Revisa el plan_accion: {total_sin_sku} sin SKU en marketplace + {total_fail} SKU no cargados en Lusync"
             )
         }
 
