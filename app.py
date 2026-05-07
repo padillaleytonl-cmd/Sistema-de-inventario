@@ -519,8 +519,8 @@ def _sync_falabella_automatico():
                 if not order_id:
                     continue
                 estado_orden = (o.get("Status") or o.get("status") or "").lower()
-                fa_key = f"FA-{order_id}"
-                cancel_key = f"FA-CANCEL-{order_id}"
+                fa_key = f"FALABELLA-{order_id}"
+                cancel_key = f"FALABELLA-CANCEL-{order_id}"
 
                 # ── Órdenes nuevas (estados que descuentan stock) ──
                 if estado_orden in ("ready_to_ship", "shipped", "delivered", "pending"):
@@ -651,7 +651,7 @@ def _sync_falabella_automatico():
                     marcar_orden_procesada_texto(cancel_key)
 
             except Exception as e:
-                errores.append(f"FA orden: {e}")
+                errores.append(f"FALABELLA orden: {e}")
 
         import gc; gc.collect()
         print(f"[Scheduler Falabella] Sync OK — nuevas:{nuevas} canceladas:{canceladas} errores:{len(errores)}")
@@ -2592,7 +2592,7 @@ def devoluciones_buscar_orden():
     # Limpiar el número (quitar espacios, prefijos opcionales que el usuario haya puesto)
     numero_limpio = numero.upper().strip()
     # Si pegó algo como "ML-2000012757", quitar el prefijo
-    for prefix in ("ML-", "FA-", "WM-", "PA-", "RP-", "WC-"):
+    for prefix in ("ML-", "FALABELLA-", "WM-", "PA-", "RP-", "WC-"):
         if numero_limpio.startswith(prefix):
             numero_limpio = numero_limpio[len(prefix):]
             break
@@ -8789,7 +8789,7 @@ def admin_reprocesar_ordenes():
     prefijos = {
         "meli":      ["MELI-", "MELI-CANCEL-"],
         "walmart":   ["WM-", "WM-CANCEL-"],
-        "falabella": ["FA-", "FA-CANCEL-"],
+        "falabella": ["FALABELLA-", "FALABELLA-CANCEL-"],
         "paris":     ["PA-", "PA-CANCEL-"],
         "ripley":    ["RP-", "RP-CANCEL-"],
         "woo":       ["WOO-", "WOO-CANCEL-"],
