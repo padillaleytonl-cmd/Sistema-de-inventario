@@ -356,7 +356,12 @@ def obtener_ordenes_meli(limit=50, offset=0, estado=None):
 
 def obtener_orden_meli(order_id):
     """Detalle de una orden específica.
-    Si recibe un pack_id en vez de un order_id, lo resuelve automáticamente."""
+    Si recibe un pack_id en vez de un order_id, devuelve la orden con TODOS los items
+    del pack consolidados (no solo la primera orden interna).
+    
+    BUG FIX (2026-05-06): antes solo procesaba la primera orden del pack, los demás
+    productos del carrito quedaban sin descontar stock.
+    """
     try:
         # Intento 1: tratar como order_id directo
         res = requests.get(
@@ -377,20 +382,60 @@ def obtener_orden_meli(order_id):
             )
             if res2.status_code == 200:
                 pack = res2.json()
-                # El pack contiene una lista de órdenes internas; tomamos la primera
-                ordenes = pack.get("orders", [])
-                if ordenes:
-                    primer_order_id = ordenes[0].get("id")
-                    if primer_order_id:
-                        print(f"[MELI] Pack {order_id} → orden interna {primer_order_id}")
-                        # Recursivamente traer la orden real
+                ordenes_internas = pack.get("orders", []) or []
+                if not ordenes_internas:
+                    print(f"[MELI] Pack {order_id} sin órdenes internas")
+                    return None
+                
+                print(f"[MELI] Pack {order_id} tiene {len(ordenes_internas)} órdenes internas")
+                
+                # Traer detalle de TODAS las órdenes del pack
+                ordenes_completas = []
+                for orden_interna in ordenes_internas:
+                    int_order_id = orden_interna.get("id")
+                    if not int_order_id: continue
+                    try:
                         res3 = requests.get(
-                            f"{MELI_API_URL}/orders/{primer_order_id}",
+                            f"{MELI_API_URL}/orders/{int_order_id}",
                             headers=meli_headers(),
                             timeout=15
                         )
                         if res3.status_code == 200:
-                            return res3.json()
+                            ordenes_completas.append(res3.json())
+                    except Exception as e:
+                        print(f"[MELI] Error trayendo orden {int_order_id} del pack: {e}")
+                        continue
+                
+                if not ordenes_completas:
+                    return None
+                
+                # Consolidar items de TODAS las órdenes en una sola estructura
+                # Mantenemos el pack_id como id principal (lo que TÚ ves en MELI)
+                primera = ordenes_completas[0]
+                consolidada = dict(primera)  # Base con buyer, status, etc.
+                
+                # Marcar que es pack y guardar pack_id
+                consolidada["_is_pack"] = True
+                consolidada["_pack_id"] = str(order_id)
+                consolidada["id"] = order_id  # Forzar a que el "id" sea el pack_id
+                
+                # Consolidar TODOS los order_items de TODAS las órdenes
+                items_consolidados = []
+                for orden in ordenes_completas:
+                    for item in orden.get("order_items", []) or []:
+                        # Anotar el order_id real interno para trazabilidad
+                        item_copy = dict(item)
+                        item_copy["_internal_order_id"] = str(orden.get("id", ""))
+                        items_consolidados.append(item_copy)
+                
+                consolidada["order_items"] = items_consolidados
+                
+                print(f"[MELI] Pack {order_id} consolidado: {len(items_consolidados)} items totales")
+                return consolidada
+        
+        return None
+    except Exception as e:
+        print(f"[MELI] Error obteniendo orden {order_id}: {e}")
         return None
     except Exception as e:
         print(f"[MELI] Error orden {order_id}: {e}")
