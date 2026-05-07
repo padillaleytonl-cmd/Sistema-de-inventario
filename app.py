@@ -569,8 +569,11 @@ def _sync_falabella_automatico():
                         fecha_compra_fa = None
 
                     for item in items_orden:
-                        seller_sku = (item.get("SellerSku") or item.get("sellerSku") or item.get("sku") or "").strip()
-                        # Falabella separa cada unidad en una línea, cantidad=1 por línea
+                        # FIX: campo real de Falabella es "Sku" (no "SellerSku")
+                        # obtener_items_orden_falabella ya lo normaliza en SellerSku=Sku
+                        # y agrupa cantidad real (cada OrderItem = 1 unidad)
+                        seller_sku = (item.get("SellerSku") or item.get("Sku") or
+                                      item.get("sellerSku") or item.get("sku") or "").strip()
                         cantidad = int(item.get("Quantity") or item.get("quantity") or 1)
                         if not seller_sku:
                             continue
@@ -623,7 +626,8 @@ def _sync_falabella_automatico():
                     items_reintegrados = []
                     ultimo_sku = None
                     for item in items_orden:
-                        seller_sku = (item.get("SellerSku") or item.get("sellerSku") or item.get("sku") or "").strip()
+                        seller_sku = (item.get("SellerSku") or item.get("Sku") or
+                                      item.get("sellerSku") or item.get("sku") or "").strip()
                         cantidad = int(item.get("Quantity") or item.get("quantity") or 1)
                         if not seller_sku:
                             continue

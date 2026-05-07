@@ -468,7 +468,14 @@ def obtener_orden_falabella(order_id):
 
 
 def obtener_items_orden_falabella(order_id):
-    """Items de una orden específica."""
+    """Items de una orden específica.
+
+    La API devuelve:
+      - Un dict  {"OrderItem": {...}}        si hay 1 item
+      - Una lista {"OrderItem": [{...}, ...]} si hay varios
+    El campo SKU real es "Sku" (no "SellerSku").
+    Cada OrderItem representa 1 unidad — la cantidad se cuenta agrupando por Sku.
+    """
     res = llamar_api_falabella(
         "GetOrderItems",
         params_extra={"OrderId": order_id},
@@ -478,11 +485,32 @@ def obtener_items_orden_falabella(order_id):
     if not res["ok"]:
         return []
     data = res.get("data", {}) or {}
-    body = data.get("SuccessResponse", {}).get("Body", {}) or {}
-    items = body.get("OrderItems", {}).get("OrderItem", [])
-    if isinstance(items, dict):
-        items = [items]
-    return items
+    body = (data.get("SuccessResponse", {}) or {}).get("Body", {}) or {}
+    raw = (body.get("OrderItems", {}) or {}).get("OrderItem", [])
+
+    # Normalizar siempre a lista
+    if isinstance(raw, dict):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+
+    # Agrupar por SKU para calcular cantidad real
+    # (cada OrderItem = 1 unidad, varios items del mismo SKU = cantidad > 1)
+    from collections import defaultdict
+    agrupado = defaultdict(lambda: {"SellerSku": "", "Sku": "", "Quantity": 0,
+                                    "Status": "", "Name": "", "CreatedAt": ""})
+    for item in raw:
+        sku = (item.get("Sku") or item.get("SellerSku") or "").strip()
+        if not sku:
+            continue
+        agrupado[sku]["SellerSku"] = sku
+        agrupado[sku]["Sku"]       = sku
+        agrupado[sku]["Quantity"]  += 1
+        agrupado[sku]["Status"]    = item.get("Status") or ""
+        agrupado[sku]["Name"]      = item.get("Name") or ""
+        agrupado[sku]["CreatedAt"] = item.get("CreatedAt") or ""
+
+    return list(agrupado.values())
 
 
 # ═══════════════════════════════════════════════════════════════════════════
