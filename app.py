@@ -112,8 +112,17 @@ def sincronizar_stock_marketplaces(sku, stock, contexto="manual"):
 # ── SYNC AUTOMÁTICO WALMART CADA 5 MINUTOS ──
 def _sync_walmart_automatico():
     """Tarea de background: sincroniza órdenes Walmart sin requerir sesión"""
+    # FIX: lock anti-overlapping igual que los demás canales
+    if not hasattr(_sync_walmart_automatico, "_running"):
+        _sync_walmart_automatico._running = False
+    if _sync_walmart_automatico._running:
+        print("[Scheduler Walmart] Ya hay un sync corriendo, salto")
+        return
+    _sync_walmart_automatico._running = True
     try:
         print("[Scheduler] Iniciando sync automático Walmart...")
+        from inventario import obtener_sku_lusync_por_canal, descontar_venta_inteligente
+        from bodegas_logic import detectar_fulfillment_walmart
         productos = cargar_productos()
         nuevas = 0
         errores = []
@@ -130,19 +139,15 @@ def _sync_walmart_automatico():
                 if orden_ya_procesada_texto(customer_order_id):
                     continue
 
-                # Marcar ANTES de procesar para evitar dobles descuentos si una API externa
-                # (Paris/Woo/Walmart) timeout-ea en medio del loop
-                marcar_orden_procesada_texto(customer_order_id)
-
                 lineas = o.get("orderLines", {}).get("orderLine", [])
                 if isinstance(lineas, dict):
                     lineas = [lineas]
 
                 # Detectar si esta orden es WFS (Walmart Fulfillment Services)
-                from inventario import detectar_fulfillment_walmart, descontar_venta_inteligente
                 es_wfs = detectar_fulfillment_walmart(o)
                 tipo_str = "WFS" if es_wfs else "Seller"
 
+                items_descontados = []
                 for linea in lineas:
                     try:
                         sku = linea.get("item", {}).get("sku")
@@ -157,15 +162,8 @@ def _sync_walmart_automatico():
                             if status_qty and status_qty.get("amount"):
                                 cantidad = int(float(status_qty.get("amount", 1)))
 
-                        # Buscar SKU Lusync vía mapeo (sku que viene de Walmart puede no ser igual a sku Lusync)
-                        sku_lusync = sku
-                        try:
-                            from inventario import listar_sku_mapeo
-                            for fila in listar_sku_mapeo():
-                                if fila.get("sku_walmart") == sku:
-                                    sku_lusync = fila.get("sku_lusync")
-                                    break
-                        except: pass
+                        # FIX: usar obtener_sku_lusync_por_canal (más eficiente que listar_sku_mapeo)
+                        sku_lusync = obtener_sku_lusync_por_canal("walmart", sku) or sku
 
                         # Buscar producto y descontar de bodega correcta
                         producto_existe = any(p["sku"] == sku_lusync for p in productos)
@@ -186,13 +184,14 @@ def _sync_walmart_automatico():
 
                         # Sync a otros canales SOLO si fue Seller (afectó Central)
                         if not es_wfs:
-                            from inventario import cargar_productos as _cp
-                            stock_total = next((pp["stock"] for pp in _cp() if pp["sku"] == sku_lusync), 0)
+                            stock_total = resultado.get("stock_despues", 0)
                             sincronizar_stock_marketplaces(sku_lusync, stock_total, contexto="walmart_orden_bg")
+                        items_descontados.append(sku_lusync)
                     except Exception as e:
                         errores.append(str(e))
                         print(f"[Scheduler] Error linea: {e}")
 
+                # FIX: marcar solo UNA vez después de procesar (antes había doble marcar)
                 marcar_orden_procesada_texto(customer_order_id)
                 nuevas += 1
 
@@ -270,44 +269,14 @@ def _sync_walmart_automatico():
         except Exception as e:
             print(f"[Scheduler] Error procesando cancelaciones: {e}")
 
-        # ── SYNC PARIS (si está configurado) ──
-        try:
-            import os as _os
-            if _os.environ.get("PARIS_API_KEY"):
-                from paris import obtener_ordenes_paris_todas
-                ordenes_paris = obtener_ordenes_paris_todas(dias=7, estado="awaiting_fullfillment")
-                for so in ordenes_paris:
-                    sub_order_num = str(so.get("subOrderNumber", ""))
-                    paris_key = f"PARIS-{sub_order_num}"
-                    if orden_ya_procesada_texto(paris_key):
-                        continue
-                    shipments = so.get("shipments", [])
-                    for ship in shipments:
-                        items = ship.get("items", [])
-                        for item in items:
-                            sku_seller = item.get("seller_sku") or item.get("sellerSku") or ""
-                            cantidad = 1
-                            if not sku_seller:
-                                continue
-                            for p in productos:
-                                if p["sku"] == sku_seller:
-                                    p["stock"] = max(0, p["stock"] - cantidad)
-                                    guardar_producto(p)
-                                    registrar_movimiento("salida", p["sku"], p["nombre"],
-                                                        cantidad, "Venta Paris",
-                                                        usuario="Sistema", canal="Paris",
-                                                        orden_id=sub_order_num)
-                                    sincronizar_stock_marketplaces(p["sku"], p["stock"], contexto="auto_sync")
-                                    print(f"[Scheduler] Paris SKU:{sku_seller} -{cantidad} Stock:{p['stock']}")
-                    marcar_orden_procesada_texto(paris_key)
-                    nuevas += 1
-                print(f"[Scheduler] Paris sync OK")
-        except Exception as e:
-            print(f"[Scheduler] Paris error: {e}")
+        # Paris ya tiene su propia función _sync_paris_automatico con job registrado
+        # No se duplica aquí para evitar doble procesamiento
 
         print(f"[Scheduler] Sync completado — nuevas:{nuevas} errores:{len(errores)}")
     except Exception as e:
         print(f"[Scheduler] Error general: {e}")
+    finally:
+        _sync_walmart_automatico._running = False
 
 scheduler = BackgroundScheduler(daemon=True)
 
@@ -503,64 +472,95 @@ def _sync_falabella_automatico():
     _sync_locks["falabella"]["running"] = True
     try:
         print("[Scheduler Falabella] Iniciando sync automático...")
-        from falabella import obtener_ordenes_falabella
+        # FIX: importar también obtener_items_orden_falabella — los items NO vienen
+        # dentro del objeto orden, hay que pedirlos por separado con el order_id
+        from falabella import obtener_ordenes_falabella, obtener_items_orden_falabella
+        from inventario import obtener_sku_lusync_por_canal
+        from bodegas_logic import descontar_venta, detectar_fulfillment_falabella
         nuevas = 0
         canceladas = 0
         errores = []
 
-        # Pendientes y nuevas
-        try:
-            ordenes = obtener_ordenes_falabella(estado=None, dias=2, limit=50, offset=0)
-            # Defensa: asegurar que es una lista
-            if not isinstance(ordenes, list):
-                print(f"[Scheduler Falabella] Respuesta inesperada: {type(ordenes).__name__}")
-                ordenes = []
-        except Exception as e:
-            print(f"[Scheduler Falabella] Error obteniendo órdenes: {e}")
-            return
+        # FIX: buscar en todos los estados relevantes en pasadas separadas para
+        # no mezclar lógica. Estado=None devuelve todos (sin filtro).
+        # Falabella SellerCenter soporta: pending, ready_to_ship, shipped, delivered, canceled
+        estados_activos   = ["pending", "ready_to_ship", "shipped", "delivered"]
+        estados_cancelados = ["canceled"]
 
-        for o in ordenes:
-            # Defensa: si por algún motivo el item no es dict, saltar
+        todas_ordenes = []
+        for estado in estados_activos + estados_cancelados:
+            try:
+                lote = obtener_ordenes_falabella(estado=estado, dias=3, limit=50, offset=0)
+                if isinstance(lote, list):
+                    todas_ordenes.extend(lote)
+            except Exception as e:
+                errores.append(f"FA get estado {estado}: {e}")
+
+        print(f"[Scheduler Falabella] Total órdenes obtenidas: {len(todas_ordenes)}")
+
+        for o in todas_ordenes:
             if not isinstance(o, dict):
                 continue
             try:
                 order_id = str(o.get("OrderId") or o.get("orderId") or o.get("id") or "")
+                if not order_id:
+                    continue
                 estado_orden = (o.get("Status") or o.get("status") or "").lower()
                 fa_key = f"FA-{order_id}"
                 cancel_key = f"FA-CANCEL-{order_id}"
-
-                items_orden = o.get("OrderItems") or o.get("orderItems") or o.get("items") or []
 
                 # ── Órdenes nuevas (estados que descuentan stock) ──
                 if estado_orden in ("ready_to_ship", "shipped", "delivered", "pending"):
                     if orden_ya_procesada_texto(fa_key):
                         continue
 
+                    # FIX CRÍTICO: los items NO vienen en el objeto orden.
+                    # Hay que pedirlos explícitamente por order_id
+                    try:
+                        items_orden = obtener_items_orden_falabella(order_id) or []
+                    except Exception as e:
+                        errores.append(f"FA items orden {order_id}: {e}")
+                        items_orden = []
+
+                    if not items_orden:
+                        print(f"[Scheduler Falabella] Orden {order_id}: sin items, saltando")
+                        continue
+
+                    es_fbf = detectar_fulfillment_falabella(o)
+                    tipo_str = "FBF" if es_fbf else "FBS"
                     items_descontados = []
+
                     for item in items_orden:
                         seller_sku = (item.get("SellerSku") or item.get("sellerSku") or item.get("sku") or "").strip()
+                        # Falabella separa cada unidad en una línea, cantidad=1 por línea
                         cantidad = int(item.get("Quantity") or item.get("quantity") or 1)
-                        if not seller_sku: continue
+                        if not seller_sku:
+                            continue
 
-                        # Buscar SKU Lusync por mapeo
-                        from inventario import obtener_sku_lusync_por_canal
                         sku_lusync = obtener_sku_lusync_por_canal("falabella", seller_sku) or seller_sku
 
                         productos = cargar_productos()
-                        for p in productos:
-                            if p["sku"] == sku_lusync:
-                                p["stock"] = max(0, p["stock"] - cantidad)
-                                guardar_producto(p)
-                                registrar_movimiento(
-                                    "salida", p["sku"], p["nombre"], cantidad,
-                                    f"Venta Falabella orden {order_id}",
-                                    usuario="Sistema", canal="Falabella", orden_id=order_id
-                                )
-                                sincronizar_stock_marketplaces(
-                                    p["sku"], p["stock"], contexto="falabella_orden_bg"
-                                )
-                                items_descontados.append(seller_sku)
-                                break
+                        prod = next((p for p in productos if p["sku"] == sku_lusync), None)
+                        if not prod:
+                            print(f"[Scheduler Falabella] SKU '{sku_lusync}' no encontrado")
+                            continue
+
+                        resultado = descontar_venta(
+                            sku=sku_lusync,
+                            cantidad=cantidad,
+                            canal="Falabella",
+                            fulfillment=es_fbf,
+                            orden_id=order_id,
+                            motivo=f"Venta Falabella {tipo_str}",
+                            usuario="Sistema",
+                            origen_registro="scheduler"
+                        )
+                        sincronizar_stock_marketplaces(
+                            sku_lusync, resultado.get("stock_despues", 0),
+                            contexto="falabella_orden_bg"
+                        )
+                        items_descontados.append(f"{seller_sku} x{cantidad}")
+                        print(f"[Scheduler Falabella] {order_id} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado.get('bodega','?')}")
 
                     if items_descontados:
                         marcar_orden_procesada_texto(fa_key)
@@ -571,32 +571,42 @@ def _sync_falabella_automatico():
                     if orden_ya_procesada_texto(cancel_key):
                         continue
                     if not orden_ya_procesada_texto(fa_key):
+                        # nunca se descontó, solo marcar cancelación para no volver
                         marcar_orden_procesada_texto(cancel_key)
                         continue
 
+                    try:
+                        items_orden = obtener_items_orden_falabella(order_id) or []
+                    except Exception as e:
+                        errores.append(f"FA items cancelada {order_id}: {e}")
+                        items_orden = []
+
                     items_reintegrados = []
+                    ultimo_sku = None
                     for item in items_orden:
                         seller_sku = (item.get("SellerSku") or item.get("sellerSku") or item.get("sku") or "").strip()
                         cantidad = int(item.get("Quantity") or item.get("quantity") or 1)
-                        if not seller_sku: continue
-                        from inventario import obtener_sku_lusync_por_canal
+                        if not seller_sku:
+                            continue
+                        ultimo_sku = seller_sku
                         sku_lusync = obtener_sku_lusync_por_canal("falabella", seller_sku) or seller_sku
 
                         productos = cargar_productos()
-                        for p in productos:
-                            if p["sku"] == sku_lusync:
-                                p["stock"] += cantidad
-                                guardar_producto(p)
-                                registrar_movimiento(
-                                    "entrada", p["sku"], p["nombre"], cantidad,
-                                    f"Cancelación Falabella orden {order_id}",
-                                    usuario="Sistema", canal="Falabella", orden_id=order_id
-                                )
-                                sincronizar_stock_marketplaces(
-                                    p["sku"], p["stock"], contexto="falabella_cancelacion_bg"
-                                )
-                                items_reintegrados.append(f"{p['nombre']} (SKU: {seller_sku}) x{cantidad}")
-                                break
+                        prod = next((p for p in productos if p["sku"] == sku_lusync), None)
+                        if not prod:
+                            continue
+
+                        prod["stock"] += cantidad
+                        guardar_producto(prod)
+                        registrar_movimiento(
+                            "entrada", prod["sku"], prod["nombre"], cantidad,
+                            f"Cancelación Falabella orden {order_id}",
+                            usuario="Sistema", canal="Falabella", orden_id=order_id
+                        )
+                        sincronizar_stock_marketplaces(
+                            prod["sku"], prod["stock"], contexto="falabella_cancelacion_bg"
+                        )
+                        items_reintegrados.append(f"{prod['nombre']} (SKU: {seller_sku}) x{cantidad}")
 
                     if items_reintegrados:
                         try:
@@ -604,16 +614,21 @@ def _sync_falabella_automatico():
                                 tipo="cancelacion",
                                 titulo=f"Orden cancelada en Falabella: {order_id}",
                                 mensaje="Stock reintegrado:<br>" + "<br>".join(f"• {it}" for it in items_reintegrados),
-                                sku=seller_sku
+                                sku=ultimo_sku
                             )
-                        except: pass
+                        except:
+                            pass
                         canceladas += 1
 
                     marcar_orden_procesada_texto(cancel_key)
+
             except Exception as e:
                 errores.append(f"FA orden: {e}")
 
+        import gc; gc.collect()
         print(f"[Scheduler Falabella] Sync OK — nuevas:{nuevas} canceladas:{canceladas} errores:{len(errores)}")
+        if errores:
+            print(f"[Scheduler Falabella] Errores: {errores[:3]}")
     except Exception as e:
         print(f"[Scheduler Falabella] Error general: {e}")
     finally:
@@ -629,102 +644,142 @@ def _sync_paris_automatico():
     try:
         print("[Scheduler Paris] Iniciando sync automático...")
         from paris import obtener_ordenes_paris_todas
+        from inventario import obtener_sku_lusync_por_canal
+        from bodegas_logic import descontar_venta, detectar_fulfillment_paris
         nuevas = 0
         canceladas = 0
         errores = []
 
+        # Traer sin filtro de estado (Paris no filtra bien por estado en la API)
+        # dias=3 para cubrir órdenes recientes con margen
         try:
-            ordenes = obtener_ordenes_paris_todas(dias=2)
+            ordenes = obtener_ordenes_paris_todas(dias=3)
         except Exception as e:
             print(f"[Scheduler Paris] Error obteniendo órdenes: {e}")
             return
 
+        print(f"[Scheduler Paris] Órdenes obtenidas: {len(ordenes)}")
+
         for o in ordenes:
             try:
                 sub_order = str(o.get("subOrderNumber") or o.get("subOrder") or o.get("orderNumber") or "")
-                if not sub_order: continue
-                estado = (o.get("status") or "").lower()
-                pa_key = f"PA-{sub_order}"
+                if not sub_order:
+                    continue
+
+                # FIX: usar PARIS- como prefijo (consistente con scheduler manual en paris.py)
+                pa_key  = f"PARIS-{sub_order}"
                 cancel_key = f"PA-CANCEL-{sub_order}"
 
-                items_orden = o.get("items") or o.get("orderItems") or []
+                # FIX: el estado en París viene en itemStatus dentro de shipments[].items[],
+                # NO a nivel de la orden. Tomar el estado general de la orden si existe,
+                # pero NO descartar órdenes por estado — procesar todas las no marcadas.
+                estado_orden = (
+                    o.get("status") or o.get("itemStatus") or o.get("orderStatus") or ""
+                ).lower()
 
-                # ── Nuevas ──
-                if estado in ("processing", "shipped", "delivered", "ready_to_ship"):
-                    if orden_ya_procesada_texto(pa_key):
-                        continue
-                    items_descontados = []
-                    for item in items_orden:
-                        seller_sku = (item.get("sellerSku") or item.get("sku") or "").strip()
-                        cantidad = int(item.get("quantity") or 1)
-                        if not seller_sku: continue
-                        from inventario import obtener_sku_lusync_por_canal
-                        sku_lusync = obtener_sku_lusync_por_canal("paris", seller_sku) or seller_sku
+                # Estados que indican cancelación explícita
+                es_cancelada = estado_orden in ("canceled", "cancelled", "rejected", "failure")
 
-                        productos = cargar_productos()
-                        for p in productos:
-                            if p["sku"] == sku_lusync:
-                                p["stock"] = max(0, p["stock"] - cantidad)
-                                guardar_producto(p)
-                                registrar_movimiento(
-                                    "salida", p["sku"], p["nombre"], cantidad,
-                                    f"Venta París orden {sub_order}",
-                                    usuario="Sistema", canal="París", orden_id=sub_order
-                                )
-                                sincronizar_stock_marketplaces(
-                                    p["sku"], p["stock"], contexto="paris_orden_bg"
-                                )
-                                items_descontados.append(seller_sku)
-                                break
-                    if items_descontados:
-                        marcar_orden_procesada_texto(pa_key)
-                        nuevas += 1
-
-                # ── Canceladas ──
-                elif estado in ("canceled", "cancelled"):
+                # ── Órdenes canceladas ──
+                if es_cancelada:
                     if orden_ya_procesada_texto(cancel_key):
                         continue
                     if not orden_ya_procesada_texto(pa_key):
                         marcar_orden_procesada_texto(cancel_key)
                         continue
+                    # Reintegrar: recorrer shipments → items (estructura real de París)
                     items_reintegrados = []
-                    for item in items_orden:
-                        seller_sku = (item.get("sellerSku") or item.get("sku") or "").strip()
-                        cantidad = int(item.get("quantity") or 1)
-                        if not seller_sku: continue
-                        from inventario import obtener_sku_lusync_por_canal
-                        sku_lusync = obtener_sku_lusync_por_canal("paris", seller_sku) or seller_sku
-
-                        productos = cargar_productos()
-                        for p in productos:
-                            if p["sku"] == sku_lusync:
-                                p["stock"] += cantidad
-                                guardar_producto(p)
-                                registrar_movimiento(
-                                    "entrada", p["sku"], p["nombre"], cantidad,
-                                    f"Cancelación París orden {sub_order}",
-                                    usuario="Sistema", canal="París", orden_id=sub_order
-                                )
-                                sincronizar_stock_marketplaces(
-                                    p["sku"], p["stock"], contexto="paris_cancelacion_bg"
-                                )
-                                items_reintegrados.append(f"{p['nombre']} (SKU: {seller_sku}) x{cantidad}")
-                                break
+                    ultimo_sku = None
+                    for ship in (o.get("shipments") or []):
+                        for item in (ship.get("items") or []):
+                            seller_sku = (item.get("seller_sku") or item.get("sellerSku") or "").strip()
+                            cantidad = int(item.get("quantity") or 1)
+                            if not seller_sku:
+                                continue
+                            ultimo_sku = seller_sku
+                            sku_lusync = obtener_sku_lusync_por_canal("paris", seller_sku) or seller_sku
+                            productos = cargar_productos()
+                            prod = next((p for p in productos if p["sku"] == sku_lusync), None)
+                            if not prod:
+                                continue
+                            prod["stock"] += cantidad
+                            guardar_producto(prod)
+                            registrar_movimiento(
+                                "entrada", prod["sku"], prod["nombre"], cantidad,
+                                f"Cancelación París orden {sub_order}",
+                                usuario="Sistema", canal="París", orden_id=sub_order
+                            )
+                            sincronizar_stock_marketplaces(prod["sku"], prod["stock"], contexto="paris_cancelacion_bg")
+                            items_reintegrados.append(f"{prod['nombre']} (SKU: {seller_sku}) x{cantidad}")
                     if items_reintegrados:
                         try:
                             crear_alerta(
                                 tipo="cancelacion",
                                 titulo=f"Orden cancelada en París: {sub_order}",
                                 mensaje="Stock reintegrado:<br>" + "<br>".join(f"• {it}" for it in items_reintegrados),
-                                sku=seller_sku
+                                sku=ultimo_sku
                             )
-                        except: pass
+                        except:
+                            pass
                         canceladas += 1
                     marcar_orden_procesada_texto(cancel_key)
+                    continue
+
+                # ── Órdenes nuevas: procesar todas las no marcadas ──
+                if orden_ya_procesada_texto(pa_key):
+                    continue
+
+                # FIX CRÍTICO: los items están en shipments[].items[], NO en o.get("items")
+                es_cd = detectar_fulfillment_paris(o)
+                tipo_str = "Fulfillment" if es_cd else "Seller"
+                items_descontados = []
+
+                for ship in (o.get("shipments") or []):
+                    for item in (ship.get("items") or []):
+                        seller_sku = (item.get("seller_sku") or item.get("sellerSku") or "").strip()
+                        cantidad = int(item.get("quantity") or 1)
+                        if not seller_sku:
+                            continue
+
+                        sku_lusync = obtener_sku_lusync_por_canal("paris", seller_sku) or seller_sku
+                        productos = cargar_productos()
+                        prod = next((p for p in productos if p["sku"] == sku_lusync), None)
+                        if not prod:
+                            print(f"[Scheduler Paris] SKU '{sku_lusync}' no encontrado")
+                            continue
+
+                        resultado = descontar_venta(
+                            sku=sku_lusync,
+                            cantidad=cantidad,
+                            canal="Paris",
+                            fulfillment=es_cd,
+                            orden_id=sub_order,
+                            motivo=f"Venta Paris {tipo_str}",
+                            usuario="Sistema",
+                            origen_registro="scheduler"
+                        )
+                        sincronizar_stock_marketplaces(
+                            sku_lusync, resultado.get("stock_despues", 0),
+                            contexto="paris_orden_bg"
+                        )
+                        items_descontados.append(f"{seller_sku} x{cantidad}")
+                        print(f"[Scheduler Paris] {sub_order} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado.get('bodega','?')}")
+
+                if items_descontados:
+                    marcar_orden_procesada_texto(pa_key)
+                    nuevas += 1
+                elif not items_descontados and o.get("shipments"):
+                    # Tiene shipments pero todos los items fallaron (SKU no mapeado, etc.)
+                    # Marcar igual para no reintentar infinitamente
+                    marcar_orden_procesada_texto(pa_key)
+
             except Exception as e:
                 errores.append(f"PA orden: {e}")
 
+        import gc; gc.collect()
         print(f"[Scheduler Paris] Sync OK — nuevas:{nuevas} canceladas:{canceladas} errores:{len(errores)}")
+        if errores:
+            print(f"[Scheduler Paris] Errores: {errores[:3]}")
     except Exception as e:
         print(f"[Scheduler Paris] Error general: {e}")
     finally:
@@ -740,102 +795,149 @@ def _sync_ripley_automatico():
     try:
         print("[Scheduler Ripley] Iniciando sync automático...")
         from ripley import obtener_ordenes_ripley
+        from inventario import obtener_sku_lusync_por_canal
+        from bodegas_logic import descontar_venta, detectar_fulfillment_ripley
         nuevas = 0
         canceladas = 0
         errores = []
 
-        try:
-            ordenes = obtener_ordenes_ripley(estado=None, dias=2, max_resultados=50)
-        except Exception as e:
-            print(f"[Scheduler Ripley] Error obteniendo órdenes: {e}")
-            return
+        # FIX: Mirakl/Ripley requiere filtrar por estado explícito — si se pasa estado=None
+        # la API puede devolver lista vacía o error. Iterar por cada estado activo
+        # igual que hace el scheduler manual en ripley.py.
+        # FIX: los estados en Mirakl son: WAITING_ACCEPTANCE, WAITING_DEBIT, SHIPPING,
+        # SHIPPED, RECEIVED, REFUSED, CANCELED — en MAYÚSCULAS.
+        estados_activos    = ["WAITING_ACCEPTANCE", "WAITING_DEBIT", "SHIPPING", "SHIPPED", "RECEIVED"]
+        estados_cancelados = ["REFUSED", "CANCELED"]
 
-        for o in ordenes:
+        todas_ordenes = []
+        for estado in estados_activos + estados_cancelados:
             try:
-                order_id = str(o.get("order_id") or o.get("commercial_id") or o.get("id") or "")
-                if not order_id: continue
-                estado = (o.get("status") or o.get("state") or "").lower()
-                rp_key = f"RP-{order_id}"
+                lote = obtener_ordenes_ripley(estado=estado, dias=3, max_resultados=50)
+                if isinstance(lote, list):
+                    todas_ordenes.extend(lote)
+            except Exception as e:
+                errores.append(f"RP get estado {estado}: {e}")
+
+        print(f"[Scheduler Ripley] Total órdenes obtenidas: {len(todas_ordenes)}")
+
+        for o in todas_ordenes:
+            try:
+                # FIX: Mirakl devuelve el ID en "order_id" y el estado en "order_state"
+                order_id = str(
+                    o.get("order_id") or o.get("commercial_id") or
+                    o.get("id") or ""
+                )
+                if not order_id:
+                    continue
+
+                # FIX: campo correcto es order_state (no status ni state)
+                estado = (
+                    o.get("order_state") or o.get("status") or o.get("state") or ""
+                ).upper()
+
+                rp_key     = f"RIPLEY-{order_id}"
                 cancel_key = f"RP-CANCEL-{order_id}"
 
+                # FIX: los items en Mirakl vienen en order_lines[].order_line_items[]
+                # o directamente en order_lines[] según versión. Intentar ambos.
                 items_orden = o.get("order_lines") or o.get("items") or o.get("lines") or []
 
-                # ── Nuevas ──
-                if estado in ("waiting_acceptance", "accepted", "shipping", "shipped", "received"):
-                    if orden_ya_procesada_texto(rp_key):
-                        continue
-                    items_descontados = []
-                    for item in items_orden:
-                        shop_sku = (item.get("shop_sku") or item.get("sku") or item.get("seller_sku") or "").strip()
-                        cantidad = int(item.get("quantity") or 1)
-                        if not shop_sku: continue
-                        from inventario import obtener_sku_lusync_por_canal
-                        sku_lusync = obtener_sku_lusync_por_canal("ripley", shop_sku) or shop_sku
-
-                        productos = cargar_productos()
-                        for p in productos:
-                            if p["sku"] == sku_lusync:
-                                p["stock"] = max(0, p["stock"] - cantidad)
-                                guardar_producto(p)
-                                registrar_movimiento(
-                                    "salida", p["sku"], p["nombre"], cantidad,
-                                    f"Venta Ripley orden {order_id}",
-                                    usuario="Sistema", canal="Ripley", orden_id=order_id
-                                )
-                                sincronizar_stock_marketplaces(
-                                    p["sku"], p["stock"], contexto="ripley_orden_bg"
-                                )
-                                items_descontados.append(shop_sku)
-                                break
-                    if items_descontados:
-                        marcar_orden_procesada_texto(rp_key)
-                        nuevas += 1
-
-                # ── Canceladas (estados Mirakl: refused, canceled) ──
-                elif estado in ("canceled", "cancelled", "refused"):
+                # ── Órdenes canceladas ──
+                if estado in ("REFUSED", "CANCELED", "CANCELLED"):
                     if orden_ya_procesada_texto(cancel_key):
                         continue
                     if not orden_ya_procesada_texto(rp_key):
                         marcar_orden_procesada_texto(cancel_key)
                         continue
                     items_reintegrados = []
+                    ultimo_sku = None
                     for item in items_orden:
-                        shop_sku = (item.get("shop_sku") or item.get("sku") or item.get("seller_sku") or "").strip()
+                        shop_sku = (item.get("offer_sku") or item.get("shop_sku") or
+                                    item.get("sku") or item.get("seller_sku") or "").strip()
                         cantidad = int(item.get("quantity") or 1)
-                        if not shop_sku: continue
-                        from inventario import obtener_sku_lusync_por_canal
+                        if not shop_sku:
+                            continue
+                        ultimo_sku = shop_sku
                         sku_lusync = obtener_sku_lusync_por_canal("ripley", shop_sku) or shop_sku
-
                         productos = cargar_productos()
-                        for p in productos:
-                            if p["sku"] == sku_lusync:
-                                p["stock"] += cantidad
-                                guardar_producto(p)
-                                registrar_movimiento(
-                                    "entrada", p["sku"], p["nombre"], cantidad,
-                                    f"Cancelación Ripley orden {order_id}",
-                                    usuario="Sistema", canal="Ripley", orden_id=order_id
-                                )
-                                sincronizar_stock_marketplaces(
-                                    p["sku"], p["stock"], contexto="ripley_cancelacion_bg"
-                                )
-                                items_reintegrados.append(f"{p['nombre']} (SKU: {shop_sku}) x{cantidad}")
-                                break
+                        prod = next((p for p in productos if p["sku"] == sku_lusync), None)
+                        if not prod:
+                            continue
+                        prod["stock"] += cantidad
+                        guardar_producto(prod)
+                        registrar_movimiento(
+                            "entrada", prod["sku"], prod["nombre"], cantidad,
+                            f"Cancelación Ripley orden {order_id}",
+                            usuario="Sistema", canal="Ripley", orden_id=order_id
+                        )
+                        sincronizar_stock_marketplaces(prod["sku"], prod["stock"], contexto="ripley_cancelacion_bg")
+                        items_reintegrados.append(f"{prod['nombre']} (SKU: {shop_sku}) x{cantidad}")
                     if items_reintegrados:
                         try:
                             crear_alerta(
                                 tipo="cancelacion",
                                 titulo=f"Orden cancelada en Ripley: {order_id}",
                                 mensaje="Stock reintegrado:<br>" + "<br>".join(f"• {it}" for it in items_reintegrados),
-                                sku=shop_sku
+                                sku=ultimo_sku
                             )
-                        except: pass
+                        except:
+                            pass
                         canceladas += 1
                     marcar_orden_procesada_texto(cancel_key)
+                    continue
+
+                # ── Órdenes nuevas activas ──
+                if estado not in ("WAITING_ACCEPTANCE", "WAITING_DEBIT", "SHIPPING", "SHIPPED", "RECEIVED"):
+                    continue  # estado desconocido, saltar
+                if orden_ya_procesada_texto(rp_key):
+                    continue
+
+                es_fbr = detectar_fulfillment_ripley(o)
+                tipo_str = "FBR" if es_fbr else "Seller"
+                items_descontados = []
+
+                for item in items_orden:
+                    shop_sku = (item.get("offer_sku") or item.get("shop_sku") or
+                                item.get("sku") or item.get("seller_sku") or "").strip()
+                    cantidad = int(item.get("quantity") or 1)
+                    if not shop_sku:
+                        continue
+
+                    sku_lusync = obtener_sku_lusync_por_canal("ripley", shop_sku) or shop_sku
+                    productos = cargar_productos()
+                    prod = next((p for p in productos if p["sku"] == sku_lusync), None)
+                    if not prod:
+                        print(f"[Scheduler Ripley] SKU '{sku_lusync}' no encontrado")
+                        continue
+
+                    resultado = descontar_venta(
+                        sku=sku_lusync,
+                        cantidad=cantidad,
+                        canal="Ripley",
+                        fulfillment=es_fbr,
+                        orden_id=order_id,
+                        motivo=f"Venta Ripley {tipo_str}",
+                        usuario="Sistema",
+                        origen_registro="scheduler"
+                    )
+                    sincronizar_stock_marketplaces(
+                        sku_lusync, resultado.get("stock_despues", 0),
+                        contexto="ripley_orden_bg"
+                    )
+                    items_descontados.append(f"{shop_sku} x{cantidad}")
+                    print(f"[Scheduler Ripley] {order_id} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado.get('bodega','?')}")
+
+                if items_descontados:
+                    marcar_orden_procesada_texto(rp_key)
+                    nuevas += 1
+
             except Exception as e:
                 errores.append(f"RP orden: {e}")
 
+        import gc; gc.collect()
         print(f"[Scheduler Ripley] Sync OK — nuevas:{nuevas} canceladas:{canceladas} errores:{len(errores)}")
+        if errores:
+            print(f"[Scheduler Ripley] Errores: {errores[:3]}")
     except Exception as e:
         print(f"[Scheduler Ripley] Error general: {e}")
     finally:
