@@ -8730,6 +8730,65 @@ def admin_reprocesar_ordenes():
 #   /admin/sync_meli_rango?desde=2026-05-01&hasta=2026-05-06&token=XXX
 # ════════════════════════════════════════════════════════════════════════════
 
+# ════════════════════════════════════════════════════════════════════════════
+# ENDPOINT: FORZAR SYNC DE CUALQUIER CANAL (genérico)
+# ════════════════════════════════════════════════════════════════════════════
+# Fuerza la ejecución del scheduler de un canal específico.
+# Útil para recuperar órdenes después de bugs o caídas.
+#
+# Uso:
+#   /admin/forzar_sync_canal?canal=walmart&token=XXX
+#   /admin/forzar_sync_canal?canal=falabella&token=XXX
+#   /admin/forzar_sync_canal?canal=paris&token=XXX
+#   /admin/forzar_sync_canal?canal=ripley&token=XXX
+#   /admin/forzar_sync_canal?canal=woo&token=XXX
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/forzar_sync_canal", methods=["GET"])
+def admin_forzar_sync_canal():
+    """Fuerza la ejecución del scheduler de un canal específico (en background)."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    token_recibido = request.args.get("token", "")
+    autorizado = session.get("logged") or (token_recibido and token_recibido == bypass_token)
+    if not autorizado:
+        return jsonify({"error": "no autorizado"}), 401
+    
+    canal = (request.args.get("canal") or "").strip().lower()
+    
+    schedulers_disponibles = {
+        "walmart": _sync_walmart_automatico,
+        "falabella": _sync_falabella_automatico,
+        "paris": _sync_paris_automatico,
+        "ripley": _sync_ripley_automatico,
+        "woo": _sync_woo_automatico,
+        "meli": _sync_meli_automatico,
+    }
+    
+    if canal not in schedulers_disponibles:
+        return jsonify({
+            "error": f"Canal '{canal}' no válido",
+            "canales_validos": list(schedulers_disponibles.keys()),
+            "ejemplo": "/admin/forzar_sync_canal?canal=walmart&token=XXX"
+        }), 400
+    
+    # Liberar lock si quedó pegado
+    if canal in _sync_locks:
+        _sync_locks[canal]["running"] = False
+    
+    # Ejecutar scheduler en background
+    import threading
+    sched_func = schedulers_disponibles[canal]
+    t = threading.Thread(target=sched_func, daemon=True)
+    t.start()
+    
+    return jsonify({
+        "canal": canal,
+        "scheduler_ejecutado": True,
+        "mensaje": f"Scheduler {canal} corriendo en background. Las órdenes se procesarán en los próximos segundos.",
+        "verificar_resultado": f"/admin/movimientos_por_fecha?desde=2026-05-01&hasta=2026-05-06&canal={canal}&token={bypass_token}"
+    })
+
+
 @app.route("/admin/sync_meli_rango", methods=["GET"])
 def admin_sync_meli_rango():
     """Fuerza sync de órdenes MELI en rango de fechas específico (con paginación)."""
