@@ -8434,7 +8434,7 @@ async function importarExcelMeli(input) {
   fd.append('archivo', file);
 
   try {
-    const r = await fetch('/admin/importar_excel_meli?token=' + ADMIN_TOKEN, {
+    const r = await fetch('/admin/importar_excel_meli', {
       method: 'POST', body: fd
     });
     const data = await r.json();
@@ -8492,7 +8492,7 @@ async function confirmarImportarMeli() {
   fd.append('archivo', _meliArchivoActual);
 
   try {
-    const r = await fetch('/admin/importar_excel_meli?token=' + ADMIN_TOKEN + '&ejecutar=1', {
+    const r = await fetch('/admin/importar_excel_meli?ejecutar=1', {
       method: 'POST', body: fd
     });
     const data = await r.json();

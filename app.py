@@ -11620,8 +11620,7 @@ def admin_importar_excel_meli():
     POST: subir el archivo Excel
     GET con ?url=: para debug
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
-    if request.args.get("token") != bypass_token and not session.get("logged"):
+    if not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
 
     ejecutar = request.args.get("ejecutar", "0") == "1"
