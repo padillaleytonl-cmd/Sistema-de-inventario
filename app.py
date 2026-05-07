@@ -405,11 +405,11 @@ def _sync_meli_automatico():
                         # Descuento inteligente (Full vs Central)
                         try:
                             descontar_venta_inteligente(
-                                sku_lusync=sku_lusync,
+                                sku=sku_lusync,
                                 cantidad=cantidad,
                                 canal="mercadolibre",
+                                fulfillment=es_full,
                                 orden_id=order_id,
-                                es_fulfillment=es_full,
                                 fecha_compra_marketplace=fecha_compra
                             )
                             items_descontados.append((sku_lusync, cantidad))
@@ -8810,11 +8810,11 @@ def admin_sync_meli_rango():
                         
                         try:
                             descontar_venta_inteligente(
-                                sku_lusync=sku_lusync,
+                                sku=sku_lusync,
                                 cantidad=cantidad,
                                 canal="mercadolibre",
+                                fulfillment=es_full,
                                 orden_id=order_id,
-                                es_fulfillment=es_full,
                                 fecha_compra_marketplace=fecha_compra
                             )
                             items_descontados.append({"sku_canal": sku_seller, "sku_lusync": sku_lusync, "cantidad": cantidad})
