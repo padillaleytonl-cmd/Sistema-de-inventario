@@ -490,7 +490,7 @@ def _sync_falabella_automatico():
         todas_ordenes = []
         for estado in estados_activos + estados_cancelados:
             try:
-                lote = obtener_ordenes_falabella(estado=estado, dias=3, limit=50, offset=0)
+                lote = obtener_ordenes_falabella(estado=estado, dias=7, limit=50, offset=0)
                 if isinstance(lote, list):
                     todas_ordenes.extend(lote)
             except Exception as e:
@@ -651,9 +651,9 @@ def _sync_paris_automatico():
         errores = []
 
         # Traer sin filtro de estado (Paris no filtra bien por estado en la API)
-        # dias=3 para cubrir órdenes recientes con margen
+        # dias=7 para cubrir órdenes recientes con margen
         try:
-            ordenes = obtener_ordenes_paris_todas(dias=3)
+            ordenes = obtener_ordenes_paris_todas(dias=7)
         except Exception as e:
             print(f"[Scheduler Paris] Error obteniendo órdenes: {e}")
             return
@@ -812,7 +812,7 @@ def _sync_ripley_automatico():
         todas_ordenes = []
         for estado in estados_activos + estados_cancelados:
             try:
-                lote = obtener_ordenes_ripley(estado=estado, dias=3, max_resultados=50)
+                lote = obtener_ordenes_ripley(estado=estado, dias=7, max_resultados=50)
                 if isinstance(lote, list):
                     todas_ordenes.extend(lote)
             except Exception as e:
