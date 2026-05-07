@@ -327,8 +327,16 @@ def obtener_publicaciones_meli(limite=50, offset=0):
 
 # ── ÓRDENES ─────────────────────────────────────────────────────────────────
 
-def obtener_ordenes_meli(limit=50, offset=0, estado=None):
-    """Lista órdenes recientes del seller."""
+def obtener_ordenes_meli(limit=50, offset=0, estado=None, date_from=None, date_to=None):
+    """Lista órdenes recientes del seller.
+    
+    Args:
+        limit: máx órdenes por página (50 max recomendado)
+        offset: paginación
+        estado: 'paid', 'cancelled', etc.
+        date_from: fecha desde 'YYYY-MM-DDTHH:MM:SS.000-00:00' (formato ISO MELI)
+        date_to: fecha hasta (mismo formato)
+    """
     try:
         from inventario import get_meli_auth
         auth = get_meli_auth()
@@ -338,6 +346,10 @@ def obtener_ordenes_meli(limit=50, offset=0, estado=None):
         params = {"seller": auth["user_id"], "limit": limit, "offset": offset, "sort": "date_desc"}
         if estado:
             params["order.status"] = estado
+        if date_from:
+            params["order.date_created.from"] = date_from
+        if date_to:
+            params["order.date_created.to"] = date_to
 
         res = requests.get(
             f"{MELI_API_URL}/orders/search",
@@ -352,6 +364,35 @@ def obtener_ordenes_meli(limit=50, offset=0, estado=None):
     except Exception as e:
         print(f"[MELI] Error órdenes: {e}")
         return []
+
+
+def obtener_todas_ordenes_meli_rango(date_from, date_to, max_paginas=10):
+    """Trae TODAS las órdenes MELI en un rango de fechas (con paginación).
+    
+    Itera sobre páginas hasta agotar resultados o llegar a max_paginas.
+    Devuelve lista combinada de órdenes.
+    
+    Args:
+        date_from, date_to: ISO format con timezone (ej: '2026-05-01T00:00:00.000-04:00')
+        max_paginas: límite de páginas para evitar loops infinitos (10 = 500 órdenes max)
+    """
+    todas = []
+    offset = 0
+    limit = 50
+    for pagina in range(max_paginas):
+        ordenes = obtener_ordenes_meli(
+            limit=limit, offset=offset,
+            date_from=date_from, date_to=date_to
+        )
+        if not ordenes:
+            break
+        todas.extend(ordenes)
+        print(f"[MELI Rango] Página {pagina+1}: +{len(ordenes)} órdenes (total acumulado: {len(todas)})")
+        if len(ordenes) < limit:
+            # Última página
+            break
+        offset += limit
+    return todas
 
 
 def obtener_orden_meli(order_id):

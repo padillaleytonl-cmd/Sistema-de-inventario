@@ -8720,6 +8720,140 @@ def admin_reprocesar_ordenes():
 #   /admin/movimientos_por_fecha?desde=2026-05-01&hasta=2026-05-06&canal=mercadolibre&token=XXX
 # ════════════════════════════════════════════════════════════════════════════
 
+# ════════════════════════════════════════════════════════════════════════════
+# ENDPOINT: FORZAR SYNC MELI EN RANGO DE FECHAS
+# ════════════════════════════════════════════════════════════════════════════
+# Trae TODAS las órdenes MELI en un rango de fechas y las procesa.
+# Útil para recuperar órdenes históricas que no llegaron por webhook ni scheduler.
+#
+# Uso:
+#   /admin/sync_meli_rango?desde=2026-05-01&hasta=2026-05-06&token=XXX
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/sync_meli_rango", methods=["GET"])
+def admin_sync_meli_rango():
+    """Fuerza sync de órdenes MELI en rango de fechas específico (con paginación)."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    token_recibido = request.args.get("token", "")
+    autorizado = session.get("logged") or (token_recibido and token_recibido == bypass_token)
+    if not autorizado:
+        return jsonify({"error": "no autorizado"}), 401
+    
+    desde = request.args.get("desde", "")  # YYYY-MM-DD
+    hasta = request.args.get("hasta", "")  # YYYY-MM-DD
+    
+    if not desde or not hasta:
+        return jsonify({
+            "error": "Faltan desde/hasta (formato YYYY-MM-DD)",
+            "ejemplo": "/admin/sync_meli_rango?desde=2026-05-01&hasta=2026-05-06&token=XXX"
+        }), 400
+    
+    # Convertir a formato MELI (ISO con timezone Chile UTC-4)
+    date_from = f"{desde}T00:00:00.000-04:00"
+    date_to = f"{hasta}T23:59:59.999-04:00"
+    
+    try:
+        from mercadolibre import obtener_todas_ordenes_meli_rango
+        from inventario import descontar_venta_inteligente, detectar_fulfillment_meli, intentar_marcar_orden_atomic, orden_ya_procesada_texto, marcar_orden_procesada_texto, obtener_sku_lusync_por_canal
+        from datetime import datetime
+        
+        # Traer todas las órdenes del rango (con paginación)
+        print(f"[Sync MELI Rango] Trayendo órdenes desde {date_from} hasta {date_to}")
+        ordenes = obtener_todas_ordenes_meli_rango(date_from, date_to, max_paginas=20)
+        print(f"[Sync MELI Rango] Total órdenes obtenidas: {len(ordenes)}")
+        
+        nuevas = 0
+        ya_procesadas = 0
+        canceladas = 0
+        errores = []
+        ordenes_procesadas_ids = []
+        
+        for o in ordenes:
+            try:
+                order_id = str(o.get("id", ""))
+                estado = o.get("status", "")
+                meli_key = f"MELI-{order_id}"
+                cancel_key = f"MELI-CANCEL-{order_id}"
+                
+                # ── Órdenes pagadas ──
+                if estado in ("paid", "confirmed"):
+                    if orden_ya_procesada_texto(meli_key):
+                        ya_procesadas += 1
+                        continue
+                    
+                    fecha_compra = None
+                    try:
+                        ds = (o.get("date_created", "") or "").replace("Z", "+00:00")
+                        if ds:
+                            fecha_compra = datetime.fromisoformat(ds)
+                    except: pass
+                    
+                    es_full = detectar_fulfillment_meli(o)
+                    items_descontados = []
+                    
+                    for item in o.get("order_items", []):
+                        item_data = item.get("item", {})
+                        item_id = item_data.get("id", "")
+                        sku_seller = (
+                            (item_data.get("seller_sku") or "").strip()
+                            or (item_data.get("seller_custom_field") or "").strip()
+                        )
+                        cantidad = int(item.get("quantity", 1))
+                        if not sku_seller:
+                            continue
+                        
+                        # Traducir SKU canal a Lusync
+                        try:
+                            sku_lusync = obtener_sku_lusync_por_canal("mercadolibre", sku_canal=sku_seller, item_id_canal=item_id) or sku_seller
+                        except Exception:
+                            sku_lusync = sku_seller
+                        
+                        try:
+                            descontar_venta_inteligente(
+                                sku_lusync=sku_lusync,
+                                cantidad=cantidad,
+                                canal="mercadolibre",
+                                orden_id=order_id,
+                                es_fulfillment=es_full,
+                                fecha_compra_marketplace=fecha_compra
+                            )
+                            items_descontados.append({"sku_canal": sku_seller, "sku_lusync": sku_lusync, "cantidad": cantidad})
+                        except Exception as e:
+                            errores.append(f"{order_id}/{sku_seller}→{sku_lusync}: {str(e)[:100]}")
+                    
+                    if items_descontados:
+                        marcar_orden_procesada_texto(meli_key)
+                        nuevas += 1
+                        ordenes_procesadas_ids.append({"id": order_id, "items": items_descontados, "full": es_full})
+                
+                # ── Órdenes canceladas ──
+                elif estado in ("cancelled", "canceled"):
+                    if orden_ya_procesada_texto(cancel_key):
+                        continue
+                    if not orden_ya_procesada_texto(meli_key):
+                        # Nunca se procesó la venta, solo marcar
+                        marcar_orden_procesada_texto(cancel_key)
+                        continue
+                    canceladas += 1
+                    marcar_orden_procesada_texto(cancel_key)
+            except Exception as e:
+                errores.append(f"Orden {order_id}: {str(e)[:100]}")
+        
+        return jsonify({
+            "rango": {"desde": desde, "hasta": hasta},
+            "total_ordenes_meli": len(ordenes),
+            "procesadas_ahora": nuevas,
+            "ya_procesadas_antes": ya_procesadas,
+            "canceladas": canceladas,
+            "errores_count": len(errores),
+            "errores": errores[:30],  # solo primeros 30
+            "ordenes_procesadas_ahora": ordenes_procesadas_ids[:50]  # solo primeras 50
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()[:500]}), 500
+
+
 @app.route("/admin/movimientos_por_fecha", methods=["GET"])
 def admin_movimientos_por_fecha():
     """Devuelve movimientos filtrados por rango de fechas (sin tope)."""
