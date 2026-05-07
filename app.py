@@ -11552,10 +11552,10 @@ def admin_debug_meli_item():
         import requests as _req
         from mercadolibre import meli_headers, MELI_API_URL
 
+        # Pedir item completo SIN filtrar nada para ver todos los campos
         res = _req.get(
             f"{MELI_API_URL}/items/{item_id}",
             headers=meli_headers(),
-            params={"attributes": "id,title,seller_custom_field,attributes,variations"},
             timeout=20
         )
         if res.status_code != 200:
@@ -11563,22 +11563,26 @@ def admin_debug_meli_item():
 
         data = res.json()
 
-        # Extraer info relevante para debug SKU
+        # Mostrar TODOS los campos del item y variantes para debug
         resultado = {
             "item_id": data.get("id"),
             "title": data.get("title"),
             "seller_custom_field_item": data.get("seller_custom_field"),
-            "attributes_sku": [a for a in (data.get("attributes") or []) if "SKU" in str(a.get("id","")).upper()],
+            "todos_attributes_item": data.get("attributes", [])[:10],
             "num_variantes": len(data.get("variations") or []),
+            "todos_los_campos_item": list(data.keys()),
             "variantes": []
         }
 
         for var in (data.get("variations") or [])[:5]:
             var_info = {
                 "variation_id": var.get("id"),
+                "todos_los_campos": list(var.keys()),
                 "seller_custom_field": var.get("seller_custom_field"),
-                "attributes_sku": [a for a in (var.get("attributes") or []) if "SKU" in str(a.get("id","")).upper() or "SKU" in str(a.get("value_name","")).upper()],
-                "all_attributes": var.get("attributes", [])[:5]
+                "user_product_id": var.get("user_product_id"),
+                "inventory_id": var.get("inventory_id"),
+                "todos_attributes": var.get("attributes", []),
+                "attribute_combinations": var.get("attribute_combinations", [])[:3],
             }
             resultado["variantes"].append(var_info)
 
