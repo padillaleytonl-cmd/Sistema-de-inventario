@@ -10586,6 +10586,193 @@ def admin_debug_falabella_ordenes():
         return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/admin/exportar_movimientos_excel")
+def admin_exportar_movimientos_excel():
+    """Exporta todos los movimientos a Excel para migración o backup.
+    Columnas: id, tipo, sku, nombre, cantidad, motivo, canal, bodega,
+              orden_id, usuario, origen, fecha_compra, fecha_importacion,
+              stock_antes, stock_despues
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        import io, openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from inventario import get_conn
+
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("""
+            SELECT id, tipo, sku, nombre, cantidad, motivo, canal,
+                   COALESCE(bodega_codigo,'CENTRAL'),
+                   orden_id, usuario,
+                   COALESCE(origen_registro,'sistema'),
+                   fecha_compra_marketplace,
+                   fecha_importacion,
+                   stock_antes, stock_despues,
+                   fecha
+            FROM movimientos
+            ORDER BY fecha DESC
+        """)
+        filas = cur.fetchall()
+        cur.close(); conn.close()
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Movimientos"
+
+        headers = ["id","tipo","sku","nombre","cantidad","motivo","canal",
+                   "bodega","orden_id","usuario","origen_registro",
+                   "fecha_compra_marketplace","fecha_importacion",
+                   "stock_antes","stock_despues","fecha_sistema"]
+
+        # Estilo header
+        fill = PatternFill("solid", fgColor="1D4ED8")
+        font = Font(color="FFFFFF", bold=True, size=11)
+        for col, h in enumerate(headers, 1):
+            c = ws.cell(row=1, column=col, value=h)
+            c.fill = fill; c.font = font
+            c.alignment = Alignment(horizontal="center")
+
+        for row_i, fila in enumerate(filas, 2):
+            for col_i, val in enumerate(fila, 1):
+                ws.cell(row=row_i, column=col_i, value=val)
+
+        # Anchos razonables
+        anchos = [6,8,14,35,8,25,12,12,16,10,12,20,20,10,10,20]
+        for i, ancho in enumerate(anchos, 1):
+            ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = ancho
+
+        buf = io.BytesIO()
+        wb.save(buf); buf.seek(0)
+
+        nombre_archivo = f"movimientos_lusync_{__import__('datetime').datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        return send_file(buf, as_attachment=True,
+                         download_name=nombre_archivo,
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/admin/importar_movimientos_excel", methods=["POST"])
+def admin_importar_movimientos_excel():
+    """Importa movimientos desde un Excel exportado por Lusync.
+    - Solo inserta movimientos que no existan ya (detecta duplicados por orden_id+canal+sku+fecha)
+    - Nunca borra movimientos existentes
+    - Ideal para migración de cliente a nuevo servidor
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        import io, openpyxl
+        from inventario import get_conn
+
+        archivo = request.files.get("archivo")
+        if not archivo:
+            return jsonify({"ok": False, "error": "No se recibió archivo"}), 400
+
+        wb = openpyxl.load_workbook(io.BytesIO(archivo.read()), data_only=True)
+        ws = wb.active
+
+        # Leer headers de la primera fila
+        headers = [str(c.value or "").strip().lower() for c in ws[1]]
+
+        def col(row, nombre):
+            try:
+                idx = headers.index(nombre)
+                return row[idx].value
+            except (ValueError, IndexError):
+                return None
+
+        conn = get_conn(); cur = conn.cursor()
+        # Asegurar columnas necesarias
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_compra_marketplace TIMESTAMP")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS origen_registro TEXT DEFAULT 'sistema'")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS stock_antes INTEGER")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS stock_despues INTEGER")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS bodega_codigo TEXT DEFAULT 'CENTRAL'")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_importacion TIMESTAMP")
+        conn.commit()
+
+        importados = 0
+        duplicados = 0
+        errores = 0
+
+        for row in ws.iter_rows(min_row=2):
+            if not any(c.value for c in row):
+                continue
+            try:
+                tipo       = col(row, "tipo") or "salida"
+                sku        = str(col(row, "sku") or "").strip()
+                nombre     = col(row, "nombre") or sku
+                cantidad   = int(col(row, "cantidad") or 0)
+                motivo     = col(row, "motivo") or ""
+                canal      = col(row, "canal") or "Sistema"
+                bodega     = col(row, "bodega") or "CENTRAL"
+                orden_id   = str(col(row, "orden_id") or "").strip() or None
+                usuario    = col(row, "usuario") or "Importación"
+                origen     = col(row, "origen_registro") or "import_excel"
+                fecha_compra = col(row, "fecha_compra_marketplace")
+                fecha_imp  = col(row, "fecha_importacion")
+                stock_ant  = col(row, "stock_antes")
+                stock_des  = col(row, "stock_despues")
+                fecha_sis  = col(row, "fecha_sistema")
+
+                if not sku:
+                    errores += 1
+                    continue
+
+                # Detectar duplicado por orden_id + canal + sku (si tienen orden_id)
+                if orden_id:
+                    cur.execute("""
+                        SELECT 1 FROM movimientos
+                        WHERE orden_id=%s AND canal=%s AND sku=%s LIMIT 1
+                    """, (orden_id, canal, sku))
+                    if cur.fetchone():
+                        duplicados += 1
+                        continue
+
+                cur.execute("""
+                    INSERT INTO movimientos
+                        (tipo, sku, nombre, cantidad, motivo, canal, bodega_codigo,
+                         orden_id, usuario, origen_registro,
+                         fecha_compra_marketplace, fecha_importacion,
+                         stock_antes, stock_despues, fecha)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """, (
+                    tipo, sku, nombre, cantidad, motivo, canal, bodega,
+                    orden_id, usuario, "import_excel",
+                    fecha_compra, fecha_imp,
+                    stock_ant, stock_des,
+                    fecha_sis or __import__('datetime').datetime.now()
+                ))
+                importados += 1
+
+            except Exception as e:
+                errores += 1
+                print(f"[Importar mov] fila error: {e}")
+
+        conn.commit()
+        cur.close(); conn.close()
+
+        try:
+            registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                            "importar_movimientos_excel", entidad="movimientos",
+                            detalle=f"importados={importados} duplicados={duplicados} errores={errores}")
+        except: pass
+
+        return jsonify({
+            "ok": True,
+            "importados": importados,
+            "duplicados": duplicados,
+            "errores": errores,
+            "mensaje": f"{importados} movimientos importados correctamente"
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+
+
 @app.route("/admin/debug_falabella_items")
 def admin_debug_falabella_items():
     """Muestra la respuesta RAW de GetOrderItems para una orden específica.

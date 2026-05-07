@@ -1977,7 +1977,16 @@ tbody td {
         <div class="page-date">Registro completo de entradas y salidas</div>
         <div style="font-size:13px;color:var(--muted);margin-top:2px;font-family:'DM Mono',monospace;" id="relojMov"></div>
       </div>
-      <div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <!-- Exportar -->
+        <button onclick="exportarMovimientos()" style="padding:8px 14px;border:0.5px solid var(--border);background:var(--bg2);color:var(--text);border-radius:8px;font-size:12px;cursor:pointer;font-weight:500;display:inline-flex;align-items:center;gap:6px;">
+          ↓ Exportar Excel
+        </button>
+        <!-- Importar -->
+        <label style="padding:8px 14px;border:0.5px solid #2563EB;background:#EFF6FF;color:#1D4ED8;border-radius:8px;font-size:12px;cursor:pointer;font-weight:500;display:inline-flex;align-items:center;gap:6px;" title="Importar movimientos desde Excel (migración)">
+          ↑ Importar Excel
+          <input type="file" accept=".xlsx" style="display:none;" onchange="importarMovimientos(this)">
+        </label>
         <button onclick="borrarTodosMovimientos()" style="padding:8px 14px;border:0.5px solid #DC2626;background:#FEE2E2;color:#991B1B;border-radius:8px;font-size:12px;cursor:pointer;font-weight:500;display:inline-flex;align-items:center;gap:6px;" title="DESARROLLO: borra todos los movimientos">
           🗑 Borrar historial
         </button>
@@ -5977,6 +5986,36 @@ function borrarTodosMovimientos(){
         toast('Error: ' + (d.error||'desconocido'));
       }
     });
+}
+
+function exportarMovimientos(){
+  toast('Generando Excel…');
+  const a = document.createElement('a');
+  a.href = '/admin/exportar_movimientos_excel';
+  a.download = 'movimientos_lusync.xlsx';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+function importarMovimientos(input){
+  const file = input.files[0];
+  if(!file) return;
+  const ok = confirm(`¿Importar "${file.name}"?\n\nSolo se agregarán movimientos que no existan ya (se detectan por orden_id + canal). No se borrarán los actuales.`);
+  if(!ok){ input.value=''; return; }
+  const fd = new FormData();
+  fd.append('archivo', file);
+  toast('Importando…');
+  fetch('/admin/importar_movimientos_excel', {method:'POST', body:fd})
+    .then(r=>r.json()).then(d=>{
+      input.value = '';
+      if(d.ok){
+        toast(`✓ ${d.importados} importados · ${d.duplicados} ya existían · ${d.errores} errores`);
+        cargarMovimientosFull();
+      } else {
+        toast('Error: ' + (d.error||'desconocido'));
+      }
+    }).catch(e=>{ input.value=''; toast('Error de red: '+e); });
 }
 </script>
 <!-- ════════════════════════════════════════════════════════════════
