@@ -11235,12 +11235,34 @@ def admin_autodescubrir_publicaciones():
                         break
                     items = lote["items"]
                     for it in items:
-                        pubs_raw.append({
-                            "sku_canal": it.get("sku_seller") or it.get("sku") or "",
-                            "item_id_canal": it.get("id") or it.get("item_id"),
-                            "nombre": it.get("title") or it.get("nombre") or "",
-                            "extra": {"status": it.get("status"), "stock": it.get("stock")}
-                        })
+                        item_id  = it.get("id") or it.get("item_id")
+                        titulo   = it.get("title") or it.get("nombre") or ""
+                        status   = it.get("status")
+                        stock    = it.get("stock", 0)
+                        sku_main = (it.get("sku_seller") or it.get("sku") or "").strip()
+                        variantes = it.get("variantes_skus") or []
+
+                        if variantes:
+                            # Publicación multivariante — generar una entrada por variante
+                            skus_vistos = set()
+                            for sku_var in variantes:
+                                sku_var = sku_var.strip()
+                                if sku_var and sku_var not in skus_vistos:
+                                    skus_vistos.add(sku_var)
+                                    pubs_raw.append({
+                                        "sku_canal": sku_var,
+                                        "item_id_canal": item_id,
+                                        "nombre": titulo,
+                                        "extra": {"status": status, "stock": stock}
+                                    })
+                        else:
+                            # Publicación simple
+                            pubs_raw.append({
+                                "sku_canal": sku_main,
+                                "item_id_canal": item_id,
+                                "nombre": titulo,
+                                "extra": {"status": status, "stock": stock}
+                            })
                     if len(items) < 50:
                         break
                     offset += 50
