@@ -11610,5 +11610,142 @@ def admin_debug_meli_item():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+
+@app.route("/admin/importar_excel_meli", methods=["GET", "POST"])
+def admin_importar_excel_meli():
+    """
+    Importa el Excel de publicaciones de MercadoLibre (Seller Center → Modificar desde Excel)
+    y mapea automáticamente SKUs en Lusync.
+
+    POST: subir el archivo Excel
+    GET con ?url=: para debug
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if request.args.get("token") != bypass_token and not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    ejecutar = request.args.get("ejecutar", "0") == "1"
+
+    if request.method != "POST" or "archivo" not in request.files:
+        return jsonify({
+            "error": "Envía el Excel con POST multipart/form-data, campo 'archivo'",
+            "uso": "curl -X POST -F 'archivo=@Publicaciones.xlsx' '...?token=XXX&ejecutar=1'"
+        }), 400
+
+    try:
+        import pandas as pd
+        import io
+        from inventario import get_conn, obtener_publicaciones_canal, agregar_publicacion, cargar_productos
+
+        archivo = request.files["archivo"]
+        contenido = archivo.read()
+
+        # Leer hoja Publicaciones
+        df = pd.read_excel(io.BytesIO(contenido), sheet_name="Publicaciones", header=None)
+
+        # Cargar SKUs Lusync para cruce
+        productos = cargar_productos()
+        skus_lusync = {p["sku"].upper().strip(): p["sku"] for p in productos}
+
+        # Extraer filas desde fila 6 (índice 5) en adelante
+        data_rows = df.iloc[5:].copy()
+        data_rows.columns = range(len(data_rows.columns))
+
+        # Columnas clave:
+        # 1 = ITEM_ID, 2 = PRODUCT_NUMBER (variation_id legacy), 3 = VARIATION_ID, 4 = SKU, 5 = TITLE, 6 = VARIATIONS
+        mapeados = []
+        ya_mapeados = []
+        no_en_lusync = []
+        sin_item_id = []
+        errores = []
+
+        for _, row in data_rows.iterrows():
+            item_id  = str(row[1]).strip() if pd.notna(row[1]) else ""
+            sku_meli = str(row[4]).strip() if pd.notna(row[4]) else ""
+            titulo   = str(row[5]).strip() if pd.notna(row[5]) else str(row[6]).strip() if pd.notna(row[6]) else ""
+
+            # Solo filas con SKU definido
+            if not sku_meli or sku_meli.lower() in ("nan", "none", ""):
+                continue
+            if not item_id or item_id.lower() in ("nan", "none", ""):
+                sin_item_id.append({"sku": sku_meli, "titulo": titulo})
+                continue
+
+            # Buscar SKU en Lusync
+            sku_lusync = skus_lusync.get(sku_meli.upper())
+
+            if not sku_lusync:
+                no_en_lusync.append({
+                    "item_id": item_id,
+                    "sku_meli": sku_meli,
+                    "titulo": titulo
+                })
+                continue
+
+            # Verificar si ya está mapeado
+            pubs_existentes = obtener_publicaciones_canal(sku_lusync, "mercadolibre") or []
+            ya_existe = any(
+                p.get("sku_canal") == sku_meli or p.get("item_id_canal") == item_id
+                for p in pubs_existentes
+            )
+
+            if ya_existe:
+                ya_mapeados.append({
+                    "item_id": item_id,
+                    "sku_meli": sku_meli,
+                    "sku_lusync": sku_lusync,
+                    "titulo": titulo
+                })
+                continue
+
+            mapeados.append({
+                "item_id": item_id,
+                "sku_meli": sku_meli,
+                "sku_lusync": sku_lusync,
+                "titulo": titulo
+            })
+
+            if ejecutar:
+                try:
+                    agregar_publicacion(
+                        sku_lusync=sku_lusync,
+                        canal="mercadolibre",
+                        sku_canal=sku_meli,
+                        item_id_canal=item_id if item_id.startswith("MLC") else None,
+                        notas="importado_excel_meli"
+                    )
+                except Exception as e:
+                    errores.append(f"{sku_meli}: {e}")
+
+        reporte = {
+            "modo": "EJECUCIÓN REAL — mapeos guardados" if ejecutar else "SIMULACIÓN — no se guarda nada",
+            "archivo": archivo.filename,
+            "stats": {
+                "total_filas_con_sku": len(mapeados) + len(ya_mapeados) + len(no_en_lusync),
+                "nuevos_mapeados": len(mapeados),
+                "ya_estaban_mapeados": len(ya_mapeados),
+                "sku_no_en_lusync": len(no_en_lusync),
+                "sin_item_id": len(sin_item_id),
+                "errores_guardado": len(errores)
+            },
+            "nuevos_mapeados": mapeados,
+            "no_en_lusync": no_en_lusync,
+            "errores": errores,
+            "siguiente_paso": (
+                f"✅ {len(mapeados)} mapeos guardados correctamente"
+                if ejecutar and not errores
+                else f"⚠️ Revisa no_en_lusync: {len(no_en_lusync)} SKUs del Excel no existen en Lusync"
+                if no_en_lusync
+                else "✅ Todo mapeado"
+            )
+        }
+
+        return jsonify(reporte)
+
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
