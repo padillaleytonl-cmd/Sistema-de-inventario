@@ -11757,6 +11757,7 @@ def admin_importar_excel_meli():
                     errores.append(f"{sku_meli}: {e}")
 
         reporte = {
+            "version": "v3-sku-canal-fix",
             "modo": "EJECUCIÓN REAL — mapeos guardados" if ejecutar else "SIMULACIÓN — no se guarda nada",
             "archivo": archivo.filename,
             "stats": {
