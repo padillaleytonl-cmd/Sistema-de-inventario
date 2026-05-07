@@ -1268,14 +1268,25 @@ def stats_ventas_por_canal_dia(fecha_desde, fecha_hasta):
     try:
         cur.execute("""
             SELECT TO_CHAR(DATE(fecha), 'YYYY-MM-DD') AS dia,
-                   canal,
+                   CASE LOWER(TRIM(canal))
+                     WHEN 'mercadolibre' THEN 'MercadoLibre'
+                     WHEN 'meli'         THEN 'MercadoLibre'
+                     WHEN 'falabella'    THEN 'Falabella'
+                     WHEN 'paris'        THEN 'Paris'
+                     WHEN 'ripley'       THEN 'Ripley'
+                     WHEN 'walmart'      THEN 'Walmart'
+                     WHEN 'woocommerce'  THEN 'Web'
+                     WHEN 'web'          THEN 'Web'
+                     WHEN 'woo'          THEN 'Web'
+                     ELSE INITCAP(canal)
+                   END AS canal_norm,
                    COALESCE(SUM(cantidad), 0) AS total
             FROM movimientos
             WHERE tipo = 'salida'
               AND DATE(fecha) BETWEEN %s AND %s
               AND canal IS NOT NULL
-              AND canal NOT IN ('Manual', 'Sistema', 'manual', 'sistema', '')
-            GROUP BY dia, canal
+              AND LOWER(TRIM(canal)) NOT IN ('manual', 'sistema', '')
+            GROUP BY dia, canal_norm
             ORDER BY dia ASC
         """, (fecha_desde, fecha_hasta))
         rows = cur.fetchall()
@@ -1756,18 +1767,13 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
 
         ahora_chile = now_chile().replace(tzinfo=None)
 
-        # FIX: usar la fecha REAL de compra del marketplace como fecha del movimiento.
-        # Si no llega fecha_compra_clean (ej: sync sin payload), usar ahora_chile como fallback.
-        # Asi el panel muestra cuando compro el cliente, no cuando corrio el scheduler.
-        fecha_movimiento = fecha_compra_clean if fecha_compra_clean else ahora_chile
-
         cur.execute("""INSERT INTO movimientos
             (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id,
              bodega_codigo, fecha_importacion, fecha_compra_marketplace,
              origen_registro, stock_antes, stock_despues)
             VALUES ('salida', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (sku, nombre, descontar, motivo_final, usuario, canal,
-             fecha_movimiento, orden_id, bodega, ahora_chile,
+             ahora_chile, orden_id, bodega, ahora_chile,
              fecha_compra_clean, origen_registro, stock_antes, stock_despues))
         conn.commit()
         cur.close(); conn.close()

@@ -1719,7 +1719,7 @@ tbody td {
         <div class="metric-value" id="kpiAlertas">—</div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
           <span style="font-size:11px;color:var(--muted);cursor:pointer;" onclick="abrirAlertas()">Ver alertas →</span>
-          <button class="btn-ver-mas" onclick="abrirModalKpi('canales')">Canales</button>
+          <span style="font-size:11px;color:var(--muted);cursor:pointer;" onclick="showSection('canales', document.querySelector('.nav-btn:nth-child(6)'))">Ver canales →</span>
         </div>
       </div>
     </div>
@@ -1977,16 +1977,7 @@ tbody td {
         <div class="page-date">Registro completo de entradas y salidas</div>
         <div style="font-size:13px;color:var(--muted);margin-top:2px;font-family:'DM Mono',monospace;" id="relojMov"></div>
       </div>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <!-- Exportar -->
-        <button onclick="exportarMovimientos()" style="padding:8px 14px;border:0.5px solid var(--border);background:var(--bg2);color:var(--text);border-radius:8px;font-size:12px;cursor:pointer;font-weight:500;display:inline-flex;align-items:center;gap:6px;">
-          ↓ Exportar Excel
-        </button>
-        <!-- Importar -->
-        <label style="padding:8px 14px;border:0.5px solid #2563EB;background:#EFF6FF;color:#1D4ED8;border-radius:8px;font-size:12px;cursor:pointer;font-weight:500;display:inline-flex;align-items:center;gap:6px;" title="Importar movimientos desde Excel (migración)">
-          ↑ Importar Excel
-          <input type="file" accept=".xlsx" style="display:none;" onchange="importarMovimientos(this)">
-        </label>
+      <div>
         <button onclick="borrarTodosMovimientos()" style="padding:8px 14px;border:0.5px solid #DC2626;background:#FEE2E2;color:#991B1B;border-radius:8px;font-size:12px;cursor:pointer;font-weight:500;display:inline-flex;align-items:center;gap:6px;" title="DESARROLLO: borra todos los movimientos">
           🗑 Borrar historial
         </button>
@@ -5987,36 +5978,6 @@ function borrarTodosMovimientos(){
       }
     });
 }
-
-function exportarMovimientos(){
-  toast('Generando Excel…');
-  const a = document.createElement('a');
-  a.href = '/admin/exportar_movimientos_excel';
-  a.download = 'movimientos_lusync.xlsx';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-}
-
-function importarMovimientos(input){
-  const file = input.files[0];
-  if(!file) return;
-  const ok = confirm(`¿Importar "${file.name}"?\n\nSolo se agregarán movimientos que no existan ya (se detectan por orden_id + canal). No se borrarán los actuales.`);
-  if(!ok){ input.value=''; return; }
-  const fd = new FormData();
-  fd.append('archivo', file);
-  toast('Importando…');
-  fetch('/admin/importar_movimientos_excel', {method:'POST', body:fd})
-    .then(r=>r.json()).then(d=>{
-      input.value = '';
-      if(d.ok){
-        toast(`✓ ${d.importados} importados · ${d.duplicados} ya existían · ${d.errores} errores`);
-        cargarMovimientosFull();
-      } else {
-        toast('Error: ' + (d.error||'desconocido'));
-      }
-    }).catch(e=>{ input.value=''; toast('Error de red: '+e); });
-}
 </script>
 <!-- ════════════════════════════════════════════════════════════════
      MODAL DE ALERTAS
@@ -6799,21 +6760,37 @@ document.getElementById('syncParisModal').addEventListener('click', function(e){
 // DASHBOARD NUEVO - GRÁFICOS DINÁMICOS CON CHART.JS
 // ════════════════════════════════════════════════════════════════
 
+// Normaliza cualquier variante de nombre de canal al nombre canónico
+function normalizarCanal(c) {
+  if (!c) return c;
+  const m = {
+    'mercadolibre': 'MercadoLibre', 'meli': 'MercadoLibre', 'mercado libre': 'MercadoLibre',
+    'falabella': 'Falabella',
+    'paris': 'Paris', 'parís': 'Paris',
+    'ripley': 'Ripley',
+    'walmart': 'Walmart',
+    'woocommerce': 'Web', 'woo': 'Web', 'web': 'Web',
+    'hites': 'Hites',
+    'manual': 'Manual', 'sistema': 'Sistema'
+  };
+  return m[c.toLowerCase().trim()] || c;
+}
+
 const COLORES_CANAL = {
   // Colores oficiales de cada marketplace
-  WooCommerce: '#7F54B3', WC: '#7F54B3',  // morado oficial WooCommerce
-  Walmart: '#0071CE',     WM: '#0071CE',  // azul oficial Walmart
-  Paris: '#0F265C',       PA: '#0F265C', 'París': '#0F265C',  // azul oscuro París
-  Falabella: '#00B25E',   FA: '#00B25E',  // verde oficial Falabella
-  Ripley: '#A01B7A',      RP: '#A01B7A',  // rosa/púrpura oficial Ripley
-  MercadoLibre: '#FFE600', ML: '#FFE600', // amarillo oficial MercadoLibre
-  Hites: '#E30613',       HI: '#E30613',  // rojo oficial Hites
+  Web: '#7F54B3', WooCommerce: '#7F54B3', WC: '#7F54B3',
+  Walmart: '#0071CE',     WM: '#0071CE',
+  Paris: '#0F265C',       PA: '#0F265C', 'París': '#0F265C',
+  Falabella: '#00B25E',   FA: '#00B25E',
+  Ripley: '#A01B7A',      RP: '#A01B7A',
+  MercadoLibre: '#FFE600', ML: '#FFE600',
+  Hites: '#E30613',       HI: '#E30613',
   Manual: '#6b7280',
   Sistema: '#6b7280'
 };
 
 // Lista de canales que SIEMPRE deben aparecer en el gráfico de ventas
-const TODOS_LOS_CANALES = ['WooCommerce', 'Walmart', 'Paris', 'MercadoLibre', 'Falabella', 'Ripley', 'Hites'];
+const TODOS_LOS_CANALES = ['Web', 'Walmart', 'Paris', 'MercadoLibre', 'Falabella', 'Ripley', 'Hites'];
 
 let _charts = {};
 
@@ -6904,7 +6881,8 @@ async function cargarKPIs() {
     // Calcular ventas totales por canal (en unidades)
     const ventasPorCanal = {};
     resVentas.forEach(v => {
-      ventasPorCanal[v.canal] = (ventasPorCanal[v.canal] || 0) + v.total;
+      const cNorm = normalizarCanal(v.canal);
+      ventasPorCanal[cNorm] = (ventasPorCanal[cNorm] || 0) + v.total;
     });
 
     // Pintar KPI Ventas: monto + badges

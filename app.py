@@ -10804,5 +10804,78 @@ def admin_debug_falabella_items():
         import traceback
         return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
 
+@app.route("/admin/normalizar_canales")
+def admin_normalizar_canales():
+    """Normaliza nombres de canal inconsistentes en la tabla movimientos.
+    Convierte variantes como 'mercadolibre', 'MELI', 'woo', 'París' al
+    nombre canónico usado en el dashboard.
+    Uso: /admin/normalizar_canales?token=XXX
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if request.args.get("token") != bypass_token and not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import get_conn
+        conn = get_conn(); cur = conn.cursor()
+
+        # Mapeo de variantes → nombre canónico
+        mapeo = [
+            # MercadoLibre
+            ("mercadolibre", "MercadoLibre"),
+            ("Mercadolibre", "MercadoLibre"),
+            ("MERCADOLIBRE", "MercadoLibre"),
+            ("meli", "MercadoLibre"),
+            ("MELI", "MercadoLibre"),
+            ("Meli", "MercadoLibre"),
+            # Falabella
+            ("falabella", "Falabella"),
+            ("FALABELLA", "Falabella"),
+            # Paris
+            ("paris", "Paris"),
+            ("París", "Paris"),
+            ("PARIS", "Paris"),
+            # Ripley
+            ("ripley", "Ripley"),
+            ("RIPLEY", "Ripley"),
+            # Walmart
+            ("walmart", "Walmart"),
+            ("WALMART", "Walmart"),
+            # Web / WooCommerce
+            ("WooCommerce", "Web"),
+            ("woocommerce", "Web"),
+            ("Woocommerce", "Web"),
+            ("woo", "Web"),
+            ("Woo", "Web"),
+            # Hites
+            ("hites", "Hites"),
+            ("HITES", "Hites"),
+        ]
+
+        total_actualizados = 0
+        log = []
+        for variante, canonico in mapeo:
+            cur.execute(
+                "UPDATE movimientos SET canal=%s WHERE canal=%s",
+                (canonico, variante)
+            )
+            n = cur.rowcount
+            if n > 0:
+                log.append(f"'{variante}' → '{canonico}': {n} filas")
+                total_actualizados += n
+
+        conn.commit()
+        cur.close(); conn.close()
+
+        return jsonify({
+            "ok": True,
+            "total_actualizados": total_actualizados,
+            "detalle": log,
+            "mensaje": f"{total_actualizados} movimientos normalizados"
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
