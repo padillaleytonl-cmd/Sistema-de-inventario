@@ -282,14 +282,12 @@ def obtener_publicaciones_meli(limite=50, offset=0):
         for i in range(0, len(item_ids), 20):
             batch = item_ids[i:i+20]
             ids_str = ",".join(batch)
-            # IMPORTANTE: pedir attributes y variations completos para extraer SELLER_SKU
+            # IMPORTANTE: NO filtrar attributes para que vengan las variantes con sus atributos completos
+            # Si se filtra con "attributes=...,variations", MELI devuelve variantes sin sus atributos internos
             res2 = requests.get(
                 f"{MELI_API_URL}/items",
                 headers=meli_headers(),
-                params={
-                    "ids": ids_str,
-                    "attributes": "id,title,available_quantity,price,status,seller_custom_field,attributes,variations"
-                },
+                params={"ids": ids_str},
                 timeout=25
             )
             if res2.status_code == 200:
