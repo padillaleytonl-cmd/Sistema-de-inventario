@@ -11632,7 +11632,12 @@ def admin_importar_excel_meli():
         }), 400
 
     try:
-        import pandas as pd
+        try:
+            import pandas as pd
+        except ImportError:
+            import subprocess, sys
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "pandas", "openpyxl", "--break-system-packages", "-q"])
+            import pandas as pd
         import io
         from inventario import get_conn, obtener_publicaciones_canal, agregar_publicacion, cargar_productos
 

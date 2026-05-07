@@ -8,3 +8,4 @@ openpyxl
 holidays
 reportlab
 python-barcode
+pandas
