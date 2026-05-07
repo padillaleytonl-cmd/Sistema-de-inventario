@@ -11110,6 +11110,19 @@ def admin_autodescubrir_publicaciones():
                 # FIX BUG 1: SKU vacío, None, "None", "nan" → NUNCA cruzar automáticamente
                 # Antes cruzaba al primer SKU que encontraba — generaba falsos positivos masivos
                 if not sku_canal or sku_canal.lower() in ("none", "nan", "null", "0", ""):
+                    # Detectar si es publicación paraguas de catálogo MELI
+                    # (tiene variantes con inventory_id pero sin seller_custom_field ni SELLER_SKU)
+                    # En ese caso sus variantes individuales ya están mapeadas — no es una alerta real
+                    extra_data = pub.get("extra", {})
+                    variantes_raw = pub.get("variantes_raw", [])
+                    tiene_inventory_id = any(
+                        v.get("inventory_id") for v in variantes_raw
+                    ) if variantes_raw else False
+
+                    if tiene_inventory_id:
+                        # Publicación paraguas — ignorar silenciosamente
+                        continue
+
                     sin_sku.append({
                         "item_id": item_id,
                         "nombre": nombre_pub,
@@ -11242,6 +11255,8 @@ def admin_autodescubrir_publicaciones():
                         sku_main = (it.get("sku_seller") or it.get("sku") or "").strip()
                         variantes = it.get("variantes_skus") or []
 
+                        variantes_raw_list = it.get("variantes_raw", [])
+
                         if variantes:
                             # Publicación multivariante — generar una entrada por variante
                             skus_vistos = set()
@@ -11253,15 +11268,17 @@ def admin_autodescubrir_publicaciones():
                                         "sku_canal": sku_var,
                                         "item_id_canal": item_id,
                                         "nombre": titulo,
-                                        "extra": {"status": status, "stock": stock}
+                                        "extra": {"status": status, "stock": stock},
+                                        "variantes_raw": variantes_raw_list
                                     })
                         else:
-                            # Publicación simple
+                            # Publicación simple o paraguas sin SKU
                             pubs_raw.append({
                                 "sku_canal": sku_main,
                                 "item_id_canal": item_id,
                                 "nombre": titulo,
-                                "extra": {"status": status, "stock": stock}
+                                "extra": {"status": status, "stock": stock},
+                                "variantes_raw": variantes_raw_list
                             })
                     if len(items) < 50:
                         break

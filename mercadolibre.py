@@ -315,7 +315,8 @@ def obtener_publicaciones_meli(limite=50, offset=0):
                         "status":           body.get("status"),
                         "sku_seller":       sku_seller,
                         "sku_origen":       sku_origen,
-                        "variantes_skus":   variantes_skus
+                        "variantes_skus":   variantes_skus,
+                        "variantes_raw":    body.get("variations", []) or []
                     })
         return {"items": items, "total": data.get("paging", {}).get("total", len(item_ids))}
     except Exception as e:
