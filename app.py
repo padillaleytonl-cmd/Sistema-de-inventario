@@ -171,6 +171,18 @@ def _sync_walmart_automatico():
                             print(f"[Scheduler] SKU '{sku_lusync}' no encontrado en inventario")
                             continue
 
+                        # Parsear fecha real de compra (Walmart: orderDate o createdAt en ISO)
+                        fecha_compra_wm = None
+                        try:
+                            date_str = (o.get("orderDate") or o.get("createdAt") or
+                                        o.get("orderPlacedTime") or "")
+                            if date_str:
+                                fecha_compra_wm = datetime.fromisoformat(
+                                    str(date_str).replace("Z", "+00:00")
+                                )
+                        except Exception:
+                            fecha_compra_wm = None
+
                         resultado = descontar_venta_inteligente(
                             sku=sku_lusync,
                             cantidad=cantidad,
@@ -178,7 +190,8 @@ def _sync_walmart_automatico():
                             fulfillment=es_wfs,
                             orden_id=customer_order_id,
                             motivo=f"Venta Walmart {tipo_str}",
-                            usuario="Sistema"
+                            usuario="Sistema",
+                            fecha_compra_marketplace=fecha_compra_wm
                         )
                         print(f"[Scheduler] {customer_order_id} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado['bodega']}")
 
@@ -530,6 +543,20 @@ def _sync_falabella_automatico():
                     tipo_str = "FBF" if es_fbf else "FBS"
                     items_descontados = []
 
+                    # Parsear fecha real de compra (Falabella SellerCenter: CreatedAt)
+                    fecha_compra_fa = None
+                    try:
+                        import pytz as _pytz_fa
+                        date_str = (o.get("CreatedAt") or o.get("created_at") or "")
+                        if date_str:
+                            try:
+                                fecha_compra_fa = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                            except ValueError:
+                                fecha_naive = datetime.strptime(date_str.strip(), "%Y-%m-%d %H:%M:%S")
+                                fecha_compra_fa = _pytz_fa.utc.localize(fecha_naive)
+                    except Exception:
+                        fecha_compra_fa = None
+
                     for item in items_orden:
                         seller_sku = (item.get("SellerSku") or item.get("sellerSku") or item.get("sku") or "").strip()
                         # Falabella separa cada unidad en una línea, cantidad=1 por línea
@@ -553,6 +580,7 @@ def _sync_falabella_automatico():
                             orden_id=order_id,
                             motivo=f"Venta Falabella {tipo_str}",
                             usuario="Sistema",
+                            fecha_compra_marketplace=fecha_compra_fa,
                             origen_registro="scheduler"
                         )
                         sincronizar_stock_marketplaces(
@@ -734,6 +762,15 @@ def _sync_paris_automatico():
                 tipo_str = "Fulfillment" if es_cd else "Seller"
                 items_descontados = []
 
+                # Parsear fecha real de compra (Paris API: createdAt en ISO UTC)
+                fecha_compra_pa = None
+                try:
+                    date_str = (o.get("createdAt") or o.get("created_at") or "")
+                    if date_str:
+                        fecha_compra_pa = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                except Exception:
+                    fecha_compra_pa = None
+
                 for ship in (o.get("shipments") or []):
                     for item in (ship.get("items") or []):
                         seller_sku = (item.get("seller_sku") or item.get("sellerSku") or "").strip()
@@ -756,6 +793,7 @@ def _sync_paris_automatico():
                             orden_id=sub_order,
                             motivo=f"Venta Paris {tipo_str}",
                             usuario="Sistema",
+                            fecha_compra_marketplace=fecha_compra_pa,
                             origen_registro="scheduler"
                         )
                         sincronizar_stock_marketplaces(
@@ -896,6 +934,15 @@ def _sync_ripley_automatico():
                 tipo_str = "FBR" if es_fbr else "Seller"
                 items_descontados = []
 
+                # Parsear fecha real de compra (Mirakl/Ripley: created_date en ISO UTC)
+                fecha_compra_rp = None
+                try:
+                    date_str = (o.get("created_date") or o.get("createdDate") or "")
+                    if date_str:
+                        fecha_compra_rp = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                except Exception:
+                    fecha_compra_rp = None
+
                 for item in items_orden:
                     shop_sku = (item.get("offer_sku") or item.get("shop_sku") or
                                 item.get("sku") or item.get("seller_sku") or "").strip()
@@ -918,6 +965,7 @@ def _sync_ripley_automatico():
                         orden_id=order_id,
                         motivo=f"Venta Ripley {tipo_str}",
                         usuario="Sistema",
+                        fecha_compra_marketplace=fecha_compra_rp,
                         origen_registro="scheduler"
                     )
                     sincronizar_stock_marketplaces(
@@ -998,6 +1046,17 @@ def _sync_woo_automatico():
                 if orden_ya_procesada_texto(woo_key):
                     continue
                 items_descontados = []
+                # Parsear fecha real de compra (WooCommerce: date_created en ISO)
+                fecha_compra_woo = None
+                try:
+                    date_str = (o.get("date_created") or o.get("date_created_gmt") or "")
+                    if date_str:
+                        fecha_compra_woo = datetime.fromisoformat(
+                            str(date_str).replace("Z", "+00:00")
+                        )
+                except Exception:
+                    fecha_compra_woo = None
+
                 for line in o.get("line_items", []):
                     sku = (line.get("sku") or "").strip()
                     cantidad = int(line.get("quantity") or 1)
@@ -1010,7 +1069,8 @@ def _sync_woo_automatico():
                             registrar_movimiento(
                                 "salida", p["sku"], p["nombre"], cantidad,
                                 f"Venta Web (Woo) orden {order_id}",
-                                usuario="Sistema", canal="Web", orden_id=order_id
+                                usuario="Sistema", canal="Web", orden_id=order_id,
+                                fecha_override=fecha_compra_woo
                             )
                             sincronizar_stock_marketplaces(
                                 p["sku"], p["stock"], contexto="woo_orden_bg"

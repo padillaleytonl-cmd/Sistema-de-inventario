@@ -1756,13 +1756,18 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
 
         ahora_chile = now_chile().replace(tzinfo=None)
 
+        # FIX: usar la fecha REAL de compra del marketplace como fecha del movimiento.
+        # Si no llega fecha_compra_clean (ej: sync sin payload), usar ahora_chile como fallback.
+        # Asi el panel muestra cuando compro el cliente, no cuando corrio el scheduler.
+        fecha_movimiento = fecha_compra_clean if fecha_compra_clean else ahora_chile
+
         cur.execute("""INSERT INTO movimientos
             (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id,
              bodega_codigo, fecha_importacion, fecha_compra_marketplace,
              origen_registro, stock_antes, stock_despues)
             VALUES ('salida', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (sku, nombre, descontar, motivo_final, usuario, canal,
-             ahora_chile, orden_id, bodega, ahora_chile,
+             fecha_movimiento, orden_id, bodega, ahora_chile,
              fecha_compra_clean, origen_registro, stock_antes, stock_despues))
         conn.commit()
         cur.close(); conn.close()
