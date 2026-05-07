@@ -11647,16 +11647,40 @@ def admin_importar_excel_meli():
         # Leer hoja Publicaciones
         df = pd.read_excel(io.BytesIO(contenido), sheet_name="Publicaciones", header=None)
 
-        # Cargar SKUs Lusync para cruce
+        # Cargar SKUs Lusync para cruce — incluir productos Y SKUs ya mapeados en canal
         productos = cargar_productos()
         skus_lusync = {p["sku"].upper().strip(): p["sku"] for p in productos}
+
+        # Agregar también SKUs que ya tienen mapeo en mercadolibre aunque no estén en inventario
+        try:
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("SELECT DISTINCT sku_lusync FROM publicaciones_canal WHERE canal='mercadolibre'")
+            for (sku_canal_existente,) in cur.fetchall():
+                if sku_canal_existente:
+                    skus_lusync[sku_canal_existente.upper().strip()] = sku_canal_existente
+            cur.close()
+            conn.close()
+        except Exception:
+            pass
 
         # Extraer filas desde fila 6 (índice 5) en adelante
         data_rows = df.iloc[5:].copy()
         data_rows.columns = range(len(data_rows.columns))
 
         # Columnas clave:
-        # 1 = ITEM_ID, 2 = PRODUCT_NUMBER (variation_id legacy), 3 = VARIATION_ID, 4 = SKU, 5 = TITLE, 6 = VARIATIONS
+        # 1 = ITEM_ID, 2 = PRODUCT_NUMBER, 3 = VARIATION_ID, 4 = SKU, 5 = TITLE, 6 = VARIATIONS
+
+        # Pre-análisis: detectar qué ITEM_IDs son publicaciones simples (tienen SKU sin VAR_ID)
+        # Para esos, ignorar sus filas hijas de variantes (son duplicados del paraguas)
+        items_simples = set()
+        for _, row in data_rows.iterrows():
+            item_id  = str(row[1]).strip() if pd.notna(row[1]) else ""
+            var_id   = str(row[3]).strip() if pd.notna(row[3]) else ""
+            sku      = str(row[4]).strip() if pd.notna(row[4]) else ""
+            if item_id and item_id != "nan" and sku and sku != "nan" and (not var_id or var_id == "nan"):
+                items_simples.add(item_id)
+
         mapeados = []
         ya_mapeados = []
         no_en_lusync = []
@@ -11665,8 +11689,14 @@ def admin_importar_excel_meli():
 
         for _, row in data_rows.iterrows():
             item_id  = str(row[1]).strip() if pd.notna(row[1]) else ""
+            var_id   = str(row[3]).strip() if pd.notna(row[3]) else ""
             sku_meli = str(row[4]).strip() if pd.notna(row[4]) else ""
             titulo   = str(row[5]).strip() if pd.notna(row[5]) else str(row[6]).strip() if pd.notna(row[6]) else ""
+
+            # Omitir filas hijas de publicaciones que ya tienen su propio SKU como publicación simple
+            # Esto evita duplicar mapeos de paraguas que ya tienen variantes individuales mapeadas
+            if var_id and var_id != "nan" and item_id in items_simples:
+                continue
 
             # Solo filas con SKU definido
             if not sku_meli or sku_meli.lower() in ("nan", "none", ""):
