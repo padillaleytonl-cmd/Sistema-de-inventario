@@ -10582,5 +10582,36 @@ def admin_debug_falabella_ordenes():
         return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/admin/debug_falabella_items")
+def admin_debug_falabella_items():
+    """Muestra la respuesta RAW de GetOrderItems para una orden específica.
+    Uso: /admin/debug_falabella_items?order_id=1152896462&token=XXX
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    token = request.args.get("token", "")
+    if token != bypass_token and not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    order_id = request.args.get("order_id", "1152896462")
+
+    try:
+        from falabella import llamar_api_falabella
+        res = llamar_api_falabella(
+            "GetOrderItems",
+            params_extra={"OrderId": order_id},
+            method="GET",
+            formato="JSON"
+        )
+        return jsonify({
+            "order_id": order_id,
+            "ok": res.get("ok"),
+            "error": res.get("error"),
+            "raw_text": res.get("raw_text", "")[:3000],
+            "data": res.get("data")
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
