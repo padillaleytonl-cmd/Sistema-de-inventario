@@ -514,11 +514,17 @@ def _sync_falabella_automatico():
         for o in todas_ordenes:
             if not isinstance(o, dict):
                 continue
+            # obtener_ordenes_falabella ya desenvuelve {"Order":{}} — o es la orden directa
             try:
                 order_id = str(o.get("OrderId") or o.get("orderId") or o.get("id") or "")
                 if not order_id:
                     continue
-                estado_orden = (o.get("Status") or o.get("status") or "").lower()
+                # Estado puede venir en Statuses[0].Status o en Status directo
+                statuses = o.get("Statuses") or []
+                if isinstance(statuses, list) and statuses:
+                    estado_orden = (statuses[0].get("Status") or "").lower()
+                else:
+                    estado_orden = (o.get("Status") or o.get("status") or "").lower()
                 fa_key = f"FALABELLA-{order_id}"
                 cancel_key = f"FALABELLA-CANCEL-{order_id}"
 
@@ -543,17 +549,22 @@ def _sync_falabella_automatico():
                     tipo_str = "FBF" if es_fbf else "FBS"
                     items_descontados = []
 
-                    # Parsear fecha real de compra (Falabella SellerCenter: CreatedAt)
+                    # Parsear fecha real de compra (Falabella: CreatedAt = "2026-05-05 23:57:15" sin tz)
                     fecha_compra_fa = None
                     try:
                         import pytz as _pytz_fa
                         date_str = (o.get("CreatedAt") or o.get("created_at") or "")
                         if date_str:
                             try:
+                                # Formato con T y/o timezone
                                 fecha_compra_fa = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
                             except ValueError:
-                                fecha_naive = datetime.strptime(date_str.strip(), "%Y-%m-%d %H:%M:%S")
-                                fecha_compra_fa = _pytz_fa.utc.localize(fecha_naive)
+                                try:
+                                    # Formato "YYYY-MM-DD HH:MM:SS" sin timezone → asumir UTC
+                                    fecha_naive = datetime.strptime(date_str.strip(), "%Y-%m-%d %H:%M:%S")
+                                    fecha_compra_fa = _pytz_fa.utc.localize(fecha_naive)
+                                except Exception:
+                                    fecha_compra_fa = None
                     except Exception:
                         fecha_compra_fa = None
 

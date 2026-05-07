@@ -419,7 +419,6 @@ def obtener_ordenes_falabella(estado=None, dias=30, limit=50, offset=0):
     if not res["ok"]:
         return []
     data = res.get("data", {}) or {}
-    # Defensa: si data es lista en vez de dict, devolver vacío
     if not isinstance(data, dict):
         print(f"[Falabella] Respuesta inesperada (data no es dict): {type(data).__name__}")
         return []
@@ -430,16 +429,28 @@ def obtener_ordenes_falabella(estado=None, dias=30, limit=50, offset=0):
     if not isinstance(body, dict):
         return []
     orders_container = body.get("Orders", {}) or {}
-    if not isinstance(orders_container, dict):
-        # A veces "Orders" puede venir como lista directamente
-        if isinstance(orders_container, list):
-            return orders_container
-        return []
-    orders = orders_container.get("Order", [])
-    if isinstance(orders, dict):
-        orders = [orders]
-    if not isinstance(orders, list):
-        return []
+
+    # FIX: la API puede devolver Orders como:
+    #   dict  → {"Order": [...]} o {"Order": {...}}  (una sola orden)
+    #   lista → [{"Order": {...}}, ...]               (ya sin wrapper de Orders)
+    raw_list = []
+    if isinstance(orders_container, list):
+        raw_list = orders_container
+    elif isinstance(orders_container, dict):
+        inner = orders_container.get("Order", [])
+        if isinstance(inner, dict):
+            raw_list = [inner]
+        elif isinstance(inner, list):
+            raw_list = inner
+
+    # Desenvolver cada elemento si viene envuelto en {"Order": {...}}
+    orders = []
+    for item in raw_list:
+        if isinstance(item, dict) and "Order" in item and len(item) == 1:
+            orders.append(item["Order"])
+        elif isinstance(item, dict):
+            orders.append(item)
+
     return orders
 
 
