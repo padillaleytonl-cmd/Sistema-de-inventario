@@ -11533,5 +11533,61 @@ def admin_autodescubrir_publicaciones():
         return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
 
 
+
+@app.route("/admin/debug_meli_item")
+def admin_debug_meli_item():
+    """
+    Muestra la estructura RAW de un item de MELI para debug de variantes.
+    Uso: /admin/debug_meli_item?item_id=MLC2749905118&token=XXX
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if request.args.get("token") != bypass_token and not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    item_id = request.args.get("item_id", "").strip()
+    if not item_id:
+        return jsonify({"error": "Falta item_id"}), 400
+
+    try:
+        import requests as _req
+        from mercadolibre import meli_headers, MELI_API_URL
+
+        res = _req.get(
+            f"{MELI_API_URL}/items/{item_id}",
+            headers=meli_headers(),
+            params={"attributes": "id,title,seller_custom_field,attributes,variations"},
+            timeout=20
+        )
+        if res.status_code != 200:
+            return jsonify({"error": f"MELI {res.status_code}", "detail": res.text[:500]}), 400
+
+        data = res.json()
+
+        # Extraer info relevante para debug SKU
+        resultado = {
+            "item_id": data.get("id"),
+            "title": data.get("title"),
+            "seller_custom_field_item": data.get("seller_custom_field"),
+            "attributes_sku": [a for a in (data.get("attributes") or []) if "SKU" in str(a.get("id","")).upper()],
+            "num_variantes": len(data.get("variations") or []),
+            "variantes": []
+        }
+
+        for var in (data.get("variations") or [])[:5]:
+            var_info = {
+                "variation_id": var.get("id"),
+                "seller_custom_field": var.get("seller_custom_field"),
+                "attributes_sku": [a for a in (var.get("attributes") or []) if "SKU" in str(a.get("id","")).upper() or "SKU" in str(a.get("value_name","")).upper()],
+                "all_attributes": var.get("attributes", [])[:5]
+            }
+            resultado["variantes"].append(var_info)
+
+        return jsonify(resultado)
+
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
