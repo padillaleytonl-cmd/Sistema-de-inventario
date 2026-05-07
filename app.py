@@ -11651,14 +11651,19 @@ def admin_importar_excel_meli():
         productos = cargar_productos()
         skus_lusync = {p["sku"].upper().strip(): p["sku"] for p in productos}
 
-        # Agregar también SKUs que ya tienen mapeo en mercadolibre aunque no estén en inventario
+        # Agregar SKUs que ya tienen mapeo en mercadolibre:
+        # - sku_lusync (el SKU interno de Lusync)
+        # - sku_canal (el SKU como aparece en MELI, que es lo que viene en el Excel)
         try:
             conn = get_conn()
             cur = conn.cursor()
-            cur.execute("SELECT DISTINCT sku_lusync FROM publicaciones_canal WHERE canal='mercadolibre'")
-            for (sku_canal_existente,) in cur.fetchall():
-                if sku_canal_existente:
-                    skus_lusync[sku_canal_existente.upper().strip()] = sku_canal_existente
+            cur.execute("SELECT DISTINCT sku_lusync, sku_canal FROM publicaciones_canal WHERE canal='mercadolibre'")
+            for (sl, sc) in cur.fetchall():
+                if sl:
+                    skus_lusync[sl.upper().strip()] = sl
+                if sc:
+                    # sku_canal del Excel mapea al sku_lusync correspondiente
+                    skus_lusync[sc.upper().strip()] = sl or sc
             cur.close()
             conn.close()
         except Exception:
