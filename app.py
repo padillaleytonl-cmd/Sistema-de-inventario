@@ -10468,51 +10468,114 @@ def admin_reset_sku_mapeo_canal():
 
 @app.route("/admin/debug_falabella_ordenes")
 def admin_debug_falabella_ordenes():
-    """Diagnóstico: muestra la respuesta RAW de la API de Falabella para GetOrders.
-    Sirve para detectar por qué el scheduler no toma las órdenes.
-    Uso: /admin/debug_falabella_ordenes?dias=7&estado=shipped&token=XXX
+    """Diagnóstico profundo de por qué Falabella no registra órdenes.
+    Uso: /admin/debug_falabella_ordenes?dias=7&token=XXX
     """
     bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
     token = request.args.get("token", "")
     if token != bypass_token and not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
 
-    dias   = int(request.args.get("dias", 7))
-    estado = request.args.get("estado", None)  # None = sin filtro
+    dias = int(request.args.get("dias", 7))
 
     try:
-        from falabella import llamar_api_falabella, obtener_ordenes_falabella
-        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+        from falabella import obtener_ordenes_falabella, obtener_items_orden_falabella
+        from inventario import obtener_sku_lusync_por_canal, orden_ya_procesada_texto
 
-        fecha_desde = (_dt.utcnow() - _td(days=dias)).strftime("%Y-%m-%dT00:00:00")
-        params = {"CreatedAfter": fecha_desde, "Limit": 10, "Offset": 0}
-        if estado:
-            params["Status"] = estado
+        reporte = {}
 
-        # Respuesta RAW de la API
-        res_raw = llamar_api_falabella("GetOrders", params_extra=params, method="GET", formato="JSON")
-
-        # También intentar con la función de alto nivel para cada estado
-        resultados_por_estado = {}
+        # 1. Órdenes por estado (ya desenvueltas)
         for est in ["pending", "ready_to_ship", "shipped", "delivered", "canceled"]:
             try:
                 ordenes = obtener_ordenes_falabella(estado=est, dias=dias, limit=5)
-                resultados_por_estado[est] = {
-                    "count": len(ordenes),
-                    "primera_orden": ordenes[0] if ordenes else None
-                }
+                reporte[est] = {"count": len(ordenes)}
+                if ordenes:
+                    o = ordenes[0]
+                    order_id = str(o.get("OrderId") or "")
+                    statuses = o.get("Statuses") or []
+                    estado_leido = (statuses[0].get("Status") if statuses else o.get("Status") or "")
+                    fa_key = f"FALABELLA-{order_id}"
+                    ya_procesada = orden_ya_procesada_texto(fa_key)
+
+                    # Items de esa orden
+                    items = []
+                    try:
+                        items_raw = obtener_items_orden_falabella(order_id) or []
+                        for item in items_raw:
+                            sku_fa = (item.get("SellerSku") or item.get("sellerSku") or "")
+                            sku_lusync = obtener_sku_lusync_por_canal("falabella", sku_fa) or "NO MAPEADO"
+                            items.append({
+                                "SellerSku": sku_fa,
+                                "sku_lusync": sku_lusync,
+                                "cantidad": item.get("Quantity") or item.get("quantity"),
+                                "Status": item.get("Status") or item.get("status")
+                            })
+                    except Exception as e:
+                        items = [f"ERROR items: {e}"]
+
+                    reporte[est]["primera_orden"] = {
+                        "OrderId": order_id,
+                        "OrderNumber": o.get("OrderNumber"),
+                        "CreatedAt": o.get("CreatedAt"),
+                        "estado_leido_del_campo": estado_leido,
+                        "fa_key": fa_key,
+                        "ya_marcada_en_bd": ya_procesada,
+                        "items": items,
+                        "campos_disponibles": list(o.keys())
+                    }
             except Exception as e:
-                resultados_por_estado[est] = {"error": str(e)}
+                reporte[est] = {"error": str(e)}
+
+        # 2. Simular exactamente lo que haría el scheduler
+        simulacion = []
+        try:
+            todas = []
+            for est in ["pending", "ready_to_ship", "shipped", "delivered"]:
+                lote = obtener_ordenes_falabella(estado=est, dias=dias, limit=5) or []
+                todas.extend(lote)
+
+            for o in todas[:5]:
+                order_id = str(o.get("OrderId") or o.get("orderId") or "")
+                statuses = o.get("Statuses") or []
+                estado_ord = (statuses[0].get("Status") if statuses else o.get("Status") or "").lower()
+                fa_key = f"FALABELLA-{order_id}"
+                ya_proc = orden_ya_procesada_texto(fa_key)
+                items_raw = obtener_items_orden_falabella(order_id) or []
+
+                sim = {
+                    "order_id": order_id,
+                    "estado_leido": estado_ord,
+                    "estado_valido": estado_ord in ("ready_to_ship", "shipped", "delivered", "pending"),
+                    "fa_key": fa_key,
+                    "ya_procesada": ya_proc,
+                    "items_count": len(items_raw),
+                    "resultado": None
+                }
+
+                if ya_proc:
+                    sim["resultado"] = "SKIP — ya marcada en BD"
+                elif estado_ord not in ("ready_to_ship", "shipped", "delivered", "pending"):
+                    sim["resultado"] = f"SKIP — estado '{estado_ord}' no reconocido"
+                elif not items_raw:
+                    sim["resultado"] = "SKIP — sin items"
+                else:
+                    sku_fa = (items_raw[0].get("SellerSku") or items_raw[0].get("sellerSku") or "")
+                    sku_lusync = obtener_sku_lusync_por_canal("falabella", sku_fa) or sku_fa
+                    productos = cargar_productos()
+                    prod = next((p for p in productos if p["sku"] == sku_lusync), None)
+                    if not prod:
+                        sim["resultado"] = f"SKIP — SKU '{sku_lusync}' no en productos"
+                    else:
+                        sim["resultado"] = f"✅ PROCESARÍA — {sku_lusync} stock={prod['stock']}"
+
+                simulacion.append(sim)
+        except Exception as e:
+            simulacion = [f"ERROR simulación: {e}"]
 
         return jsonify({
             "ok": True,
-            "params_enviados": params,
-            "raw_ok": res_raw.get("ok"),
-            "raw_status_code": res_raw.get("status_code"),
-            "raw_error": res_raw.get("error"),
-            "raw_data_keys": list(res_raw.get("data", {}).keys()) if isinstance(res_raw.get("data"), dict) else str(type(res_raw.get("data"))),
-            "raw_text_preview": res_raw.get("raw_text", "")[:500],
-            "ordenes_por_estado": resultados_por_estado
+            "ordenes_por_estado": reporte,
+            "simulacion_scheduler": simulacion
         })
     except Exception as e:
         import traceback
