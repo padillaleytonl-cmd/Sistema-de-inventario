@@ -10877,5 +10877,171 @@ def admin_normalizar_canales():
         return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
 
 
+
+@app.route("/admin/test_flujo_venta")
+def admin_test_flujo_venta():
+    """
+    Testea el flujo completo de una venta SIN tocar stock real.
+    Simula: orden entra → stock se descuenta → se sincroniza a todos los canales.
+
+    Uso: /admin/test_flujo_venta?sku=EDLABA001&canal=Walmart&token=XXX
+    Parámetros:
+      sku     = SKU Lusync a testear
+      canal   = Canal que origina la venta (Walmart, Falabella, Paris, Ripley, MercadoLibre, Web)
+      simular = 1 (default) solo simula sin tocar nada | 0 = ejecuta real (CUIDADO)
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if request.args.get("token") != bypass_token and not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    sku      = request.args.get("sku", "").strip()
+    canal    = request.args.get("canal", "Walmart")
+    simular  = request.args.get("simular", "1") != "0"
+
+    if not sku:
+        return jsonify({"error": "Falta parámetro sku"}), 400
+
+    reporte = {
+        "sku": sku,
+        "canal": canal,
+        "modo": "SIMULACIÓN (sin cambios reales)" if simular else "⚠️ EJECUCIÓN REAL",
+        "pasos": []
+    }
+
+    def paso(nombre, estado, detalle, extra=None):
+        p = {"paso": nombre, "estado": estado, "detalle": detalle}
+        if extra:
+            p["extra"] = extra
+        reporte["pasos"].append(p)
+
+    # ── PASO 1: Verificar que el SKU existe ──
+    try:
+        productos = cargar_productos()
+        prod = next((p for p in productos if p["sku"] == sku), None)
+        if not prod:
+            paso("1. Verificar SKU", "❌ ERROR", f"SKU '{sku}' no existe en inventario")
+            return jsonify(reporte)
+        stock_actual = prod.get("stock", 0)
+        paso("1. Verificar SKU", "✅ OK",
+             f"Producto encontrado: {prod['nombre']}",
+             {"stock_central": stock_actual, "nombre": prod["nombre"]})
+    except Exception as e:
+        paso("1. Verificar SKU", "❌ ERROR", str(e))
+        return jsonify(reporte)
+
+    # ── PASO 2: Verificar stock disponible ──
+    if stock_actual <= 0:
+        paso("2. Stock disponible", "⚠️ ADVERTENCIA",
+             f"Stock en 0 — la venta se registraría pero no descontaría nada")
+    else:
+        paso("2. Stock disponible", "✅ OK",
+             f"Stock Central = {stock_actual} unidades — suficiente para vender")
+
+    # ── PASO 3: Verificar mapeo de canales ──
+    try:
+        from inventario import obtener_publicaciones_canal
+        canales_a_verificar = ["mercadolibre", "falabella", "walmart", "paris", "ripley", "web"]
+        mapeos = {}
+        for c in canales_a_verificar:
+            pubs = obtener_publicaciones_canal(sku, c) or []
+            mapeos[c] = {
+                "publicaciones": len(pubs),
+                "detalle": [{"sku_canal": p.get("sku_canal"), "item_id": p.get("item_id_canal")} for p in pubs[:3]]
+            }
+        paso("3. Mapeo de publicaciones", "✅ OK",
+             "Publicaciones encontradas por canal", mapeos)
+    except Exception as e:
+        paso("3. Mapeo de publicaciones", "❌ ERROR", str(e))
+
+    # ── PASO 4: Simular/ejecutar descuento de stock ──
+    if simular:
+        stock_resultante = max(0, stock_actual - 1)
+        paso("4. Descuento de stock", "✅ SIMULADO",
+             f"Stock Central {stock_actual} → {stock_resultante} (−1 unidad)",
+             {"stock_antes": stock_actual, "stock_despues": stock_resultante,
+              "bodega": "CENTRAL", "nota": "No se ejecutó — modo simulación"})
+    else:
+        try:
+            from bodegas_logic import descontar_venta
+            resultado = descontar_venta(
+                sku=sku, cantidad=1, canal=canal,
+                fulfillment=False,
+                orden_id=f"TEST-{__import__('datetime').datetime.now().strftime('%Y%m%d%H%M%S')}",
+                motivo=f"Test flujo venta — canal {canal}",
+                usuario="Sistema (Test)",
+                origen_registro="test"
+            )
+            stock_resultante = resultado.get("stock_despues", stock_actual - 1)
+            paso("4. Descuento de stock", "✅ EJECUTADO",
+                 f"Stock {stock_actual} → {stock_resultante}",
+                 resultado)
+        except Exception as e:
+            paso("4. Descuento de stock", "❌ ERROR", str(e))
+            stock_resultante = stock_actual - 1
+
+    # ── PASO 5: Testear sync a cada canal (siempre en modo dry-run real) ──
+    # Llamamos a cada función de actualización pero capturamos resultado sin afectar nada
+    # en simulación, o ejecutamos real si simular=False
+    try:
+        from mercadolibre import actualizar_stock_meli
+        from falabella import actualizar_stock_falabella_lusync
+        from walmart import actualizar_stock_walmart_lusync
+        from paris import actualizar_stock_paris
+        from ripley import actualizar_stock_ripley
+        from woo import actualizar_stock_woo
+
+        canales_sync = [
+            ("MercadoLibre", actualizar_stock_meli),
+            ("Falabella",    actualizar_stock_falabella_lusync),
+            ("Walmart",      actualizar_stock_walmart_lusync),
+            ("Paris",        actualizar_stock_paris),
+            ("Ripley",       actualizar_stock_ripley),
+            ("Web/Woo",      actualizar_stock_woo),
+        ]
+
+        sync_resultados = {}
+        for nombre, fn in canales_sync:
+            if simular:
+                # En simulación: verificar si tiene publicaciones mapeadas
+                c_key = nombre.lower().replace("/woo","").replace("web","woocommerce").strip()
+                pubs = mapeos.get(c_key, {}).get("publicaciones", 0) if 'mapeos' in dir() else 0
+                if pubs > 0:
+                    sync_resultados[nombre] = f"✅ LISTO para sync ({pubs} publicación/es mapeada/s)"
+                else:
+                    sync_resultados[nombre] = "⚠️ Sin publicaciones mapeadas — no se sincronizaría"
+            else:
+                try:
+                    r = fn(sku, stock_resultante)
+                    if isinstance(r, dict):
+                        ok = r.get("exitosas", 0) > 0 or r.get("ok")
+                        sync_resultados[nombre] = f"{'✅' if ok else '❌'} {r}"
+                    else:
+                        sync_resultados[nombre] = f"{'✅' if r else '❌'} resultado={r}"
+                except Exception as e:
+                    sync_resultados[nombre] = f"❌ Error: {str(e)[:100]}"
+
+        paso("5. Sincronización a canales", "✅ OK" if simular else "✅ EJECUTADO",
+             "Resultado por canal" if not simular else "Diagnóstico de publicaciones mapeadas",
+             sync_resultados)
+    except Exception as e:
+        paso("5. Sincronización a canales", "❌ ERROR", str(e))
+
+    # ── RESUMEN ──
+    errores = [p for p in reporte["pasos"] if "❌" in p["estado"]]
+    advertencias = [p for p in reporte["pasos"] if "⚠️" in p["estado"]]
+    reporte["resumen"] = {
+        "resultado": "❌ HAY ERRORES" if errores else ("⚠️ HAY ADVERTENCIAS" if advertencias else "✅ FLUJO OK"),
+        "errores": len(errores),
+        "advertencias": len(advertencias),
+        "conclusion": (
+            "El flujo tiene errores que impedirían la sincronización correcta" if errores
+            else "El flujo funcionaría correctamente — la venta se descontaría y sincronizaría a todos los canales con publicaciones mapeadas" if not advertencias
+            else "El flujo funciona pero algunos canales no se sincronizarían por falta de mapeo"
+        )
+    }
+
+    return jsonify(reporte)
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
