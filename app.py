@@ -11914,5 +11914,144 @@ def admin_validar_meli():
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
+
+@app.route("/admin/importar_csv_walmart", methods=["POST"])
+def admin_importar_csv_walmart():
+    """
+    Importa CSV de Walmart Chile (Mis productos → Exportar).
+    Columnas: Imagen, Nombre del producto, SKU, Estado, Price, Inventario, Categoría, Item ID
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    ejecutar = request.args.get("ejecutar", "0") == "1"
+
+    if "archivo" not in request.files:
+        return jsonify({"error": "Envía el CSV con campo 'archivo'"}), 400
+
+    try:
+        import csv, io, json
+        from inventario import get_conn, agregar_publicacion, cargar_productos
+
+        archivo = request.files["archivo"]
+        contenido = archivo.read().decode("utf-8-sig")
+        alias_map = json.loads(request.form.get("alias_map", "{}"))
+
+        reader = csv.DictReader(io.StringIO(contenido))
+        filas = list(reader)
+
+        # Cargar SKUs Lusync
+        productos = cargar_productos()
+        sku_real = {p["sku"].upper().strip(): p["sku"] for p in productos}
+        lista_skus_lusync = sorted(sku_real.values())
+
+        # Cargar mapeos ya existentes en Walmart
+        mapeados_existentes = {}
+        try:
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT sku_canal, sku_lusync, item_id_canal
+                FROM sku_mapeo_canal WHERE canal='walmart' AND activo=TRUE
+            """)
+            for (sc, sl, iid) in cur.fetchall():
+                if sc: mapeados_existentes[sc.upper().strip()] = {"sku_lusync": sl, "item_id": iid}
+                if sl: sku_real[sl.upper().strip()] = sl
+            # Alias de sku_mapeo legacy
+            try:
+                cur.execute("SELECT sku_lusync, sku_walmart FROM sku_mapeo WHERE sku_walmart IS NOT NULL AND sku_walmart != ''")
+                for (sl, sc) in cur.fetchall():
+                    if sc: mapeados_existentes[sc.upper().strip()] = {"sku_lusync": sl, "item_id": None}
+            except Exception:
+                pass
+            cur.close()
+            conn.close()
+        except Exception:
+            pass
+
+        automaticos    = []
+        requieren_alias = []
+        no_en_lusync   = []
+        ya_mapeados    = []
+        skus_vistos    = set()
+
+        for fila in filas:
+            sku_wm  = (fila.get("SKU") or "").strip()
+            titulo  = (fila.get("Nombre del producto") or "").strip()
+            item_id = (fila.get("Item ID") or "").strip()
+            stock   = int(fila.get("Inventario") or 0)
+            estado  = (fila.get("Estado") or "").strip()
+
+            if not sku_wm:
+                continue
+            if sku_wm.upper() in skus_vistos:
+                continue
+            skus_vistos.add(sku_wm.upper())
+
+            entry = {"sku_canal": sku_wm, "titulo": titulo, "item_id": item_id,
+                     "stock": stock, "estado": estado}
+
+            # ¿Ya mapeado?
+            existente = mapeados_existentes.get(sku_wm.upper())
+            if existente:
+                ya_mapeados.append({**entry, "sku_lusync": existente.get("sku_lusync", sku_wm)})
+                continue
+
+            # ¿Coincide exacto?
+            sku_lusync_exacto = sku_real.get(sku_wm.upper())
+            if sku_lusync_exacto:
+                automaticos.append({**entry, "sku_lusync": sku_lusync_exacto})
+                continue
+
+            # ¿Tiene alias manual?
+            alias_key = sku_wm + "+" + item_id
+            if alias_key in alias_map and alias_map[alias_key]:
+                automaticos.append({**entry, "sku_lusync": alias_map[alias_key], "via_alias": True})
+                continue
+
+            # Requiere alias
+            requieren_alias.append({**entry, "sku_lusync_sugerido": ""})
+
+        # Ejecutar
+        guardados = 0
+        errores = []
+        if ejecutar:
+            for m in automaticos:
+                try:
+                    agregar_publicacion(
+                        sku_lusync=m["sku_lusync"],
+                        canal="walmart",
+                        sku_canal=m["sku_canal"],
+                        item_id_canal=m.get("item_id") or None,
+                        notas="importado_csv_walmart"
+                    )
+                    guardados += 1
+                except Exception as e:
+                    errores.append(f"{m['sku_canal']}: {str(e)}")
+
+        return jsonify({
+            "canal": "Walmart",
+            "automaticos":       automaticos,
+            "requieren_alias":   requieren_alias,
+            "no_en_lusync":      no_en_lusync,
+            "ya_mapeados":       ya_mapeados,
+            "skus_lusync_disponibles": lista_skus_lusync,
+            "stats": {
+                "total": len(automaticos) + len(requieren_alias) + len(no_en_lusync) + len(ya_mapeados),
+                "automaticos":     len(automaticos),
+                "requieren_alias": len(requieren_alias),
+                "no_en_lusync":    len(no_en_lusync),
+                "ya_mapeados":     len(ya_mapeados),
+                "nuevos_mapeados": guardados,
+                "errores":         len(errores),
+            },
+            "modo": "ejecutado" if ejecutar else "simulacion",
+            "errores": errores
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

@@ -2015,6 +2015,12 @@ tbody td {
         <button onclick="abrirImportadorMeli()" style="padding:7px 14px;border:none;background:linear-gradient(135deg,#FFE000,#FFA500);color:#5a3800;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:700;box-shadow:0 2px 8px rgba(255,160,0,0.3);">
           📥 Importar Excel MercadoLibre
         </button>
+        <button onclick="abrirImportadorCanal('walmart')" style="padding:7px 14px;border:none;background:linear-gradient(135deg,#0071CE,#004F9A);color:white;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:700;box-shadow:0 2px 8px rgba(0,113,206,0.3);">
+          📥 Importar CSV Walmart
+        </button>
+        <button onclick="abrirImportadorCanal('ripley')" style="padding:7px 14px;border:none;background:linear-gradient(135deg,#cc0000,#990000);color:white;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:700;box-shadow:0 2px 8px rgba(204,0,0,0.3);">
+          📥 Importar CSV Ripley
+        </button>
         <select id="selPlataformaWeb" onchange="cambiarPlataformaWeb()" style="padding:7px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg);color:var(--text);">
           <option value="WooCommerce">WooCommerce</option>
           <option value="Shopify">Shopify</option>
@@ -2540,6 +2546,97 @@ tbody td {
       </div>
       <div class="header-actions">
         <button class="btn-secondary" onclick="cargarCanales()">↻ Refrescar</button>
+      </div>
+    </div>
+
+    <!-- ══ MODAL IMPORTADOR CANAL GENÉRICO (Walmart, Ripley, etc.) ══ -->
+    <div id="modalImportadorCanal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
+      <div style="background:var(--bg);border-radius:20px;width:720px;max-width:95vw;max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,0.4);border:0.5px solid var(--border);">
+        <div style="padding:24px 28px 0;flex-shrink:0;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <div id="canalIcono" style="width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;">📥</div>
+              <div>
+                <div id="canalTitulo" style="font-size:16px;font-weight:700;color:var(--text);">Importar publicaciones</div>
+                <div id="canalSubtitulo" style="font-size:12px;color:var(--muted);margin-top:1px;">Sube el archivo exportado del marketplace</div>
+              </div>
+            </div>
+            <button onclick="cerrarImportadorCanal()" style="width:32px;height:32px;border-radius:8px;border:0.5px solid var(--border);background:var(--bg2);cursor:pointer;font-size:16px;color:var(--muted);display:flex;align-items:center;justify-content:center;">×</button>
+          </div>
+          <!-- Stepper -->
+          <div style="display:flex;align-items:center;gap:0;margin-bottom:24px;">
+            <div class="meli-step active" id="canalStep1"><div class="meli-step-circle">1</div><div class="meli-step-label">Subir archivo</div></div>
+            <div class="meli-step-line"></div>
+            <div class="meli-step" id="canalStep2"><div class="meli-step-circle">2</div><div class="meli-step-label">Revisar mapeos</div></div>
+            <div class="meli-step-line"></div>
+            <div class="meli-step" id="canalStep3"><div class="meli-step-circle">3</div><div class="meli-step-label">Confirmar</div></div>
+          </div>
+        </div>
+
+        <div style="flex:1;overflow-y:auto;padding:0 28px 28px;min-height:0;">
+          <!-- PASO 1 -->
+          <div id="canalPaso1">
+            <label id="canalDropZone" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;border:2px dashed var(--border);border-radius:14px;padding:48px 24px;cursor:pointer;background:var(--bg2);"
+              ondragover="event.preventDefault();"
+              ondrop="event.preventDefault();canalHandleDrop(event);">
+              <div style="font-size:36px;">📄</div>
+              <div style="font-size:14px;font-weight:600;color:var(--text);">Arrastra tu archivo aquí</div>
+              <div style="font-size:12px;color:var(--muted);">o haz clic para seleccionar</div>
+              <div id="canalFileHint" style="font-size:11px;color:var(--hint);background:var(--bg);padding:4px 10px;border-radius:6px;border:0.5px solid var(--border);">.csv</div>
+              <input type="file" id="canalFileInput" accept=".csv,.xlsx" onchange="canalProcessFile(this.files[0])" style="display:none;">
+            </label>
+          </div>
+
+          <!-- PASO 2 -->
+          <div id="canalPaso2" style="display:none;">
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px;">
+              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #d1fae5;">
+                <div style="font-size:26px;font-weight:700;color:#059669;" id="canalStatAuto">—</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">✅ Nuevos automáticos</div>
+              </div>
+              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #dbeafe;">
+                <div style="font-size:26px;font-weight:700;color:#2563eb;" id="canalStatYa">—</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">☑️ Ya mapeados</div>
+              </div>
+              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #fef3c7;">
+                <div style="font-size:26px;font-weight:700;color:#d97706;" id="canalStatAlias">—</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">🔗 Requieren alias</div>
+              </div>
+              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #fee2e2;">
+                <div style="font-size:26px;font-weight:700;color:#dc2626;" id="canalStatNuevo">—</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">➕ No en Lusync</div>
+              </div>
+            </div>
+            <div style="display:flex;gap:4px;margin-bottom:14px;background:var(--bg2);padding:4px;border-radius:10px;">
+              <button class="meli-tab active" id="canalTabAuto" onclick="canalSwitchTab('auto')">✅ Nuevos <span id="canalTabAutoBadge" style="background:#059669;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+              <button class="meli-tab" id="canalTabYa" onclick="canalSwitchTab('ya')">☑️ Ya mapeados <span id="canalTabYaBadge" style="background:#2563eb;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+              <button class="meli-tab" id="canalTabAlias" onclick="canalSwitchTab('alias')">🔗 Alias <span id="canalTabAliasBadge" style="background:#d97706;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+              <button class="meli-tab" id="canalTabNuevo" onclick="canalSwitchTab('nuevo')">➕ Nuevos <span id="canalTabNuevoBadge" style="background:#dc2626;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+            </div>
+            <div id="canalTabContentAuto"><div id="canalListaAuto" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div></div>
+            <div id="canalTabContentYa" style="display:none;"><div id="canalListaYa" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div></div>
+            <div id="canalTabContentAlias" style="display:none;"><div id="canalListaAlias" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div></div>
+            <div id="canalTabContentNuevo" style="display:none;"><div id="canalListaNuevo" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div></div>
+            <div style="margin-top:20px;display:flex;justify-content:flex-end;">
+              <button onclick="canalIrPaso3()" style="padding:11px 28px;background:linear-gradient(135deg,#059669,#047857);color:white;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;">Continuar → Confirmar mapeos</button>
+            </div>
+          </div>
+
+          <!-- PASO 3 -->
+          <div id="canalPaso3" style="display:none;">
+            <div id="canalResumenFinal" style="background:var(--bg2);border-radius:12px;padding:20px;margin-bottom:20px;border:0.5px solid var(--border);"></div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+              <button onclick="canalIrPaso(2)" style="padding:11px 20px;background:var(--bg2);color:var(--text);border:0.5px solid var(--border);border-radius:10px;font-size:13px;cursor:pointer;">← Volver</button>
+              <button onclick="canalConfirmar()" style="padding:11px 28px;background:linear-gradient(135deg,#059669,#047857);color:white;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;">✅ Guardar mapeos</button>
+            </div>
+          </div>
+
+          <!-- Procesando -->
+          <div id="canalProcesando" style="display:none;text-align:center;padding:40px;">
+            <div style="font-size:32px;margin-bottom:12px;">⏳</div>
+            <div style="font-size:14px;color:var(--text);font-weight:600;" id="canalProcesandoMsg">Analizando archivo…</div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -8803,6 +8900,258 @@ async function meliConfirmar() {
     alert('Error al guardar: ' + e.message);
     meliIrPaso(3);
   }
+}
+
+
+// ══════════════════════════════════════════════════════════════════════
+// IMPORTADOR CANAL GENÉRICO (Walmart, Ripley, etc.)
+// ══════════════════════════════════════════════════════════════════════
+let _canalActual    = null;
+let _canalData      = null;
+let _canalArchivo   = null;
+let _canalAliasMap  = {};
+
+const _canalConfig = {
+  walmart: {
+    titulo:    "Importar publicaciones de Walmart",
+    subtitulo: "Portal Walmart → Mis productos → Exportar CSV",
+    icono:     "🔵",
+    iconoBg:   "linear-gradient(135deg,#0071CE,#004F9A)",
+    endpoint:  "/admin/importar_csv_walmart",
+    fileHint:  "items_list.csv",
+    accept:    ".csv"
+  },
+  ripley: {
+    titulo:    "Importar publicaciones de Ripley",
+    subtitulo: "Portal Ripley → Catálogo → Exportar",
+    icono:     "🔴",
+    iconoBg:   "linear-gradient(135deg,#cc0000,#990000)",
+    endpoint:  "/admin/importar_csv_ripley",
+    fileHint:  "ripley_catalog.csv",
+    accept:    ".csv,.xlsx"
+  }
+};
+
+function abrirImportadorCanal(canal) {
+  _canalActual   = canal;
+  _canalData     = null;
+  _canalArchivo  = null;
+  _canalAliasMap = {};
+  const cfg = _canalConfig[canal] || {};
+  document.getElementById('canalTitulo').textContent    = cfg.titulo    || 'Importar publicaciones';
+  document.getElementById('canalSubtitulo').textContent = cfg.subtitulo || '';
+  document.getElementById('canalIcono').style.background = cfg.iconoBg  || '#333';
+  document.getElementById('canalIcono').textContent      = cfg.icono    || '📥';
+  document.getElementById('canalFileHint').textContent   = cfg.fileHint || '.csv';
+  document.getElementById('canalFileInput').accept       = cfg.accept   || '.csv';
+  document.getElementById('modalImportadorCanal').style.display = 'flex';
+  canalIrPaso(1);
+}
+
+function cerrarImportadorCanal() {
+  document.getElementById('modalImportadorCanal').style.display = 'none';
+}
+
+function canalHandleDrop(e) {
+  const file = e.dataTransfer.files[0];
+  if (file) canalProcessFile(file);
+}
+
+function canalIrPaso(n) {
+  ['1','2','3'].forEach(i => {
+    document.getElementById('canalPaso' + i).style.display = i == n ? 'block' : 'none';
+  });
+  document.getElementById('canalProcesando').style.display = 'none';
+  [1,2,3].forEach(i => {
+    const el = document.getElementById('canalStep' + i);
+    el.className = 'meli-step' + (i < n ? ' done' : i === n ? ' active' : '');
+  });
+}
+
+async function canalProcessFile(file) {
+  if (!file) return;
+  _canalArchivo = file;
+  document.getElementById('canalPaso1').style.display = 'none';
+  document.getElementById('canalProcesando').style.display = 'block';
+  document.getElementById('canalProcesandoMsg').textContent = 'Analizando ' + file.name + '…';
+
+  const cfg = _canalConfig[_canalActual] || {};
+  const fd = new FormData();
+  fd.append('archivo', file);
+
+  try {
+    const r = await fetch(cfg.endpoint, { method: 'POST', body: fd });
+    const data = await r.json();
+    if (data.error) {
+      document.getElementById('canalProcesando').style.display = 'none';
+      document.getElementById('canalPaso1').style.display = 'block';
+      alert('Error: ' + data.error);
+      return;
+    }
+    _canalData = data;
+    canalRenderPaso2(data);
+    canalIrPaso(2);
+  } catch(e) {
+    document.getElementById('canalProcesando').style.display = 'none';
+    document.getElementById('canalPaso1').style.display = 'block';
+    alert('Error de conexión: ' + e.message);
+  }
+}
+
+function canalRenderPaso2(data) {
+  const auto      = data.automaticos    || [];
+  const alias     = data.requieren_alias || [];
+  const nuevos    = data.no_en_lusync   || [];
+  const ya        = data.ya_mapeados    || [];
+
+  document.getElementById('canalStatAuto').textContent  = auto.length;
+  document.getElementById('canalStatYa').textContent    = ya.length;
+  document.getElementById('canalStatAlias').textContent = alias.length;
+  document.getElementById('canalStatNuevo').textContent = nuevos.length;
+  document.getElementById('canalTabAutoBadge').textContent  = auto.length;
+  document.getElementById('canalTabYaBadge').textContent    = ya.length;
+  document.getElementById('canalTabAliasBadge').textContent = alias.length;
+  document.getElementById('canalTabNuevoBadge').textContent = nuevos.length;
+
+  // Automáticos
+  document.getElementById('canalListaAuto').innerHTML = auto.length === 0
+    ? '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">Ninguno — todos ya estaban mapeados ✅</div>'
+    : auto.map(m => `<div class="meli-row">
+        <span class="meli-sku-tag">${m.sku_canal}</span>
+        <span class="meli-arrow">→</span>
+        <span class="meli-sku-tag" style="border-color:#059669;color:#059669;">${m.sku_lusync}</span>
+        <span style="flex:1;color:var(--muted);font-size:11px;">${m.titulo||''}</span>
+        <span style="font-size:10px;color:var(--hint);">stock:${m.stock||0}</span>
+      </div>`).join('');
+
+  // Ya mapeados
+  document.getElementById('canalListaYa').innerHTML = ya.length === 0
+    ? '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">Ninguno</div>'
+    : ya.map(m => `<div class="meli-row" style="opacity:0.7;">
+        <span class="meli-sku-tag" style="border-color:#2563eb;color:#2563eb;">${m.sku_canal}</span>
+        <span class="meli-arrow">→</span>
+        <span class="meli-sku-tag" style="border-color:#2563eb;color:#2563eb;">${m.sku_lusync}</span>
+        <span style="flex:1;color:var(--muted);font-size:11px;">${m.titulo||''}</span>
+        <span style="font-size:10px;color:#059669;">☑️ OK</span>
+      </div>`).join('');
+
+  // Alias
+  _canalAliasMap = {};
+  document.getElementById('canalListaAlias').innerHTML = alias.length === 0
+    ? '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">Ninguno ✅</div>'
+    : alias.map((m, i) => {
+        const boxId = 'canalAliasBox_' + i;
+        return `<div class="meli-row">
+          <span class="meli-sku-tag" style="border-color:#d97706;color:#d97706;flex-shrink:0;">${m.sku_canal}</span>
+          <span class="meli-arrow" style="flex-shrink:0;">→</span>
+          <div class="meli-searchable" id="${boxId}" style="position:relative;flex-shrink:0;width:200px;">
+            <input type="text" placeholder="Buscar SKU Lusync..." autocomplete="off"
+              onfocus="canalOpenDD('${boxId}')"
+              oninput="canalFilterDD('${boxId}',this.value,'${m.sku_canal}','${m.item_id||''}')"
+              onblur="setTimeout(()=>canalCloseDD('${boxId}'),200)"
+              style="width:100%;padding:5px 10px;border:0.5px solid #d97706;border-radius:7px;font-size:11px;background:var(--bg);color:var(--text);font-family:monospace;box-sizing:border-box;outline:none;">
+            <div id="${boxId}_list" style="display:none;position:absolute;top:calc(100% + 3px);left:0;right:0;background:var(--bg);border:0.5px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.15);z-index:999;max-height:180px;overflow-y:auto;">
+              <div class="meli-dd-item" data-value="" onclick="canalSelectAlias('${boxId}','','${m.sku_canal}','${m.item_id||''}')" style="padding:6px 10px;font-size:11px;color:var(--muted);cursor:pointer;font-style:italic;">-- Ignorar --</div>
+              ${(data.skus_lusync_disponibles||[]).map(s=>`<div class="meli-dd-item" data-value="${s}" onclick="canalSelectAlias('${boxId}','${s}','${m.sku_canal}','${m.item_id||''}')" style="padding:6px 10px;font-size:11px;font-family:monospace;color:var(--text);cursor:pointer;">${s}</div>`).join('')}
+            </div>
+          </div>
+          <span style="font-size:11px;color:var(--muted);flex:1;margin-left:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${m.titulo||''}</span>
+        </div>`;
+      }).join('');
+
+  // No en Lusync
+  document.getElementById('canalListaNuevo').innerHTML = nuevos.length === 0
+    ? '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">Ninguno</div>'
+    : nuevos.map(m => `<div class="meli-row">
+        <span class="meli-sku-tag" style="border-color:#dc2626;color:#dc2626;">${m.sku_canal}</span>
+        <span style="flex:1;color:var(--muted);font-size:11px;">${m.titulo||''}</span>
+        <span style="font-size:10px;color:var(--hint);font-style:italic;">No existe en Lusync</span>
+      </div>`).join('');
+
+  canalSwitchTab('auto');
+}
+
+function canalSwitchTab(tab) {
+  ['auto','ya','alias','nuevo'].forEach(t => {
+    document.getElementById('canalTab' + t.charAt(0).toUpperCase() + t.slice(1)).className = 'meli-tab' + (t === tab ? ' active' : '');
+    document.getElementById('canalTabContent' + t.charAt(0).toUpperCase() + t.slice(1)).style.display = t === tab ? 'block' : 'none';
+  });
+}
+
+function canalIrPaso3() {
+  const auto  = (_canalData.automaticos||[]).length;
+  const alias = Object.values(_canalAliasMap).filter(v=>v).length;
+  document.getElementById('canalResumenFinal').innerHTML = `
+    <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:16px;">Resumen de mapeos a guardar</div>
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--bg);border-radius:8px;">
+        <span style="font-size:13px;">✅ Mapeos automáticos</span><span style="font-size:16px;font-weight:700;color:#059669;">${auto}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--bg);border-radius:8px;">
+        <span style="font-size:13px;">🔗 Aliases definidos</span><span style="font-size:16px;font-weight:700;color:#d97706;">${alias}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 14px;background:linear-gradient(135deg,rgba(5,150,105,.1),rgba(4,120,87,.05));border-radius:8px;border:0.5px solid #d1fae5;">
+        <span style="font-size:14px;font-weight:600;">Total a guardar</span><span style="font-size:20px;font-weight:700;color:#059669;">${auto+alias}</span>
+      </div>
+    </div>`;
+  canalIrPaso(3);
+}
+
+async function canalConfirmar() {
+  const cfg = _canalConfig[_canalActual] || {};
+  document.getElementById('canalPaso3').style.display = 'none';
+  document.getElementById('canalProcesando').style.display = 'block';
+  document.getElementById('canalProcesandoMsg').textContent = 'Guardando mapeos…';
+
+  const fd = new FormData();
+  fd.append('archivo', _canalArchivo);
+  fd.append('alias_map', JSON.stringify(_canalAliasMap));
+
+  try {
+    const r = await fetch(cfg.endpoint + '?ejecutar=1', { method: 'POST', body: fd });
+    const data = await r.json();
+    document.getElementById('canalProcesando').style.display = 'none';
+    document.getElementById('canalPaso3').style.display = 'block';
+    const guardados = (data.stats||{}).nuevos_mapeados || 0;
+    document.getElementById('canalResumenFinal').innerHTML = `
+      <div style="text-align:center;padding:20px;">
+        <div style="font-size:40px;margin-bottom:12px;">✅</div>
+        <div style="font-size:18px;font-weight:700;color:#059669;margin-bottom:6px;">${guardados} mapeos guardados</div>
+        <div style="font-size:13px;color:var(--muted);">Canal ${data.canal||_canalActual} sincronizado correctamente</div>
+      </div>`;
+    document.querySelector('#canalPaso3 div[style*="justify-content:flex-end"]').innerHTML =
+      '<button onclick="cerrarImportadorCanal()" style="padding:11px 28px;background:var(--text);color:var(--bg);border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;">Listo →</button>';
+    [1,2,3].forEach(i => document.getElementById('canalStep'+i).className='meli-step done');
+  } catch(e) {
+    alert('Error: ' + e.message);
+    canalIrPaso(3);
+  }
+}
+
+// Dropdown searchable canal
+function canalOpenDD(id) { document.getElementById(id+'_list').style.display='block'; }
+function canalCloseDD(id) { document.getElementById(id+'_list').style.display='none'; }
+function canalFilterDD(id, query, skuCanal, itemId) {
+  const list = document.getElementById(id+'_list');
+  if (!list) return;
+  list.style.display = 'block';
+  const q = query.toLowerCase().trim();
+  let visibles = [];
+  Array.from(list.querySelectorAll('.meli-dd-item')).forEach(el => {
+    const val = el.dataset.value || '';
+    if (!val) { el.style.display=''; return; }
+    const show = !q || val.toLowerCase().includes(q);
+    el.style.display = show ? '' : 'none';
+    if (show) visibles.push(val);
+  });
+  if (visibles.length === 1) canalSelectAlias(id, visibles[0], skuCanal, itemId);
+  else { const k=skuCanal+'+'+itemId; if(!visibles.includes(_canalAliasMap[k])) _canalAliasMap[k]=''; }
+}
+function canalSelectAlias(id, value, skuCanal, itemId) {
+  const inp = document.querySelector('#'+id+' input');
+  if (inp) { inp.value=value||''; inp.style.borderColor=value?'#059669':'#d97706'; }
+  _canalAliasMap[skuCanal+'+'+itemId] = value;
+  canalCloseDD(id);
 }
 
 // ─── (Importar Excel MELI movido a módulo Mapeo SKUs) ───────────────────────
