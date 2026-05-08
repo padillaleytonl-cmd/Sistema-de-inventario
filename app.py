@@ -11655,29 +11655,34 @@ def admin_importar_excel_meli():
         lista_skus_lusync = sorted(sku_real.values())
 
         # ── Cargar mapeos ya existentes en MELI ──
-        # Fuente 1: publicaciones_canal (mapeos directos por item_id)
-        # Fuente 2: sku_mapeo (mapeos por alias sku_mercadolibre)
+        # Consulta sku_mapeo_canal (tabla principal multi-pub) + sku_mapeo (alias legacy)
         mapeados_existentes = {}  # sku_canal.upper → {sku_lusync, item_id}
         try:
             conn = get_conn()
             cur = conn.cursor()
 
-            # Desde publicaciones_canal
-            cur.execute("SELECT sku_canal, sku_lusync, item_id_canal FROM publicaciones_canal WHERE canal='mercadolibre'")
+            # Tabla principal: sku_mapeo_canal
+            cur.execute("""
+                SELECT sku_canal, sku_lusync, item_id_canal 
+                FROM sku_mapeo_canal 
+                WHERE canal='mercadolibre' AND activo=TRUE
+            """)
             for (sc, sl, iid) in cur.fetchall():
                 if sc:
                     mapeados_existentes[sc.upper().strip()] = {"sku_lusync": sl, "item_id": iid}
                 if sl:
                     sku_real[sl.upper().strip()] = sl
 
-            # Desde sku_mapeo (aliases guardados manualmente)
-            cur.execute("SELECT sku_lusync, sku_mercadolibre FROM sku_mapeo WHERE sku_mercadolibre IS NOT NULL AND sku_mercadolibre != ''")
-            for (sl, sc_meli) in cur.fetchall():
-                if sc_meli:
-                    # El sku_mercadolibre en sku_mapeo puede ser un alias (ej: RHR2022)
-                    mapeados_existentes[sc_meli.upper().strip()] = {"sku_lusync": sl, "item_id": None}
-                if sl:
-                    sku_real[sl.upper().strip()] = sl
+            # Tabla legacy: sku_mapeo (aliases manuales por sku_mercadolibre)
+            try:
+                cur.execute("SELECT sku_lusync, sku_mercadolibre FROM sku_mapeo WHERE sku_mercadolibre IS NOT NULL AND sku_mercadolibre != ''")
+                for (sl, sc_meli) in cur.fetchall():
+                    if sc_meli:
+                        mapeados_existentes[sc_meli.upper().strip()] = {"sku_lusync": sl, "item_id": None}
+                    if sl:
+                        sku_real[sl.upper().strip()] = sl
+            except Exception:
+                pass
 
             cur.close()
             conn.close()
