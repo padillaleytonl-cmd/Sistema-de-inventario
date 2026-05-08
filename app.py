@@ -12598,5 +12598,42 @@ def config_tipificaciones_eliminar():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
+
+@app.route("/admin/test_sync_sku")
+def admin_test_sync_sku():
+    """Debug: prueba el sync de un SKU a todos los canales y devuelve el resultado completo."""
+    if not session.get("logged"):
+        bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+        if request.args.get("token") != bypass_token:
+            return jsonify({"error": "no autorizado"}), 401
+    sku = request.args.get("sku", "").strip()
+    if not sku:
+        return jsonify({"error": "Pasa ?sku=XXX"}), 400
+    try:
+        from inventario import get_conn
+        # Stock total
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("SELECT COALESCE(SUM(cantidad),0) FROM stock_bodegas WHERE sku=%s", (sku,))
+        stock = int(cur.fetchone()[0] or 0)
+        # Mapeos por canal
+        cur.execute("""
+            SELECT canal, sku_canal, item_id_canal 
+            FROM sku_mapeo_canal 
+            WHERE sku_lusync=%s AND activo=TRUE
+        """, (sku,))
+        mapeos = [{"canal": r[0], "sku_canal": r[1], "item_id": r[2]} for r in cur.fetchall()]
+        cur.close(); conn.close()
+        # Ejecutar sync directamente (NO en background)
+        resultado = sincronizar_stock_marketplaces(sku, stock, contexto="test_manual")
+        return jsonify({
+            "sku": sku,
+            "stock_total_lusync": stock,
+            "mapeos_existentes": mapeos,
+            "resultado_sync": resultado
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
