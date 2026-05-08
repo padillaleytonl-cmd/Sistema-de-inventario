@@ -11822,7 +11822,10 @@ def admin_validar_meli():
         from mercadolibre import obtener_publicaciones_meli
 
         # 1. Obtener publicaciones de MELI
-        pubs_meli = obtener_publicaciones_meli()
+        resultado_meli = obtener_publicaciones_meli()
+        if not resultado_meli:
+            return jsonify({"error": "No se pudo conectar con MercadoLibre"}), 500
+        pubs_meli = resultado_meli.get("items", [])
 
         # 2. Cargar mapeos existentes en sku_mapeo_canal
         conn = get_conn()
@@ -11852,11 +11855,12 @@ def admin_validar_meli():
         sin_sku_en_meli = []
 
         for pub in pubs_meli:
-            item_id  = pub.get("item_id") or pub.get("id") or ""
-            sku_meli = (pub.get("sku_seller") or pub.get("sku") or "").strip()
-            titulo   = pub.get("title") or pub.get("nombre") or ""
-            status   = pub.get("status", "")
-            stock    = pub.get("stock", 0) or 0
+            item_id  = str(pub.get("item_id") or "").strip()
+            sku_meli = str(pub.get("sku_seller") or "").strip()
+            titulo   = str(pub.get("title") or "").strip()
+            status   = str(pub.get("status") or "")
+            stock    = int(pub.get("stock") or 0)
+            variantes_skus = pub.get("variantes_skus") or []
 
             entry = {
                 "item_id": item_id,
@@ -11866,8 +11870,10 @@ def admin_validar_meli():
                 "stock": stock
             }
 
-            # Buscar mapeo por sku_canal o por item_id
-            mapeo = mapeos.get(sku_meli.upper()) or mapeos.get(item_id.upper())
+            # Buscar mapeo por sku_meli, por item_id, o por cualquier variante
+            mapeo = (mapeos.get(sku_meli.upper()) or 
+                     mapeos.get(item_id.upper()) or
+                     next((mapeos.get(v.upper()) for v in variantes_skus if mapeos.get(v.upper())), None))
             if mapeo:
                 entry["sku_lusync"] = mapeo.get("sku_lusync")
                 mapeadas.append(entry)
