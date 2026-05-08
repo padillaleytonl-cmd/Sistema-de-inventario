@@ -2116,7 +2116,7 @@ tbody td {
             </div>
             <div id="meliTabContentAlias" style="display:none;">
               <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Estos SKUs existen en MercadoLibre con un nombre diferente al de Lusync. Selecciona el SKU Lusync equivalente.</div>
-              <div id="meliListaAlias" style="max-height:280px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;overflow:hidden;"></div>
+              <div id="meliListaAlias" style="max-height:340px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div>
             </div>
             <div id="meliTabContentNuevo" style="display:none;">
               <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Estos SKUs no existen en Lusync. No se mapearán — agrégalos primero en Inventario si corresponde.</div>
@@ -2165,6 +2165,9 @@ tbody td {
     .meli-row:hover { background:var(--bg2); }
     .meli-sku-tag { font-family:monospace;font-size:11px;background:var(--bg2);padding:2px 8px;border-radius:5px;border:0.5px solid var(--border);color:var(--text); }
     .meli-arrow { color:var(--muted);font-size:14px; }
+    .meli-dd-item:hover { background:var(--bg2); }
+    .meli-dd-list::-webkit-scrollbar { width:4px; }
+    .meli-dd-list::-webkit-scrollbar-thumb { background:var(--border);border-radius:4px; }
     </style>
 
     <div class="card" style="padding:0;overflow:hidden;">
@@ -8611,28 +8614,24 @@ function meliRenderPaso2(data) {
   document.getElementById('meliListaAlias').innerHTML = alias.length === 0
     ? '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">Ninguno — todos los SKUs coinciden exactamente ✅</div>'
     : alias.map((m, i) => {
-        const aliasId = 'alias_' + i;
-        const selectId = 'sel_' + i;
-        const opts = (_meliData.skus_lusync_disponibles || [])
-          .map(s => `<option value="${s}" ${s === m.sku_lusync_sugerido ? 'selected' : ''}>${s}</option>`)
-          .join('');
+        const aliasId = 'aliasbox_' + i;
         return `
-          <div class="meli-row" style="flex-wrap:wrap;gap:8px;">
-            <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:200px;flex-wrap:wrap;">
-              <span class="meli-sku-tag" style="border-color:#d97706;color:#d97706;">${m.sku_meli}</span>
-              <span class="meli-arrow">→</span>
-              <div style="display:flex;flex-direction:column;gap:3px;">
-                <input type="text" placeholder="🔍 Buscar SKU..." 
-                  oninput="meliFilterSelect('${selectId}', this.value)"
-                  style="padding:3px 8px;border:0.5px solid #d97706;border-radius:5px;font-size:11px;background:var(--bg);color:var(--text);font-family:monospace;width:160px;outline:none;">
-                <select id="${selectId}" onchange="_meliAliasMap['${m.sku_meli}+${m.item_id}']=this.value" 
-                  style="padding:4px 8px;border:0.5px solid var(--border);border-radius:6px;font-size:11px;background:var(--bg);color:var(--text);font-family:monospace;width:160px;">
-                  <option value="">-- Ignorar --</option>
-                  ${opts}
-                </select>
+          <div class="meli-row" style="gap:10px;align-items:center;">
+            <span class="meli-sku-tag" style="border-color:#d97706;color:#d97706;flex-shrink:0;">${m.sku_meli}</span>
+            <span class="meli-arrow" style="flex-shrink:0;">→</span>
+            <div class="meli-searchable" id="${aliasId}" style="position:relative;flex-shrink:0;width:200px;">
+              <input type="text" placeholder="Buscar SKU Lusync..." autocomplete="off"
+                value=""
+                onfocus="meliOpenDropdown('${aliasId}')"
+                oninput="meliFilterDropdown('${aliasId}', this.value, '${m.sku_meli}', '${m.item_id}')"
+                onblur="setTimeout(()=>meliCloseDropdown('${aliasId}'),200)"
+                style="width:100%;padding:5px 10px;border:0.5px solid #d97706;border-radius:7px;font-size:11px;background:var(--bg);color:var(--text);font-family:monospace;box-sizing:border-box;outline:none;">
+              <div class="meli-dd-list" id="${aliasId}_list" style="display:none;position:absolute;top:calc(100% + 3px);left:0;right:0;background:var(--bg);border:0.5px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.15);z-index:999;max-height:180px;overflow-y:auto;">
+                <div class="meli-dd-item" data-value="" onclick="meliSelectAlias('${aliasId}','','${m.sku_meli}','${m.item_id}')" style="padding:6px 10px;font-size:11px;color:var(--muted);cursor:pointer;font-style:italic;">-- Ignorar --</div>
+                ${(_meliData.skus_lusync_disponibles||[]).map(s=>`<div class="meli-dd-item" data-value="${s}" onclick="meliSelectAlias('${aliasId}','${s}','${m.sku_meli}','${m.item_id}')" style="padding:6px 10px;font-size:11px;font-family:monospace;color:var(--text);cursor:pointer;">${s}</div>`).join('')}
               </div>
             </div>
-            <span style="font-size:11px;color:var(--muted);flex:1;">${m.titulo || ''}</span>
+            <span style="font-size:11px;color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${m.titulo || ''}</span>
           </div>`;
       }).join('');
 
@@ -8649,19 +8648,48 @@ function meliRenderPaso2(data) {
   meliSwitchTab('auto');
 }
 
-function meliFilterSelect(selectId, query) {
-  const sel = document.getElementById(selectId);
-  if (!sel) return;
+// ── Dropdown searchable para alias ──────────────────────────────────────
+function meliOpenDropdown(id) {
+  const list = document.getElementById(id + '_list');
+  if (list) list.style.display = 'block';
+}
+function meliCloseDropdown(id) {
+  const list = document.getElementById(id + '_list');
+  if (list) list.style.display = 'none';
+}
+function meliFilterDropdown(id, query, skuMeli, itemId) {
+  const list = document.getElementById(id + '_list');
+  if (!list) return;
+  list.style.display = 'block';
   const q = query.toLowerCase().trim();
-  Array.from(sel.options).forEach(opt => {
-    if (opt.value === '') return; // siempre mostrar "Ignorar"
-    opt.style.display = !q || opt.value.toLowerCase().includes(q) ? '' : 'none';
+  let visibles = [];
+  Array.from(list.querySelectorAll('.meli-dd-item')).forEach(el => {
+    const val = el.dataset.value || '';
+    if (!val) { el.style.display = ''; return; } // siempre mostrar Ignorar
+    const show = !q || val.toLowerCase().includes(q);
+    el.style.display = show ? '' : 'none';
+    if (show && val) visibles.push(val);
   });
-  // Si hay un único resultado visible, seleccionarlo automáticamente
-  const visibles = Array.from(sel.options).filter(o => o.value && o.style.display !== 'none');
+  // Auto-seleccionar si queda exactamente 1
   if (visibles.length === 1) {
-    sel.value = visibles[0].value;
-    sel.dispatchEvent(new Event('change'));
+    meliSelectAlias(id, visibles[0], skuMeli, itemId);
+  } else {
+    // Limpiar selección si el texto no coincide con ningún valor exacto
+    const key = skuMeli + '+' + itemId;
+    if (!visibles.includes(_meliAliasMap[key])) _meliAliasMap[key] = '';
+  }
+}
+function meliSelectAlias(id, value, skuMeli, itemId) {
+  const input = document.querySelector('#' + id + ' input');
+  if (input) input.value = value || '';
+  const key = skuMeli + '+' + itemId;
+  _meliAliasMap[key] = value;
+  meliCloseDropdown(id);
+  // Highlight visual
+  const box = document.getElementById(id);
+  if (box) {
+    const inp = box.querySelector('input');
+    if (inp) inp.style.borderColor = value ? '#059669' : '#d97706';
   }
 }
 
