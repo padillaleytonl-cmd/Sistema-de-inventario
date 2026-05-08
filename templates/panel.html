@@ -2012,14 +2012,23 @@ tbody td {
         <div class="page-date" style="margin-top:2px;">Vincula SKUs de cada canal con tu inventario Lusync</div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <button onclick="abrirImportadorMeli()" style="padding:7px 14px;border:none;background:linear-gradient(135deg,#FFE000,#FFA500);color:#5a3800;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:700;box-shadow:0 2px 8px rgba(255,160,0,0.3);">
+        <button onclick="abrirImportadorMeli()" style="padding:7px 14px;border:none;background:linear-gradient(135deg,#FFE600,#F5C800);color:#5a3800;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:700;box-shadow:0 2px 8px rgba(255,160,0,0.3);">
           📥 Importar Excel MercadoLibre
         </button>
-        <button onclick="abrirImportadorCanal('walmart')" style="padding:7px 14px;border:none;background:linear-gradient(135deg,#0071CE,#004F9A);color:white;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:700;box-shadow:0 2px 8px rgba(0,113,206,0.3);">
+        <button onclick="abrirImportadorCanal('walmart')" style="padding:7px 14px;border:none;background:linear-gradient(135deg,#0071CE,#0055A5);color:white;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:700;box-shadow:0 2px 8px rgba(0,113,206,0.3);">
           📥 Importar CSV Walmart
         </button>
-        <button onclick="abrirImportadorCanal('ripley')" style="padding:7px 14px;border:none;background:linear-gradient(135deg,#cc0000,#990000);color:white;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:700;box-shadow:0 2px 8px rgba(204,0,0,0.3);">
+        <button onclick="abrirImportadorCanal('ripley')" style="padding:7px 14px;border:none;background:linear-gradient(135deg,#E30613,#B5000F);color:white;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:700;box-shadow:0 2px 8px rgba(227,6,19,0.3);">
           📥 Importar CSV Ripley
+        </button>
+        <button onclick="abrirImportadorCanal('falabella')" style="padding:7px 14px;border:none;background:linear-gradient(135deg,#7AB648,#5A9130);color:white;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:700;box-shadow:0 2px 8px rgba(122,182,72,0.3);">
+          📥 Importar Excel Falabella
+        </button>
+        <button onclick="abrirImportadorCanal('paris')" style="padding:7px 14px;border:none;background:linear-gradient(135deg,#004B9B,#003480);color:white;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:700;box-shadow:0 2px 8px rgba(0,75,155,0.3);">
+          📥 Importar Excel Paris
+        </button>
+        <button disabled title="Próximamente — módulo Hites no habilitado" style="padding:7px 14px;border:0.5px solid #ccc;background:#f0f0f0;color:#aaa;border-radius:8px;font-size:12px;cursor:not-allowed;display:inline-flex;align-items:center;gap:6px;font-weight:600;opacity:0.6;">
+          🔒 Importar Excel Hites <span style="font-size:9px;background:#bbb;color:white;padding:1px 6px;border-radius:10px;margin-left:2px;">Próximo</span>
         </button>
         <select id="selPlataformaWeb" onchange="cambiarPlataformaWeb()" style="padding:7px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg);color:var(--text);">
           <option value="WooCommerce">WooCommerce</option>
@@ -8919,7 +8928,7 @@ const _importadorCfg = {
     titulo:    "Importar publicaciones de Walmart",
     subtitulo: "Portal Walmart → Mis productos → Exportar CSV",
     icono:     "🔵",
-    iconoBg:   "linear-gradient(135deg,#0071CE,#004F9A)",
+    iconoBg:   "linear-gradient(135deg,#0071CE,#0055A5)",
     endpoint:  "/admin/importar_csv_walmart",
     fileHint:  "items_list.csv",
     accept:    ".csv"
@@ -8928,9 +8937,27 @@ const _importadorCfg = {
     titulo:    "Importar publicaciones de Ripley",
     subtitulo: "Portal Ripley → Ofertas → Exportar (offers-import.xlsx)",
     icono:     "🔴",
-    iconoBg:   "linear-gradient(135deg,#cc0000,#990000)",
+    iconoBg:   "linear-gradient(135deg,#E30613,#B5000F)",
     endpoint:  "/admin/importar_csv_ripley",
     fileHint:  "offers-import.xlsx",
+    accept:    ".xlsx"
+  },
+  falabella: {
+    titulo:    "Importar publicaciones de Falabella",
+    subtitulo: "Seller Center → Mis Productos → Descargar Excel",
+    icono:     "🟢",
+    iconoBg:   "linear-gradient(135deg,#7AB648,#5A9130)",
+    endpoint:  "/admin/importar_excel_falabella",
+    fileHint:  "SellerPriceTemplate.xlsx",
+    accept:    ".xlsx"
+  },
+  paris: {
+    titulo:    "Importar publicaciones de Paris",
+    subtitulo: "Seller Center Paris → Catálogo → Exportar productos",
+    icono:     "⚫",
+    iconoBg:   "linear-gradient(135deg,#004B9B,#003480)",
+    endpoint:  "/admin/importar_excel_paris",
+    fileHint:  "export-product.xlsx",
     accept:    ".xlsx"
   }
 };

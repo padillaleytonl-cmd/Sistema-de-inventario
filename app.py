@@ -12202,5 +12202,185 @@ def admin_importar_csv_ripley():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+@app.route("/admin/importar_excel_falabella", methods=["POST"])
+def admin_importar_excel_falabella():
+    """
+    Importa Excel de Falabella (SellerPriceTemplate.xlsx).
+    Columnas: SellerSku, ShopSku, PriceFalabella, SalePriceFalabella, ..., Name
+    Fila 1 = headers, fila 2+ = datos
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    ejecutar = request.args.get("ejecutar", "0") == "1"
+    if "archivo" not in request.files:
+        return jsonify({"error": "Envía el archivo con campo 'archivo'"}), 400
+    try:
+        import io, json, openpyxl
+        from inventario import get_conn, agregar_publicacion, cargar_productos
+        archivo = request.files["archivo"]
+        alias_map = json.loads(request.form.get("alias_map", "{}"))
+        wb = openpyxl.load_workbook(io.BytesIO(archivo.read()), data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            return jsonify({"error": "Archivo vacío"}), 400
+        headers = [str(h).strip() if h else "" for h in rows[0]]
+        def col(name):
+            for i,h in enumerate(headers):
+                if h.lower() == name.lower(): return i
+            return None
+        idx_sku   = col("SellerSku")
+        idx_shop  = col("ShopSku")
+        idx_name  = col("Name")
+        if idx_sku is None:
+            return jsonify({"error": f"No se encontró columna 'SellerSku'. Headers: {headers}"}), 400
+        productos = cargar_productos()
+        sku_real = {p["sku"].upper().strip(): p["sku"] for p in productos}
+        lista_skus_lusync = sorted(sku_real.values())
+        mapeados_existentes = {}
+        try:
+            conn = get_conn(); cur = conn.cursor()
+            cur.execute("SELECT sku_canal, sku_lusync, item_id_canal FROM sku_mapeo_canal WHERE canal='falabella' AND activo=TRUE")
+            for (sc, sl, iid) in cur.fetchall():
+                if sc: mapeados_existentes[sc.upper().strip()] = {"sku_lusync": sl, "item_id": iid}
+                if sl: sku_real[sl.upper().strip()] = sl
+            try:
+                cur.execute("SELECT sku_lusync, sku_falabella FROM sku_mapeo WHERE sku_falabella IS NOT NULL AND sku_falabella != ''")
+                for (sl, sc) in cur.fetchall():
+                    if sc: mapeados_existentes[sc.upper().strip()] = {"sku_lusync": sl}
+            except Exception: pass
+            cur.close(); conn.close()
+        except Exception: pass
+        automaticos=[]; requieren_alias=[]; no_en_lusync=[]; ya_mapeados=[]; skus_vistos=set()
+        for row in rows[1:]:
+            sku_fal = str(row[idx_sku] or "").strip() if idx_sku is not None else ""
+            titulo  = str(row[idx_name] or "").strip() if idx_name is not None else ""
+            item_id = str(row[idx_shop] or "").strip() if idx_shop is not None else ""
+            if not sku_fal or sku_fal.upper() in skus_vistos: continue
+            skus_vistos.add(sku_fal.upper())
+            entry = {"sku_canal": sku_fal, "titulo": titulo, "item_id": item_id, "stock": 0, "estado": ""}
+            existente = mapeados_existentes.get(sku_fal.upper())
+            if existente:
+                ya_mapeados.append({**entry, "sku_lusync": existente.get("sku_lusync", sku_fal)}); continue
+            sku_lusync_exacto = sku_real.get(sku_fal.upper())
+            if sku_lusync_exacto:
+                automaticos.append({**entry, "sku_lusync": sku_lusync_exacto}); continue
+            alias_key = sku_fal + "+" + item_id
+            if alias_key in alias_map and alias_map[alias_key]:
+                automaticos.append({**entry, "sku_lusync": alias_map[alias_key], "via_alias": True}); continue
+            requieren_alias.append({**entry, "sku_lusync_sugerido": ""})
+        guardados=0; errores=[]
+        if ejecutar:
+            for m in automaticos:
+                try:
+                    agregar_publicacion(sku_lusync=m["sku_lusync"], canal="falabella",
+                        sku_canal=m["sku_canal"], item_id_canal=m.get("item_id") or None,
+                        notas="importado_excel_falabella")
+                    guardados += 1
+                except Exception as e: errores.append(f"{m['sku_canal']}: {str(e)}")
+        return jsonify({"canal":"Falabella","automaticos":automaticos,"requieren_alias":requieren_alias,
+            "no_en_lusync":no_en_lusync,"ya_mapeados":ya_mapeados,"skus_lusync_disponibles":lista_skus_lusync,
+            "stats":{"total":len(automaticos)+len(requieren_alias)+len(no_en_lusync)+len(ya_mapeados),
+                "automaticos":len(automaticos),"requieren_alias":len(requieren_alias),
+                "no_en_lusync":len(no_en_lusync),"ya_mapeados":len(ya_mapeados),
+                "nuevos_mapeados":guardados,"errores":len(errores)},
+            "modo":"ejecutado" if ejecutar else "simulacion","errores":errores})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/admin/importar_excel_paris", methods=["POST"])
+def admin_importar_excel_paris():
+    """
+    Importa Excel de Paris (export-product.xlsx).
+    Múltiples hojas por categoría. Fila 4=headers legibles, fila 7+=datos.
+    Columnas clave: title(0), id(1), skuSeller(2)
+    Las variantes tienen el mismo id de producto pero diferente skuSeller.
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    ejecutar = request.args.get("ejecutar", "0") == "1"
+    if "archivo" not in request.files:
+        return jsonify({"error": "Envía el archivo con campo 'archivo'"}), 400
+    try:
+        import io, json, openpyxl
+        from inventario import get_conn, agregar_publicacion, cargar_productos
+        archivo = request.files["archivo"]
+        alias_map = json.loads(request.form.get("alias_map", "{}"))
+        wb = openpyxl.load_workbook(io.BytesIO(archivo.read()), data_only=True, read_only=True)
+        productos = cargar_productos()
+        sku_real = {p["sku"].upper().strip(): p["sku"] for p in productos}
+        lista_skus_lusync = sorted(sku_real.values())
+        mapeados_existentes = {}
+        try:
+            conn = get_conn(); cur = conn.cursor()
+            cur.execute("SELECT sku_canal, sku_lusync, item_id_canal FROM sku_mapeo_canal WHERE canal='paris' AND activo=TRUE")
+            for (sc, sl, iid) in cur.fetchall():
+                if sc: mapeados_existentes[sc.upper().strip()] = {"sku_lusync": sl, "item_id": iid}
+                if sl: sku_real[sl.upper().strip()] = sl
+            try:
+                cur.execute("SELECT sku_lusync, sku_paris FROM sku_mapeo WHERE sku_paris IS NOT NULL AND sku_paris != ''")
+                for (sl, sc) in cur.fetchall():
+                    if sc: mapeados_existentes[sc.upper().strip()] = {"sku_lusync": sl}
+            except Exception: pass
+            cur.close(); conn.close()
+        except Exception: pass
+        # Hojas a ignorar
+        hojas_ignorar = {'Ayuda','configuration'}
+        automaticos=[]; requieren_alias=[]; no_en_lusync=[]; ya_mapeados=[]; skus_vistos=set()
+        for sheet_name in wb.sheetnames:
+            if sheet_name in hojas_ignorar or sheet_name.endswith('data'): continue
+            ws = wb[sheet_name]
+            rows = list(ws.iter_rows(values_only=True))
+            if len(rows) < 7: continue
+            # Fila 4 (idx 3) = headers legibles
+            headers = [str(h).strip().lower() if h else "" for h in rows[3]]
+            def col(name):
+                for i,h in enumerate(headers):
+                    if name in h: return i
+                return None
+            idx_sku   = col("sku seller") or col("skuseller") or 2
+            idx_title = col("nombre") or col("title") or 0
+            idx_id    = col("sku") if col("sku") != idx_sku else 1
+            if idx_id is None: idx_id = 1
+            for row in rows[6:]:  # datos desde fila 7
+                sku_par = str(row[idx_sku] or "").strip() if idx_sku < len(row) else ""
+                titulo  = str(row[idx_title] or "").strip() if idx_title < len(row) else ""
+                item_id = str(row[idx_id] or "").strip() if idx_id < len(row) else ""
+                if not sku_par or sku_par.upper() in skus_vistos: continue
+                skus_vistos.add(sku_par.upper())
+                entry = {"sku_canal": sku_par, "titulo": titulo, "item_id": item_id,
+                         "stock": 0, "estado": "", "hoja": sheet_name}
+                existente = mapeados_existentes.get(sku_par.upper())
+                if existente:
+                    ya_mapeados.append({**entry, "sku_lusync": existente.get("sku_lusync", sku_par)}); continue
+                sku_lusync_exacto = sku_real.get(sku_par.upper())
+                if sku_lusync_exacto:
+                    automaticos.append({**entry, "sku_lusync": sku_lusync_exacto}); continue
+                alias_key = sku_par + "+" + item_id
+                if alias_key in alias_map and alias_map[alias_key]:
+                    automaticos.append({**entry, "sku_lusync": alias_map[alias_key], "via_alias": True}); continue
+                requieren_alias.append({**entry, "sku_lusync_sugerido": ""})
+        guardados=0; errores=[]
+        if ejecutar:
+            for m in automaticos:
+                try:
+                    agregar_publicacion(sku_lusync=m["sku_lusync"], canal="paris",
+                        sku_canal=m["sku_canal"], item_id_canal=m.get("item_id") or None,
+                        notas="importado_excel_paris")
+                    guardados += 1
+                except Exception as e: errores.append(f"{m['sku_canal']}: {str(e)}")
+        return jsonify({"canal":"Paris","automaticos":automaticos,"requieren_alias":requieren_alias,
+            "no_en_lusync":no_en_lusync,"ya_mapeados":ya_mapeados,"skus_lusync_disponibles":lista_skus_lusync,
+            "stats":{"total":len(automaticos)+len(requieren_alias)+len(no_en_lusync)+len(ya_mapeados),
+                "automaticos":len(automaticos),"requieren_alias":len(requieren_alias),
+                "no_en_lusync":len(no_en_lusync),"ya_mapeados":len(ya_mapeados),
+                "nuevos_mapeados":guardados,"errores":len(errores)},
+            "modo":"ejecutado" if ejecutar else "simulacion","errores":errores})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
