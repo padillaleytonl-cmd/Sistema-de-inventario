@@ -5460,9 +5460,24 @@ function onChangeSkuMapeo(skuLusync, campo, valor){
 }
 
 function guardarFilaSkuMapeo(skuLusync){
-  if(!_mapeoEditando[skuLusync]) return;
+  // Leer valores actuales del DOM como fallback si _mapeoEditando está vacío
   const fila = _mapeoCache.find(m => m.sku_lusync === skuLusync);
   if(!fila) return;
+  if(!_mapeoEditando[skuLusync]) {
+    // Leer directamente del DOM
+    const campos = ['sku_web','sku_walmart','sku_paris','sku_falabella','sku_ripley','sku_mercadolibre','sku_hites'];
+    let hayCambios = false;
+    campos.forEach(c => {
+      const idEl = `mp_${skuLusync}_${c}`.replace(/[^a-zA-Z0-9_]/g,'_');
+      const el = document.getElementById(idEl);
+      if(el && el.value !== (fila[c] || '')) {
+        if(!_mapeoEditando[skuLusync]) _mapeoEditando[skuLusync] = {};
+        _mapeoEditando[skuLusync][c] = el.value;
+        hayCambios = true;
+      }
+    });
+    if(!hayCambios) return;
+  }
   Object.assign(fila, _mapeoEditando[skuLusync]);
   delete _mapeoEditando[skuLusync];
   const payload = {
@@ -5481,8 +5496,8 @@ function guardarFilaSkuMapeo(skuLusync){
     body: JSON.stringify(payload)
   }).then(r=>r.json()).then(d=>{
     if(d.ok){ toast(`✓ ${skuLusync}`); }
-    else { toast('Error al guardar'); }
-  });
+    else { toast('Error al guardar: ' + (d.error || 'desconocido'), 'error'); console.error('[guardar mapeo]', d); }
+  }).catch(e => toast('Error de red: ' + e.message, 'error'));
 }
 
 function cambiarPlataformaWeb(){

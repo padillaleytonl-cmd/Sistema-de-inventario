@@ -3336,19 +3336,25 @@ def ruta_sku_mapeo_historial():
 def ruta_sku_mapeo_guardar():
     if not session.get("logged"): return jsonify({"ok": False}), 401
     data = request.json or {}
-    ok = guardar_sku_mapeo_fila(
-        data.get("sku_lusync", "").strip(),
-        {
-            "web":         data.get("sku_web", ""),
-            "walmart":     data.get("sku_walmart", ""),
-            "paris":       data.get("sku_paris", ""),
-            "falabella":   data.get("sku_falabella", ""),
-            "ripley":      data.get("sku_ripley", ""),
-            "mercadolibre":data.get("sku_mercadolibre", ""),
-            "hites":       data.get("sku_hites", "")
-        }
-    )
-    return jsonify({"ok": ok})
+    try:
+        guardar_sku_mapeo_fila(
+            data.get("sku_lusync", "").strip(),
+            {
+                "web":         data.get("sku_web", ""),
+                "walmart":     data.get("sku_walmart", ""),
+                "paris":       data.get("sku_paris", ""),
+                "falabella":   data.get("sku_falabella", ""),
+                "ripley":      data.get("sku_ripley", ""),
+                "mercadolibre":data.get("sku_mercadolibre", ""),
+                "hites":       data.get("sku_hites", "")
+            }
+        )
+        return jsonify({"ok": True})
+    except Exception as e:
+        import traceback
+        print(f"[guardar_sku_mapeo] ERROR: {e}")
+        traceback.print_exc()
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/sku_mapeo/plataforma_web", methods=["GET", "POST"])
 def ruta_plataforma_web():
