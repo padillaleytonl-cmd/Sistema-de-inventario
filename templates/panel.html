@@ -1908,10 +1908,7 @@ tbody td {
             <div class="form-group" style="margin-bottom:12px;">
               <label>Motivo</label>
               <select id="motivoEntrada">
-                <option>Ingreso mercadería</option>
-                <option>Devolución</option>
-                <option>Ajuste de inventario</option>
-                <option>Otro</option>
+                <option>Cargando...</option>
               </select>
             </div>
             <button class="btn-primary" onclick="entrada()" style="width:100%; background:var(--success);">Registrar entrada</button>
@@ -1923,10 +1920,7 @@ tbody td {
             <div class="form-group" style="margin-bottom:12px;">
               <label>Motivo</label>
               <select id="motivoSalida">
-                <option>Venta tienda</option>
-                <option>Merma</option>
-                <option>Ajuste de inventario</option>
-                <option>Otro</option>
+                <option>Cargando...</option>
               </select>
             </div>
             <button class="btn-primary" onclick="salida()" style="width:100%; background:var(--danger);">Registrar salida</button>
@@ -2556,6 +2550,7 @@ tbody td {
         <button class="cfg-tab" onclick="showCfgTab('bodegas',this)">Bodegas</button>
         <button class="cfg-tab" onclick="showCfgTab('integraciones',this)">Integraciones</button>
         <button class="cfg-tab" onclick="showCfgTab('usuarios',this)">Usuarios</button>
+        <button class="cfg-tab" onclick="showCfgTab('tipificaciones',this)">Motivos de movimiento</button>
       </div>
 
       <!-- Contenido configuración -->
@@ -2717,6 +2712,63 @@ tbody td {
             + Agregar bodega adicional (próximamente)
           </div>
           <button class="btn-primary" style="margin-top:14px;" onclick="guardarConfiguracion()">Guardar bodega</button>
+        </div>
+
+        <!-- TIPIFICACIONES DE MOVIMIENTO -->
+        <div id="cfg-tipificaciones" style="display:none;">
+          <div class="card" style="margin-bottom:14px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+              <div>
+                <div class="card-title">Motivos de movimiento de stock</div>
+                <div style="font-size:12px;color:var(--muted);margin-top:2px;">Define las razones por las que el stock entra o sale del inventario</div>
+              </div>
+              <button onclick="abrirNuevaTipificacion()" style="padding:7px 14px;background:var(--navy);color:white;border:none;border-radius:8px;font-size:12px;cursor:pointer;font-weight:600;">+ Nueva tipificación</button>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+              <!-- Entradas -->
+              <div>
+                <div style="font-size:12px;font-weight:700;color:#059669;margin-bottom:10px;display:flex;align-items:center;gap:6px;">
+                  ↑ ENTRADAS
+                </div>
+                <div id="tipificaciones-entrada" style="display:flex;flex-direction:column;gap:6px;"></div>
+              </div>
+              <!-- Salidas -->
+              <div>
+                <div style="font-size:12px;font-weight:700;color:#dc2626;margin-bottom:10px;display:flex;align-items:center;gap:6px;">
+                  ↓ SALIDAS
+                </div>
+                <div id="tipificaciones-salida" style="display:flex;flex-direction:column;gap:6px;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Modal nueva tipificación -->
+        <div id="modalTipificacion" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;align-items:center;justify-content:center;">
+          <div style="background:var(--bg);border-radius:16px;padding:28px;width:440px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+            <div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:20px;" id="modalTipTitle">Nueva tipificación</div>
+            <input type="hidden" id="tipId">
+            <div class="form-group" style="margin-bottom:14px;">
+              <label>Tipo</label>
+              <select id="tipTipo" style="width:100%;padding:8px 10px;border:0.5px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;">
+                <option value="entrada">↑ Entrada</option>
+                <option value="salida">↓ Salida</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin-bottom:14px;">
+              <label>Nombre <span style="color:#dc2626;">*</span></label>
+              <input id="tipNombre" placeholder="Ej: Donación, Exhibición, Préstamo..." style="width:100%;box-sizing:border-box;">
+            </div>
+            <div class="form-group" style="margin-bottom:20px;">
+              <label>Descripción (opcional)</label>
+              <input id="tipDesc" placeholder="Describe cuándo usar este motivo..." style="width:100%;box-sizing:border-box;">
+            </div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+              <button onclick="cerrarModalTip()" style="padding:9px 18px;background:var(--bg2);color:var(--text);border:0.5px solid var(--border);border-radius:8px;font-size:13px;cursor:pointer;">Cancelar</button>
+              <button onclick="guardarTipificacion()" style="padding:9px 18px;background:var(--navy);color:white;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">Guardar</button>
+            </div>
+          </div>
         </div>
 
         <!-- INTEGRACIONES -->
@@ -2973,6 +3025,7 @@ function showSection(sec, btn){
   if(sec === 'configuracion'){
     if(gear) gear.classList.add('active');
     cargarConfiguracion();
+    cargarTipificaciones();  // Cargar motivos para dropdowns de entrada/salida
   }
 }
 
@@ -3776,6 +3829,7 @@ function cargarMovimientosFull(){
 
 // ── CONFIGURACIÓN
 function showCfgTab(tab, el){
+  if (tab === 'tipificaciones') cargarTipificaciones();
   ['negocio','restock','bodegas','integraciones','usuarios'].forEach(t => {
     const el2 = document.getElementById('cfg-'+t);
     if(el2) el2.style.display = t===tab ? '' : 'none';
@@ -9182,6 +9236,113 @@ function canalSelectAlias(id, value, skuCanal, itemId) {
   if (inp) { inp.value=value||''; inp.style.borderColor=value?'#059669':'#d97706'; }
   _canalAliasMap[skuCanal+'+'+itemId] = value;
   canalCloseDD(id);
+}
+
+
+// ══════════════════════════════════════════════════════════════════════
+// TIPIFICACIONES DE MOVIMIENTO
+// ══════════════════════════════════════════════════════════════════════
+let _tipificaciones = [];
+
+async function cargarTipificaciones() {
+  try {
+    const r = await fetch('/config/tipificaciones');
+    _tipificaciones = await r.json();
+    renderTipificaciones();
+  } catch(e) {
+    console.error('Error cargando tipificaciones:', e);
+  }
+}
+
+function renderTipificaciones() {
+  // Actualizar también los selects de entrada/salida en Inventario
+  const selE = document.getElementById('motivoEntrada');
+  const selS = document.getElementById('motivoSalida');
+  if (selE) {
+    selE.innerHTML = _tipificaciones.filter(t=>t.tipo==='entrada'&&t.activo)
+      .map(t=>`<option>${t.nombre}</option>`).join('') || '<option>Ajuste de inventario</option>';
+  }
+  if (selS) {
+    selS.innerHTML = _tipificaciones.filter(t=>t.tipo==='salida'&&t.activo)
+      .map(t=>`<option>${t.nombre}</option>`).join('') || '<option>Ajuste de inventario</option>';
+  }
+  ['entrada','salida'].forEach(tipo => {
+    const lista = _tipificaciones.filter(t => t.tipo === tipo);
+    document.getElementById('tipificaciones-' + tipo).innerHTML = lista.length === 0
+      ? '<div style="font-size:12px;color:var(--muted);padding:8px;">Ninguna</div>'
+      : lista.map(t => `
+          <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--bg2);border-radius:8px;border:0.5px solid var(--border);${!t.activo?'opacity:0.5':''}">
+            <div style="flex:1;">
+              <div style="font-size:12px;font-weight:600;color:var(--text);">${t.nombre}</div>
+              ${t.descripcion ? `<div style="font-size:11px;color:var(--muted);margin-top:1px;">${t.descripcion}</div>` : ''}
+            </div>
+            ${t.es_sistema
+              ? '<span style="font-size:10px;color:var(--muted);background:var(--bg);padding:2px 6px;border-radius:10px;border:0.5px solid var(--border);">Sistema</span>'
+              : `<button onclick="editarTipificacion(${t.id})" style="padding:4px 8px;border:0.5px solid var(--border);background:var(--bg);border-radius:6px;font-size:11px;cursor:pointer;color:var(--text);">✏️</button>
+                 <button onclick="eliminarTipificacion(${t.id})" style="padding:4px 8px;border:0.5px solid #fee2e2;background:#fff5f5;border-radius:6px;font-size:11px;cursor:pointer;color:#dc2626;">🗑️</button>`
+            }
+          </div>`).join('');
+  });
+}
+
+function abrirNuevaTipificacion() {
+  document.getElementById('tipId').value = '';
+  document.getElementById('tipTipo').value = 'salida';
+  document.getElementById('tipNombre').value = '';
+  document.getElementById('tipDesc').value = '';
+  document.getElementById('modalTipTitle').textContent = 'Nueva tipificación';
+  document.getElementById('modalTipificacion').style.display = 'flex';
+}
+
+function editarTipificacion(id) {
+  const t = _tipificaciones.find(x => x.id === id);
+  if (!t) return;
+  document.getElementById('tipId').value = t.id;
+  document.getElementById('tipTipo').value = t.tipo;
+  document.getElementById('tipNombre').value = t.nombre;
+  document.getElementById('tipDesc').value = t.descripcion || '';
+  document.getElementById('modalTipTitle').textContent = 'Editar tipificación';
+  document.getElementById('modalTipificacion').style.display = 'flex';
+}
+
+function cerrarModalTip() {
+  document.getElementById('modalTipificacion').style.display = 'none';
+}
+
+async function guardarTipificacion() {
+  const payload = {
+    id:          document.getElementById('tipId').value || null,
+    tipo:        document.getElementById('tipTipo').value,
+    nombre:      document.getElementById('tipNombre').value.trim(),
+    descripcion: document.getElementById('tipDesc').value.trim(),
+    activo:      true
+  };
+  if (!payload.nombre) { alert('El nombre es requerido'); return; }
+  const r = await fetch('/config/tipificaciones/guardar', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  });
+  const d = await r.json();
+  if (d.ok) {
+    cerrarModalTip();
+    cargarTipificaciones();
+    toast('Tipificación guardada ✓');
+  } else {
+    alert('Error: ' + d.error);
+  }
+}
+
+async function eliminarTipificacion(id) {
+  if (!confirm('¿Eliminar esta tipificación?')) return;
+  const r = await fetch('/config/tipificaciones/eliminar', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({id})
+  });
+  const d = await r.json();
+  if (d.ok) { cargarTipificaciones(); toast('Eliminada ✓'); }
+  else alert('Error: ' + d.error);
 }
 
 // ─── (Importar Excel MELI movido a módulo Mapeo SKUs) ───────────────────────

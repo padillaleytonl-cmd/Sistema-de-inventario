@@ -4777,7 +4777,22 @@ def ruta_bodegas_set_stock():
         registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
                         "set_stock_bodega",
                         detalle=f"SKU {sku} en bodega {bodega} = {cantidad}")
-        return jsonify({"ok": True, "nuevo_total": get_stock_bodega(sku, bodega)})
+        # Sincronizar stock total a todos los marketplaces
+        # Sumar stock en todas las bodegas para este SKU
+        try:
+            from inventario import listar_bodegas
+            bodegas_lista = listar_bodegas()
+            stock_total = sum(get_stock_bodega(sku, b["codigo"]) for b in bodegas_lista)
+        except Exception:
+            stock_total = cantidad  # fallback
+        import threading
+        threading.Thread(
+            target=sincronizar_stock_marketplaces,
+            args=(sku, stock_total),
+            kwargs={"contexto": f"ajuste_bodega_{bodega}"},
+            daemon=True
+        ).start()
+        return jsonify({"ok": True, "nuevo_total": get_stock_bodega(sku, bodega), "stock_total": stock_total})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -12472,6 +12487,116 @@ def admin_debug_paris_ordenes():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════
+# TIPIFICACIONES DE MOVIMIENTOS (Configuración)
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route("/config/tipificaciones")
+def config_tipificaciones_listar():
+    """Lista todas las tipificaciones de entrada y salida."""
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import get_conn
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tipificaciones_movimiento (
+                id SERIAL PRIMARY KEY,
+                tipo TEXT NOT NULL CHECK (tipo IN ('entrada','salida')),
+                nombre TEXT NOT NULL,
+                descripcion TEXT,
+                activo BOOLEAN DEFAULT TRUE,
+                es_sistema BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        # Insertar tipificaciones default si la tabla está vacía
+        cur.execute("SELECT COUNT(*) FROM tipificaciones_movimiento")
+        if cur.fetchone()[0] == 0:
+            defaults = [
+                ('entrada', 'Compra a proveedor', 'Ingreso de mercadería desde proveedor', True),
+                ('entrada', 'Devolución de cliente', 'Producto devuelto por cliente en buen estado', True),
+                ('entrada', 'Ajuste de inventario', 'Corrección manual de stock', True),
+                ('entrada', 'Transferencia entre bodegas', 'Ingreso desde otra bodega', True),
+                ('salida', 'Venta', 'Venta por cualquier canal', True),
+                ('salida', 'Merma', 'Producto dañado o vencido', True),
+                ('salida', 'Ajuste de inventario', 'Corrección manual de stock', True),
+                ('salida', 'Muestra/Regalo', 'Producto entregado como muestra o regalo', True),
+                ('salida', 'Robo/Pérdida', 'Pérdida por robo o extravío', True),
+                ('salida', 'Devolución a proveedor', 'Producto devuelto al proveedor', True),
+            ]
+            for tipo, nombre, desc, activo in defaults:
+                cur.execute("""
+                    INSERT INTO tipificaciones_movimiento (tipo, nombre, descripcion, activo, es_sistema)
+                    VALUES (%s, %s, %s, %s, FALSE)
+                """, (tipo, nombre, desc, activo))
+        conn.commit()
+        cur.execute("SELECT id, tipo, nombre, descripcion, activo, es_sistema FROM tipificaciones_movimiento ORDER BY tipo, nombre")
+        rows = cur.fetchall()
+        cur.close(); conn.close()
+        return jsonify([{
+            "id": r[0], "tipo": r[1], "nombre": r[2],
+            "descripcion": r[3], "activo": r[4], "es_sistema": r[5]
+        } for r in rows])
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/config/tipificaciones/guardar", methods=["POST"])
+def config_tipificaciones_guardar():
+    """Crea o actualiza una tipificación."""
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    data = request.json or {}
+    tid    = data.get("id")
+    tipo   = data.get("tipo", "").strip()
+    nombre = data.get("nombre", "").strip()
+    desc   = data.get("descripcion", "").strip()
+    activo = data.get("activo", True)
+    if tipo not in ("entrada", "salida") or not nombre:
+        return jsonify({"ok": False, "error": "tipo y nombre son requeridos"}), 400
+    try:
+        from inventario import get_conn
+        conn = get_conn(); cur = conn.cursor()
+        if tid:
+            cur.execute("""
+                UPDATE tipificaciones_movimiento
+                SET nombre=%s, descripcion=%s, activo=%s
+                WHERE id=%s AND es_sistema=FALSE
+                RETURNING id
+            """, (nombre, desc, activo, tid))
+            if cur.fetchone() is None:
+                return jsonify({"ok": False, "error": "No se puede editar tipificación del sistema"}), 400
+        else:
+            cur.execute("""
+                INSERT INTO tipificaciones_movimiento (tipo, nombre, descripcion, activo, es_sistema)
+                VALUES (%s, %s, %s, %s, FALSE) RETURNING id
+            """, (tipo, nombre, desc, activo))
+            tid = cur.fetchone()[0]
+        conn.commit(); cur.close(); conn.close()
+        return jsonify({"ok": True, "id": tid})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/config/tipificaciones/eliminar", methods=["POST"])
+def config_tipificaciones_eliminar():
+    """Elimina (desactiva) una tipificación no-sistema."""
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    tid = (request.json or {}).get("id")
+    if not tid: return jsonify({"ok": False, "error": "id requerido"}), 400
+    try:
+        from inventario import get_conn
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("DELETE FROM tipificaciones_movimiento WHERE id=%s AND es_sistema=FALSE RETURNING id", (tid,))
+        deleted = cur.fetchone()
+        conn.commit(); cur.close(); conn.close()
+        if not deleted:
+            return jsonify({"ok": False, "error": "No se puede eliminar tipificación del sistema"})
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

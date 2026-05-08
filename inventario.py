@@ -167,6 +167,35 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
     cur.close()
     conn.close()
 
+    # ── SYNC UNIVERSAL: cualquier movimiento de stock sincroniza a todos los canales ──
+    # Se ejecuta en background para no bloquear la respuesta
+    try:
+        import threading
+        def _sync_bg():
+            try:
+                # Calcular stock total actual en todas las bodegas
+                conn2 = get_conn()
+                cur2 = conn2.cursor()
+                cur2.execute("""
+                    SELECT COALESCE(SUM(cantidad), 0) 
+                    FROM stock_bodegas 
+                    WHERE sku = %s
+                """, (sku,))
+                row = cur2.fetchone()
+                stock_total = int(row[0]) if row else 0
+                cur2.close()
+                conn2.close()
+
+                # Importar y llamar sync solo si hay mapeos para este SKU
+                from app import sincronizar_stock_marketplaces
+                sincronizar_stock_marketplaces(sku, stock_total, contexto=f"{tipo}_{canal}_{motivo[:20] if motivo else 'manual'}")
+            except Exception as e:
+                print(f"[SyncUniversal] Error sincronizando {sku}: {e}")
+
+        threading.Thread(target=_sync_bg, daemon=True).start()
+    except Exception:
+        pass
+
 def cargar_movimientos(limite=20):
     conn = get_conn()
     cur = conn.cursor()
