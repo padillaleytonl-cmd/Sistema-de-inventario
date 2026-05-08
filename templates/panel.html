@@ -2038,7 +2038,7 @@ tbody td {
     </div>
 
     <!-- ══ MODAL IMPORTADOR MELI ══ -->
-    <div id="modalImportadorMeli" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
+    <div id="modalImportadorMeli" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
       <div style="background:var(--bg);border-radius:20px;width:720px;max-width:95vw;max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,0.4);border:0.5px solid var(--border);">
         
         <!-- Header -->
@@ -2550,7 +2550,7 @@ tbody td {
     </div>
 
     <!-- ══ MODAL IMPORTADOR CANAL GENÉRICO (Walmart, Ripley, etc.) ══ -->
-    <div id="modalImportadorCanal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
+    <div id="modalImportadorCanal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
       <div style="background:var(--bg);border-radius:20px;width:720px;max-width:95vw;max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,0.4);border:0.5px solid var(--border);">
         <div style="padding:24px 28px 0;flex-shrink:0;">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
@@ -2576,14 +2576,15 @@ tbody td {
         <div style="flex:1;overflow-y:auto;padding:0 28px 28px;min-height:0;">
           <!-- PASO 1 -->
           <div id="canalPaso1">
-            <label id="canalDropZone" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;border:2px dashed var(--border);border-radius:14px;padding:48px 24px;cursor:pointer;background:var(--bg2);"
-              ondragover="event.preventDefault();"
-              ondrop="event.preventDefault();canalHandleDrop(event);">
+            <label id="canalDropZone" for="canalFileInput" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;border:2px dashed var(--border);border-radius:14px;padding:48px 24px;cursor:pointer;background:var(--bg2);"
+              ondragover="event.preventDefault();this.style.borderColor='#0071CE';"
+              ondragleave="this.style.borderColor='';"
+              ondrop="event.preventDefault();this.style.borderColor='';canalHandleDrop(event);">
               <div style="font-size:36px;">📄</div>
               <div style="font-size:14px;font-weight:600;color:var(--text);">Arrastra tu archivo aquí</div>
               <div style="font-size:12px;color:var(--muted);">o haz clic para seleccionar</div>
               <div id="canalFileHint" style="font-size:11px;color:var(--hint);background:var(--bg);padding:4px 10px;border-radius:6px;border:0.5px solid var(--border);">.csv</div>
-              <input type="file" id="canalFileInput" accept=".csv,.xlsx" onchange="canalProcessFile(this.files[0])" style="display:none;">
+              <input type="file" id="canalFileInput" accept=".csv,.xlsx" style="display:none;" onchange="canalProcessFile(this.files[0])">
             </label>
           </div>
 
@@ -8911,7 +8912,7 @@ let _canalData      = null;
 let _canalArchivo   = null;
 let _canalAliasMap  = {};
 
-const _canalConfig = {
+const _importadorCfg = {
   walmart: {
     titulo:    "Importar publicaciones de Walmart",
     subtitulo: "Portal Walmart → Mis productos → Exportar CSV",
@@ -8937,7 +8938,7 @@ function abrirImportadorCanal(canal) {
   _canalData     = null;
   _canalArchivo  = null;
   _canalAliasMap = {};
-  const cfg = _canalConfig[canal] || {};
+  const cfg = _importadorCfg[canal] || {};
   document.getElementById('canalTitulo').textContent    = cfg.titulo    || 'Importar publicaciones';
   document.getElementById('canalSubtitulo').textContent = cfg.subtitulo || '';
   document.getElementById('canalIcono').style.background = cfg.iconoBg  || '#333';
@@ -8975,7 +8976,7 @@ async function canalProcessFile(file) {
   document.getElementById('canalProcesando').style.display = 'block';
   document.getElementById('canalProcesandoMsg').textContent = 'Analizando ' + file.name + '…';
 
-  const cfg = _canalConfig[_canalActual] || {};
+  const cfg = _importadorCfg[_canalActual] || {};
   const fd = new FormData();
   fd.append('archivo', file);
 
@@ -9098,7 +9099,7 @@ function canalIrPaso3() {
 }
 
 async function canalConfirmar() {
-  const cfg = _canalConfig[_canalActual] || {};
+  const cfg = _importadorCfg[_canalActual] || {};
   document.getElementById('canalPaso3').style.display = 'none';
   document.getElementById('canalProcesando').style.display = 'block';
   document.getElementById('canalProcesandoMsg').textContent = 'Guardando mapeos…';
