@@ -12613,7 +12613,7 @@ def admin_test_sync_sku():
         from inventario import get_conn
         # Stock total
         conn = get_conn(); cur = conn.cursor()
-        cur.execute("SELECT COALESCE(SUM(cantidad),0) FROM stock_bodegas WHERE sku=%s", (sku,))
+        cur.execute("SELECT COALESCE(SUM(cantidad),0) FROM stock_bodega WHERE sku=%s", (sku,))
         stock = int(cur.fetchone()[0] or 0)
         # Mapeos por canal
         cur.execute("""

@@ -178,7 +178,7 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
                 cur2 = conn2.cursor()
                 cur2.execute("""
                     SELECT COALESCE(SUM(cantidad), 0) 
-                    FROM stock_bodegas 
+                    FROM stock_bodega 
                     WHERE sku = %s
                 """, (sku,))
                 row = cur2.fetchone()
