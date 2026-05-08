@@ -11808,5 +11808,105 @@ def admin_debug_skus_canal():
     except Exception as e:
         return jsonify({"error": str(e)})
 
+
+@app.route("/admin/validar_meli")
+def admin_validar_meli():
+    """
+    Valida el estado completo del mapeo de MercadoLibre.
+    Compara publicaciones activas en MELI vs mapeos en Lusync.
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import get_conn, cargar_productos
+        from mercadolibre import obtener_publicaciones_meli
+
+        # 1. Obtener publicaciones de MELI
+        pubs_meli = obtener_publicaciones_meli()
+
+        # 2. Cargar mapeos existentes en sku_mapeo_canal
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT sku_canal, sku_lusync, item_id_canal, activo
+            FROM sku_mapeo_canal WHERE canal='mercadolibre'
+        """)
+        mapeos = {}
+        for (sc, sl, iid, activo) in cur.fetchall():
+            if sc: mapeos[sc.upper().strip()] = {"sku_lusync": sl, "item_id": iid, "activo": activo}
+            if iid: mapeos[iid.upper().strip()] = {"sku_lusync": sl, "sku_canal": sc, "activo": activo}
+
+        # 3. Cargar alias de sku_mapeo
+        try:
+            cur.execute("SELECT sku_lusync, sku_mercadolibre FROM sku_mapeo WHERE sku_mercadolibre IS NOT NULL AND sku_mercadolibre != ''")
+            for (sl, sc) in cur.fetchall():
+                if sc: mapeos[sc.upper().strip()] = {"sku_lusync": sl, "via": "sku_mapeo"}
+        except Exception:
+            pass
+        cur.close()
+        conn.close()
+
+        # 4. Cruzar
+        mapeadas        = []
+        sin_mapeo       = []
+        sin_sku_en_meli = []
+
+        for pub in pubs_meli:
+            item_id  = pub.get("item_id") or pub.get("id") or ""
+            sku_meli = (pub.get("sku_seller") or pub.get("sku") or "").strip()
+            titulo   = pub.get("title") or pub.get("nombre") or ""
+            status   = pub.get("status", "")
+            stock    = pub.get("stock", 0) or 0
+
+            entry = {
+                "item_id": item_id,
+                "sku_meli": sku_meli,
+                "titulo": titulo[:60],
+                "status": status,
+                "stock": stock
+            }
+
+            # Buscar mapeo por sku_canal o por item_id
+            mapeo = mapeos.get(sku_meli.upper()) or mapeos.get(item_id.upper())
+            if mapeo:
+                entry["sku_lusync"] = mapeo.get("sku_lusync")
+                mapeadas.append(entry)
+            elif not sku_meli:
+                sin_sku_en_meli.append(entry)
+            else:
+                sin_mapeo.append(entry)
+
+        # 5. Resumen
+        activas_sin_mapeo = [p for p in sin_mapeo if p["status"] == "active" and p["stock"] > 0]
+
+        return jsonify({
+            "resumen": {
+                "total_publicaciones_meli": len(pubs_meli),
+                "mapeadas": len(mapeadas),
+                "sin_mapeo": len(sin_mapeo),
+                "sin_sku_en_meli": len(sin_sku_en_meli),
+                "porcentaje_mapeo": round(len(mapeadas) / max(len(pubs_meli), 1) * 100, 1),
+                "activas_sin_mapeo_con_stock": len(activas_sin_mapeo),
+            },
+            "alertas": {
+                "critico": [
+                    {"item_id": p["item_id"], "titulo": p["titulo"], "stock": p["stock"]}
+                    for p in activas_sin_mapeo
+                ],
+                "sin_sku_en_meli": [
+                    {"item_id": p["item_id"], "titulo": p["titulo"], "stock": p["stock"]}
+                    for p in sin_sku_en_meli if p["status"] == "active"
+                ]
+            },
+            "detalle": {
+                "mapeadas": mapeadas[:10],
+                "sin_mapeo": sin_mapeo[:20]
+            }
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
