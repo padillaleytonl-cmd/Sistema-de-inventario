@@ -2037,133 +2037,7 @@ tbody td {
       </div>
     </div>
 
-    <!-- ══ MODAL IMPORTADOR MELI ══ -->
-    <div id="modalImportadorMeli" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
-      <div style="background:var(--bg);border-radius:20px;width:720px;max-width:95vw;max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,0.4);border:0.5px solid var(--border);">
-        
-        <!-- Header -->
-        <div style="padding:24px 28px 0;flex-shrink:0;">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
-            <div style="display:flex;align-items:center;gap:12px;">
-              <div style="width:40px;height:40px;background:linear-gradient(135deg,#FFE000,#FFA500);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;">📥</div>
-              <div>
-                <div style="font-size:16px;font-weight:700;color:var(--text);">Importar publicaciones de MercadoLibre</div>
-                <div style="font-size:12px;color:var(--muted);margin-top:1px;">Seller Center → Publicaciones → Modificar desde Excel</div>
-              </div>
-            </div>
-            <button onclick="cerrarImportadorMeli()" style="width:32px;height:32px;border-radius:8px;border:0.5px solid var(--border);background:var(--bg2);cursor:pointer;font-size:16px;color:var(--muted);display:flex;align-items:center;justify-content:center;">×</button>
-          </div>
 
-          <!-- Stepper -->
-          <div id="meliStepper" style="display:flex;align-items:center;gap:0;margin-bottom:24px;">
-            <div class="meli-step active" id="meliStep1">
-              <div class="meli-step-circle">1</div>
-              <div class="meli-step-label">Subir archivo</div>
-            </div>
-            <div class="meli-step-line"></div>
-            <div class="meli-step" id="meliStep2">
-              <div class="meli-step-circle">2</div>
-              <div class="meli-step-label">Revisar mapeos</div>
-            </div>
-            <div class="meli-step-line"></div>
-            <div class="meli-step" id="meliStep3">
-              <div class="meli-step-circle">3</div>
-              <div class="meli-step-label">Confirmar</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Body scrollable -->
-        <div style="flex:1;overflow-y:auto;padding:0 28px 28px;min-height:0;">
-
-          <!-- PASO 1: Subir archivo -->
-          <div id="meliPaso1">
-            <label id="meliDropZone" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;border:2px dashed var(--border);border-radius:14px;padding:48px 24px;cursor:pointer;transition:all .2s;background:var(--bg2);" 
-              ondragover="event.preventDefault();this.style.borderColor='#FFA500';"
-              ondragleave="this.style.borderColor='';"
-              ondrop="event.preventDefault();meliHandleDrop(event);">
-              <div style="font-size:36px;">📄</div>
-              <div style="font-size:14px;font-weight:600;color:var(--text);">Arrastra tu Excel aquí</div>
-              <div style="font-size:12px;color:var(--muted);">o haz clic para seleccionar el archivo</div>
-              <div style="font-size:11px;color:var(--hint);background:var(--bg);padding:4px 10px;border-radius:6px;border:0.5px solid var(--border);">Publicaciones-YYYY_MM_DD.xlsx</div>
-              <input type="file" accept=".xlsx" onchange="meliProcessFile(this.files[0])" style="display:none;" id="meliFileInput">
-            </label>
-          </div>
-
-          <!-- PASO 2: Revisar -->
-          <div id="meliPaso2" style="display:none;">
-            <!-- Stats -->
-            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px;">
-              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #d1fae5;">
-                <div style="font-size:26px;font-weight:700;color:#059669;" id="meliStatAuto">—</div>
-                <div style="font-size:11px;color:var(--muted);margin-top:3px;">✅ Nuevos automáticos</div>
-              </div>
-              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #dbeafe;">
-                <div style="font-size:26px;font-weight:700;color:#2563eb;" id="meliStatYa">—</div>
-                <div style="font-size:11px;color:var(--muted);margin-top:3px;">☑️ Ya mapeados</div>
-              </div>
-              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #fef3c7;">
-                <div style="font-size:26px;font-weight:700;color:#d97706;" id="meliStatAlias">—</div>
-                <div style="font-size:11px;color:var(--muted);margin-top:3px;">🔗 Requieren alias</div>
-              </div>
-              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #fee2e2;">
-                <div style="font-size:26px;font-weight:700;color:#dc2626;" id="meliStatNuevo">—</div>
-                <div style="font-size:11px;color:var(--muted);margin-top:3px;">➕ No en Lusync</div>
-              </div>
-            </div>
-
-            <!-- Tabs -->
-            <div style="display:flex;gap:4px;margin-bottom:14px;background:var(--bg2);padding:4px;border-radius:10px;">
-              <button class="meli-tab active" id="meliTabAuto" onclick="meliSwitchTab('auto')">✅ Nuevos <span id="meliTabAutoBadge" style="background:#059669;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
-              <button class="meli-tab" id="meliTabYa" onclick="meliSwitchTab('ya')">☑️ Ya mapeados <span id="meliTabYaBadge" style="background:#2563eb;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
-              <button class="meli-tab" id="meliTabAlias" onclick="meliSwitchTab('alias')">🔗 Alias <span id="meliTabAliasBadge" style="background:#d97706;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
-              <button class="meli-tab" id="meliTabNuevo" onclick="meliSwitchTab('nuevo')">➕ Nuevos <span id="meliTabNuevoBadge" style="background:#dc2626;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
-            </div>
-
-            <!-- Contenido tabs -->
-            <div id="meliTabContentAuto" style="display:block;">
-              <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Estos SKUs coinciden exactamente con Lusync y se mapearán automáticamente.</div>
-              <div id="meliListaAuto" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div>
-            </div>
-            <div id="meliTabContentYa" style="display:none;">
-              <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Estos SKUs ya están vinculados en Lusync — no se modificarán.</div>
-              <div id="meliListaYa" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div>
-            </div>
-            <div id="meliTabContentAlias" style="display:none;">
-              <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Estos SKUs existen en MercadoLibre con un nombre diferente al de Lusync. Selecciona el SKU Lusync equivalente.</div>
-              <div id="meliListaAlias" style="max-height:340px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div>
-            </div>
-            <div id="meliTabContentNuevo" style="display:none;">
-              <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Estos SKUs no existen en Lusync. No se mapearán — agrégalos primero en Inventario si corresponde.</div>
-              <div id="meliListaNuevo" style="max-height:280px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;overflow:hidden;"></div>
-            </div>
-
-            <div style="margin-top:20px;display:flex;justify-content:flex-end;">
-              <button onclick="meliIrPaso3()" style="padding:11px 28px;background:linear-gradient(135deg,#059669,#047857);color:white;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:8px;">
-                Continuar → Confirmar mapeos
-              </button>
-            </div>
-          </div>
-
-          <!-- PASO 3: Confirmar -->
-          <div id="meliPaso3" style="display:none;">
-            <div id="meliResumenFinal" style="background:var(--bg2);border-radius:12px;padding:20px;margin-bottom:20px;border:0.5px solid var(--border);"></div>
-            <div style="display:flex;gap:10px;justify-content:flex-end;">
-              <button onclick="meliVolverPaso2()" style="padding:11px 20px;background:var(--bg2);color:var(--text);border:0.5px solid var(--border);border-radius:10px;font-size:13px;cursor:pointer;">← Volver</button>
-              <button onclick="meliConfirmar()" style="padding:11px 28px;background:linear-gradient(135deg,#059669,#047857);color:white;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;">✅ Guardar mapeos</button>
-            </div>
-          </div>
-
-          <!-- Procesando -->
-          <div id="meliProcesando" style="display:none;text-align:center;padding:40px;">
-            <div style="font-size:32px;margin-bottom:12px;">⏳</div>
-            <div style="font-size:14px;color:var(--text);font-weight:600;" id="meliProcesandoMsg">Analizando archivo…</div>
-            <div style="font-size:12px;color:var(--muted);margin-top:4px;">Esto puede tomar unos segundos</div>
-          </div>
-
-        </div>
-      </div>
-    </div>
 
     <style>
     .meli-step { display:flex;flex-direction:column;align-items:center;gap:4px;flex:0 0 auto; }
@@ -2546,98 +2420,6 @@ tbody td {
       </div>
       <div class="header-actions">
         <button class="btn-secondary" onclick="cargarCanales()">↻ Refrescar</button>
-      </div>
-    </div>
-
-    <!-- ══ MODAL IMPORTADOR CANAL GENÉRICO (Walmart, Ripley, etc.) ══ -->
-    <div id="modalImportadorCanal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
-      <div style="background:var(--bg);border-radius:20px;width:720px;max-width:95vw;max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,0.4);border:0.5px solid var(--border);">
-        <div style="padding:24px 28px 0;flex-shrink:0;">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
-            <div style="display:flex;align-items:center;gap:12px;">
-              <div id="canalIcono" style="width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;">📥</div>
-              <div>
-                <div id="canalTitulo" style="font-size:16px;font-weight:700;color:var(--text);">Importar publicaciones</div>
-                <div id="canalSubtitulo" style="font-size:12px;color:var(--muted);margin-top:1px;">Sube el archivo exportado del marketplace</div>
-              </div>
-            </div>
-            <button onclick="cerrarImportadorCanal()" style="width:32px;height:32px;border-radius:8px;border:0.5px solid var(--border);background:var(--bg2);cursor:pointer;font-size:16px;color:var(--muted);display:flex;align-items:center;justify-content:center;">×</button>
-          </div>
-          <!-- Stepper -->
-          <div style="display:flex;align-items:center;gap:0;margin-bottom:24px;">
-            <div class="meli-step active" id="canalStep1"><div class="meli-step-circle">1</div><div class="meli-step-label">Subir archivo</div></div>
-            <div class="meli-step-line"></div>
-            <div class="meli-step" id="canalStep2"><div class="meli-step-circle">2</div><div class="meli-step-label">Revisar mapeos</div></div>
-            <div class="meli-step-line"></div>
-            <div class="meli-step" id="canalStep3"><div class="meli-step-circle">3</div><div class="meli-step-label">Confirmar</div></div>
-          </div>
-        </div>
-
-        <div style="flex:1;overflow-y:auto;padding:0 28px 28px;min-height:0;">
-          <!-- PASO 1 -->
-          <div id="canalPaso1">
-            <label id="canalDropZone" for="canalFileInput" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;border:2px dashed var(--border);border-radius:14px;padding:48px 24px;cursor:pointer;background:var(--bg2);"
-              ondragover="event.preventDefault();this.style.borderColor='#0071CE';"
-              ondragleave="this.style.borderColor='';"
-              ondrop="event.preventDefault();this.style.borderColor='';canalHandleDrop(event);">
-              <div style="font-size:36px;">📄</div>
-              <div style="font-size:14px;font-weight:600;color:var(--text);">Arrastra tu archivo aquí</div>
-              <div style="font-size:12px;color:var(--muted);">o haz clic para seleccionar</div>
-              <div id="canalFileHint" style="font-size:11px;color:var(--hint);background:var(--bg);padding:4px 10px;border-radius:6px;border:0.5px solid var(--border);">.csv</div>
-              <input type="file" id="canalFileInput" accept=".csv,.xlsx" style="display:none;" onchange="canalProcessFile(this.files[0])">
-            </label>
-          </div>
-
-          <!-- PASO 2 -->
-          <div id="canalPaso2" style="display:none;">
-            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px;">
-              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #d1fae5;">
-                <div style="font-size:26px;font-weight:700;color:#059669;" id="canalStatAuto">—</div>
-                <div style="font-size:11px;color:var(--muted);margin-top:3px;">✅ Nuevos automáticos</div>
-              </div>
-              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #dbeafe;">
-                <div style="font-size:26px;font-weight:700;color:#2563eb;" id="canalStatYa">—</div>
-                <div style="font-size:11px;color:var(--muted);margin-top:3px;">☑️ Ya mapeados</div>
-              </div>
-              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #fef3c7;">
-                <div style="font-size:26px;font-weight:700;color:#d97706;" id="canalStatAlias">—</div>
-                <div style="font-size:11px;color:var(--muted);margin-top:3px;">🔗 Requieren alias</div>
-              </div>
-              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #fee2e2;">
-                <div style="font-size:26px;font-weight:700;color:#dc2626;" id="canalStatNuevo">—</div>
-                <div style="font-size:11px;color:var(--muted);margin-top:3px;">➕ No en Lusync</div>
-              </div>
-            </div>
-            <div style="display:flex;gap:4px;margin-bottom:14px;background:var(--bg2);padding:4px;border-radius:10px;">
-              <button class="meli-tab active" id="canalTabAuto" onclick="canalSwitchTab('auto')">✅ Nuevos <span id="canalTabAutoBadge" style="background:#059669;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
-              <button class="meli-tab" id="canalTabYa" onclick="canalSwitchTab('ya')">☑️ Ya mapeados <span id="canalTabYaBadge" style="background:#2563eb;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
-              <button class="meli-tab" id="canalTabAlias" onclick="canalSwitchTab('alias')">🔗 Alias <span id="canalTabAliasBadge" style="background:#d97706;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
-              <button class="meli-tab" id="canalTabNuevo" onclick="canalSwitchTab('nuevo')">➕ Nuevos <span id="canalTabNuevoBadge" style="background:#dc2626;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
-            </div>
-            <div id="canalTabContentAuto"><div id="canalListaAuto" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div></div>
-            <div id="canalTabContentYa" style="display:none;"><div id="canalListaYa" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div></div>
-            <div id="canalTabContentAlias" style="display:none;"><div id="canalListaAlias" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div></div>
-            <div id="canalTabContentNuevo" style="display:none;"><div id="canalListaNuevo" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div></div>
-            <div style="margin-top:20px;display:flex;justify-content:flex-end;">
-              <button onclick="canalIrPaso3()" style="padding:11px 28px;background:linear-gradient(135deg,#059669,#047857);color:white;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;">Continuar → Confirmar mapeos</button>
-            </div>
-          </div>
-
-          <!-- PASO 3 -->
-          <div id="canalPaso3" style="display:none;">
-            <div id="canalResumenFinal" style="background:var(--bg2);border-radius:12px;padding:20px;margin-bottom:20px;border:0.5px solid var(--border);"></div>
-            <div style="display:flex;gap:10px;justify-content:flex-end;">
-              <button onclick="canalIrPaso(2)" style="padding:11px 20px;background:var(--bg2);color:var(--text);border:0.5px solid var(--border);border-radius:10px;font-size:13px;cursor:pointer;">← Volver</button>
-              <button onclick="canalConfirmar()" style="padding:11px 28px;background:linear-gradient(135deg,#059669,#047857);color:white;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;">✅ Guardar mapeos</button>
-            </div>
-          </div>
-
-          <!-- Procesando -->
-          <div id="canalProcesando" style="display:none;text-align:center;padding:40px;">
-            <div style="font-size:32px;margin-bottom:12px;">⏳</div>
-            <div style="font-size:14px;color:var(--text);font-weight:600;" id="canalProcesandoMsg">Analizando archivo…</div>
-          </div>
-        </div>
       </div>
     </div>
 
@@ -5220,7 +5002,227 @@ function imprimirEtiquetaDev(){
       <span class="meta">SKU: ${sku} · OC: ${oc}</span>
       <span class="canal-tag">${canal}</span>
     </div>
-  </body></html>`);
+      <!-- ══ MODAL IMPORTADOR CANAL GENÉRICO (Walmart, Ripley, etc.) ══ -->
+    <div id="modalImportadorCanal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
+      <div style="background:var(--bg);border-radius:20px;width:720px;max-width:95vw;max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,0.4);border:0.5px solid var(--border);">
+        <div style="padding:24px 28px 0;flex-shrink:0;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <div id="canalIcono" style="width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;">📥</div>
+              <div>
+                <div id="canalTitulo" style="font-size:16px;font-weight:700;color:var(--text);">Importar publicaciones</div>
+                <div id="canalSubtitulo" style="font-size:12px;color:var(--muted);margin-top:1px;">Sube el archivo exportado del marketplace</div>
+              </div>
+            </div>
+            <button onclick="cerrarImportadorCanal()" style="width:32px;height:32px;border-radius:8px;border:0.5px solid var(--border);background:var(--bg2);cursor:pointer;font-size:16px;color:var(--muted);display:flex;align-items:center;justify-content:center;">×</button>
+          </div>
+          <!-- Stepper -->
+          <div style="display:flex;align-items:center;gap:0;margin-bottom:24px;">
+            <div class="meli-step active" id="canalStep1"><div class="meli-step-circle">1</div><div class="meli-step-label">Subir archivo</div></div>
+            <div class="meli-step-line"></div>
+            <div class="meli-step" id="canalStep2"><div class="meli-step-circle">2</div><div class="meli-step-label">Revisar mapeos</div></div>
+            <div class="meli-step-line"></div>
+            <div class="meli-step" id="canalStep3"><div class="meli-step-circle">3</div><div class="meli-step-label">Confirmar</div></div>
+          </div>
+        </div>
+
+        <div style="flex:1;overflow-y:auto;padding:0 28px 28px;min-height:0;">
+          <!-- PASO 1 -->
+          <div id="canalPaso1">
+            <label id="canalDropZone" for="canalFileInput" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;border:2px dashed var(--border);border-radius:14px;padding:48px 24px;cursor:pointer;background:var(--bg2);"
+              ondragover="event.preventDefault();this.style.borderColor='#0071CE';"
+              ondragleave="this.style.borderColor='';"
+              ondrop="event.preventDefault();this.style.borderColor='';canalHandleDrop(event);">
+              <div style="font-size:36px;">📄</div>
+              <div style="font-size:14px;font-weight:600;color:var(--text);">Arrastra tu archivo aquí</div>
+              <div style="font-size:12px;color:var(--muted);">o haz clic para seleccionar</div>
+              <div id="canalFileHint" style="font-size:11px;color:var(--hint);background:var(--bg);padding:4px 10px;border-radius:6px;border:0.5px solid var(--border);">.csv</div>
+              <input type="file" id="canalFileInput" accept=".csv,.xlsx" style="display:none;" onchange="canalProcessFile(this.files[0])">
+            </label>
+          </div>
+
+          <!-- PASO 2 -->
+          <div id="canalPaso2" style="display:none;">
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px;">
+              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #d1fae5;">
+                <div style="font-size:26px;font-weight:700;color:#059669;" id="canalStatAuto">—</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">✅ Nuevos automáticos</div>
+              </div>
+              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #dbeafe;">
+                <div style="font-size:26px;font-weight:700;color:#2563eb;" id="canalStatYa">—</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">☑️ Ya mapeados</div>
+              </div>
+              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #fef3c7;">
+                <div style="font-size:26px;font-weight:700;color:#d97706;" id="canalStatAlias">—</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">🔗 Requieren alias</div>
+              </div>
+              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #fee2e2;">
+                <div style="font-size:26px;font-weight:700;color:#dc2626;" id="canalStatNuevo">—</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">➕ No en Lusync</div>
+              </div>
+            </div>
+            <div style="display:flex;gap:4px;margin-bottom:14px;background:var(--bg2);padding:4px;border-radius:10px;">
+              <button class="meli-tab active" id="canalTabAuto" onclick="canalSwitchTab('auto')">✅ Nuevos <span id="canalTabAutoBadge" style="background:#059669;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+              <button class="meli-tab" id="canalTabYa" onclick="canalSwitchTab('ya')">☑️ Ya mapeados <span id="canalTabYaBadge" style="background:#2563eb;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+              <button class="meli-tab" id="canalTabAlias" onclick="canalSwitchTab('alias')">🔗 Alias <span id="canalTabAliasBadge" style="background:#d97706;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+              <button class="meli-tab" id="canalTabNuevo" onclick="canalSwitchTab('nuevo')">➕ Nuevos <span id="canalTabNuevoBadge" style="background:#dc2626;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+            </div>
+            <div id="canalTabContentAuto"><div id="canalListaAuto" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div></div>
+            <div id="canalTabContentYa" style="display:none;"><div id="canalListaYa" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div></div>
+            <div id="canalTabContentAlias" style="display:none;"><div id="canalListaAlias" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div></div>
+            <div id="canalTabContentNuevo" style="display:none;"><div id="canalListaNuevo" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div></div>
+            <div style="margin-top:20px;display:flex;justify-content:flex-end;">
+              <button onclick="canalIrPaso3()" style="padding:11px 28px;background:linear-gradient(135deg,#059669,#047857);color:white;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;">Continuar → Confirmar mapeos</button>
+            </div>
+          </div>
+
+          <!-- PASO 3 -->
+          <div id="canalPaso3" style="display:none;">
+            <div id="canalResumenFinal" style="background:var(--bg2);border-radius:12px;padding:20px;margin-bottom:20px;border:0.5px solid var(--border);"></div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+              <button onclick="canalIrPaso(2)" style="padding:11px 20px;background:var(--bg2);color:var(--text);border:0.5px solid var(--border);border-radius:10px;font-size:13px;cursor:pointer;">← Volver</button>
+              <button onclick="canalConfirmar()" style="padding:11px 28px;background:linear-gradient(135deg,#059669,#047857);color:white;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;">✅ Guardar mapeos</button>
+            </div>
+          </div>
+
+          <!-- Procesando -->
+          <div id="canalProcesando" style="display:none;text-align:center;padding:40px;">
+            <div style="font-size:32px;margin-bottom:12px;">⏳</div>
+            <div style="font-size:14px;color:var(--text);font-weight:600;" id="canalProcesandoMsg">Analizando archivo…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- ══ MODAL IMPORTADOR MELI ══ -->
+    <div id="modalImportadorMeli" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
+      <div style="background:var(--bg);border-radius:20px;width:720px;max-width:95vw;max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,0.4);border:0.5px solid var(--border);">
+        
+        <!-- Header -->
+        <div style="padding:24px 28px 0;flex-shrink:0;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <div style="width:40px;height:40px;background:linear-gradient(135deg,#FFE000,#FFA500);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;">📥</div>
+              <div>
+                <div style="font-size:16px;font-weight:700;color:var(--text);">Importar publicaciones de MercadoLibre</div>
+                <div style="font-size:12px;color:var(--muted);margin-top:1px;">Seller Center → Publicaciones → Modificar desde Excel</div>
+              </div>
+            </div>
+            <button onclick="cerrarImportadorMeli()" style="width:32px;height:32px;border-radius:8px;border:0.5px solid var(--border);background:var(--bg2);cursor:pointer;font-size:16px;color:var(--muted);display:flex;align-items:center;justify-content:center;">×</button>
+          </div>
+
+          <!-- Stepper -->
+          <div id="meliStepper" style="display:flex;align-items:center;gap:0;margin-bottom:24px;">
+            <div class="meli-step active" id="meliStep1">
+              <div class="meli-step-circle">1</div>
+              <div class="meli-step-label">Subir archivo</div>
+            </div>
+            <div class="meli-step-line"></div>
+            <div class="meli-step" id="meliStep2">
+              <div class="meli-step-circle">2</div>
+              <div class="meli-step-label">Revisar mapeos</div>
+            </div>
+            <div class="meli-step-line"></div>
+            <div class="meli-step" id="meliStep3">
+              <div class="meli-step-circle">3</div>
+              <div class="meli-step-label">Confirmar</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Body scrollable -->
+        <div style="flex:1;overflow-y:auto;padding:0 28px 28px;min-height:0;">
+
+          <!-- PASO 1: Subir archivo -->
+          <div id="meliPaso1">
+            <label id="meliDropZone" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;border:2px dashed var(--border);border-radius:14px;padding:48px 24px;cursor:pointer;transition:all .2s;background:var(--bg2);" 
+              ondragover="event.preventDefault();this.style.borderColor='#FFA500';"
+              ondragleave="this.style.borderColor='';"
+              ondrop="event.preventDefault();meliHandleDrop(event);">
+              <div style="font-size:36px;">📄</div>
+              <div style="font-size:14px;font-weight:600;color:var(--text);">Arrastra tu Excel aquí</div>
+              <div style="font-size:12px;color:var(--muted);">o haz clic para seleccionar el archivo</div>
+              <div style="font-size:11px;color:var(--hint);background:var(--bg);padding:4px 10px;border-radius:6px;border:0.5px solid var(--border);">Publicaciones-YYYY_MM_DD.xlsx</div>
+              <input type="file" accept=".xlsx" onchange="meliProcessFile(this.files[0])" style="display:none;" id="meliFileInput">
+            </label>
+          </div>
+
+          <!-- PASO 2: Revisar -->
+          <div id="meliPaso2" style="display:none;">
+            <!-- Stats -->
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px;">
+              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #d1fae5;">
+                <div style="font-size:26px;font-weight:700;color:#059669;" id="meliStatAuto">—</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">✅ Nuevos automáticos</div>
+              </div>
+              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #dbeafe;">
+                <div style="font-size:26px;font-weight:700;color:#2563eb;" id="meliStatYa">—</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">☑️ Ya mapeados</div>
+              </div>
+              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #fef3c7;">
+                <div style="font-size:26px;font-weight:700;color:#d97706;" id="meliStatAlias">—</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">🔗 Requieren alias</div>
+              </div>
+              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #fee2e2;">
+                <div style="font-size:26px;font-weight:700;color:#dc2626;" id="meliStatNuevo">—</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">➕ No en Lusync</div>
+              </div>
+            </div>
+
+            <!-- Tabs -->
+            <div style="display:flex;gap:4px;margin-bottom:14px;background:var(--bg2);padding:4px;border-radius:10px;">
+              <button class="meli-tab active" id="meliTabAuto" onclick="meliSwitchTab('auto')">✅ Nuevos <span id="meliTabAutoBadge" style="background:#059669;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+              <button class="meli-tab" id="meliTabYa" onclick="meliSwitchTab('ya')">☑️ Ya mapeados <span id="meliTabYaBadge" style="background:#2563eb;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+              <button class="meli-tab" id="meliTabAlias" onclick="meliSwitchTab('alias')">🔗 Alias <span id="meliTabAliasBadge" style="background:#d97706;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+              <button class="meli-tab" id="meliTabNuevo" onclick="meliSwitchTab('nuevo')">➕ Nuevos <span id="meliTabNuevoBadge" style="background:#dc2626;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+            </div>
+
+            <!-- Contenido tabs -->
+            <div id="meliTabContentAuto" style="display:block;">
+              <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Estos SKUs coinciden exactamente con Lusync y se mapearán automáticamente.</div>
+              <div id="meliListaAuto" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div>
+            </div>
+            <div id="meliTabContentYa" style="display:none;">
+              <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Estos SKUs ya están vinculados en Lusync — no se modificarán.</div>
+              <div id="meliListaYa" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div>
+            </div>
+            <div id="meliTabContentAlias" style="display:none;">
+              <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Estos SKUs existen en MercadoLibre con un nombre diferente al de Lusync. Selecciona el SKU Lusync equivalente.</div>
+              <div id="meliListaAlias" style="max-height:340px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div>
+            </div>
+            <div id="meliTabContentNuevo" style="display:none;">
+              <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Estos SKUs no existen en Lusync. No se mapearán — agrégalos primero en Inventario si corresponde.</div>
+              <div id="meliListaNuevo" style="max-height:280px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;overflow:hidden;"></div>
+            </div>
+
+            <div style="margin-top:20px;display:flex;justify-content:flex-end;">
+              <button onclick="meliIrPaso3()" style="padding:11px 28px;background:linear-gradient(135deg,#059669,#047857);color:white;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:8px;">
+                Continuar → Confirmar mapeos
+              </button>
+            </div>
+          </div>
+
+          <!-- PASO 3: Confirmar -->
+          <div id="meliPaso3" style="display:none;">
+            <div id="meliResumenFinal" style="background:var(--bg2);border-radius:12px;padding:20px;margin-bottom:20px;border:0.5px solid var(--border);"></div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+              <button onclick="meliVolverPaso2()" style="padding:11px 20px;background:var(--bg2);color:var(--text);border:0.5px solid var(--border);border-radius:10px;font-size:13px;cursor:pointer;">← Volver</button>
+              <button onclick="meliConfirmar()" style="padding:11px 28px;background:linear-gradient(135deg,#059669,#047857);color:white;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;">✅ Guardar mapeos</button>
+            </div>
+          </div>
+
+          <!-- Procesando -->
+          <div id="meliProcesando" style="display:none;text-align:center;padding:40px;">
+            <div style="font-size:32px;margin-bottom:12px;">⏳</div>
+            <div style="font-size:14px;color:var(--text);font-weight:600;" id="meliProcesandoMsg">Analizando archivo…</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:4px;">Esto puede tomar unos segundos</div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+</body></html>`);
   w.document.close();
 }
 
@@ -9463,5 +9465,225 @@ async function ejecutarTransferencia(){
 }
 </script>
 
+    <!-- ══ MODAL IMPORTADOR CANAL GENÉRICO (Walmart, Ripley, etc.) ══ -->
+    <div id="modalImportadorCanal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
+      <div style="background:var(--bg);border-radius:20px;width:720px;max-width:95vw;max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,0.4);border:0.5px solid var(--border);">
+        <div style="padding:24px 28px 0;flex-shrink:0;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <div id="canalIcono" style="width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;">📥</div>
+              <div>
+                <div id="canalTitulo" style="font-size:16px;font-weight:700;color:var(--text);">Importar publicaciones</div>
+                <div id="canalSubtitulo" style="font-size:12px;color:var(--muted);margin-top:1px;">Sube el archivo exportado del marketplace</div>
+              </div>
+            </div>
+            <button onclick="cerrarImportadorCanal()" style="width:32px;height:32px;border-radius:8px;border:0.5px solid var(--border);background:var(--bg2);cursor:pointer;font-size:16px;color:var(--muted);display:flex;align-items:center;justify-content:center;">×</button>
+          </div>
+          <!-- Stepper -->
+          <div style="display:flex;align-items:center;gap:0;margin-bottom:24px;">
+            <div class="meli-step active" id="canalStep1"><div class="meli-step-circle">1</div><div class="meli-step-label">Subir archivo</div></div>
+            <div class="meli-step-line"></div>
+            <div class="meli-step" id="canalStep2"><div class="meli-step-circle">2</div><div class="meli-step-label">Revisar mapeos</div></div>
+            <div class="meli-step-line"></div>
+            <div class="meli-step" id="canalStep3"><div class="meli-step-circle">3</div><div class="meli-step-label">Confirmar</div></div>
+          </div>
+        </div>
+
+        <div style="flex:1;overflow-y:auto;padding:0 28px 28px;min-height:0;">
+          <!-- PASO 1 -->
+          <div id="canalPaso1">
+            <label id="canalDropZone" for="canalFileInput" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;border:2px dashed var(--border);border-radius:14px;padding:48px 24px;cursor:pointer;background:var(--bg2);"
+              ondragover="event.preventDefault();this.style.borderColor='#0071CE';"
+              ondragleave="this.style.borderColor='';"
+              ondrop="event.preventDefault();this.style.borderColor='';canalHandleDrop(event);">
+              <div style="font-size:36px;">📄</div>
+              <div style="font-size:14px;font-weight:600;color:var(--text);">Arrastra tu archivo aquí</div>
+              <div style="font-size:12px;color:var(--muted);">o haz clic para seleccionar</div>
+              <div id="canalFileHint" style="font-size:11px;color:var(--hint);background:var(--bg);padding:4px 10px;border-radius:6px;border:0.5px solid var(--border);">.csv</div>
+              <input type="file" id="canalFileInput" accept=".csv,.xlsx" style="display:none;" onchange="canalProcessFile(this.files[0])">
+            </label>
+          </div>
+
+          <!-- PASO 2 -->
+          <div id="canalPaso2" style="display:none;">
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px;">
+              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #d1fae5;">
+                <div style="font-size:26px;font-weight:700;color:#059669;" id="canalStatAuto">—</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">✅ Nuevos automáticos</div>
+              </div>
+              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #dbeafe;">
+                <div style="font-size:26px;font-weight:700;color:#2563eb;" id="canalStatYa">—</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">☑️ Ya mapeados</div>
+              </div>
+              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #fef3c7;">
+                <div style="font-size:26px;font-weight:700;color:#d97706;" id="canalStatAlias">—</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">🔗 Requieren alias</div>
+              </div>
+              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #fee2e2;">
+                <div style="font-size:26px;font-weight:700;color:#dc2626;" id="canalStatNuevo">—</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">➕ No en Lusync</div>
+              </div>
+            </div>
+            <div style="display:flex;gap:4px;margin-bottom:14px;background:var(--bg2);padding:4px;border-radius:10px;">
+              <button class="meli-tab active" id="canalTabAuto" onclick="canalSwitchTab('auto')">✅ Nuevos <span id="canalTabAutoBadge" style="background:#059669;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+              <button class="meli-tab" id="canalTabYa" onclick="canalSwitchTab('ya')">☑️ Ya mapeados <span id="canalTabYaBadge" style="background:#2563eb;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+              <button class="meli-tab" id="canalTabAlias" onclick="canalSwitchTab('alias')">🔗 Alias <span id="canalTabAliasBadge" style="background:#d97706;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+              <button class="meli-tab" id="canalTabNuevo" onclick="canalSwitchTab('nuevo')">➕ Nuevos <span id="canalTabNuevoBadge" style="background:#dc2626;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+            </div>
+            <div id="canalTabContentAuto"><div id="canalListaAuto" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div></div>
+            <div id="canalTabContentYa" style="display:none;"><div id="canalListaYa" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div></div>
+            <div id="canalTabContentAlias" style="display:none;"><div id="canalListaAlias" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div></div>
+            <div id="canalTabContentNuevo" style="display:none;"><div id="canalListaNuevo" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div></div>
+            <div style="margin-top:20px;display:flex;justify-content:flex-end;">
+              <button onclick="canalIrPaso3()" style="padding:11px 28px;background:linear-gradient(135deg,#059669,#047857);color:white;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;">Continuar → Confirmar mapeos</button>
+            </div>
+          </div>
+
+          <!-- PASO 3 -->
+          <div id="canalPaso3" style="display:none;">
+            <div id="canalResumenFinal" style="background:var(--bg2);border-radius:12px;padding:20px;margin-bottom:20px;border:0.5px solid var(--border);"></div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+              <button onclick="canalIrPaso(2)" style="padding:11px 20px;background:var(--bg2);color:var(--text);border:0.5px solid var(--border);border-radius:10px;font-size:13px;cursor:pointer;">← Volver</button>
+              <button onclick="canalConfirmar()" style="padding:11px 28px;background:linear-gradient(135deg,#059669,#047857);color:white;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;">✅ Guardar mapeos</button>
+            </div>
+          </div>
+
+          <!-- Procesando -->
+          <div id="canalProcesando" style="display:none;text-align:center;padding:40px;">
+            <div style="font-size:32px;margin-bottom:12px;">⏳</div>
+            <div style="font-size:14px;color:var(--text);font-weight:600;" id="canalProcesandoMsg">Analizando archivo…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- ══ MODAL IMPORTADOR MELI ══ -->
+    <div id="modalImportadorMeli" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
+      <div style="background:var(--bg);border-radius:20px;width:720px;max-width:95vw;max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,0.4);border:0.5px solid var(--border);">
+        
+        <!-- Header -->
+        <div style="padding:24px 28px 0;flex-shrink:0;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <div style="width:40px;height:40px;background:linear-gradient(135deg,#FFE000,#FFA500);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;">📥</div>
+              <div>
+                <div style="font-size:16px;font-weight:700;color:var(--text);">Importar publicaciones de MercadoLibre</div>
+                <div style="font-size:12px;color:var(--muted);margin-top:1px;">Seller Center → Publicaciones → Modificar desde Excel</div>
+              </div>
+            </div>
+            <button onclick="cerrarImportadorMeli()" style="width:32px;height:32px;border-radius:8px;border:0.5px solid var(--border);background:var(--bg2);cursor:pointer;font-size:16px;color:var(--muted);display:flex;align-items:center;justify-content:center;">×</button>
+          </div>
+
+          <!-- Stepper -->
+          <div id="meliStepper" style="display:flex;align-items:center;gap:0;margin-bottom:24px;">
+            <div class="meli-step active" id="meliStep1">
+              <div class="meli-step-circle">1</div>
+              <div class="meli-step-label">Subir archivo</div>
+            </div>
+            <div class="meli-step-line"></div>
+            <div class="meli-step" id="meliStep2">
+              <div class="meli-step-circle">2</div>
+              <div class="meli-step-label">Revisar mapeos</div>
+            </div>
+            <div class="meli-step-line"></div>
+            <div class="meli-step" id="meliStep3">
+              <div class="meli-step-circle">3</div>
+              <div class="meli-step-label">Confirmar</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Body scrollable -->
+        <div style="flex:1;overflow-y:auto;padding:0 28px 28px;min-height:0;">
+
+          <!-- PASO 1: Subir archivo -->
+          <div id="meliPaso1">
+            <label id="meliDropZone" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;border:2px dashed var(--border);border-radius:14px;padding:48px 24px;cursor:pointer;transition:all .2s;background:var(--bg2);" 
+              ondragover="event.preventDefault();this.style.borderColor='#FFA500';"
+              ondragleave="this.style.borderColor='';"
+              ondrop="event.preventDefault();meliHandleDrop(event);">
+              <div style="font-size:36px;">📄</div>
+              <div style="font-size:14px;font-weight:600;color:var(--text);">Arrastra tu Excel aquí</div>
+              <div style="font-size:12px;color:var(--muted);">o haz clic para seleccionar el archivo</div>
+              <div style="font-size:11px;color:var(--hint);background:var(--bg);padding:4px 10px;border-radius:6px;border:0.5px solid var(--border);">Publicaciones-YYYY_MM_DD.xlsx</div>
+              <input type="file" accept=".xlsx" onchange="meliProcessFile(this.files[0])" style="display:none;" id="meliFileInput">
+            </label>
+          </div>
+
+          <!-- PASO 2: Revisar -->
+          <div id="meliPaso2" style="display:none;">
+            <!-- Stats -->
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px;">
+              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #d1fae5;">
+                <div style="font-size:26px;font-weight:700;color:#059669;" id="meliStatAuto">—</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">✅ Nuevos automáticos</div>
+              </div>
+              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #dbeafe;">
+                <div style="font-size:26px;font-weight:700;color:#2563eb;" id="meliStatYa">—</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">☑️ Ya mapeados</div>
+              </div>
+              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #fef3c7;">
+                <div style="font-size:26px;font-weight:700;color:#d97706;" id="meliStatAlias">—</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">🔗 Requieren alias</div>
+              </div>
+              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #fee2e2;">
+                <div style="font-size:26px;font-weight:700;color:#dc2626;" id="meliStatNuevo">—</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">➕ No en Lusync</div>
+              </div>
+            </div>
+
+            <!-- Tabs -->
+            <div style="display:flex;gap:4px;margin-bottom:14px;background:var(--bg2);padding:4px;border-radius:10px;">
+              <button class="meli-tab active" id="meliTabAuto" onclick="meliSwitchTab('auto')">✅ Nuevos <span id="meliTabAutoBadge" style="background:#059669;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+              <button class="meli-tab" id="meliTabYa" onclick="meliSwitchTab('ya')">☑️ Ya mapeados <span id="meliTabYaBadge" style="background:#2563eb;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+              <button class="meli-tab" id="meliTabAlias" onclick="meliSwitchTab('alias')">🔗 Alias <span id="meliTabAliasBadge" style="background:#d97706;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+              <button class="meli-tab" id="meliTabNuevo" onclick="meliSwitchTab('nuevo')">➕ Nuevos <span id="meliTabNuevoBadge" style="background:#dc2626;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+            </div>
+
+            <!-- Contenido tabs -->
+            <div id="meliTabContentAuto" style="display:block;">
+              <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Estos SKUs coinciden exactamente con Lusync y se mapearán automáticamente.</div>
+              <div id="meliListaAuto" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div>
+            </div>
+            <div id="meliTabContentYa" style="display:none;">
+              <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Estos SKUs ya están vinculados en Lusync — no se modificarán.</div>
+              <div id="meliListaYa" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div>
+            </div>
+            <div id="meliTabContentAlias" style="display:none;">
+              <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Estos SKUs existen en MercadoLibre con un nombre diferente al de Lusync. Selecciona el SKU Lusync equivalente.</div>
+              <div id="meliListaAlias" style="max-height:340px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div>
+            </div>
+            <div id="meliTabContentNuevo" style="display:none;">
+              <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Estos SKUs no existen en Lusync. No se mapearán — agrégalos primero en Inventario si corresponde.</div>
+              <div id="meliListaNuevo" style="max-height:280px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;overflow:hidden;"></div>
+            </div>
+
+            <div style="margin-top:20px;display:flex;justify-content:flex-end;">
+              <button onclick="meliIrPaso3()" style="padding:11px 28px;background:linear-gradient(135deg,#059669,#047857);color:white;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:8px;">
+                Continuar → Confirmar mapeos
+              </button>
+            </div>
+          </div>
+
+          <!-- PASO 3: Confirmar -->
+          <div id="meliPaso3" style="display:none;">
+            <div id="meliResumenFinal" style="background:var(--bg2);border-radius:12px;padding:20px;margin-bottom:20px;border:0.5px solid var(--border);"></div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+              <button onclick="meliVolverPaso2()" style="padding:11px 20px;background:var(--bg2);color:var(--text);border:0.5px solid var(--border);border-radius:10px;font-size:13px;cursor:pointer;">← Volver</button>
+              <button onclick="meliConfirmar()" style="padding:11px 28px;background:linear-gradient(135deg,#059669,#047857);color:white;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;">✅ Guardar mapeos</button>
+            </div>
+          </div>
+
+          <!-- Procesando -->
+          <div id="meliProcesando" style="display:none;text-align:center;padding:40px;">
+            <div style="font-size:32px;margin-bottom:12px;">⏳</div>
+            <div style="font-size:14px;color:var(--text);font-weight:600;" id="meliProcesandoMsg">Analizando archivo…</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:4px;">Esto puede tomar unos segundos</div>
+          </div>
+
+        </div>
+      </div>
+    </div>
 </body>
 </html>
