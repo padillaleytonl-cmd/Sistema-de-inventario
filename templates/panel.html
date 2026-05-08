@@ -2068,7 +2068,7 @@ tbody td {
         </div>
 
         <!-- Body scrollable -->
-        <div style="flex:1;overflow-y:auto;padding:0 28px 28px;">
+        <div style="flex:1;overflow-y:auto;padding:0 28px 28px;min-height:0;">
 
           <!-- PASO 1: Subir archivo -->
           <div id="meliPaso1">
@@ -8611,19 +8611,26 @@ function meliRenderPaso2(data) {
   document.getElementById('meliListaAlias').innerHTML = alias.length === 0
     ? '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">Ninguno — todos los SKUs coinciden exactamente ✅</div>'
     : alias.map((m, i) => {
+        const aliasId = 'alias_' + i;
+        const selectId = 'sel_' + i;
         const opts = (_meliData.skus_lusync_disponibles || [])
           .map(s => `<option value="${s}" ${s === m.sku_lusync_sugerido ? 'selected' : ''}>${s}</option>`)
           .join('');
         return `
           <div class="meli-row" style="flex-wrap:wrap;gap:8px;">
-            <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:200px;">
+            <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:200px;flex-wrap:wrap;">
               <span class="meli-sku-tag" style="border-color:#d97706;color:#d97706;">${m.sku_meli}</span>
               <span class="meli-arrow">→</span>
-              <select onchange="_meliAliasMap['${m.sku_meli}+${m.item_id}']=this.value" 
-                style="padding:4px 8px;border:0.5px solid var(--border);border-radius:6px;font-size:11px;background:var(--bg);color:var(--text);font-family:monospace;">
-                <option value="">-- Ignorar --</option>
-                ${opts}
-              </select>
+              <div style="display:flex;flex-direction:column;gap:3px;">
+                <input type="text" placeholder="🔍 Buscar SKU..." 
+                  oninput="meliFilterSelect('${selectId}', this.value)"
+                  style="padding:3px 8px;border:0.5px solid #d97706;border-radius:5px;font-size:11px;background:var(--bg);color:var(--text);font-family:monospace;width:160px;outline:none;">
+                <select id="${selectId}" onchange="_meliAliasMap['${m.sku_meli}+${m.item_id}']=this.value" 
+                  style="padding:4px 8px;border:0.5px solid var(--border);border-radius:6px;font-size:11px;background:var(--bg);color:var(--text);font-family:monospace;width:160px;">
+                  <option value="">-- Ignorar --</option>
+                  ${opts}
+                </select>
+              </div>
             </div>
             <span style="font-size:11px;color:var(--muted);flex:1;">${m.titulo || ''}</span>
           </div>`;
@@ -8640,6 +8647,22 @@ function meliRenderPaso2(data) {
         </div>`).join('');
 
   meliSwitchTab('auto');
+}
+
+function meliFilterSelect(selectId, query) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  const q = query.toLowerCase().trim();
+  Array.from(sel.options).forEach(opt => {
+    if (opt.value === '') return; // siempre mostrar "Ignorar"
+    opt.style.display = !q || opt.value.toLowerCase().includes(q) ? '' : 'none';
+  });
+  // Si hay un único resultado visible, seleccionarlo automáticamente
+  const visibles = Array.from(sel.options).filter(o => o.value && o.style.display !== 'none');
+  if (visibles.length === 1) {
+    sel.value = visibles[0].value;
+    sel.dispatchEvent(new Event('change'));
+  }
 }
 
 function meliSwitchTab(tab) {
