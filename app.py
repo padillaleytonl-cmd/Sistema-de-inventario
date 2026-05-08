@@ -12294,10 +12294,9 @@ def admin_importar_excel_falabella():
 @app.route("/admin/importar_excel_paris", methods=["POST"])
 def admin_importar_excel_paris():
     """
-    Importa Excel de Paris (export-product.xlsx).
-    Múltiples hojas por categoría. Fila 4=headers legibles, fila 7+=datos.
-    Columnas clave: title(0), id(1), skuSeller(2)
-    Las variantes tienen el mismo id de producto pero diferente skuSeller.
+    Importa Excel de precios Paris (export-price.xlsx).
+    Hoja: marketplace. Fila 1=headers, col 0=SKU Paris, col 1=SELLER SKU, col 2=Nombre.
+    El archivo tiene XML inválido — se parchea antes de leer.
     """
     if not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
@@ -12305,14 +12304,82 @@ def admin_importar_excel_paris():
     if "archivo" not in request.files:
         return jsonify({"error": "Envía el archivo con campo 'archivo'"}), 400
     try:
-        import io, json, openpyxl
+        import io, json, zipfile, re, openpyxl
         from inventario import get_conn, agregar_publicacion, cargar_productos
+
         archivo = request.files["archivo"]
         alias_map = json.loads(request.form.get("alias_map", "{}"))
-        wb = openpyxl.load_workbook(io.BytesIO(archivo.read()), data_only=True, read_only=True)
+        raw = archivo.read()
+
+        # Parchear XML inválido del archivo Paris (colores RGB sin canal alpha y errorStyle inválido)
+        def fix_color(m):
+            rgb = m.group(1)
+            if len(rgb) == 6: return f'rgb="FF{rgb}"' 
+            elif len(rgb) == 7: return f'rgb="FF{rgb[:6]}"' 
+            return m.group(0)
+
+        with zipfile.ZipFile(io.BytesIO(raw)) as zin:
+            styles = zin.read('xl/styles.xml').decode('utf-8')
+            styles_fixed = re.sub(r'rgb="([0-9A-Fa-f]+)"', fix_color, styles)
+            sheets_patched = {}
+            for name in zin.namelist():
+                if name.startswith('xl/worksheets/') and name.endswith('.xml'):
+                    xml = zin.read(name).decode('utf-8')
+                    xml = re.sub(r'errorStyle="[^"]*"', '', xml)
+                    sheets_patched[name] = xml
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(raw)) as zin:
+            with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zout:
+                for name in zin.namelist():
+                    if name == 'xl/styles.xml':
+                        zout.writestr(name, styles_fixed.encode('utf-8'))
+                    elif name in sheets_patched:
+                        zout.writestr(name, sheets_patched[name].encode('utf-8'))
+                    else:
+                        zout.writestr(name, zin.read(name))
+        buf.seek(0)
+
+        wb = openpyxl.load_workbook(buf, data_only=True, read_only=True)
+
+        # Buscar hoja con datos — preferir 'marketplace', luego cualquiera con SELLER SKU en fila 1
+        ws = None
+        for sname in wb.sheetnames:
+            if sname.lower() in ('marketplace', 'paris'):
+                ws = wb[sname]; break
+        if not ws:
+            for sname in wb.sheetnames:
+                if sname.endswith('data') or sname.lower() in ('configuration','easydata','parisdata','spiddata'): continue
+                ws_try = wb[sname]
+                rows_try = list(ws_try.iter_rows(values_only=True))
+                if rows_try and any('seller' in str(c).lower() for c in rows_try[0] if c):
+                    ws = ws_try; break
+        if not ws:
+            return jsonify({"error": f"No se encontró hoja de datos. Hojas: {wb.sheetnames}"}), 400
+
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            return jsonify({"error": "Hoja vacía"}), 400
+
+        # Headers en fila 1
+        headers = [str(h).strip().lower() if h else "" for h in rows[0]]
+        def col(names):
+            for name in names:
+                for i, h in enumerate(headers):
+                    if name in h: return i
+            return None
+
+        idx_sku_seller = col(['seller sku', 'sellersku', 'sku seller'])
+        idx_sku_paris  = col(['sku(', 'sku *', 'sku(*']) 
+        if idx_sku_paris is None: idx_sku_paris = 0
+        idx_titulo     = col(['nombre', 'name', 'título']) or 2
+        if idx_sku_seller is None: idx_sku_seller = 1
+
+        # Cargar Lusync
         productos = cargar_productos()
         sku_real = {p["sku"].upper().strip(): p["sku"] for p in productos}
         lista_skus_lusync = sorted(sku_real.values())
+
         mapeados_existentes = {}
         try:
             conn = get_conn(); cur = conn.cursor()
@@ -12327,42 +12394,33 @@ def admin_importar_excel_paris():
             except Exception: pass
             cur.close(); conn.close()
         except Exception: pass
-        # Hojas a ignorar
-        hojas_ignorar = {'Ayuda','configuration'}
+
         automaticos=[]; requieren_alias=[]; no_en_lusync=[]; ya_mapeados=[]; skus_vistos=set()
-        for sheet_name in wb.sheetnames:
-            if sheet_name in hojas_ignorar or sheet_name.endswith('data'): continue
-            ws = wb[sheet_name]
-            rows = list(ws.iter_rows(values_only=True))
-            if len(rows) < 7: continue
-            # Fila 4 (idx 3) = headers legibles
-            headers = [str(h).strip().lower() if h else "" for h in rows[3]]
-            def col(name):
-                for i,h in enumerate(headers):
-                    if name in h: return i
-                return None
-            idx_sku   = col("sku seller") or col("skuseller") or 2
-            idx_title = col("nombre") or col("title") or 0
-            idx_id    = col("sku") if col("sku") != idx_sku else 1
-            if idx_id is None: idx_id = 1
-            for row in rows[6:]:  # datos desde fila 7
-                sku_par = str(row[idx_sku] or "").strip() if idx_sku < len(row) else ""
-                titulo  = str(row[idx_title] or "").strip() if idx_title < len(row) else ""
-                item_id = str(row[idx_id] or "").strip() if idx_id < len(row) else ""
-                if not sku_par or sku_par.upper() in skus_vistos: continue
-                skus_vistos.add(sku_par.upper())
-                entry = {"sku_canal": sku_par, "titulo": titulo, "item_id": item_id,
-                         "stock": 0, "estado": "", "hoja": sheet_name}
-                existente = mapeados_existentes.get(sku_par.upper())
-                if existente:
-                    ya_mapeados.append({**entry, "sku_lusync": existente.get("sku_lusync", sku_par)}); continue
-                sku_lusync_exacto = sku_real.get(sku_par.upper())
-                if sku_lusync_exacto:
-                    automaticos.append({**entry, "sku_lusync": sku_lusync_exacto}); continue
-                alias_key = sku_par + "+" + item_id
-                if alias_key in alias_map and alias_map[alias_key]:
-                    automaticos.append({**entry, "sku_lusync": alias_map[alias_key], "via_alias": True}); continue
-                requieren_alias.append({**entry, "sku_lusync_sugerido": ""})
+
+        for row in rows[1:]:
+            row = list(row)
+            sku_seller = str(row[idx_sku_seller] or "").strip() if idx_sku_seller < len(row) else ""
+            sku_paris  = str(row[idx_sku_paris]  or "").strip() if idx_sku_paris  < len(row) else ""
+            titulo     = str(row[idx_titulo]     or "").strip() if idx_titulo     < len(row) else ""
+
+            # Usar seller SKU como clave principal (es el SKU de Lusync)
+            sku_usar = sku_seller or sku_paris
+            if not sku_usar or sku_usar.upper() in skus_vistos: continue
+            skus_vistos.add(sku_usar.upper())
+
+            entry = {"sku_canal": sku_usar, "titulo": titulo, "item_id": sku_paris, "stock": 0, "estado": ""}
+
+            existente = mapeados_existentes.get(sku_usar.upper())
+            if existente:
+                ya_mapeados.append({**entry, "sku_lusync": existente.get("sku_lusync", sku_usar)}); continue
+            sku_lusync_exacto = sku_real.get(sku_usar.upper())
+            if sku_lusync_exacto:
+                automaticos.append({**entry, "sku_lusync": sku_lusync_exacto}); continue
+            alias_key = sku_usar + "+" + sku_paris
+            if alias_key in alias_map and alias_map[alias_key]:
+                automaticos.append({**entry, "sku_lusync": alias_map[alias_key], "via_alias": True}); continue
+            requieren_alias.append({**entry, "sku_lusync_sugerido": ""})
+
         guardados=0; errores=[]
         if ejecutar:
             for m in automaticos:
@@ -12372,6 +12430,7 @@ def admin_importar_excel_paris():
                         notas="importado_excel_paris")
                     guardados += 1
                 except Exception as e: errores.append(f"{m['sku_canal']}: {str(e)}")
+
         return jsonify({"canal":"Paris","automaticos":automaticos,"requieren_alias":requieren_alias,
             "no_en_lusync":no_en_lusync,"ya_mapeados":ya_mapeados,"skus_lusync_disponibles":lista_skus_lusync,
             "stats":{"total":len(automaticos)+len(requieren_alias)+len(no_en_lusync)+len(ya_mapeados),
