@@ -12613,8 +12613,16 @@ def admin_test_sync_sku():
         from inventario import get_conn
         # Stock total
         conn = get_conn(); cur = conn.cursor()
-        cur.execute("SELECT COALESCE(SUM(cantidad),0) FROM stock_bodega WHERE sku=%s", (sku,))
-        stock = int(cur.fetchone()[0] or 0)
+        # Debug: leer ambas fuentes para comparar
+        cur.execute("SELECT stock FROM productos WHERE sku=%s", (sku,))
+        row = cur.fetchone()
+        stock_productos = int(row[0]) if row and row[0] is not None else 0
+        
+        cur.execute("SELECT bodega_codigo, cantidad FROM stock_bodega WHERE sku=%s", (sku,))
+        bodegas = [{"bodega": r[0], "cantidad": r[1]} for r in cur.fetchall()]
+        suma_bodegas = sum(b["cantidad"] for b in bodegas)
+        
+        stock = stock_productos  # usar productos como fuente
         # Mapeos por canal
         cur.execute("""
             SELECT canal, sku_canal, item_id_canal 
@@ -12628,6 +12636,12 @@ def admin_test_sync_sku():
         return jsonify({
             "sku": sku,
             "stock_total_lusync": stock,
+            "debug": {
+                "stock_en_tabla_productos": stock_productos,
+                "stock_en_tabla_bodegas": suma_bodegas,
+                "detalle_bodegas": bodegas,
+                "fuente_usada_para_sync": "productos.stock"
+            },
             "mapeos_existentes": mapeos,
             "resultado_sync": resultado
         })
