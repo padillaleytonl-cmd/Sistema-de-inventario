@@ -2087,10 +2087,14 @@ tbody td {
           <!-- PASO 2: Revisar -->
           <div id="meliPaso2" style="display:none;">
             <!-- Stats -->
-            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px;">
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px;">
               <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #d1fae5;">
                 <div style="font-size:26px;font-weight:700;color:#059669;" id="meliStatAuto">—</div>
-                <div style="font-size:11px;color:var(--muted);margin-top:3px;">✅ Mapeo automático</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">✅ Nuevos automáticos</div>
+              </div>
+              <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #dbeafe;">
+                <div style="font-size:26px;font-weight:700;color:#2563eb;" id="meliStatYa">—</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">☑️ Ya mapeados</div>
               </div>
               <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #fef3c7;">
                 <div style="font-size:26px;font-weight:700;color:#d97706;" id="meliStatAlias">—</div>
@@ -2098,13 +2102,14 @@ tbody td {
               </div>
               <div style="background:var(--bg2);border-radius:12px;padding:16px;text-align:center;border:0.5px solid #fee2e2;">
                 <div style="font-size:26px;font-weight:700;color:#dc2626;" id="meliStatNuevo">—</div>
-                <div style="font-size:11px;color:var(--muted);margin-top:3px;">➕ No están en Lusync</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:3px;">➕ No en Lusync</div>
               </div>
             </div>
 
             <!-- Tabs -->
             <div style="display:flex;gap:4px;margin-bottom:14px;background:var(--bg2);padding:4px;border-radius:10px;">
-              <button class="meli-tab active" id="meliTabAuto" onclick="meliSwitchTab('auto')">✅ Automáticos <span id="meliTabAutoBadge" style="background:#059669;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+              <button class="meli-tab active" id="meliTabAuto" onclick="meliSwitchTab('auto')">✅ Nuevos <span id="meliTabAutoBadge" style="background:#059669;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
+              <button class="meli-tab" id="meliTabYa" onclick="meliSwitchTab('ya')">☑️ Ya mapeados <span id="meliTabYaBadge" style="background:#2563eb;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
               <button class="meli-tab" id="meliTabAlias" onclick="meliSwitchTab('alias')">🔗 Alias <span id="meliTabAliasBadge" style="background:#d97706;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
               <button class="meli-tab" id="meliTabNuevo" onclick="meliSwitchTab('nuevo')">➕ Nuevos <span id="meliTabNuevoBadge" style="background:#dc2626;color:white;border-radius:20px;padding:1px 7px;font-size:10px;margin-left:4px;">0</span></button>
             </div>
@@ -2112,7 +2117,11 @@ tbody td {
             <!-- Contenido tabs -->
             <div id="meliTabContentAuto" style="display:block;">
               <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Estos SKUs coinciden exactamente con Lusync y se mapearán automáticamente.</div>
-              <div id="meliListaAuto" style="max-height:280px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;overflow:hidden;"></div>
+              <div id="meliListaAuto" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div>
+            </div>
+            <div id="meliTabContentYa" style="display:none;">
+              <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Estos SKUs ya están vinculados en Lusync — no se modificarán.</div>
+              <div id="meliListaYa" style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border);border-radius:10px;"></div>
             </div>
             <div id="meliTabContentAlias" style="display:none;">
               <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Estos SKUs existen en MercadoLibre con un nombre diferente al de Lusync. Selecciona el SKU Lusync equivalente.</div>
@@ -8601,20 +8610,23 @@ async function meliProcessFile(file) {
 }
 
 function meliRenderPaso2(data) {
-  const auto   = data.automaticos || [];
-  const alias  = data.requieren_alias || [];
-  const nuevos = data.no_en_lusync || [];
+  const auto      = data.automaticos || [];
+  const alias     = data.requieren_alias || [];
+  const nuevos    = data.no_en_lusync || [];
+  const yaMapeados = data.ya_mapeados || [];
 
   document.getElementById('meliStatAuto').textContent  = auto.length;
+  document.getElementById('meliStatYa').textContent    = yaMapeados.length;
   document.getElementById('meliStatAlias').textContent = alias.length;
   document.getElementById('meliStatNuevo').textContent = nuevos.length;
   document.getElementById('meliTabAutoBadge').textContent  = auto.length;
+  document.getElementById('meliTabYaBadge').textContent    = yaMapeados.length;
   document.getElementById('meliTabAliasBadge').textContent = alias.length;
   document.getElementById('meliTabNuevoBadge').textContent = nuevos.length;
 
-  // Lista automáticos
+  // Lista automáticos (nuevos)
   document.getElementById('meliListaAuto').innerHTML = auto.length === 0
-    ? '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">Ninguno</div>'
+    ? '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">Ninguno — todos ya estaban mapeados ✅</div>'
     : auto.map(m => `
         <div class="meli-row">
           <span class="meli-sku-tag">${m.sku_meli}</span>
@@ -8622,6 +8634,18 @@ function meliRenderPaso2(data) {
           <span class="meli-sku-tag" style="border-color:#059669;color:#059669;">${m.sku_lusync}</span>
           <span style="flex:1;color:var(--muted);font-size:11px;">${m.titulo || ''}</span>
           <span style="font-size:10px;color:var(--hint);">${m.item_id}</span>
+        </div>`).join('');
+
+  // Lista ya mapeados
+  document.getElementById('meliListaYa').innerHTML = yaMapeados.length === 0
+    ? '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">Ninguno</div>'
+    : yaMapeados.map(m => `
+        <div class="meli-row" style="opacity:0.7;">
+          <span class="meli-sku-tag" style="border-color:#2563eb;color:#2563eb;">${m.sku_meli}</span>
+          <span class="meli-arrow">→</span>
+          <span class="meli-sku-tag" style="border-color:#2563eb;color:#2563eb;">${m.sku_lusync}</span>
+          <span style="flex:1;color:var(--muted);font-size:11px;">${m.titulo || ''}</span>
+          <span style="font-size:10px;color:#059669;">☑️ OK</span>
         </div>`).join('');
 
   // Lista alias — con dropdown
@@ -8709,7 +8733,7 @@ function meliSelectAlias(id, value, skuMeli, itemId) {
 }
 
 function meliSwitchTab(tab) {
-  ['auto','alias','nuevo'].forEach(t => {
+  ['auto','ya','alias','nuevo'].forEach(t => {
     document.getElementById('meliTab' + t.charAt(0).toUpperCase() + t.slice(1)).className = 'meli-tab' + (t === tab ? ' active' : '');
     document.getElementById('meliTabContent' + t.charAt(0).toUpperCase() + t.slice(1)).style.display = t === tab ? 'block' : 'none';
   });
