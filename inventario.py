@@ -173,24 +173,30 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
         import threading
         def _sync_bg():
             try:
-                # Calcular stock total actual en todas las bodegas
+                # Calcular stock disponible para canales no-fulfillment
+                # = SUM de bodegas tipo 'propia' (CENTRAL, etc.)
+                # NO se cuenta MELI_FULL, PARIS_CD ni ninguna fulfillment/transito
                 conn2 = get_conn()
                 cur2 = conn2.cursor()
                 cur2.execute("""
-                    SELECT COALESCE(SUM(cantidad), 0) 
-                    FROM stock_bodega 
-                    WHERE sku = %s
+                    SELECT COALESCE(SUM(sb.cantidad), 0)
+                    FROM stock_bodega sb
+                    JOIN bodegas b ON b.codigo = sb.bodega_codigo
+                    WHERE sb.sku = %s AND b.tipo = 'propia'
                 """, (sku,))
                 row = cur2.fetchone()
-                stock_total = int(row[0]) if row else 0
+                stock_disponible = int(row[0]) if row and row[0] is not None else 0
                 cur2.close()
                 conn2.close()
 
-                # Importar y llamar sync solo si hay mapeos para este SKU
+                # Importar y llamar sync con stock disponible
                 from app import sincronizar_stock_marketplaces
-                sincronizar_stock_marketplaces(sku, stock_total, contexto=f"{tipo}_{canal}_{motivo[:20] if motivo else 'manual'}")
+                resultado = sincronizar_stock_marketplaces(sku, stock_disponible, contexto=f"{tipo}_{canal}_{motivo[:20] if motivo else 'manual'}")
+                print(f"[SyncUniversal] {sku} stock_propio={stock_disponible} -> {resultado}")
             except Exception as e:
+                import traceback
                 print(f"[SyncUniversal] Error sincronizando {sku}: {e}")
+                traceback.print_exc()
 
         threading.Thread(target=_sync_bg, daemon=True).start()
     except Exception:

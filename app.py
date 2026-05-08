@@ -12613,16 +12613,22 @@ def admin_test_sync_sku():
         from inventario import get_conn
         # Stock total
         conn = get_conn(); cur = conn.cursor()
-        # Debug: leer ambas fuentes para comparar
+        # Debug: leer todas las fuentes para comparar
         cur.execute("SELECT stock FROM productos WHERE sku=%s", (sku,))
         row = cur.fetchone()
         stock_productos = int(row[0]) if row and row[0] is not None else 0
         
-        cur.execute("SELECT bodega_codigo, cantidad FROM stock_bodega WHERE sku=%s", (sku,))
-        bodegas = [{"bodega": r[0], "cantidad": r[1]} for r in cur.fetchall()]
-        suma_bodegas = sum(b["cantidad"] for b in bodegas)
+        cur.execute("""
+            SELECT sb.bodega_codigo, sb.cantidad, b.tipo
+            FROM stock_bodega sb
+            LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo
+            WHERE sb.sku=%s
+        """, (sku,))
+        bodegas = [{"bodega": r[0], "cantidad": r[1], "tipo": r[2]} for r in cur.fetchall()]
+        suma_total_bodegas = sum(b["cantidad"] for b in bodegas)
+        suma_propias = sum(b["cantidad"] for b in bodegas if b["tipo"] == "propia")
         
-        stock = stock_productos  # usar productos como fuente
+        stock = suma_propias  # solo bodegas propias se publican como disponibles
         # Mapeos por canal
         cur.execute("""
             SELECT canal, sku_canal, item_id_canal 
@@ -12637,10 +12643,11 @@ def admin_test_sync_sku():
             "sku": sku,
             "stock_total_lusync": stock,
             "debug": {
+                "stock_disponible_bodegas_propias": suma_propias,
                 "stock_en_tabla_productos": stock_productos,
-                "stock_en_tabla_bodegas": suma_bodegas,
+                "stock_total_todas_bodegas": suma_total_bodegas,
                 "detalle_bodegas": bodegas,
-                "fuente_usada_para_sync": "productos.stock"
+                "fuente_usada_para_sync": "SUM(stock_bodega WHERE tipo='propia')"
             },
             "mapeos_existentes": mapeos,
             "resultado_sync": resultado
