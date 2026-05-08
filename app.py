@@ -12441,5 +12441,37 @@ def admin_importar_excel_paris():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+@app.route("/admin/debug_paris_ordenes")
+def admin_debug_paris_ordenes():
+    """Debug: muestra el JSON raw de las últimas órdenes de Paris para ver estructura de variantes."""
+    if not session.get("logged"):
+        bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+        if request.args.get("token") != bypass_token:
+            return jsonify({"error": "no autorizado"}), 401
+    try:
+        from paris import obtener_ordenes_paris_todas, obtener_orden_paris
+        dias = int(request.args.get("dias", 30))
+        ordenes = obtener_ordenes_paris_todas(dias=dias)
+        if not ordenes:
+            return jsonify({"total": 0, "mensaje": "No hay órdenes en los últimos {} días".format(dias)})
+        # Mostrar las primeras 3 órdenes en detalle
+        detalle = []
+        for orden in ordenes[:3]:
+            orden_id = orden.get("id") or orden.get("order_id") or orden.get("orderId")
+            try:
+                full = obtener_orden_paris(orden_id)
+                detalle.append({"id": orden_id, "raw": full})
+            except Exception as e:
+                detalle.append({"id": orden_id, "raw": orden, "error": str(e)})
+        return jsonify({
+            "total_ordenes": len(ordenes),
+            "dias": dias,
+            "primeras_3_raw": detalle
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
