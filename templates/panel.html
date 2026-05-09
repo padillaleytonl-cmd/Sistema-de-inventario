@@ -3022,10 +3022,11 @@ function showSection(sec, btn){
   if(sec === 'skumapeo') cargarSkuMapeo();
   if(sec === 'canales' && typeof cargarCanales === 'function') cargarCanales();
   if(sec === 'dashboard' && typeof cargarDashboardCompleto === 'function') cargarDashboardCompleto();
+  if(sec === 'inventario') cargarTipificaciones();
   if(sec === 'configuracion'){
     if(gear) gear.classList.add('active');
     cargarConfiguracion();
-    cargarTipificaciones();  // Cargar motivos para dropdowns de entrada/salida
+    cargarTipificaciones();
   }
 }
 
@@ -4255,6 +4256,10 @@ document.addEventListener('DOMContentLoaded', () => {
   if(overlay) overlay.addEventListener('click', function(e){
     if(e.target === this) cerrarModalDetalle();
   });
+  // Cargar tipificaciones al inicio para que los selects de Inventario tengan motivos
+  if (typeof cargarTipificaciones === 'function') {
+    setTimeout(() => cargarTipificaciones(), 200);
+  }
 });
 
 function filtrarModalProductos(q){
