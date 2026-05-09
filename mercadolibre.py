@@ -210,13 +210,20 @@ def actualizar_stock_meli(sku_lusync, cantidad):
             item_data = r_get.json()
 
             # ── EXCLUIR publicaciones de catálogo (catalog_listing) ──
-            # Esas las gestiona automáticamente MercadoLibre y no se puede modificar stock vía API
             if item_data.get("catalog_listing"):
                 log.append(f"  {item_id}: ⏭️ catalog_listing — MELI lo gestiona solo, omitido")
                 print(f"[MELI Stock] Item {item_id} es catalog_listing, omitido")
                 continue
 
             variations = item_data.get("variations", []) or []
+
+            # ── EXCLUIR publicaciones MELI Full ──
+            # Si el item o sus variantes tienen inventory_id, es Full y MELI gestiona el stock
+            tiene_inventory_id = bool(item_data.get("inventory_id")) or any(v.get("inventory_id") for v in variations)
+            if tiene_inventory_id:
+                log.append(f"  {item_id}: ⏭️ MELI Full (inventory_id detectado) — MELI gestiona stock")
+                print(f"[MELI Stock] Item {item_id} es Full, omitido")
+                continue
 
             if variations:
                 # Publicación con variantes — actualizar la variante específica que matchea con sku_canal
@@ -249,9 +256,40 @@ def actualizar_stock_meli(sku_lusync, cantidad):
                     if ok: exitosas += 1
                     else: fallidas += 1
                 else:
-                    log.append(f"  {item_id}: tiene variantes pero no matchea sku '{sku_canal}'")
-                    print(f"[MELI Stock] Item {item_id} tiene variantes y sku_canal '{sku_canal}' no matchea")
-                    fallidas += 1
+                    # No matcheamos por SKU, pero si solo hay 1 variante, actualizarla igual
+                    # (caso común: publicación con atributos de color pero un solo SKU físico)
+                    if len(variations) == 1:
+                        var_id = variations[0].get("id")
+                        payload = {"variations": [{"id": var_id, "available_quantity": int(cantidad)}]}
+                        res = requests.put(
+                            f"{MELI_API_URL}/items/{item_id}",
+                            headers=meli_headers(),
+                            json=payload,
+                            timeout=15
+                        )
+                        ok = res.status_code in (200, 201)
+                        log.append(f"  {item_id} variante única {var_id}: status {res.status_code} {'OK' if ok else 'FAIL'}")
+                        print(f"[MELI Stock] Item:{item_id} Variante única Var:{var_id} Qty:{cantidad} Status:{res.status_code}")
+                        if not ok: log.append(f"    body: {res.text[:300]}")
+                        if ok: exitosas += 1
+                        else: fallidas += 1
+                    else:
+                        # Multiples variantes y no matchea — actualizar TODAS con el mismo stock
+                        # (escenario raro pero práctico: si Lusync solo tiene 1 SKU para publicación con N variantes)
+                        var_ids = [v.get("id") for v in variations]
+                        payload = {"variations": [{"id": vid, "available_quantity": int(cantidad)} for vid in var_ids]}
+                        res = requests.put(
+                            f"{MELI_API_URL}/items/{item_id}",
+                            headers=meli_headers(),
+                            json=payload,
+                            timeout=15
+                        )
+                        ok = res.status_code in (200, 201)
+                        log.append(f"  {item_id} {len(var_ids)} variantes: status {res.status_code} {'OK' if ok else 'FAIL'}")
+                        print(f"[MELI Stock] Item:{item_id} {len(var_ids)} variantes (sku no matchea) Qty:{cantidad} Status:{res.status_code}")
+                        if not ok: log.append(f"    body: {res.text[:300]}")
+                        if ok: exitosas += 1
+                        else: fallidas += 1
             else:
                 # Publicación simple (sin variantes) — actualizar available_quantity directo
                 res = requests.put(

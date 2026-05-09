@@ -202,6 +202,7 @@ def actualizar_stock_falabella(sku, cantidad):
   <Product>
     <SellerSku>{sku}</SellerSku>
     <Quantity>{int(cantidad)}</Quantity>
+    <Status>active</Status>
   </Product>
 </Request>"""
 
