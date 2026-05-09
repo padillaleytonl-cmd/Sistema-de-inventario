@@ -238,8 +238,10 @@ def actualizar_stock_meli(sku_lusync, cantidad):
                             break
 
                 if target_variation:
-                    # Actualizar solo esa variante via PUT al item con array de variations
                     var_id = target_variation.get("id")
+                    user_product_id = target_variation.get("user_product_id")
+
+                    # Estrategia 1: PUT /items con variations (para publicaciones sin Full)
                     payload = {"variations": [{"id": var_id, "available_quantity": int(cantidad)}]}
                     res = requests.put(
                         f"{MELI_API_URL}/items/{item_id}",
@@ -249,14 +251,50 @@ def actualizar_stock_meli(sku_lusync, cantidad):
                     )
                     ok = res.status_code in (200, 201)
                     es_full = "not_modifiable" in res.text or "fulfillment" in res.text.lower()
+
                     if ok:
                         log.append(f"  {item_id} var {var_id} (sku {sku_canal}): status {res.status_code} OK")
                         print(f"[MELI Stock] Item:{item_id} Var:{var_id} Sku:{sku_canal} Qty:{cantidad} Status:{res.status_code}")
                         exitosas += 1
+                    elif es_full and user_product_id:
+                        # Estrategia 2: bi-modal — usar /user-products/{id}/stock/type/selling_address
+                        # Esto actualiza SOLO el stock propio (deja Full intacto)
+                        try:
+                            # Primero GET para obtener x-version actual
+                            r_get_stock = requests.get(
+                                f"{MELI_API_URL}/user-products/{user_product_id}/stock",
+                                headers=meli_headers(),
+                                timeout=15
+                            )
+                            x_version = r_get_stock.headers.get("x-version", "1")
+
+                            # PUT al endpoint de selling_address
+                            headers_put = dict(meli_headers())
+                            headers_put["x-version"] = str(x_version)
+                            headers_put["Content-Type"] = "application/json"
+                            r_sa = requests.put(
+                                f"{MELI_API_URL}/user-products/{user_product_id}/stock/type/selling_address",
+                                headers=headers_put,
+                                json={"quantity": int(cantidad)},
+                                timeout=15
+                            )
+                            ok_sa = r_sa.status_code in (200, 201, 204)
+                            if ok_sa:
+                                log.append(f"  {item_id} var {var_id} (sku {sku_canal}): bi-modal selling_address OK (qty={cantidad})")
+                                print(f"[MELI Stock] Item:{item_id} Var:{var_id} Sku:{sku_canal} bi-modal selling_address Qty:{cantidad} Status:{r_sa.status_code}")
+                                exitosas += 1
+                            else:
+                                log.append(f"  {item_id} var {var_id} (sku {sku_canal}): selling_address FAIL status {r_sa.status_code}")
+                                log.append(f"    body: {r_sa.text[:300]}")
+                                print(f"[MELI Stock] Item:{item_id} Var:{var_id} selling_address Status:{r_sa.status_code} body:{r_sa.text[:200]}")
+                                fallidas += 1
+                        except Exception as e_sa:
+                            log.append(f"  {item_id} var {var_id} (sku {sku_canal}): error selling_address: {e_sa}")
+                            print(f"[MELI Stock] Item:{item_id} Var:{var_id} error selling_address: {e_sa}")
+                            fallidas += 1
                     elif es_full:
-                        log.append(f"  {item_id} var {var_id} (sku {sku_canal}): ⏭️ variante Full — MELI gestiona stock")
-                        print(f"[MELI Stock] Item:{item_id} Var:{var_id} Sku:{sku_canal} es Full, omitido")
-                        # No es failure: es una variante Full que correctamente rechazó la actualización
+                        log.append(f"  {item_id} var {var_id} (sku {sku_canal}): ⏭️ Full sin user_product_id — omitido")
+                        print(f"[MELI Stock] Item:{item_id} Var:{var_id} Full sin user_product_id, omitido")
                     else:
                         log.append(f"  {item_id} var {var_id} (sku {sku_canal}): status {res.status_code} FAIL")
                         log.append(f"    body: {res.text[:300]}")
