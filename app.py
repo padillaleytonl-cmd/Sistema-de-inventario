@@ -12697,5 +12697,48 @@ def admin_corregir_stock_bodega():
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
+
+@app.route("/admin/test_canal_directo")
+def admin_test_canal_directo():
+    """Prueba MELI o Falabella directamente y devuelve el resultado HTTP exacto."""
+    if not session.get("logged"):
+        bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+        if request.args.get("token") != bypass_token:
+            return jsonify({"error": "no autorizado"}), 401
+    canal = request.args.get("canal", "").lower()
+    sku = request.args.get("sku", "").strip()
+    cantidad = int(request.args.get("cantidad", 0))
+    if not canal or not sku:
+        return jsonify({"error": "Pasa ?canal=meli|falabella&sku=XXX&cantidad=N"}), 400
+    try:
+        import io, sys
+        # Capturar todos los prints
+        captured = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = captured
+        resultado = None
+        try:
+            if canal in ("meli", "mercadolibre"):
+                from mercadolibre import actualizar_stock_meli
+                resultado = actualizar_stock_meli(sku, cantidad)
+            elif canal == "falabella":
+                from falabella import actualizar_stock_falabella_lusync
+                resultado = actualizar_stock_falabella_lusync(sku, cantidad)
+            else:
+                sys.stdout = old_stdout
+                return jsonify({"error": f"canal desconocido: {canal}"}), 400
+        finally:
+            sys.stdout = old_stdout
+        return jsonify({
+            "canal": canal,
+            "sku": sku,
+            "cantidad_enviada": cantidad,
+            "resultado": resultado,
+            "logs_capturados": captured.getvalue().split("\n")
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
