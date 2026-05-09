@@ -248,12 +248,20 @@ def actualizar_stock_meli(sku_lusync, cantidad):
                         timeout=15
                     )
                     ok = res.status_code in (200, 201)
-                    log.append(f"  {item_id} var {var_id} (sku {sku_canal}): status {res.status_code} {'OK' if ok else 'FAIL'}")
-                    print(f"[MELI Stock] Item:{item_id} Var:{var_id} Sku:{sku_canal} Qty:{cantidad} Status:{res.status_code}")
-                    if not ok:
+                    es_full = "not_modifiable" in res.text or "fulfillment" in res.text.lower()
+                    if ok:
+                        log.append(f"  {item_id} var {var_id} (sku {sku_canal}): status {res.status_code} OK")
+                        print(f"[MELI Stock] Item:{item_id} Var:{var_id} Sku:{sku_canal} Qty:{cantidad} Status:{res.status_code}")
+                        exitosas += 1
+                    elif es_full:
+                        log.append(f"  {item_id} var {var_id} (sku {sku_canal}): ⏭️ variante Full — MELI gestiona stock")
+                        print(f"[MELI Stock] Item:{item_id} Var:{var_id} Sku:{sku_canal} es Full, omitido")
+                        # No es failure: es una variante Full que correctamente rechazó la actualización
+                    else:
+                        log.append(f"  {item_id} var {var_id} (sku {sku_canal}): status {res.status_code} FAIL")
                         log.append(f"    body: {res.text[:300]}")
-                    if ok: exitosas += 1
-                    else: fallidas += 1
+                        print(f"[MELI Stock] Item:{item_id} Var:{var_id} Sku:{sku_canal} Qty:{cantidad} Status:{res.status_code} FAIL")
+                        fallidas += 1
                 else:
                     # No matcheamos por SKU, pero si solo hay 1 variante, actualizarla igual
                     # (caso común: publicación con atributos de color pero un solo SKU físico)
