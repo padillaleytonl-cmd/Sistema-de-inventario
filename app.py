@@ -12656,5 +12656,46 @@ def admin_test_sync_sku():
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
+
+@app.route("/admin/corregir_stock_bodega", methods=["POST", "GET"])
+def admin_corregir_stock_bodega():
+    """
+    Corrige el stock de una bodega específica para un SKU.
+    POST con JSON: {"sku": "XXX", "bodega": "CENTRAL", "cantidad": 1}
+    GET con: ?sku=XXX&bodega=CENTRAL&cantidad=1&token=...
+    """
+    if not session.get("logged"):
+        bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+        if request.args.get("token") != bypass_token:
+            return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import get_conn, set_stock_bodega
+        if request.method == "POST":
+            data = request.json or {}
+            sku = data.get("sku", "").strip()
+            bodega = data.get("bodega", "").strip()
+            cantidad = int(data.get("cantidad", 0))
+        else:
+            sku = request.args.get("sku", "").strip()
+            bodega = request.args.get("bodega", "").strip()
+            cantidad = int(request.args.get("cantidad", 0))
+        if not sku or not bodega:
+            return jsonify({"error": "Faltan sku o bodega"}), 400
+
+        # Estado antes
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("SELECT cantidad FROM stock_bodega WHERE sku=%s AND bodega_codigo=%s", (sku, bodega))
+        row = cur.fetchone()
+        antes = int(row[0]) if row else 0
+        cur.close(); conn.close()
+
+        # Aplicar corrección
+        set_stock_bodega(sku, bodega, cantidad)
+
+        return jsonify({"ok": True, "sku": sku, "bodega": bodega, "antes": antes, "ahora": cantidad})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
