@@ -9268,7 +9268,9 @@ function renderTipificaciones() {
   }
   ['entrada','salida'].forEach(tipo => {
     const lista = _tipificaciones.filter(t => t.tipo === tipo);
-    document.getElementById('tipificaciones-' + tipo).innerHTML = lista.length === 0
+    const cont = document.getElementById('tipificaciones-' + tipo);
+    if (!cont) return; // no estamos en pestaña configuración, saltar
+    cont.innerHTML = lista.length === 0
       ? '<div style="font-size:12px;color:var(--muted);padding:8px;">Ninguna</div>'
       : lista.map(t => `
           <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--bg2);border-radius:8px;border:0.5px solid var(--border);${!t.activo?'opacity:0.5':''}">
