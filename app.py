@@ -12779,6 +12779,28 @@ def admin_auto_descubrir_variantes_meli():
             WHERE canal='mercadolibre' AND activo=TRUE
         """)
         mapeos_existentes = {(r[1].upper(), r[3] or r[2]) for r in cur.fetchall() if r[1]}
+
+        # 3. ALIAS: cargar mapeos de cualquier canal donde sku_canal != sku_lusync
+        # Esto resuelve casos donde el SKU del seller en MELI es un alias del SKU Lusync
+        cur.execute("""
+            SELECT DISTINCT UPPER(TRIM(sku_canal)), UPPER(TRIM(sku_lusync))
+            FROM sku_mapeo_canal
+            WHERE activo=TRUE AND sku_canal IS NOT NULL AND sku_lusync IS NOT NULL
+        """)
+        alias_canal_a_lusync = {r[0]: r[1] for r in cur.fetchall()}
+        # También consultar tabla legacy sku_mapeo
+        try:
+            cur.execute("""
+                SELECT DISTINCT UPPER(TRIM(sku_canal)), UPPER(TRIM(sku_lusync))
+                FROM sku_mapeo
+                WHERE sku_canal IS NOT NULL AND sku_lusync IS NOT NULL
+            """)
+            for r in cur.fetchall():
+                if r[0] not in alias_canal_a_lusync:
+                    alias_canal_a_lusync[r[0]] = r[1]
+        except Exception:
+            pass
+
         cur.close(); conn.close()
 
         # 3. Obtener TODAS las publicaciones MELI (paginar)
@@ -12856,17 +12878,25 @@ def admin_auto_descubrir_variantes_meli():
                         continue
 
                     sku_upper = seller_sku.upper()
-                    # ¿Existe en Lusync?
-                    if sku_upper not in skus_lusync:
+                    # Determinar SKU Lusync: si el SELLER_SKU está en productos directo, usarlo
+                    # Si no, buscar en alias para resolverlo al SKU Lusync principal
+                    sku_lusync_real = None
+                    if sku_upper in skus_lusync:
+                        sku_lusync_real = sku_upper
+                    elif sku_upper in alias_canal_a_lusync:
+                        sku_lusync_real = alias_canal_a_lusync[sku_upper]
+
+                    if not sku_lusync_real:
                         resumen["variantes_sku_no_existe_lusync"].append({
                             "item_id": item_id, "variation_id": var_id, "seller_sku": seller_sku
                         })
                         continue
 
-                    # ¿Ya existe el mapeo?
-                    if (sku_upper, item_id) in mapeos_existentes:
+                    # ¿Ya existe el mapeo? (verificar contra el SKU Lusync resuelto)
+                    if (sku_lusync_real, item_id) in mapeos_existentes:
                         resumen["mapeos_omitidos_ya_existen"].append({
-                            "sku_lusync": seller_sku, "item_id": item_id
+                            "sku_lusync": sku_lusync_real, "item_id": item_id,
+                            "seller_sku_meli": seller_sku
                         })
                         continue
 
@@ -12874,7 +12904,7 @@ def admin_auto_descubrir_variantes_meli():
                     if not dry_run:
                         try:
                             agregar_publicacion(
-                                sku_lusync=seller_sku,
+                                sku_lusync=sku_lusync_real,
                                 canal="mercadolibre",
                                 sku_canal=seller_sku,
                                 item_id_canal=item_id,
@@ -12882,14 +12912,18 @@ def admin_auto_descubrir_variantes_meli():
                                 notas=f"Auto-descubierto via variantes (variation_id={var_id})"
                             )
                             resumen["mapeos_creados"].append({
-                                "sku_lusync": seller_sku, "item_id": item_id, "variation_id": var_id
+                                "sku_lusync": sku_lusync_real, "sku_canal": seller_sku,
+                                "item_id": item_id, "variation_id": var_id,
+                                "via_alias": sku_lusync_real != sku_upper
                             })
-                            mapeos_existentes.add((sku_upper, item_id))
+                            mapeos_existentes.add((sku_lusync_real, item_id))
                         except Exception as e_ins:
                             resumen["errores"].append(f"{item_id} {seller_sku}: {e_ins}")
                     else:
                         resumen["mapeos_creados"].append({
-                            "sku_lusync": seller_sku, "item_id": item_id, "variation_id": var_id,
+                            "sku_lusync": sku_lusync_real, "sku_canal": seller_sku,
+                            "item_id": item_id, "variation_id": var_id,
+                            "via_alias": sku_lusync_real != sku_upper,
                             "DRY_RUN": True
                         })
 
