@@ -188,26 +188,86 @@ def actualizar_stock_meli(sku_lusync, cantidad):
 
     for pub in publicaciones:
         item_id = pub.get("item_id_canal") or pub.get("sku_canal")
+        sku_canal = pub.get("sku_canal", "")
         if not item_id or not str(item_id).strip().upper().startswith("MLC"):
             log.append(f"  Publicación {item_id}: no es item_id MELI válido (debe empezar con MLC)")
             fallidas += 1
             continue
 
         try:
-            res = requests.put(
+            # Primero obtener el item para ver si tiene variantes
+            r_get = requests.get(
                 f"{MELI_API_URL}/items/{item_id}",
                 headers=meli_headers(),
-                json={"available_quantity": int(cantidad)},
                 timeout=15
             )
-            ok = res.status_code in (200, 201)
-            log.append(f"  {item_id}: status {res.status_code} {'OK' if ok else 'FAIL'}")
-            print(f"[MELI Stock] Item:{item_id} Qty:{cantidad} Status:{res.status_code}")
-            if ok:
-                exitosas += 1
-            else:
+            if r_get.status_code != 200:
+                log.append(f"  {item_id}: error obteniendo item, status {r_get.status_code}")
+                print(f"[MELI Stock] No pude leer item {item_id}: {r_get.status_code}")
                 fallidas += 1
-                log.append(f"    body: {res.text[:200]}")
+                continue
+
+            item_data = r_get.json()
+
+            # ── EXCLUIR publicaciones de catálogo (catalog_listing) ──
+            # Esas las gestiona automáticamente MercadoLibre y no se puede modificar stock vía API
+            if item_data.get("catalog_listing"):
+                log.append(f"  {item_id}: ⏭️ catalog_listing — MELI lo gestiona solo, omitido")
+                print(f"[MELI Stock] Item {item_id} es catalog_listing, omitido")
+                continue
+
+            variations = item_data.get("variations", []) or []
+
+            if variations:
+                # Publicación con variantes — actualizar la variante específica que matchea con sku_canal
+                # o todas si no se puede identificar
+                target_variation = None
+                if sku_canal:
+                    for v in variations:
+                        v_attrs = v.get("attributes", []) or []
+                        v_sku = next((a.get("value_name","") for a in v_attrs 
+                                     if a.get("id") == "SELLER_SKU"), "")
+                        if v_sku and v_sku.upper().strip() == sku_canal.upper().strip():
+                            target_variation = v
+                            break
+
+                if target_variation:
+                    # Actualizar solo esa variante via PUT al item con array de variations
+                    var_id = target_variation.get("id")
+                    payload = {"variations": [{"id": var_id, "available_quantity": int(cantidad)}]}
+                    res = requests.put(
+                        f"{MELI_API_URL}/items/{item_id}",
+                        headers=meli_headers(),
+                        json=payload,
+                        timeout=15
+                    )
+                    ok = res.status_code in (200, 201)
+                    log.append(f"  {item_id} var {var_id} (sku {sku_canal}): status {res.status_code} {'OK' if ok else 'FAIL'}")
+                    print(f"[MELI Stock] Item:{item_id} Var:{var_id} Sku:{sku_canal} Qty:{cantidad} Status:{res.status_code}")
+                    if not ok:
+                        log.append(f"    body: {res.text[:300]}")
+                    if ok: exitosas += 1
+                    else: fallidas += 1
+                else:
+                    log.append(f"  {item_id}: tiene variantes pero no matchea sku '{sku_canal}'")
+                    print(f"[MELI Stock] Item {item_id} tiene variantes y sku_canal '{sku_canal}' no matchea")
+                    fallidas += 1
+            else:
+                # Publicación simple (sin variantes) — actualizar available_quantity directo
+                res = requests.put(
+                    f"{MELI_API_URL}/items/{item_id}",
+                    headers=meli_headers(),
+                    json={"available_quantity": int(cantidad)},
+                    timeout=15
+                )
+                ok = res.status_code in (200, 201)
+                log.append(f"  {item_id}: status {res.status_code} {'OK' if ok else 'FAIL'}")
+                print(f"[MELI Stock] Item:{item_id} Qty:{cantidad} Status:{res.status_code}")
+                if ok:
+                    exitosas += 1
+                else:
+                    fallidas += 1
+                    log.append(f"    body: {res.text[:300]}")
         except Exception as e:
             fallidas += 1
             log.append(f"  {item_id}: error {e}")
