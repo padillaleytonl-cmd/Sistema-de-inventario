@@ -11590,9 +11590,9 @@ def admin_debug_meli_item():
         import requests as _req
         from mercadolibre import meli_headers, MELI_API_URL
 
-        # Pedir item completo SIN filtrar nada para ver todos los campos
+        # Pedir item con include_attributes=all para ver SELLER_SKU en variantes
         res = _req.get(
-            f"{MELI_API_URL}/items/{item_id}",
+            f"{MELI_API_URL}/items/{item_id}?include_attributes=all",
             headers=meli_headers(),
             timeout=20
         )

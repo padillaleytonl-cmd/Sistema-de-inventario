@@ -195,9 +195,9 @@ def actualizar_stock_meli(sku_lusync, cantidad):
             continue
 
         try:
-            # Primero obtener el item para ver si tiene variantes
+            # Primero obtener el item con TODOS los atributos (necesario para ver SELLER_SKU)
             r_get = requests.get(
-                f"{MELI_API_URL}/items/{item_id}",
+                f"{MELI_API_URL}/items/{item_id}?include_attributes=all",
                 headers=meli_headers(),
                 timeout=15
             )
@@ -216,14 +216,9 @@ def actualizar_stock_meli(sku_lusync, cantidad):
                 continue
 
             variations = item_data.get("variations", []) or []
-
-            # ── EXCLUIR publicaciones MELI Full ──
-            # Si el item o sus variantes tienen inventory_id, es Full y MELI gestiona el stock
-            tiene_inventory_id = bool(item_data.get("inventory_id")) or any(v.get("inventory_id") for v in variations)
-            if tiene_inventory_id:
-                log.append(f"  {item_id}: ⏭️ MELI Full (inventory_id detectado) — MELI gestiona stock")
-                print(f"[MELI Stock] Item {item_id} es Full, omitido")
-                continue
+            # NOTA: La presencia de inventory_id NO indica "solo Full".
+            # Una publicación puede tener stock Full + stock propio (Flex / Centro de Envío).
+            # El available_quantity que enviamos por API actualiza el stock propio (no el Full).
 
             if variations:
                 # Publicación con variantes — actualizar la variante específica que matchea con sku_canal
@@ -231,9 +226,13 @@ def actualizar_stock_meli(sku_lusync, cantidad):
                 target_variation = None
                 if sku_canal:
                     for v in variations:
+                        # Buscar SELLER_SKU en attributes de la variante
                         v_attrs = v.get("attributes", []) or []
                         v_sku = next((a.get("value_name","") for a in v_attrs 
                                      if a.get("id") == "SELLER_SKU"), "")
+                        # Fallback: seller_custom_field
+                        if not v_sku:
+                            v_sku = v.get("seller_custom_field") or ""
                         if v_sku and v_sku.upper().strip() == sku_canal.upper().strip():
                             target_variation = v
                             break
@@ -311,11 +310,13 @@ def actualizar_stock_meli(sku_lusync, cantidad):
             log.append(f"  {item_id}: error {e}")
             print(f"[MELI Stock] Error {item_id}: {e}")
 
+    omitidas = len(publicaciones) - exitosas - fallidas
     return {
-        "ok": exitosas > 0,
+        "ok": fallidas == 0,
         "total_publicaciones": len(publicaciones),
         "exitosas": exitosas,
         "fallidas": fallidas,
+        "omitidas": omitidas,
         "log": log
     }
 
@@ -695,11 +696,13 @@ def actualizar_precio_meli_lusync(sku_lusync, precio):
         else:
             fallidas += 1
             log.append(f"  {item_id}: FAIL")
+    omitidas = len(publicaciones) - exitosas - fallidas
     return {
-        "ok": exitosas > 0,
+        "ok": fallidas == 0,
         "total_publicaciones": len(publicaciones),
         "exitosas": exitosas,
         "fallidas": fallidas,
+        "omitidas": omitidas,
         "log": log
     }
 
