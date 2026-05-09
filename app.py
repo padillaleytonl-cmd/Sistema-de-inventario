@@ -12740,5 +12740,166 @@ def admin_test_canal_directo():
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
+
+@app.route("/admin/auto_descubrir_variantes_meli")
+def admin_auto_descubrir_variantes_meli():
+    """
+    Recorre TODAS las publicaciones MELI del seller, descubre variantes con SELLER_SKU
+    y crea los mapeos automáticamente en sku_mapeo_canal.
+
+    Útil cuando una misma publicación tiene múltiples variantes (Gris, Rosa, etc.)
+    y cada variante tiene un SKU Lusync diferente.
+
+    Uso: /admin/auto_descubrir_variantes_meli?token=XXX&dry_run=1
+         dry_run=1 para solo ver qué haría, sin crear mapeos
+         dry_run=0 para crear los mapeos en la BD
+
+    Devuelve resumen detallado por publicación.
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if request.args.get("token") != bypass_token and not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    dry_run = request.args.get("dry_run", "1") == "1"
+
+    try:
+        import requests as _req
+        from mercadolibre import meli_headers, MELI_API_URL, obtener_publicaciones_meli
+        from inventario import get_conn, agregar_publicacion
+
+        # 1. Cargar todos los SKUs Lusync para validar contra ellos
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("SELECT sku FROM productos")
+        skus_lusync = {r[0].upper().strip() for r in cur.fetchall() if r[0]}
+
+        # 2. Cargar mapeos existentes para no duplicar
+        cur.execute("""
+            SELECT canal, sku_lusync, sku_canal, item_id_canal 
+            FROM sku_mapeo_canal 
+            WHERE canal='mercadolibre' AND activo=TRUE
+        """)
+        mapeos_existentes = {(r[1].upper(), r[3] or r[2]) for r in cur.fetchall() if r[1]}
+        cur.close(); conn.close()
+
+        # 3. Obtener TODAS las publicaciones MELI (paginar)
+        publicaciones = []
+        offset = 0
+        while True:
+            batch = obtener_publicaciones_meli(limite=50, offset=offset)
+            items = batch.get("items", []) if isinstance(batch, dict) else []
+            if not items:
+                break
+            publicaciones.extend(items)
+            if len(items) < 50:
+                break
+            offset += 50
+            if offset > 2000:  # safety
+                break
+
+        resumen = {
+            "total_publicaciones_meli": len(publicaciones),
+            "skus_lusync_disponibles": len(skus_lusync),
+            "mapeos_creados": [],
+            "mapeos_omitidos_ya_existen": [],
+            "publicaciones_sin_variantes": 0,
+            "publicaciones_catalogo": 0,
+            "variantes_sin_seller_sku": [],
+            "variantes_sku_no_existe_lusync": [],
+            "errores": [],
+            "dry_run": dry_run,
+        }
+
+        for pub in publicaciones:
+            item_id = pub.get("id")
+            if not item_id:
+                continue
+            try:
+                # Pedir item con todos los attributes para ver SELLER_SKU
+                r = _req.get(
+                    f"{MELI_API_URL}/items/{item_id}?include_attributes=all",
+                    headers=meli_headers(),
+                    timeout=20
+                )
+                if r.status_code != 200:
+                    resumen["errores"].append(f"{item_id}: HTTP {r.status_code}")
+                    continue
+                data = r.json()
+
+                # Saltar catalog_listing
+                if data.get("catalog_listing"):
+                    resumen["publicaciones_catalogo"] += 1
+                    continue
+
+                variations = data.get("variations") or []
+                if not variations:
+                    resumen["publicaciones_sin_variantes"] += 1
+                    continue
+
+                # Para cada variante, buscar SELLER_SKU
+                for var in variations:
+                    var_id = var.get("id")
+                    var_attrs = var.get("attributes") or []
+                    seller_sku = None
+                    for a in var_attrs:
+                        if a.get("id") == "SELLER_SKU":
+                            seller_sku = (a.get("value_name") or "").strip()
+                            break
+                    # Fallback seller_custom_field
+                    if not seller_sku:
+                        seller_sku = (var.get("seller_custom_field") or "").strip()
+
+                    if not seller_sku:
+                        resumen["variantes_sin_seller_sku"].append({
+                            "item_id": item_id, "variation_id": var_id,
+                            "color": next((ac.get("value_name") for ac in var.get("attribute_combinations",[]) if ac.get("id")=="COLOR"), None)
+                        })
+                        continue
+
+                    sku_upper = seller_sku.upper()
+                    # ¿Existe en Lusync?
+                    if sku_upper not in skus_lusync:
+                        resumen["variantes_sku_no_existe_lusync"].append({
+                            "item_id": item_id, "variation_id": var_id, "seller_sku": seller_sku
+                        })
+                        continue
+
+                    # ¿Ya existe el mapeo?
+                    if (sku_upper, item_id) in mapeos_existentes:
+                        resumen["mapeos_omitidos_ya_existen"].append({
+                            "sku_lusync": seller_sku, "item_id": item_id
+                        })
+                        continue
+
+                    # Crear el mapeo
+                    if not dry_run:
+                        try:
+                            agregar_publicacion(
+                                sku_lusync=seller_sku,
+                                canal="mercadolibre",
+                                sku_canal=seller_sku,
+                                item_id_canal=item_id,
+                                es_catalogo=False,
+                                notas=f"Auto-descubierto via variantes (variation_id={var_id})"
+                            )
+                            resumen["mapeos_creados"].append({
+                                "sku_lusync": seller_sku, "item_id": item_id, "variation_id": var_id
+                            })
+                            mapeos_existentes.add((sku_upper, item_id))
+                        except Exception as e_ins:
+                            resumen["errores"].append(f"{item_id} {seller_sku}: {e_ins}")
+                    else:
+                        resumen["mapeos_creados"].append({
+                            "sku_lusync": seller_sku, "item_id": item_id, "variation_id": var_id,
+                            "DRY_RUN": True
+                        })
+
+            except Exception as e:
+                resumen["errores"].append(f"{item_id}: {e}")
+
+        return jsonify(resumen)
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
