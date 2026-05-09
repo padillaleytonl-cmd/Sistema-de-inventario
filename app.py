@@ -12810,7 +12810,7 @@ def admin_auto_descubrir_variantes_meli():
         }
 
         for pub in publicaciones:
-            item_id = pub.get("id")
+            item_id = pub.get("item_id") or pub.get("id")
             if not item_id:
                 continue
             try:
