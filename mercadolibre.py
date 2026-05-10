@@ -250,7 +250,18 @@ def actualizar_stock_meli(sku_lusync, cantidad):
                         timeout=15
                     )
                     ok = res.status_code in (200, 201)
-                    es_full = "not_modifiable" in res.text or "fulfillment" in res.text.lower()
+                    # Detectar varios errores que se resuelven con el endpoint específico de stock:
+                    # - not_modifiable / fulfillment: variante Full
+                    # - item.pictures.max: la publicación tiene más fotos del límite (no debería bloquear stock)
+                    # - variations.status.invalid: alguna variante pausada (no debería bloquear stock)
+                    # En todos estos casos, intentar /user-products/{id}/stock/type/selling_address
+                    debe_intentar_user_products = (
+                        "not_modifiable" in res.text
+                        or "fulfillment" in res.text.lower()
+                        or "item.pictures.max" in res.text
+                        or "variations.status.invalid" in res.text
+                    )
+                    es_full = debe_intentar_user_products
 
                     if ok:
                         log.append(f"  {item_id} var {var_id} (sku {sku_canal}): status {res.status_code} OK")
