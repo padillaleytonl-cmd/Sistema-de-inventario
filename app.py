@@ -13549,5 +13549,135 @@ def admin_enriquecer_mapeos_paris():
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
+
+@app.route("/admin/debug_paris_actualizar_raw")
+def admin_debug_paris_actualizar_raw():
+    """
+    Hace una llamada directa a la API de Paris para actualizar stock,
+    y devuelve el payload + respuesta completa para diagnosticar.
+    Uso: ?sku=PBEAMG001&cantidad=7&token=YYY
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if request.args.get("token") != bypass_token and not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    sku = request.args.get("sku", "").strip()
+    cantidad = int(request.args.get("cantidad", "0"))
+    if not sku:
+        return jsonify({"error": "Pasa ?sku=XXX&cantidad=N"}), 400
+
+    try:
+        from inventario import get_conn
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("""
+            SELECT id, sku_canal, item_id_canal, notas
+            FROM sku_mapeo_canal
+            WHERE canal='paris' AND sku_lusync=%s AND activo=TRUE
+        """, (sku,))
+        mapeos = [{"id": r[0], "sku_canal": r[1], "item_id_canal": r[2], "notas": r[3]} for r in cur.fetchall()]
+        cur.close(); conn.close()
+
+        # Llamar directamente con request a la API
+        import requests as _req
+        from paris import paris_headers, PARIS_BASE_URL
+
+        resultados = []
+        for m in mapeos:
+            paris_sku = m["item_id_canal"]
+            sku_seller = m["sku_canal"]
+            if not paris_sku:
+                resultados.append({"mapeo": m, "skip": "sin item_id_canal"})
+                continue
+
+            # Probar varios endpoints/payloads de Paris
+            # Endpoint 1: PUT /sellers/v1/inventory/sku/{sku} con quantity
+            # Endpoint 2: POST /sellers/v1/inventory con array
+            # Necesitamos ver cuál usa la función actual
+
+            # Primero ver el payload que actualizar_stock_paris ya usa via función
+            from paris import actualizar_stock_paris
+            try:
+                # Llamar la función real y capturar logs
+                import io, sys
+                old_stdout = sys.stdout
+                sys.stdout = capt = io.StringIO()
+                try:
+                    res = actualizar_stock_paris(sku, cantidad)
+                finally:
+                    sys.stdout = old_stdout
+                resultados.append({
+                    "mapeo": m,
+                    "resultado_funcion": res,
+                    "logs_funcion": capt.getvalue()
+                })
+            except Exception as e:
+                import traceback
+                resultados.append({"mapeo": m, "error": str(e), "trace": traceback.format_exc()})
+
+        return jsonify({
+            "sku": sku,
+            "cantidad": cantidad,
+            "mapeos": mapeos,
+            "resultados": resultados
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/admin/debug_paris_funcion_codigo")
+def admin_debug_paris_funcion_codigo():
+    """Muestra el código fuente de actualizar_stock_paris para diagnosticar el payload."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if request.args.get("token") != bypass_token and not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        import inspect
+        from paris import actualizar_stock_paris
+        src = inspect.getsource(actualizar_stock_paris)
+        return Response(src, mimetype="text/plain")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/debug_paris_raw_call")
+def admin_debug_paris_raw_call():
+    """Llama Paris directamente y muestra el body completo de la respuesta."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if request.args.get("token") != bypass_token and not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    sku = request.args.get("sku", "MK30WHVEX8-1").strip()
+    sku_seller = request.args.get("sku_seller", "PBEAMG001").strip()
+    cantidad = int(request.args.get("cantidad", "5"))
+
+    try:
+        import requests as _req
+        from paris import paris_headers, PARIS_BASE_URL
+
+        # Intento 1: v2/stock con campo "sku"
+        payload1 = {"skus": [{"sku": sku, "quantity": cantidad}]}
+        r1 = _req.post(f"{PARIS_BASE_URL}/v2/stock", headers=paris_headers(), json=payload1, timeout=15)
+
+        # Intento 2: v2/stock con campo "sku_seller"
+        payload2 = {"skus": [{"sku_seller": sku_seller, "quantity": cantidad}]}
+        r2 = _req.post(f"{PARIS_BASE_URL}/v2/stock", headers=paris_headers(), json=payload2, timeout=15)
+
+        # Intento 3: v1/stock/sku-seller
+        payload3 = {"skus": [{"sku_seller": sku_seller, "quantity": cantidad}]}
+        r3 = _req.post(f"{PARIS_BASE_URL}/v1/stock/sku-seller", headers=paris_headers(), json=payload3, timeout=15)
+
+        # Intento 4: v1/stock con array directo
+        payload4 = [{"sku_seller": sku_seller, "quantity": cantidad}]
+        r4 = _req.post(f"{PARIS_BASE_URL}/v1/stock/sku-seller", headers=paris_headers(), json=payload4, timeout=15)
+
+        return jsonify({
+            "intento_1_v2_sku": {"payload": payload1, "status": r1.status_code, "headers": dict(r1.headers), "body": r1.text[:1000]},
+            "intento_2_v2_sku_seller": {"payload": payload2, "status": r2.status_code, "headers": dict(r2.headers), "body": r2.text[:1000]},
+            "intento_3_v1_sku_seller": {"payload": payload3, "status": r3.status_code, "headers": dict(r3.headers), "body": r3.text[:1000]},
+            "intento_4_v1_array": {"payload": payload4, "status": r4.status_code, "headers": dict(r4.headers), "body": r4.text[:1000]},
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
