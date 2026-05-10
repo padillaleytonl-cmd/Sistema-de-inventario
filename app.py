@@ -13452,5 +13452,102 @@ def admin_verificar_stock_todos_canales():
 
     return jsonify(resultado)
 
+
+@app.route("/admin/enriquecer_mapeos_paris")
+def admin_enriquecer_mapeos_paris():
+    """
+    Enriquece los mapeos de Paris que están huérfanos (sin item_id_canal).
+    Consulta la API de Paris y para cada sku_seller encontrado, llena el item_id_canal.
+    Uso: ?token=XXX&dry_run=1 (default) o dry_run=0 para ejecutar
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if request.args.get("token") != bypass_token and not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    dry_run = request.args.get("dry_run", "1") == "1"
+
+    try:
+        from paris import obtener_stock_paris
+        from inventario import get_conn
+
+        # 1. Recopilar todos los SKUs de Paris (sku_seller -> sku Paris item_id)
+        paris_lookup = {}  # {sku_seller_upper: paris_item_sku}
+        offset = 0
+        while True:
+            data = obtener_stock_paris(limite=100, offset=offset)
+            if not data:
+                break
+            if isinstance(data, dict):
+                items = data.get("skus") or data.get("items") or []
+            elif isinstance(data, list):
+                items = data
+            else:
+                items = []
+            if not items:
+                break
+            for it in items:
+                sku_seller = str(it.get("sku_seller") or "").upper().strip()
+                paris_sku = str(it.get("sku") or "").strip()
+                if sku_seller and paris_sku:
+                    paris_lookup[sku_seller] = paris_sku
+            if len(items) < 100:
+                break
+            offset += 100
+            if offset > 5000:
+                break
+
+        # 2. Buscar mapeos huérfanos de Paris
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("""
+            SELECT id, sku_lusync, sku_canal
+            FROM sku_mapeo_canal
+            WHERE canal='paris' AND activo=TRUE AND item_id_canal IS NULL
+        """)
+        huerfanos = [{"id": r[0], "sku_lusync": r[1], "sku_canal": r[2]} for r in cur.fetchall()]
+
+        # 3. Para cada huérfano, intentar enriquecer
+        enriquecidos = []
+        sin_match = []
+        for h in huerfanos:
+            # Intentar match por sku_lusync, sku_canal
+            for key in [h["sku_lusync"], h["sku_canal"]]:
+                if not key:
+                    continue
+                key_up = key.upper().strip()
+                if key_up in paris_lookup:
+                    paris_sku = paris_lookup[key_up]
+                    enriquecidos.append({
+                        **h,
+                        "match_por": key,
+                        "sku_seller_paris": key_up,
+                        "item_id_canal_paris": paris_sku
+                    })
+                    if not dry_run:
+                        cur.execute("""
+                            UPDATE sku_mapeo_canal
+                            SET item_id_canal = %s,
+                                sku_canal = %s,
+                                notas = COALESCE(notas,'') || ' | enriquecido_paris',
+                                actualizado_at = NOW()
+                            WHERE id = %s
+                        """, (paris_sku, key_up, h["id"]))
+                    break
+            else:
+                sin_match.append(h)
+
+        if not dry_run:
+            conn.commit()
+        cur.close(); conn.close()
+
+        return jsonify({
+            "dry_run": dry_run,
+            "huerfanos_paris": len(huerfanos),
+            "enriquecidos": enriquecidos,
+            "sin_match_en_paris": sin_match,
+            "total_skus_paris": len(paris_lookup)
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
