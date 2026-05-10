@@ -108,76 +108,33 @@ def actualizar_stock_paris(sku_lusync, cantidad):
     log = []
 
     for pub in publicaciones:
-        sku_paris = (pub.get("sku_canal") or "").strip()  # ej: PBEAMG001 (sku_seller)
-        item_id_paris = (pub.get("item_id_canal") or "").strip()  # ej: MK30WHVEX8-1 (sku Paris real)
-        if not sku_paris and not item_id_paris:
+        sku_paris = (pub.get("sku_canal") or "").strip()
+        if not sku_paris:
             fallidas += 1
-            log.append(f"  Publicación sin sku_canal ni item_id, skip")
+            log.append(f"  Publicación sin sku_canal, skip")
             continue
 
-        # Estrategia: usar /v2/stock con el item_id de Paris (sku Marketplace)
-        # Si no tenemos item_id, fallback al endpoint viejo v1 con sku_seller
         try:
-            if item_id_paris:
-                # Endpoint v2 con sku Marketplace de Paris
-                payload = {
-                    "skus": [{
-                        "sku": item_id_paris,
-                        "quantity": int(cantidad)
-                    }]
-                }
-                res = requests.post(
-                    f"{PARIS_BASE_URL}/v2/stock",
-                    headers=paris_headers(),
-                    json=payload,
-                    timeout=15
-                )
-                ok = res.status_code in [200, 201]
-                print(f"[Paris Stock v2] item_id:{item_id_paris} sku_seller:{sku_paris} Qty:{cantidad} Status:{res.status_code}")
-                log.append(f"  {item_id_paris} (sku_seller={sku_paris}): v2 status {res.status_code} {'OK' if ok else 'FAIL'}")
-                if not ok:
-                    log.append(f"    body: {res.text[:200]}")
-                # Si v2 falla, intentar v1 con sku_seller como fallback
-                if not ok and sku_paris:
-                    payload_v1 = {
-                        "skus": [{
-                            "sku_seller": sku_paris,
-                            "quantity": int(cantidad)
-                        }]
-                    }
-                    res2 = requests.post(
-                        f"{PARIS_BASE_URL}/v1/stock/sku-seller",
-                        headers=paris_headers(),
-                        json=payload_v1,
-                        timeout=15
-                    )
-                    ok = res2.status_code in [200, 201]
-                    print(f"[Paris Stock v1 fallback] sku_seller:{sku_paris} Qty:{cantidad} Status:{res2.status_code}")
-                    log.append(f"    v1 fallback status {res2.status_code} {'OK' if ok else 'FAIL'}")
-            else:
-                # Sin item_id, usar v1 con sku_seller
-                payload = {
-                    "skus": [{
-                        "sku_seller": sku_paris,
-                        "quantity": int(cantidad)
-                    }]
-                }
-                res = requests.post(
-                    f"{PARIS_BASE_URL}/v1/stock/sku-seller",
-                    headers=paris_headers(),
-                    json=payload,
-                    timeout=15
-                )
-                ok = res.status_code in [200, 201]
-                print(f"[Paris Stock] SKU:{sku_paris} Qty:{cantidad} Status:{res.status_code}")
-                log.append(f"  {sku_paris}: status {res.status_code} {'OK' if ok else 'FAIL'}")
-                if not ok:
-                    log.append(f"    body: {res.text[:200]}")
-
+            payload = {
+                "skus": [{
+                    "sku_seller": sku_paris,
+                    "quantity": int(cantidad)
+                }]
+            }
+            res = requests.post(
+                f"{PARIS_BASE_URL}/v1/stock/sku-seller",
+                headers=paris_headers(),
+                json=payload,
+                timeout=15
+            )
+            ok = res.status_code in [200, 201]
+            print(f"[Paris Stock] SKU:{sku_paris} Qty:{cantidad} Status:{res.status_code}")
+            log.append(f"  {sku_paris}: status {res.status_code} {'OK' if ok else 'FAIL'}")
             if ok:
                 exitosas += 1
             else:
                 fallidas += 1
+                log.append(f"    body: {res.text[:200]}")
         except Exception as e:
             fallidas += 1
             log.append(f"  {sku_paris}: error {e}")
