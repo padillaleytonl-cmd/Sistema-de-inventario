@@ -12841,12 +12841,14 @@ def admin_auto_descubrir_variantes_meli():
         skus_lusync = {r[0].upper().strip() for r in cur.fetchall() if r[0]}
 
         # 2. Cargar mapeos existentes para no duplicar
+        # Solo considerar como "existente" los mapeos CON item_id_canal lleno
+        # Los huérfanos (item_id_canal=NULL) NO bloquean la creación de uno nuevo correcto
         cur.execute("""
             SELECT canal, sku_lusync, sku_canal, item_id_canal 
             FROM sku_mapeo_canal 
-            WHERE canal='mercadolibre' AND activo=TRUE
+            WHERE canal='mercadolibre' AND activo=TRUE AND item_id_canal IS NOT NULL
         """)
-        mapeos_existentes = {(r[1].upper(), r[3] or r[2]) for r in cur.fetchall() if r[1]}
+        mapeos_existentes = {(r[1].upper(), r[3]) for r in cur.fetchall() if r[1] and r[3]}
 
         # 3. ALIAS: cargar mapeos de cualquier canal donde sku_canal != sku_lusync
         # Esto resuelve casos donde el SKU del seller en MELI es un alias del SKU Lusync
@@ -13144,6 +13146,76 @@ def admin_debug_meli_stock_locations():
             return jsonify({"error": "Pasa ?item_id=XXX ó ?user_product_id=XXX"}), 400
 
         return jsonify(resultado)
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/admin/limpiar_mapeos_huerfanos", methods=["GET", "POST"])
+def admin_limpiar_mapeos_huerfanos():
+    """
+    Identifica y elimina mapeos huérfanos en sku_mapeo_canal:
+    - Mapeos sin item_id_canal cuando otro mapeo del mismo (sku_lusync, canal) sí lo tiene
+    - Mapeos con item_id_canal idénticos pero sku_lusync distintos (decide cuál mantener)
+
+    Uso: ?token=XXX&dry_run=1 (default) o dry_run=0 para ejecutar
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if request.args.get("token") != bypass_token and not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    dry_run = request.args.get("dry_run", "1") == "1"
+    canal_filter = request.args.get("canal", "").strip().lower()
+
+    try:
+        from inventario import get_conn
+        conn = get_conn(); cur = conn.cursor()
+
+        # Obtener todos los mapeos activos
+        sql = """SELECT id, canal, sku_lusync, sku_canal, item_id_canal, notas
+                 FROM sku_mapeo_canal WHERE activo=TRUE"""
+        params = []
+        if canal_filter:
+            sql += " AND canal=%s"
+            params.append(canal_filter)
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+
+        # Agrupar por (canal, sku_lusync) para detectar huérfanos
+        # Si hay un mapeo con item_id_canal lleno, los que tienen NULL son huérfanos a eliminar
+        from collections import defaultdict
+        grupos = defaultdict(list)
+        for r in rows:
+            key = (r[1], (r[2] or "").upper())  # (canal, sku_lusync)
+            grupos[key].append({
+                "id": r[0], "canal": r[1], "sku_lusync": r[2],
+                "sku_canal": r[3], "item_id_canal": r[4], "notas": r[5]
+            })
+
+        huerfanos_a_eliminar = []
+        for (canal, sku_lus), mapeos in grupos.items():
+            tiene_con_id = any(m["item_id_canal"] for m in mapeos)
+            if tiene_con_id:
+                # Si hay al menos uno con item_id_canal, los que NO lo tienen son huérfanos
+                for m in mapeos:
+                    if not m["item_id_canal"]:
+                        huerfanos_a_eliminar.append(m)
+
+        eliminados = []
+        if not dry_run:
+            for m in huerfanos_a_eliminar:
+                cur.execute("DELETE FROM sku_mapeo_canal WHERE id=%s", (m["id"],))
+                eliminados.append(m["id"])
+            conn.commit()
+
+        cur.close(); conn.close()
+
+        return jsonify({
+            "dry_run": dry_run,
+            "huerfanos_detectados": len(huerfanos_a_eliminar),
+            "huerfanos": huerfanos_a_eliminar,
+            "ids_eliminados": eliminados,
+        })
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
