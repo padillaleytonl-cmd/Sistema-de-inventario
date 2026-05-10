@@ -360,13 +360,58 @@ def actualizar_stock_meli(sku_lusync, cantidad):
                     timeout=15
                 )
                 ok = res.status_code in (200, 201)
-                log.append(f"  {item_id}: status {res.status_code} {'OK' if ok else 'FAIL'}")
-                print(f"[MELI Stock] Item:{item_id} Qty:{cantidad} Status:{res.status_code}")
+                debe_intentar_user_products = (
+                    "not_modifiable" in res.text
+                    or "fulfillment" in res.text.lower()
+                    or "item.pictures.max" in res.text
+                )
+
                 if ok:
+                    log.append(f"  {item_id}: status {res.status_code} OK")
+                    print(f"[MELI Stock] Item:{item_id} Qty:{cantidad} Status:{res.status_code}")
                     exitosas += 1
+                elif debe_intentar_user_products:
+                    # Fallback bi-modal: usar /user-products/{id}/stock/type/selling_address
+                    user_product_id_item = item_data.get("user_product_id")
+                    if user_product_id_item:
+                        try:
+                            r_get_stock = requests.get(
+                                f"{MELI_API_URL}/user-products/{user_product_id_item}/stock",
+                                headers=meli_headers(),
+                                timeout=15
+                            )
+                            x_version = r_get_stock.headers.get("x-version", "1")
+                            headers_put = dict(meli_headers())
+                            headers_put["x-version"] = str(x_version)
+                            headers_put["Content-Type"] = "application/json"
+                            r_sa = requests.put(
+                                f"{MELI_API_URL}/user-products/{user_product_id_item}/stock/type/selling_address",
+                                headers=headers_put,
+                                json={"quantity": int(cantidad)},
+                                timeout=15
+                            )
+                            ok_sa = r_sa.status_code in (200, 201, 204)
+                            if ok_sa:
+                                log.append(f"  {item_id}: bi-modal selling_address OK (qty={cantidad})")
+                                print(f"[MELI Stock] Item:{item_id} bi-modal selling_address Qty:{cantidad} Status:{r_sa.status_code}")
+                                exitosas += 1
+                            else:
+                                log.append(f"  {item_id}: selling_address FAIL status {r_sa.status_code}")
+                                log.append(f"    body: {r_sa.text[:300]}")
+                                print(f"[MELI Stock] Item:{item_id} selling_address Status:{r_sa.status_code} body:{r_sa.text[:200]}")
+                                fallidas += 1
+                        except Exception as e_sa:
+                            log.append(f"  {item_id}: error selling_address: {e_sa}")
+                            print(f"[MELI Stock] Item:{item_id} error selling_address: {e_sa}")
+                            fallidas += 1
+                    else:
+                        log.append(f"  {item_id}: ⏭️ no tiene user_product_id, omitido")
+                        print(f"[MELI Stock] Item:{item_id} no tiene user_product_id, omitido")
                 else:
-                    fallidas += 1
+                    log.append(f"  {item_id}: status {res.status_code} FAIL")
                     log.append(f"    body: {res.text[:300]}")
+                    print(f"[MELI Stock] Item:{item_id} Qty:{cantidad} Status:{res.status_code} FAIL")
+                    fallidas += 1
         except Exception as e:
             fallidas += 1
             log.append(f"  {item_id}: error {e}")
