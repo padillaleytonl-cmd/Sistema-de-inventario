@@ -13793,5 +13793,40 @@ def admin_debug_paris_seller_nodes():
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
+
+@app.route("/admin/paris_force_relogin")
+def admin_paris_force_relogin():
+    """Limpia el cache de token de Paris y fuerza re-autenticación."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if request.args.get("token") != bypass_token and not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    try:
+        import paris
+        # Limpiar el cache
+        old_token = paris._paris_cache.get("token", "")[:30] if paris._paris_cache.get("token") else None
+        old_seller = paris._paris_cache.get("seller_id")
+        old_expires = paris._paris_cache.get("expires_at")
+        paris._paris_cache["token"] = None
+        paris._paris_cache["expires_at"] = 0
+        paris._paris_cache["seller_id"] = None
+        paris._paris_cache["seller_name"] = None
+
+        # Forzar nueva autenticación
+        new_token = paris.get_paris_token()
+        return jsonify({
+            "ok": True,
+            "old_token_preview": old_token,
+            "old_seller_id": old_seller,
+            "old_expires_at": old_expires,
+            "new_token_preview": new_token[:30] if new_token else None,
+            "new_seller_id": paris._paris_cache.get("seller_id"),
+            "new_seller_name": paris._paris_cache.get("seller_name"),
+            "new_expires_at": paris._paris_cache.get("expires_at")
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
