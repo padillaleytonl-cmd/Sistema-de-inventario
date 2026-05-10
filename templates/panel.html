@@ -1931,49 +1931,42 @@ tbody td {
 
     <div class="layout-inv">
       <div>
-        <!-- Crear producto -->
-        <div class="card" style="margin-bottom:16px;">
-          <div class="card-title" style="margin-bottom:14px;">Agregar producto</div>
-          <div class="form-row">
-            <div class="form-group">
-              <label>SKU</label>
-              <input id="sku" placeholder="Ej: COCHE001">
-            </div>
-            <div class="form-group">
-              <label>Nombre</label>
-              <input id="nombre" placeholder="Nombre del producto">
-            </div>
-            <div class="form-group">
-              <label>Stock inicial</label>
-              <input id="stock" type="number" min="0" placeholder="0">
-            </div>
-            <button class="btn-primary" onclick="crear()" style="height:38px; align-self:end;">Crear</button>
-          </div>
-        </div>
-
-        <!-- Entrada / Salida -->
+        <!-- Entrada / Salida con autocomplete + clave admin + documento -->
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px;">
           <div class="card">
             <div class="card-title" style="margin-bottom:12px; color:var(--success);">&#8593; Entrada de stock</div>
-            <div class="form-group" style="margin-bottom:8px;"><label>SKU</label><input id="skuE" placeholder="SKU del producto"></div>
+            <div class="form-group" style="margin-bottom:8px; position:relative;">
+              <label>Producto (SKU o nombre)</label>
+              <input id="skuE" placeholder="Buscar por SKU o nombre..." autocomplete="off" oninput="buscarProductoLive('E')" onfocus="buscarProductoLive('E')" onblur="setTimeout(()=>cerrarSugerencias('E'),200)">
+              <div id="sugerenciasE" class="sku-suggest" style="display:none;"></div>
+            </div>
             <div class="form-group" style="margin-bottom:8px;"><label>Cantidad</label><input id="cantE" type="number" min="1" placeholder="0"></div>
+            <div class="form-group" style="margin-bottom:8px;">
+              <label>N° de documento (factura / invoice / guía)</label>
+              <input id="docE" placeholder="Ej: F-12345 / Inv-87 / G-22">
+            </div>
             <div class="form-group" style="margin-bottom:12px;">
               <label>Motivo</label>
-              <select id="motivoEntrada">
-                <option>Cargando...</option>
-              </select>
+              <select id="motivoEntrada"><option>Cargando...</option></select>
             </div>
             <button class="btn-primary" onclick="entrada()" style="width:100%; background:var(--success);">Registrar entrada</button>
           </div>
           <div class="card">
             <div class="card-title" style="margin-bottom:12px; color:var(--danger);">&#8595; Salida de stock</div>
-            <div class="form-group" style="margin-bottom:8px;"><label>SKU</label><input id="skuS" placeholder="SKU del producto"></div>
+            <div class="form-group" style="margin-bottom:8px; position:relative;">
+              <label>Producto (SKU o nombre)</label>
+              <input id="skuS" placeholder="Buscar por SKU o nombre..." autocomplete="off" oninput="buscarProductoLive('S')" onfocus="buscarProductoLive('S')" onblur="setTimeout(()=>cerrarSugerencias('S'),200)">
+              <div id="sugerenciasS" class="sku-suggest" style="display:none;"></div>
+            </div>
             <div class="form-group" style="margin-bottom:8px;"><label>Cantidad</label><input id="cantS" type="number" min="1" placeholder="0"></div>
+            <div class="form-group" style="margin-bottom:8px;">
+              <label>N° de orden de compra (OC)</label>
+              <input id="ocS" placeholder="Ej: 2000016358722020 (se detectará el canal)" oninput="detectarCanalOC()">
+              <div id="canalDetectado" style="font-size:11px; color:var(--muted); margin-top:4px;"></div>
+            </div>
             <div class="form-group" style="margin-bottom:12px;">
               <label>Motivo</label>
-              <select id="motivoSalida">
-                <option>Cargando...</option>
-              </select>
+              <select id="motivoSalida"><option>Cargando...</option></select>
             </div>
             <button class="btn-primary" onclick="salida()" style="width:100%; background:var(--danger);">Registrar salida</button>
           </div>
@@ -3243,44 +3236,152 @@ function crear(){
 }
 
 // ── ENTRADA
-function entrada(){
-  const skuVal  = document.getElementById('skuE').value.trim();
-  const cantVal = document.getElementById('cantE').value;
-  const motivo  = document.getElementById('motivoEntrada').value;
-  if(!skuVal || !cantVal){ toast('Completa SKU y cantidad','warn'); return; }
-  fetch('/entrada', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({sku:skuVal, cantidad:cantVal, motivo})
-  }).then(r=>r.json()).then(d=>{
-    if(d.error){ toast(d.error,'error'); return; }
-    toast('Entrada registrada');
-    document.getElementById('skuE').value='';
-    document.getElementById('cantE').value='';
-    cargar();
+// ── AUTOCOMPLETE de productos en entrada/salida
+let _productosCache = [];
+function actualizarCacheProductos(lista){ _productosCache = lista || []; }
+
+function buscarProductoLive(modo){
+  const inputId = 'sku' + modo;
+  const sugId = 'sugerencias' + modo;
+  const cont = document.getElementById(sugId);
+  if(!cont) return;
+  const q = document.getElementById(inputId).value.trim().toLowerCase();
+  if(!q || q.length < 1){ cont.style.display='none'; cont.innerHTML=''; return; }
+  if(!_productosCache.length){ cont.style.display='none'; return; }
+  const matches = _productosCache.filter(p =>
+    (p.sku||'').toLowerCase().includes(q) ||
+    (p.nombre||'').toLowerCase().includes(q)
+  ).slice(0, 8);
+  if(!matches.length){
+    cont.innerHTML = '<div class="sku-suggest-item" style="color:var(--muted); cursor:default;">Sin coincidencias</div>';
+    cont.style.display='block';
+    return;
+  }
+  cont.innerHTML = matches.map(p => {
+    const stockDisp = p.stock_disponible !== undefined ? p.stock_disponible : p.stock;
+    return `<div class="sku-suggest-item" onclick="seleccionarProducto('${modo}','${p.sku.replace(/'/g,"\\'")}')">
+      <div style="font-weight:600; color:var(--text);">${p.sku}</div>
+      <div style="font-size:11px; color:var(--muted);">${(p.nombre||'').substring(0,55)}</div>
+      <div style="font-size:10px; color:var(--success);">Stock: ${stockDisp}</div>
+    </div>`;
+  }).join('');
+  cont.style.display='block';
+}
+function seleccionarProducto(modo, sku){
+  document.getElementById('sku'+modo).value = sku;
+  cerrarSugerencias(modo);
+}
+function cerrarSugerencias(modo){
+  const cont = document.getElementById('sugerencias'+modo);
+  if(cont) cont.style.display='none';
+}
+
+// ── DETECTAR canal por número de OC
+function detectarCanalOC(){
+  const oc = (document.getElementById('ocS').value || '').trim();
+  const cont = document.getElementById('canalDetectado');
+  if(!oc){ cont.textContent=''; return; }
+  let canal = '';
+  // Heurística inicial — el backend hace la validación final
+  if(/^MLC\d+/i.test(oc) || /^\d{10,12}$/.test(oc)) canal='MercadoLibre';
+  else if(/^2\d{13,18}$/.test(oc)) canal='Walmart';
+  else if(/^MK[A-Z0-9]{8,12}/i.test(oc)) canal='Paris';
+  else if(/^MPM\d+/i.test(oc)) canal='Ripley';
+  else if(/^\d{6,9}$/.test(oc)) canal='Falabella';
+  else canal='Detectando…';
+  cont.textContent = canal ? `Canal posible: ${canal}` : '';
+  cont.style.color = canal && canal !== 'Detectando…' ? 'var(--success)' : 'var(--muted)';
+}
+
+// ── MODAL clave admin
+function pedirClaveAdmin(textoAccion){
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:99998;';
+    overlay.innerHTML = `
+      <div style="background:var(--bg);padding:24px;border-radius:12px;min-width:340px;max-width:400px;box-shadow:0 8px 32px rgba(0,0,0,0.3);">
+        <div style="font-weight:700;font-size:16px;margin-bottom:8px;color:var(--text);">🔒 Clave de admin requerida</div>
+        <div style="font-size:13px;color:var(--muted);margin-bottom:16px;">${textoAccion}</div>
+        <input id="_claveAdminInput" type="password" placeholder="Clave de admin" autofocus
+               style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--bg);color:var(--text);box-sizing:border-box;">
+        <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
+          <button id="_claveCancelar" style="padding:8px 16px;border:1px solid var(--border);background:transparent;border-radius:8px;cursor:pointer;color:var(--muted);">Cancelar</button>
+          <button id="_claveOk" class="btn-primary" style="padding:8px 16px;">Confirmar</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const input = document.getElementById('_claveAdminInput');
+    input.focus();
+    const cleanup = () => overlay.remove();
+    document.getElementById('_claveCancelar').onclick = () => { cleanup(); resolve(null); };
+    document.getElementById('_claveOk').onclick = () => { const v = input.value; cleanup(); resolve(v); };
+    input.onkeydown = (e) => {
+      if(e.key === 'Enter'){ const v = input.value; cleanup(); resolve(v); }
+      if(e.key === 'Escape'){ cleanup(); resolve(null); }
+    };
   });
 }
 
-// ── SALIDA
-function salida(){
+// ── ENTRADA con N° documento + clave admin
+async function entrada(){
+  const skuVal  = document.getElementById('skuE').value.trim();
+  const cantVal = document.getElementById('cantE').value;
+  const docVal  = document.getElementById('docE').value.trim();
+  const motivo  = document.getElementById('motivoEntrada').value;
+  if(!skuVal || !cantVal){ toast('Completa SKU y cantidad','warn'); return; }
+  if(!docVal){ toast('N° de documento es obligatorio','warn'); return; }
+
+  const clave = await pedirClaveAdmin(`Vas a registrar +${cantVal} ${skuVal} (doc: ${docVal})`);
+  if(!clave){ return; }
+
+  try{
+    const r = await fetch('/entrada', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({sku:skuVal, cantidad:cantVal, motivo, documento:docVal, clave_admin:clave})
+    });
+    const d = await r.json();
+    if(d.error){ toast(d.error,'error'); return; }
+    toast('Entrada registrada — doc ' + docVal);
+    document.getElementById('skuE').value='';
+    document.getElementById('cantE').value='';
+    document.getElementById('docE').value='';
+    cargar();
+  }catch(e){ toast('Error: '+e.message,'error'); }
+}
+
+// ── SALIDA con N° OC + clave admin
+async function salida(){
   const skuVal  = document.getElementById('skuS').value.trim();
   const cantVal = document.getElementById('cantS').value;
+  const ocVal   = document.getElementById('ocS').value.trim();
   const motivo  = document.getElementById('motivoSalida').value;
   if(!skuVal || !cantVal){ toast('Completa SKU y cantidad','warn'); return; }
-  fetch('/salida', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({sku:skuVal, cantidad:cantVal, motivo})
-  }).then(r=>r.json()).then(d=>{
+  if(!ocVal){ toast('N° de orden de compra es obligatorio','warn'); return; }
+
+  const clave = await pedirClaveAdmin(`Vas a registrar -${cantVal} ${skuVal} (OC: ${ocVal})`);
+  if(!clave){ return; }
+
+  try{
+    const r = await fetch('/salida', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({sku:skuVal, cantidad:cantVal, motivo, oc:ocVal, clave_admin:clave})
+    });
+    const d = await r.json();
     if(d.error){ toast(d.error,'error'); return; }
-    toast('Salida registrada');
+    toast('Salida registrada — OC ' + ocVal + (d.canal_detectado ? ' (' + d.canal_detectado + ')' : ''));
     document.getElementById('skuS').value='';
     document.getElementById('cantS').value='';
+    document.getElementById('ocS').value='';
+    document.getElementById('canalDetectado').textContent='';
     cargar();
-  });
+  }catch(e){ toast('Error: '+e.message,'error'); }
 }
 
 // ── RENDER TABLA
 function renderTabla(lista){
   lista.sort((a,b) => b.stock - a.stock);
+  // Cache para autocomplete de entrada/salida
+  actualizarCacheProductos(lista);
   const totalEl = document.getElementById('totalProductos');
   if(totalEl) totalEl.textContent = lista.length + ' productos';
   const tbody = document.getElementById('tabla');

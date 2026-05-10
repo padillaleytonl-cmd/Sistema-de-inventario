@@ -140,7 +140,14 @@ def actualizar_precios(sku, precio_normal, precio_oferta):
     cur.close()
     conn.close()
 
-def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistema", canal="Sistema", orden_id=None, fecha_override=None):
+def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistema", canal="Sistema", orden_id=None, fecha_override=None, numero_orden=None, documento_ref=None):
+    """
+    Registra un movimiento de stock con trazabilidad documental.
+
+    Args:
+        numero_orden: N° de orden del marketplace (para salidas)
+        documento_ref: N° de documento físico (factura/invoice/guía/OC) — siempre obligatorio para movs manuales
+    """
     conn = get_conn()
     cur = conn.cursor()
     try:
@@ -148,6 +155,10 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS canal TEXT DEFAULT 'Sistema'")
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS orden_id TEXT DEFAULT NULL")
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_importacion TIMESTAMP")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS numero_orden TEXT DEFAULT NULL")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS documento_ref TEXT DEFAULT NULL")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_mov_documento_ref ON movimientos(documento_ref)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_mov_numero_orden ON movimientos(numero_orden)")
         conn.commit()
     except:
         conn.rollback()
@@ -160,9 +171,9 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
     else:
         fecha = ahora
     cur.execute("""
-        INSERT INTO movimientos (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id, fecha_importacion)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """, (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id, ahora))
+        INSERT INTO movimientos (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id, fecha_importacion, numero_orden, documento_ref)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """, (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id, ahora, numero_orden, documento_ref))
     conn.commit()
     cur.close()
     conn.close()

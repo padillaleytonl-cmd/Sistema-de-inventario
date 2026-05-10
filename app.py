@@ -1730,23 +1730,43 @@ def actualizar_precios_route():
 
 @app.route("/entrada", methods=["POST"])
 def entrada():
-    registrar_audit(session.get("usuario","Sistema"), request.remote_addr, "entrada_manual", entidad="productos", detalle="Entrada manual de stock")
-    data = request.json
+    data = request.json or {}
+    # Validar clave admin
+    clave_correcta = os.environ.get("LUSYNC_ADMIN_KEY", "")
+    clave_recibida = (data.get("clave_admin") or "").strip()
+    if not clave_correcta:
+        return {"error": "Clave admin no configurada en el servidor (LUSYNC_ADMIN_KEY)"}, 500
+    if clave_recibida != clave_correcta:
+        registrar_audit(session.get("usuario","Sistema"), request.remote_addr, "entrada_manual_DENEGADA", entidad="productos", detalle=f"Clave admin incorrecta sku={data.get('sku')}")
+        return {"error": "Clave de admin incorrecta"}, 403
+
+    # Validar documento obligatorio
+    documento = (data.get("documento") or "").strip()
+    if not documento:
+        return {"error": "N° de documento es obligatorio"}, 400
+
+    sku_input = (data.get("sku") or "").strip()
+    if not sku_input:
+        return {"error": "SKU obligatorio"}, 400
+
+    registrar_audit(session.get("usuario","Sistema"), request.remote_addr, "entrada_manual",
+                   entidad="productos", detalle=f"sku={sku_input} cant={data.get('cantidad')} doc={documento}")
+
     productos = cargar_productos()
     for p in productos:
-        if p["sku"] == data["sku"]:
+        if p["sku"] == sku_input:
             cantidad = int(data["cantidad"])
-            # Aplicar a la bodega CENTRAL (default)
             from inventario import ajustar_stock_bodega
             try:
                 ajustar_stock_bodega(p["sku"], "CENTRAL", cantidad)
             except Exception as e:
                 print(f"[Entrada] error ajustando bodega CENTRAL: {e}")
-            # Mantener compatibilidad legacy: actualizar productos.stock
             p["stock"] += cantidad
             guardar_producto(p)
-            registrar_movimiento("entrada", p["sku"], p["nombre"], cantidad, data.get("motivo"), usuario="Luis Padilla", canal="Manual")
-            # Sync automático: usar stock de bodegas propias (lo que está disponible para vender)
+            motivo_completo = (data.get("motivo") or "Entrada manual") + f" | Doc: {documento}"
+            registrar_movimiento("entrada", p["sku"], p["nombre"], cantidad,
+                                motivo_completo, usuario=session.get("usuario","Luis Padilla"),
+                                canal="Manual", documento_ref=documento)
             from inventario import get_conn
             try:
                 _c = get_conn(); _cur = _c.cursor()
@@ -1759,30 +1779,79 @@ def entrada():
                 stock_disponible = p["stock"]
                 print(f"[Entrada] error leyendo stock propio: {e}")
             syncs = sincronizar_stock_marketplaces(p["sku"], stock_disponible, contexto="entrada_manual")
-            return {"ok": True, "syncs": syncs, "stock_disponible_enviado": stock_disponible}
-    return {"error": "no encontrado"}
+            return {"ok": True, "syncs": syncs, "stock_disponible_enviado": stock_disponible, "documento": documento}
+    return {"error": "Producto no encontrado"}, 404
+
+def _detectar_canal_por_oc(oc):
+    """Detecta a qué canal pertenece una OC consultando los movimientos previos.
+    Si no encuentra, hace heurística por formato."""
+    oc = (oc or "").strip()
+    if not oc:
+        return None
+    try:
+        from inventario import get_conn
+        _c = get_conn(); _cur = _c.cursor()
+        # 1. Buscar OC en órdenes ya registradas (movimientos previos)
+        _cur.execute("""SELECT canal FROM movimientos
+                        WHERE numero_orden = %s OR motivo LIKE %s
+                        ORDER BY id DESC LIMIT 1""", (oc, f"%{oc}%"))
+        row = _cur.fetchone()
+        _cur.close(); _c.close()
+        if row and row[0]:
+            return row[0]
+    except Exception as e:
+        print(f"[detectar_canal_oc] error: {e}")
+    # 2. Heurística por formato
+    import re
+    if re.match(r'^MLC\d+', oc, re.I): return "MercadoLibre"
+    if re.match(r'^2\d{13,18}$', oc): return "Walmart"
+    if re.match(r'^MK[A-Z0-9]{8,12}', oc, re.I): return "Paris"
+    if re.match(r'^MPM\d+', oc, re.I): return "Ripley"
+    if re.match(r'^\d{6,9}$', oc): return "Falabella"
+    return "Manual"
 
 @app.route("/salida", methods=["POST"])
 def salida():
-    registrar_audit(session.get("usuario","Sistema"), request.remote_addr, "salida_manual", entidad="productos", detalle="Salida manual de stock")
-    data = request.json
+    data = request.json or {}
+    # Validar clave admin
+    clave_correcta = os.environ.get("LUSYNC_ADMIN_KEY", "")
+    clave_recibida = (data.get("clave_admin") or "").strip()
+    if not clave_correcta:
+        return {"error": "Clave admin no configurada en el servidor (LUSYNC_ADMIN_KEY)"}, 500
+    if clave_recibida != clave_correcta:
+        registrar_audit(session.get("usuario","Sistema"), request.remote_addr, "salida_manual_DENEGADA", entidad="productos", detalle=f"Clave admin incorrecta sku={data.get('sku')}")
+        return {"error": "Clave de admin incorrecta"}, 403
+
+    # Validar OC obligatoria
+    oc = (data.get("oc") or "").strip()
+    if not oc:
+        return {"error": "N° de orden de compra (OC) es obligatorio"}, 400
+
+    sku_input = (data.get("sku") or "").strip()
+    if not sku_input:
+        return {"error": "SKU obligatorio"}, 400
+
+    canal_detectado = _detectar_canal_por_oc(oc) or "Manual"
+    registrar_audit(session.get("usuario","Sistema"), request.remote_addr, "salida_manual",
+                   entidad="productos", detalle=f"sku={sku_input} cant={data.get('cantidad')} oc={oc} canal={canal_detectado}")
+
     productos = cargar_productos()
     for p in productos:
-        if p["sku"] == data["sku"]:
+        if p["sku"] == sku_input:
             cantidad = int(data["cantidad"])
             if p["stock"] < cantidad:
-                return {"error": "Stock insuficiente"}
-            # Descontar de la bodega CENTRAL
+                return {"error": "Stock insuficiente"}, 400
             from inventario import ajustar_stock_bodega
             try:
                 ajustar_stock_bodega(p["sku"], "CENTRAL", -cantidad)
             except Exception as e:
                 print(f"[Salida] error ajustando bodega CENTRAL: {e}")
-            # Mantener compatibilidad legacy: actualizar productos.stock
             p["stock"] -= cantidad
             guardar_producto(p)
-            registrar_movimiento("salida", p["sku"], p["nombre"], cantidad, data.get("motivo"), usuario="Luis Padilla", canal="Manual")
-            # Sync automático: usar stock de bodegas propias
+            motivo_completo = (data.get("motivo") or "Salida manual") + f" | OC: {oc}"
+            registrar_movimiento("salida", p["sku"], p["nombre"], cantidad,
+                                motivo_completo, usuario=session.get("usuario","Luis Padilla"),
+                                canal=canal_detectado, numero_orden=oc, documento_ref=oc)
             from inventario import get_conn
             try:
                 _c = get_conn(); _cur = _c.cursor()
@@ -1795,8 +1864,8 @@ def salida():
                 stock_disponible = p["stock"]
                 print(f"[Salida] error leyendo stock propio: {e}")
             syncs = sincronizar_stock_marketplaces(p["sku"], stock_disponible, contexto="salida_manual")
-            return {"ok": True, "syncs": syncs, "stock_disponible_enviado": stock_disponible}
-    return {"error": "no encontrado"}
+            return {"ok": True, "syncs": syncs, "stock_disponible_enviado": stock_disponible, "oc": oc, "canal_detectado": canal_detectado}
+    return {"error": "Producto no encontrado"}, 404
 
 @app.route("/sync_ordenes")
 def sync_ordenes():
