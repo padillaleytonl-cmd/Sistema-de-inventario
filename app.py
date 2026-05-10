@@ -12979,5 +12979,106 @@ def admin_debug_mapeos_sku():
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
+
+@app.route("/admin/debug_meli_stock_locations")
+def admin_debug_meli_stock_locations():
+    """
+    Debug completo: para un user_product_id de MELI, devuelve:
+    - Estado del item (logistic_type, tags, status)
+    - Stock locations (Full + selling_address)
+    - x-version header
+    Útil para diagnosticar convivencia Full/Flex.
+
+    Uso: ?user_product_id=MLCU3179719354&token=XXX
+         ó ?item_id=MLC1529109001&token=XXX (busca user_product_ids de variantes)
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if request.args.get("token") != bypass_token and not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    upid = request.args.get("user_product_id", "").strip()
+    item_id = request.args.get("item_id", "").strip()
+
+    try:
+        import requests as _req
+        from mercadolibre import meli_headers, MELI_API_URL
+
+        resultado = {}
+
+        # Si se pasa item_id, primero traer todos los user_product_id de variantes
+        if item_id and not upid:
+            r_item = _req.get(
+                f"{MELI_API_URL}/items/{item_id}?include_attributes=all",
+                headers=meli_headers(), timeout=20
+            )
+            if r_item.status_code != 200:
+                return jsonify({"error": f"GET item falló: {r_item.status_code}", "body": r_item.text[:500]}), 500
+            item = r_item.json()
+            resultado["item"] = {
+                "id": item_id,
+                "logistic_type": item.get("shipping", {}).get("logistic_type"),
+                "tags": item.get("tags", []),
+                "status": item.get("status"),
+                "sub_status": item.get("sub_status"),
+                "tiene_self_service_in": "self_service_in" in (item.get("tags") or []),
+                "user_product_id_item": item.get("user_product_id"),
+                "inventory_id": item.get("inventory_id"),
+            }
+
+            # Recopilar user_product_ids de variantes
+            variantes_info = []
+            for v in item.get("variations") or []:
+                v_upid = v.get("user_product_id")
+                v_color = next((ac.get("value_name") for ac in v.get("attribute_combinations",[])
+                                if ac.get("id") == "COLOR"), None)
+                v_seller_sku = next((a.get("value_name") for a in v.get("attributes",[])
+                                     if a.get("id") == "SELLER_SKU"), None)
+                v_info = {
+                    "variation_id": v.get("id"),
+                    "user_product_id": v_upid,
+                    "inventory_id": v.get("inventory_id"),
+                    "color": v_color,
+                    "seller_sku": v_seller_sku,
+                    "available_quantity": v.get("available_quantity"),
+                }
+                # Para cada variante, traer su stock
+                if v_upid:
+                    try:
+                        r_st = _req.get(
+                            f"{MELI_API_URL}/user-products/{v_upid}/stock",
+                            headers=meli_headers(), timeout=15
+                        )
+                        v_info["stock_status_code"] = r_st.status_code
+                        v_info["x_version"] = r_st.headers.get("x-version")
+                        if r_st.status_code == 200:
+                            v_info["stock_data"] = r_st.json()
+                        else:
+                            v_info["stock_error_body"] = r_st.text[:300]
+                    except Exception as e:
+                        v_info["stock_error"] = str(e)
+                variantes_info.append(v_info)
+            resultado["variantes"] = variantes_info
+
+        elif upid:
+            # Solo consultar el user_product_id directamente
+            r_st = _req.get(
+                f"{MELI_API_URL}/user-products/{upid}/stock",
+                headers=meli_headers(), timeout=15
+            )
+            resultado["user_product_id"] = upid
+            resultado["status_code"] = r_st.status_code
+            resultado["x_version"] = r_st.headers.get("x-version")
+            if r_st.status_code == 200:
+                resultado["stock_data"] = r_st.json()
+            else:
+                resultado["error_body"] = r_st.text[:500]
+        else:
+            return jsonify({"error": "Pasa ?item_id=XXX ó ?user_product_id=XXX"}), 400
+
+        return jsonify(resultado)
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
