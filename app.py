@@ -1860,7 +1860,7 @@ def ver_productos():
             from inventario import get_conn
             conn = get_conn(); cur = conn.cursor()
             cur.execute("""
-                SELECT sb.sku, b.codigo, b.nombre, b.tipo, b.canal_asociado, sb.cantidad
+                SELECT sb.sku, b.codigo, b.nombre, b.tipo, b.canal, sb.cantidad
                 FROM stock_bodega sb
                 JOIN bodegas b ON b.codigo = sb.bodega_codigo
                 WHERE sb.cantidad > 0
