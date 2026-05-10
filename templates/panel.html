@@ -1504,6 +1504,58 @@ tbody td {
 
 </style>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+<style>
+  /* Tooltip custom para stock con desglose */
+  .lusync-tooltip {
+    position: absolute;
+    background: var(--text);
+    color: var(--bg);
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 11px;
+    line-height: 1.5;
+    z-index: 99999;
+    pointer-events: none;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    max-width: 220px;
+    white-space: normal;
+  }
+  .lusync-tooltip::before {
+    content: '';
+    position: absolute;
+    bottom: -5px; left: 14px;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 5px solid var(--text);
+  }
+</style>
+<script>
+  // Tooltip global delegado para [data-tooltip]
+  (function(){
+    let tip;
+    function show(e){
+      const el = e.target.closest('[data-tooltip]');
+      if(!el) return;
+      const txt = el.getAttribute('data-tooltip');
+      if(!txt) return;
+      tip = document.createElement('div');
+      tip.className = 'lusync-tooltip';
+      tip.innerHTML = txt;
+      document.body.appendChild(tip);
+      const r = el.getBoundingClientRect();
+      tip.style.left = (r.left + window.scrollX) + 'px';
+      tip.style.top  = (r.top + window.scrollY - tip.offsetHeight - 10) + 'px';
+    }
+    function hide(){
+      if(tip){ tip.remove(); tip = null; }
+    }
+    document.addEventListener('mouseover', show);
+    document.addEventListener('mouseout', hide);
+    document.addEventListener('scroll', hide, true);
+  })();
+</script>
+
 </head>
 <body>
 
@@ -3238,14 +3290,38 @@ function renderTabla(lista){
     return;
   }
   tbody.innerHTML = lista.map(p => {
-    const pillClass = p.stock <= 0 ? 'pill-danger' : p.stock < 5 ? 'pill-warn' : 'pill-ok';
-    const estado = p.stock <= 0 ? 'Sin stock' : p.stock < 5 ? 'Stock bajo' : 'Normal';
+    // Stock disponible = bodegas propias (lo vendible). Stock full = lo que está en marketplaces.
+    const stockDisp = p.stock_disponible !== undefined ? p.stock_disponible : p.stock;
+    const stockFull = p.stock_full || 0;
+    const pillClass = stockDisp <= 0 ? 'pill-danger' : stockDisp < 5 ? 'pill-warn' : 'pill-ok';
+    const estado = stockDisp <= 0 ? 'Sin stock' : stockDisp < 5 ? 'Stock bajo' : 'Normal';
     const pNormal = p.precio_normal ? '$' + Number(p.precio_normal).toLocaleString('es-CL') : '—';
     const pOferta = p.precio_oferta ? '$' + Number(p.precio_oferta).toLocaleString('es-CL') : '—';
+
+    // Tooltip con desglose por bodega
+    const bodegas = p.bodegas_detalle || [];
+    let tooltipHtml = '';
+    if (bodegas.length > 0) {
+      const propias = bodegas.filter(b => b.tipo === 'propia');
+      const fullArr = bodegas.filter(b => b.tipo === 'fulfillment');
+      const transito = bodegas.filter(b => b.tipo === 'transito');
+      const partes = [];
+      if (propias.length) partes.push('<b>Disponible:</b><br>' + propias.map(b => `&nbsp;&nbsp;${b.nombre}: ${b.cantidad}`).join('<br>'));
+      if (fullArr.length) partes.push('<b>En Full:</b><br>' + fullArr.map(b => `&nbsp;&nbsp;${b.nombre}: ${b.cantidad}`).join('<br>'));
+      if (transito.length) partes.push('<b>En tránsito:</b><br>' + transito.map(b => `&nbsp;&nbsp;${b.nombre}: ${b.cantidad}`).join('<br>'));
+      tooltipHtml = partes.join('<br>');
+    } else {
+      tooltipHtml = 'Sin desglose';
+    }
+
+    const stockCell = stockFull > 0
+      ? `<span class="stock-pill ${pillClass}" data-tooltip="${tooltipHtml.replace(/"/g,'&quot;')}" style="cursor:help;">${stockDisp}</span><div style="font-size:9px;color:var(--muted);margin-top:2px;">+${stockFull} en Full</div>`
+      : `<span class="stock-pill ${pillClass}" data-tooltip="${tooltipHtml.replace(/"/g,'&quot;')}" style="cursor:help;">${stockDisp}</span>`;
+
     return `<tr id="row-${p.sku}">
       <td><span class="sku-code">${p.sku}</span></td>
       <td>${p.nombre}</td>
-      <td><span class="stock-pill ${pillClass}">${p.stock}</span></td>
+      <td>${stockCell}</td>
       <td class="precio-cell" id="pn-${p.sku}">${pNormal}</td>
       <td class="precio-cell" id="po-${p.sku}">${pOferta}</td>
       <td style="font-size:12px; color:var(--muted);">${estado}</td>

@@ -1854,7 +1854,37 @@ def ver_productos():
     if not session.get("logged"):
         return {"productos": [], "error": "no autorizado"}, 401
     try:
-        return {"productos": cargar_productos()}
+        productos = cargar_productos()
+        # Enriquecer con desglose por bodega: stock_disponible (propio) y stock_full (fulfillment)
+        try:
+            from inventario import get_conn
+            conn = get_conn(); cur = conn.cursor()
+            cur.execute("""
+                SELECT sb.sku, b.codigo, b.nombre, b.tipo, b.canal_asociado, sb.cantidad
+                FROM stock_bodega sb
+                JOIN bodegas b ON b.codigo = sb.bodega_codigo
+                WHERE sb.cantidad > 0
+            """)
+            por_sku = {}
+            for r in cur.fetchall():
+                sku, cod, nom, tipo, canal, cant = r
+                por_sku.setdefault(sku, []).append({
+                    "codigo": cod, "nombre": nom, "tipo": tipo,
+                    "canal": canal, "cantidad": int(cant)
+                })
+            cur.close(); conn.close()
+            for p in productos:
+                bodegas = por_sku.get(p["sku"], [])
+                p["bodegas_detalle"] = bodegas
+                p["stock_disponible"] = sum(b["cantidad"] for b in bodegas if b["tipo"] == "propia")
+                p["stock_full"] = sum(b["cantidad"] for b in bodegas if b["tipo"] in ("fulfillment", "transito"))
+        except Exception as e:
+            print(f"[/productos] Error enriqueciendo bodegas: {e}")
+            for p in productos:
+                p.setdefault("bodegas_detalle", [])
+                p.setdefault("stock_disponible", p.get("stock", 0))
+                p.setdefault("stock_full", 0)
+        return {"productos": productos}
     except Exception as e:
         print(f"[/productos] Error: {e}")
         return {"productos": [], "error": str(e)}, 500
