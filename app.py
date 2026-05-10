@@ -12935,5 +12935,49 @@ def admin_auto_descubrir_variantes_meli():
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
+
+@app.route("/admin/debug_mapeos_sku")
+def admin_debug_mapeos_sku():
+    """Muestra todos los mapeos de un SKU Lusync en todos los canales."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if request.args.get("token") != bypass_token and not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    sku = request.args.get("sku", "").strip()
+    if not sku:
+        return jsonify({"error": "Pasa ?sku=XXX"}), 400
+    try:
+        from inventario import get_conn
+        conn = get_conn(); cur = conn.cursor()
+        # sku_mapeo_canal
+        cur.execute("""
+            SELECT id, canal, sku_canal, item_id_canal, es_catalogo, activo, notas
+            FROM sku_mapeo_canal
+            WHERE UPPER(sku_lusync) = UPPER(%s)
+            ORDER BY canal, id
+        """, (sku,))
+        canal_rows = [{"id": r[0], "canal": r[1], "sku_canal": r[2], "item_id_canal": r[3],
+                      "es_catalogo": r[4], "activo": r[5], "notas": r[6]} for r in cur.fetchall()]
+        # tabla legacy
+        legacy_rows = []
+        try:
+            cur.execute("""
+                SELECT canal, sku_canal FROM sku_mapeo
+                WHERE UPPER(sku_lusync) = UPPER(%s)
+            """, (sku,))
+            legacy_rows = [{"canal": r[0], "sku_canal": r[1]} for r in cur.fetchall()]
+        except Exception:
+            pass
+        cur.close(); conn.close()
+        return jsonify({
+            "sku_lusync": sku,
+            "mapeos_sku_mapeo_canal": canal_rows,
+            "mapeos_legacy_sku_mapeo": legacy_rows,
+            "total_canal": len(canal_rows),
+            "total_legacy": len(legacy_rows)
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
