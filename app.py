@@ -13232,5 +13232,211 @@ def admin_limpiar_mapeos_huerfanos():
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
+
+@app.route("/admin/debug_paris_stock_sku")
+def admin_debug_paris_stock_sku():
+    """Consulta el stock de un SKU específico en Paris."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if request.args.get("token") != bypass_token and not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    sku = request.args.get("sku", "").strip()
+    if not sku:
+        return jsonify({"error": "Pasa ?sku=XXX"}), 400
+    try:
+        from paris import obtener_stock_paris, obtener_productos_paris
+        # Obtener todo el stock paginado y filtrar por SKU
+        encontrados = []
+        offset = 0
+        while True:
+            data = obtener_stock_paris(limite=100, offset=offset)
+            if not data:
+                break
+            items = data.get("items", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+            if not items:
+                break
+            for it in items:
+                # Buscar por sellerSku, sku, etc
+                matches_sku = (
+                    str(it.get("sellerSku", "")).upper().strip() == sku.upper().strip()
+                    or str(it.get("sku", "")).upper().strip() == sku.upper().strip()
+                    or str(it.get("offerSku", "")).upper().strip() == sku.upper().strip()
+                )
+                if matches_sku:
+                    encontrados.append(it)
+            if len(items) < 100:
+                break
+            offset += 100
+            if offset > 5000:
+                break
+
+        return jsonify({
+            "sku_buscado": sku,
+            "encontrados": encontrados,
+            "total": len(encontrados)
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/admin/verificar_stock_todos_canales")
+def admin_verificar_stock_todos_canales():
+    """
+    Consulta el stock real en TODOS los canales para un SKU específico.
+    Compara con el stock de Lusync.
+    Uso: ?sku=XXX&token=YYY
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if request.args.get("token") != bypass_token and not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    sku = request.args.get("sku", "").strip()
+    if not sku:
+        return jsonify({"error": "Pasa ?sku=XXX"}), 400
+
+    resultado = {"sku": sku, "canales": {}}
+
+    # 1. Lusync
+    try:
+        from inventario import get_conn
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("""
+            SELECT sb.bodega_codigo, b.nombre, b.tipo, sb.cantidad
+            FROM stock_bodega sb
+            JOIN bodegas b ON b.codigo = sb.bodega_codigo
+            WHERE sb.sku = %s
+        """, (sku,))
+        bodegas = [{"bodega": r[0], "nombre": r[1], "tipo": r[2], "cantidad": int(r[3])} for r in cur.fetchall()]
+        propio = sum(b["cantidad"] for b in bodegas if b["tipo"] == "propia")
+        full = sum(b["cantidad"] for b in bodegas if b["tipo"] in ("fulfillment", "transito"))
+        cur.execute("SELECT stock FROM productos WHERE sku=%s", (sku,))
+        row = cur.fetchone()
+        prod_stock = int(row[0]) if row else 0
+        cur.close(); conn.close()
+        resultado["canales"]["lusync"] = {
+            "stock_disponible_propio": propio,
+            "stock_full": full,
+            "productos_stock": prod_stock,
+            "bodegas": bodegas
+        }
+    except Exception as e:
+        resultado["canales"]["lusync"] = {"error": str(e)}
+
+    # 2. MELI - todas sus publicaciones
+    try:
+        import requests as _req
+        from inventario import get_conn
+        from mercadolibre import meli_headers, MELI_API_URL
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("""
+            SELECT item_id_canal FROM sku_mapeo_canal
+            WHERE canal='mercadolibre' AND sku_lusync=%s AND activo=TRUE AND item_id_canal IS NOT NULL
+        """, (sku,))
+        items_meli = [r[0] for r in cur.fetchall()]
+        cur.close(); conn.close()
+
+        meli_data = []
+        for item_id in items_meli:
+            try:
+                r = _req.get(f"{MELI_API_URL}/items/{item_id}?include_attributes=all",
+                            headers=meli_headers(), timeout=15)
+                if r.status_code == 200:
+                    d = r.json()
+                    info = {
+                        "item_id": item_id,
+                        "catalog_listing": d.get("catalog_listing", False),
+                        "available_quantity": d.get("available_quantity"),
+                        "status": d.get("status"),
+                    }
+                    # Si tiene variantes, traer stock de cada una
+                    variations = d.get("variations") or []
+                    if variations:
+                        info["variantes"] = []
+                        for v in variations:
+                            v_seller_sku = next((a.get("value_name") for a in (v.get("attributes") or [])
+                                                 if a.get("id") == "SELLER_SKU"), None)
+                            upid = v.get("user_product_id")
+                            v_info = {
+                                "variation_id": v.get("id"),
+                                "user_product_id": upid,
+                                "seller_sku": v_seller_sku,
+                                "available_quantity": v.get("available_quantity"),
+                            }
+                            if upid:
+                                try:
+                                    r_st = _req.get(f"{MELI_API_URL}/user-products/{upid}/stock",
+                                                    headers=meli_headers(), timeout=10)
+                                    if r_st.status_code == 200:
+                                        v_info["locations"] = r_st.json().get("locations", [])
+                                except Exception:
+                                    pass
+                            info["variantes"].append(v_info)
+                    meli_data.append(info)
+                else:
+                    meli_data.append({"item_id": item_id, "error": f"HTTP {r.status_code}"})
+            except Exception as e:
+                meli_data.append({"item_id": item_id, "error": str(e)})
+        resultado["canales"]["mercadolibre"] = meli_data
+    except Exception as e:
+        resultado["canales"]["mercadolibre"] = {"error": str(e)}
+
+    # 3. Paris
+    try:
+        from paris import obtener_stock_paris
+        encontrados = []
+        offset = 0
+        while True:
+            data = obtener_stock_paris(limite=100, offset=offset)
+            if not data: break
+            items = data.get("items", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+            if not items: break
+            for it in items:
+                if (str(it.get("sellerSku", "")).upper().strip() == sku.upper()
+                    or str(it.get("sku", "")).upper().strip() == sku.upper()
+                    or str(it.get("offerSku", "")).upper().strip() == sku.upper()):
+                    encontrados.append(it)
+            if len(items) < 100: break
+            offset += 100
+            if offset > 5000: break
+        resultado["canales"]["paris"] = encontrados or "no encontrado"
+    except Exception as e:
+        resultado["canales"]["paris"] = {"error": str(e)}
+
+    # 4. Falabella
+    try:
+        from falabella import llamar_api_falabella
+        r = llamar_api_falabella("GetProducts", params={"Filter": "all", "SkuSellerList": sku}, formato="JSON")
+        if r.get("ok"):
+            resultado["canales"]["falabella"] = r.get("data", {}).get("SuccessResponse", {}).get("Body", {})
+        else:
+            resultado["canales"]["falabella"] = {"error": r.get("error")}
+    except Exception as e:
+        resultado["canales"]["falabella"] = {"error": str(e)}
+
+    # 5. Walmart
+    try:
+        from walmart import obtener_inventario_walmart
+        inv = obtener_inventario_walmart(sku)
+        resultado["canales"]["walmart"] = inv
+    except Exception as e:
+        resultado["canales"]["walmart"] = {"error": str(e)}
+
+    # 6. Ripley
+    try:
+        from ripley import obtener_stock_ripley
+        st = obtener_stock_ripley(sku)
+        resultado["canales"]["ripley"] = st
+    except Exception as e:
+        resultado["canales"]["ripley"] = {"error": str(e)}
+
+    # 7. Woo
+    try:
+        from woo import obtener_stock_producto_woo
+        wst = obtener_stock_producto_woo(sku)
+        resultado["canales"]["woo"] = wst
+    except Exception as e:
+        resultado["canales"]["woo"] = {"error": str(e)}
+
+    return jsonify(resultado)
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
