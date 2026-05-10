@@ -715,11 +715,16 @@ def init_sku_mapeo_canal():
             notas           TEXT
         )
     """)
-    # Índices únicos: una publicación de un canal solo puede mapear a un SKU Lusync
-    # Permitimos que item_id_canal sea NULL (para canales que no usan item_id, como Walmart/Falabella)
+    # Índices únicos: una publicación con N variantes puede tener N mapeos (uno por SKU Lusync)
+    # Por eso el UNIQUE es (canal, item_id_canal, sku_lusync), no solo (canal, item_id_canal)
+    # Migración: dropear el viejo si existe y crear el nuevo
+    try:
+        cur.execute("DROP INDEX IF EXISTS idx_smc_unique_item")
+    except Exception:
+        pass
     cur.execute("""
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_smc_unique_item
-        ON sku_mapeo_canal(canal, item_id_canal)
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_smc_unique_item_lusync
+        ON sku_mapeo_canal(canal, item_id_canal, sku_lusync)
         WHERE item_id_canal IS NOT NULL
     """)
     # Si no hay item_id, prevenimos duplicados por (canal, sku_canal, sku_lusync)
@@ -829,11 +834,12 @@ def agregar_publicacion(sku_lusync, canal, sku_canal, item_id_canal=None,
 
     try:
         # Primero verificar si ya existe (evitar conflicto de UNIQUE)
+        # La key es (canal, item_id_canal, sku_lusync) para soportar variantes
         if item_id_canal:
             cur.execute("""
                 SELECT id FROM sku_mapeo_canal
-                WHERE canal = %s AND item_id_canal = %s
-            """, (canal, str(item_id_canal)))
+                WHERE canal = %s AND item_id_canal = %s AND sku_lusync = %s
+            """, (canal, str(item_id_canal), sku_lusync))
         else:
             cur.execute("""
                 SELECT id FROM sku_mapeo_canal
