@@ -13390,7 +13390,9 @@ def admin_verificar_stock_todos_canales():
             items = data.get("items", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
             if not items: break
             for it in items:
-                if (str(it.get("sellerSku", "")).upper().strip() == sku.upper()
+                # Paris devuelve "sku_seller" (con guión bajo), no sellerSku
+                if (str(it.get("sku_seller", "")).upper().strip() == sku.upper()
+                    or str(it.get("sellerSku", "")).upper().strip() == sku.upper()
                     or str(it.get("sku", "")).upper().strip() == sku.upper()
                     or str(it.get("offerSku", "")).upper().strip() == sku.upper()):
                     encontrados.append(it)
