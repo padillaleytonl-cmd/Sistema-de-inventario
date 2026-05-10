@@ -13255,9 +13255,10 @@ def admin_debug_paris_stock_sku():
             if not items:
                 break
             for it in items:
-                # Buscar por sellerSku, sku, etc
+                # Paris devuelve "sku_seller" (con guión bajo), no sellerSku
                 matches_sku = (
-                    str(it.get("sellerSku", "")).upper().strip() == sku.upper().strip()
+                    str(it.get("sku_seller", "")).upper().strip() == sku.upper().strip()
+                    or str(it.get("sellerSku", "")).upper().strip() == sku.upper().strip()
                     or str(it.get("sku", "")).upper().strip() == sku.upper().strip()
                     or str(it.get("offerSku", "")).upper().strip() == sku.upper().strip()
                 )
