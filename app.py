@@ -1735,12 +1735,31 @@ def entrada():
     productos = cargar_productos()
     for p in productos:
         if p["sku"] == data["sku"]:
-            p["stock"] += int(data["cantidad"])
+            cantidad = int(data["cantidad"])
+            # Aplicar a la bodega CENTRAL (default)
+            from inventario import ajustar_stock_bodega
+            try:
+                ajustar_stock_bodega(p["sku"], "CENTRAL", cantidad)
+            except Exception as e:
+                print(f"[Entrada] error ajustando bodega CENTRAL: {e}")
+            # Mantener compatibilidad legacy: actualizar productos.stock
+            p["stock"] += cantidad
             guardar_producto(p)
-            registrar_movimiento("entrada", p["sku"], p["nombre"], int(data["cantidad"]), data.get("motivo"), usuario="Luis Padilla", canal="Manual")
-            # Sync automático a los 6 marketplaces (resiliente: si uno falla, los demás siguen)
-            syncs = sincronizar_stock_marketplaces(p["sku"], p["stock"], contexto="entrada_manual")
-            return {"ok": True, "syncs": syncs}
+            registrar_movimiento("entrada", p["sku"], p["nombre"], cantidad, data.get("motivo"), usuario="Luis Padilla", canal="Manual")
+            # Sync automático: usar stock de bodegas propias (lo que está disponible para vender)
+            from inventario import get_conn
+            try:
+                _c = get_conn(); _cur = _c.cursor()
+                _cur.execute("""SELECT COALESCE(SUM(sb.cantidad),0) FROM stock_bodega sb
+                                JOIN bodegas b ON b.codigo=sb.bodega_codigo
+                                WHERE sb.sku=%s AND b.tipo='propia'""", (p["sku"],))
+                stock_disponible = int(_cur.fetchone()[0] or 0)
+                _cur.close(); _c.close()
+            except Exception as e:
+                stock_disponible = p["stock"]
+                print(f"[Entrada] error leyendo stock propio: {e}")
+            syncs = sincronizar_stock_marketplaces(p["sku"], stock_disponible, contexto="entrada_manual")
+            return {"ok": True, "syncs": syncs, "stock_disponible_enviado": stock_disponible}
     return {"error": "no encontrado"}
 
 @app.route("/salida", methods=["POST"])
@@ -1750,14 +1769,33 @@ def salida():
     productos = cargar_productos()
     for p in productos:
         if p["sku"] == data["sku"]:
-            if p["stock"] < int(data["cantidad"]):
+            cantidad = int(data["cantidad"])
+            if p["stock"] < cantidad:
                 return {"error": "Stock insuficiente"}
-            p["stock"] -= int(data["cantidad"])
+            # Descontar de la bodega CENTRAL
+            from inventario import ajustar_stock_bodega
+            try:
+                ajustar_stock_bodega(p["sku"], "CENTRAL", -cantidad)
+            except Exception as e:
+                print(f"[Salida] error ajustando bodega CENTRAL: {e}")
+            # Mantener compatibilidad legacy: actualizar productos.stock
+            p["stock"] -= cantidad
             guardar_producto(p)
-            registrar_movimiento("salida", p["sku"], p["nombre"], int(data["cantidad"]), data.get("motivo"), usuario="Luis Padilla", canal="Manual")
-            # Sync automático a los 6 marketplaces
-            syncs = sincronizar_stock_marketplaces(p["sku"], p["stock"], contexto="salida_manual")
-            return {"ok": True, "syncs": syncs}
+            registrar_movimiento("salida", p["sku"], p["nombre"], cantidad, data.get("motivo"), usuario="Luis Padilla", canal="Manual")
+            # Sync automático: usar stock de bodegas propias
+            from inventario import get_conn
+            try:
+                _c = get_conn(); _cur = _c.cursor()
+                _cur.execute("""SELECT COALESCE(SUM(sb.cantidad),0) FROM stock_bodega sb
+                                JOIN bodegas b ON b.codigo=sb.bodega_codigo
+                                WHERE sb.sku=%s AND b.tipo='propia'""", (p["sku"],))
+                stock_disponible = int(_cur.fetchone()[0] or 0)
+                _cur.close(); _c.close()
+            except Exception as e:
+                stock_disponible = p["stock"]
+                print(f"[Salida] error leyendo stock propio: {e}")
+            syncs = sincronizar_stock_marketplaces(p["sku"], stock_disponible, contexto="salida_manual")
+            return {"ok": True, "syncs": syncs, "stock_disponible_enviado": stock_disponible}
     return {"error": "no encontrado"}
 
 @app.route("/sync_ordenes")
