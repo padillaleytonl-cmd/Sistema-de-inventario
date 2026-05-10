@@ -13710,15 +13710,83 @@ def admin_debug_paris_warehouses():
             except Exception as e:
                 resultados[ep] = {"error": str(e)}
 
-        # También probar v2/stock con filtro de warehouse específico
+        # Probar v2/stock con varios warehouses para ver cuáles acepta
+        for wh in ["dropship", "dropshipping", "Dropshipping", "DROPSHIP", "main", "default", "babymine", "seller"]:
+            try:
+                r = _req.get(f"{PARIS_BASE_URL}/v2/stock",
+                            headers=paris_headers(),
+                            params={"limit": 1, "offset": 0, "warehouse": wh},
+                            timeout=10)
+                resultados[f"v2_stock_warehouse_{wh}"] = {"status": r.status_code, "body": r.text[:500]}
+            except Exception as e:
+                resultados[f"v2_stock_warehouse_{wh}"] = {"error": str(e)}
+
+        # También intentar el PUT con quantity diferente y ver si responde con info de warehouse
         try:
-            r = _req.get(f"{PARIS_BASE_URL}/v2/stock",
-                        headers=paris_headers(),
-                        params={"limit": 5, "offset": 0, "warehouse": "dropship"},
-                        timeout=10)
-            resultados["v2_stock_warehouse_dropship"] = {"status": r.status_code, "body": r.text[:1500]}
+            payload = {"skus": [{"sku": "MK30WHVEX8-1", "quantity": 99}]}
+            r = _req.post(f"{PARIS_BASE_URL}/v2/stock",
+                         headers=paris_headers(),
+                         json=payload,
+                         timeout=10)
+            resultados["test_put_qty99"] = {"status": r.status_code, "body": r.text[:1500]}
         except Exception as e:
-            resultados["v2_stock_warehouse_dropship"] = {"error": str(e)}
+            resultados["test_put_qty99"] = {"error": str(e)}
+
+        # Intentar un endpoint para info del seller (puede listar warehouses)
+        for ep in ["/v1/seller", "/v1/seller/info", "/v2/seller", "/v1/me", "/me", "/v1/account"]:
+            try:
+                r = _req.get(f"{PARIS_BASE_URL}{ep}", headers=paris_headers(), timeout=10)
+                resultados[f"info_seller_{ep}"] = {"status": r.status_code, "body": r.text[:500]}
+            except Exception as e:
+                resultados[f"info_seller_{ep}"] = {"error": str(e)}
+
+        return jsonify(resultados)
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/admin/debug_paris_seller_nodes")
+def admin_debug_paris_seller_nodes():
+    """Lista los nodos/bodegas del seller en Paris según la documentación oficial."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if request.args.get("token") != bypass_token and not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    try:
+        import requests as _req
+        from paris import paris_headers, PARIS_BASE_URL
+
+        resultados = {}
+
+        # Endpoint oficial según la doc
+        try:
+            r = _req.get(
+                f"{PARIS_BASE_URL}/v2/stock/seller-node",
+                headers=paris_headers(),
+                params={"limit": 100, "offset": 0},
+                timeout=15
+            )
+            resultados["v2_stock_seller_node"] = {
+                "status": r.status_code,
+                "body": r.text[:3000]
+            }
+        except Exception as e:
+            resultados["v2_stock_seller_node"] = {"error": str(e)}
+
+        # Probar también sin params
+        try:
+            r = _req.get(
+                f"{PARIS_BASE_URL}/v2/stock/seller-node",
+                headers=paris_headers(),
+                timeout=15
+            )
+            resultados["v2_stock_seller_node_sin_params"] = {
+                "status": r.status_code,
+                "body": r.text[:3000]
+            }
+        except Exception as e:
+            resultados["v2_stock_seller_node_sin_params"] = {"error": str(e)}
 
         return jsonify(resultados)
     except Exception as e:
