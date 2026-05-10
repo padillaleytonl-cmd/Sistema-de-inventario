@@ -13679,5 +13679,51 @@ def admin_debug_paris_raw_call():
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
+
+@app.route("/admin/debug_paris_warehouses")
+def admin_debug_paris_warehouses():
+    """Lista todos los warehouses configurados en Paris."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if request.args.get("token") != bypass_token and not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    try:
+        import requests as _req
+        from paris import paris_headers, PARIS_BASE_URL
+
+        # Probar varios endpoints comunes para listar warehouses
+        endpoints = [
+            "/v1/warehouse",
+            "/v1/warehouses",
+            "/v2/warehouse",
+            "/v2/warehouses",
+            "/v1/seller/warehouses",
+        ]
+        resultados = {}
+        for ep in endpoints:
+            try:
+                r = _req.get(f"{PARIS_BASE_URL}{ep}", headers=paris_headers(), timeout=10)
+                resultados[ep] = {
+                    "status": r.status_code,
+                    "body": r.text[:1500]
+                }
+            except Exception as e:
+                resultados[ep] = {"error": str(e)}
+
+        # También probar v2/stock con filtro de warehouse específico
+        try:
+            r = _req.get(f"{PARIS_BASE_URL}/v2/stock",
+                        headers=paris_headers(),
+                        params={"limit": 5, "offset": 0, "warehouse": "dropship"},
+                        timeout=10)
+            resultados["v2_stock_warehouse_dropship"] = {"status": r.status_code, "body": r.text[:1500]}
+        except Exception as e:
+            resultados["v2_stock_warehouse_dropship"] = {"error": str(e)}
+
+        return jsonify(resultados)
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
