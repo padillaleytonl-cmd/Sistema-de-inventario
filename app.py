@@ -13251,7 +13251,13 @@ def admin_debug_paris_stock_sku():
             data = obtener_stock_paris(limite=100, offset=offset)
             if not data:
                 break
-            items = data.get("items", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+            # Paris devuelve la lista en "skus" (no en "items")
+            if isinstance(data, dict):
+                items = data.get("skus") or data.get("items") or []
+            elif isinstance(data, list):
+                items = data
+            else:
+                items = []
             if not items:
                 break
             for it in items:
@@ -13388,7 +13394,12 @@ def admin_verificar_stock_todos_canales():
         while True:
             data = obtener_stock_paris(limite=100, offset=offset)
             if not data: break
-            items = data.get("items", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+            if isinstance(data, dict):
+                items = data.get("skus") or data.get("items") or []
+            elif isinstance(data, list):
+                items = data
+            else:
+                items = []
             if not items: break
             for it in items:
                 # Paris devuelve "sku_seller" (con guión bajo), no sellerSku
