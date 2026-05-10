@@ -187,13 +187,22 @@ def verificar_conexion_falabella():
 # ═══════════════════════════════════════════════════════════════════════════
 
 def actualizar_stock_falabella(sku, cantidad):
-    """Actualiza el stock de UN SKU en Falabella usando UpdateStock (single-publicación).
+    """Actualiza el stock de UN SKU en Falabella usando ProductUpdate.
 
-    El body es XML con estructura:
+    Para Falabella Chile, el formato correcto es BusinessUnits con OperatorCode=facl.
+    Doc: https://developers.falabella.com/v500/reference/productupdate
+
+    Body XML:
     <Request>
       <Product>
         <SellerSku>SKU001</SellerSku>
-        <Quantity>10</Quantity>
+        <BusinessUnits>
+          <BusinessUnit>
+            <OperatorCode>facl</OperatorCode>
+            <Stock>10</Stock>
+            <Status>active</Status>
+          </BusinessUnit>
+        </BusinessUnits>
       </Product>
     </Request>
     """
@@ -201,19 +210,24 @@ def actualizar_stock_falabella(sku, cantidad):
 <Request>
   <Product>
     <SellerSku>{sku}</SellerSku>
-    <Quantity>{int(cantidad)}</Quantity>
-    <Status>active</Status>
+    <BusinessUnits>
+      <BusinessUnit>
+        <OperatorCode>facl</OperatorCode>
+        <Stock>{int(cantidad)}</Stock>
+        <Status>active</Status>
+      </BusinessUnit>
+    </BusinessUnits>
   </Product>
 </Request>"""
 
     res = llamar_api_falabella(
-        "UpdateStock",
+        "ProductUpdate",
         body_xml=body_xml,
         method="POST",
         formato="JSON"
     )
     if res["ok"]:
-        print(f"[Falabella] Stock {sku}={cantidad} OK")
+        print(f"[Falabella] Stock {sku}={cantidad} OK (ProductUpdate)")
         return True
     print(f"[Falabella] Stock {sku} ERROR: {res.get('error')}")
     return False

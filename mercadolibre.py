@@ -187,9 +187,14 @@ def actualizar_stock_meli(sku_lusync, cantidad):
     log = []
 
     for pub in publicaciones:
-        item_id = pub.get("item_id_canal") or pub.get("sku_canal")
+        item_id = pub.get("item_id_canal")  # SOLO usar el item_id, NO el sku_canal como fallback
         sku_canal = pub.get("sku_canal", "")
-        if not item_id or not str(item_id).strip().upper().startswith("MLC"):
+        if not item_id:
+            # Mapeo huérfano sin item_id_canal — omitir, no es un fallo real
+            log.append(f"  Mapeo huérfano sku_canal={sku_canal}: sin item_id_canal, omitido (corrige en Mapeo SKUs)")
+            print(f"[MELI Stock] Mapeo sin item_id para sku_canal={sku_canal}, omitido")
+            continue
+        if not str(item_id).strip().upper().startswith("MLC"):
             log.append(f"  Publicación {item_id}: no es item_id MELI válido (debe empezar con MLC)")
             fallidas += 1
             continue
