@@ -12792,6 +12792,18 @@ def admin_test_canal_directo():
             elif canal == "falabella":
                 from falabella import actualizar_stock_falabella_lusync
                 resultado = actualizar_stock_falabella_lusync(sku, cantidad)
+            elif canal == "paris":
+                from paris import actualizar_stock_paris
+                resultado = actualizar_stock_paris(sku, cantidad)
+            elif canal == "walmart":
+                from walmart import actualizar_stock_walmart
+                resultado = actualizar_stock_walmart(sku, cantidad)
+            elif canal == "ripley":
+                from ripley import actualizar_stock_ripley
+                resultado = actualizar_stock_ripley(sku, cantidad)
+            elif canal in ("woo", "woocommerce"):
+                from woo import actualizar_stock_woo
+                resultado = actualizar_stock_woo(sku, cantidad)
             else:
                 sys.stdout = old_stdout
                 return jsonify({"error": f"canal desconocido: {canal}"}), 400
