@@ -1921,6 +1921,112 @@ tbody td {
   </div>
 
   <div id="sec-inventario" class="main" style="display:none;">
+
+    <style>
+      /* ── INV tokens (scope inventario) — usa variables del sistema, NO dark fallbacks ── */
+      .inv-tabs { display:flex; gap:6px; background:var(--white); padding:6px; border-radius:12px; margin-bottom:20px; border:1px solid var(--border); }
+      .inv-tab  { flex:1; padding:10px 0; border:none; background:transparent; color:var(--muted);
+                  border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; transition:all .18s; }
+      .inv-tab.active { background:#6366f1; color:#fff; box-shadow:0 2px 12px rgba(99,102,241,.35); }
+      .inv-tab:hover:not(.active) { background:rgba(99,102,241,.08); color:#6366f1; }
+
+      .inv-scan-wrap { position:relative; margin-bottom:6px; }
+      .inv-scan-inp  { width:100%; padding:13px 48px 13px 44px; font-size:15px; font-weight:500;
+                       background:var(--white); border:1.5px solid var(--border);
+                       border-radius:12px; color:var(--text); outline:none; box-sizing:border-box; transition:border .18s; }
+      .inv-scan-inp:focus { border-color:#6366f1; box-shadow:0 0 0 3px rgba(99,102,241,.12); }
+      .inv-scan-ico  { position:absolute; left:13px; top:50%; transform:translateY(-50%); color:var(--muted); pointer-events:none; }
+      .inv-scan-badge{ position:absolute; right:13px; top:50%; transform:translateY(-50%);
+                       font-size:10px; font-weight:700; color:#6366f1; background:rgba(99,102,241,.1);
+                       padding:3px 8px; border-radius:20px; }
+      .inv-sug { position:absolute; left:0; right:0; top:calc(100% + 6px);
+                 background:var(--white); border:1px solid var(--border);
+                 border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.12);
+                 z-index:200; overflow:hidden; max-height:300px; overflow-y:auto; }
+      .inv-sug-item { padding:11px 15px; cursor:pointer; border-bottom:1px solid var(--border);
+                      display:flex; justify-content:space-between; align-items:center; transition:background .1s; }
+      .inv-sug-item:last-child { border-bottom:none; }
+      .inv-sug-item:hover { background:rgba(99,102,241,.06); }
+      .inv-sug-sku  { font-size:11px; font-weight:700; color:#6366f1; font-family:'DM Mono',monospace; }
+      .inv-sug-name { font-size:12px; color:var(--text); margin-top:2px; }
+      .inv-sug-stk  { font-size:11px; font-weight:600; white-space:nowrap; }
+
+      .inv-lista-title { font-size:11px; font-weight:700; color:var(--muted); text-transform:uppercase;
+                         letter-spacing:.06em; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; }
+      .inv-row { display:grid; align-items:center; background:var(--white);
+                 padding:11px 13px; border-radius:10px; margin-bottom:7px;
+                 border:1px solid var(--border); transition:box-shadow .15s; }
+      .inv-row:hover { box-shadow:0 2px 8px rgba(0,0,0,.08); }
+      .inv-row-e { grid-template-columns:1fr auto auto; gap:10px; }
+      .inv-row-s { grid-template-columns:1fr auto auto; gap:10px; }
+      .inv-row-sku  { font-size:10px; font-family:'DM Mono',monospace; color:#6366f1; font-weight:700; }
+      .inv-row-name { font-size:12px; color:var(--text); }
+      .inv-row-stk  { font-size:11px; color:var(--muted); }
+      .inv-qty-wrap { display:flex; align-items:center; gap:5px; }
+      .inv-qty-btn  { width:26px; height:26px; border:none; background:rgba(99,102,241,.1); border-radius:6px;
+                      color:#6366f1; font-size:16px; font-weight:700; cursor:pointer;
+                      display:flex; align-items:center; justify-content:center; transition:background .1s; }
+      .inv-qty-btn:hover { background:rgba(99,102,241,.2); }
+      .inv-qty-inp  { width:50px; text-align:center; padding:4px 6px; border-radius:6px;
+                      border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:13px; font-weight:600; }
+      .inv-row-del  { background:transparent; border:none; color:var(--muted); cursor:pointer;
+                      font-size:18px; padding:2px 6px; border-radius:6px; transition:color .1s; }
+      .inv-row-del:hover { color:#ef4444; }
+
+      /* franja documento / OC */
+      .inv-doc-strip { background:var(--white); border:1px solid var(--border); border-radius:10px;
+                       padding:14px 16px; margin-bottom:14px; display:grid;
+                       grid-template-columns:1fr 1fr 1fr; gap:10px; }
+      .inv-doc-strip label { display:block; font-size:10px; font-weight:700; color:var(--muted);
+                              text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px; }
+      .inv-doc-strip input, .inv-doc-strip select {
+        width:100%; padding:8px 10px; border-radius:7px; border:1px solid var(--border);
+        background:var(--bg); color:var(--text); font-size:12px; box-sizing:border-box; }
+      .inv-oc-strip { background:var(--white); border:1px solid var(--border); border-radius:10px;
+                      padding:14px 16px; margin-bottom:14px; display:grid;
+                      grid-template-columns:1fr 1fr; gap:10px; }
+      .inv-oc-strip label { display:block; font-size:10px; font-weight:700; color:var(--muted);
+                             text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px; }
+      .inv-oc-strip input, .inv-oc-strip select {
+        width:100%; padding:8px 10px; border-radius:7px; border:1px solid var(--border);
+        background:var(--bg); color:var(--text); font-size:12px; box-sizing:border-box; }
+
+      /* motivos ajuste */
+      .inv-motivos { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; margin:12px 0; }
+      .inv-motivo-btn { padding:9px 6px; border:1.5px solid var(--border); border-radius:9px;
+                        background:var(--white); color:var(--text); font-size:11px; font-weight:600;
+                        cursor:pointer; text-align:center; transition:all .15s; }
+      .inv-motivo-btn:hover, .inv-motivo-btn.sel { border-color:#6366f1; background:rgba(99,102,241,.08); color:#6366f1; }
+
+      /* ajuste — campos y preview */
+      .inv-aj-field { margin-bottom:12px; }
+      .inv-aj-field label { display:block; font-size:10px; font-weight:700; color:var(--muted);
+                             text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px; }
+      .inv-aj-field input, .inv-aj-field select {
+        width:100%; padding:9px 12px; border-radius:8px; border:1px solid var(--border);
+        background:var(--white); color:var(--text); font-size:13px; box-sizing:border-box; }
+      .inv-aj-sel-card { background:var(--info-bg); border:1px solid rgba(99,102,241,.2);
+                         border-radius:10px; padding:11px 13px; margin-bottom:14px; }
+      .inv-aj-preview { background:var(--info-bg); border-radius:8px; padding:11px 13px;
+                        font-size:12px; border:1px solid rgba(99,102,241,.15); margin-bottom:14px; color:var(--text); }
+
+      /* botón confirmar */
+      .inv-confirm { width:100%; padding:13px; border:none; border-radius:11px; font-size:14px;
+                     font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center;
+                     gap:9px; margin-top:16px; transition:opacity .15s, transform .1s; }
+      .inv-confirm:hover  { opacity:.9; }
+      .inv-confirm:active { transform:scale(.98); }
+      .inv-confirm:disabled { opacity:.4; cursor:not-allowed; }
+      .inv-confirm-e { background:#22c55e; color:#fff; box-shadow:0 4px 18px rgba(34,197,94,.25); }
+      .inv-confirm-s { background:#ef4444; color:#fff; box-shadow:0 4px 18px rgba(239,68,68,.25); }
+      .inv-confirm-a { background:linear-gradient(135deg,#7c3aed,#6366f1); color:#fff; box-shadow:0 4px 18px rgba(99,102,241,.3); }
+
+      @media(max-width:640px){
+        .inv-doc-strip { grid-template-columns:1fr 1fr; }
+        .inv-motivos   { grid-template-columns:repeat(2,1fr); }
+      }
+    </style>
+
     <div class="page-header">
       <div>
         <div class="page-title">Inventario</div>
@@ -1935,49 +2041,168 @@ tbody td {
 
     <div class="layout-inv">
       <div>
-        <!-- Entrada / Salida con autocomplete + clave admin + documento -->
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px;">
-          <div class="card">
-            <div class="card-title" style="margin-bottom:12px; color:var(--success);">&#8593; Entrada de stock</div>
-            <div class="form-group" style="margin-bottom:8px; position:relative;">
-              <label>Producto (SKU o nombre)</label>
-              <input id="skuE" placeholder="Buscar por SKU o nombre..." autocomplete="off" oninput="buscarProductoLive('E')" onfocus="buscarProductoLive('E')" onblur="setTimeout(()=>cerrarSugerencias('E'),200)">
-              <div id="sugerenciasE" class="sku-suggest" style="display:none;"></div>
+
+        <!-- ── TABS ── -->
+        <div class="inv-tabs" role="tablist">
+          <button class="inv-tab active" id="invtab-entrada"  onclick="invTab('entrada')"  role="tab">📥 Entrada</button>
+          <button class="inv-tab"        id="invtab-salida"   onclick="invTab('salida')"   role="tab">📤 Salida</button>
+          <button class="inv-tab"        id="invtab-ajuste"   onclick="invTab('ajuste')"   role="tab">⚖️ Ajuste</button>
+        </div>
+
+        <!-- ══ PANEL ENTRADA ══ -->
+        <div id="inv-panel-entrada">
+
+          <!-- Documento de respaldo -->
+          <div class="inv-doc-strip">
+            <div>
+              <label>N° Documento *</label>
+              <input id="docE" placeholder="F-12345 / INV-87 / GD-22" style="font-family:'DM Mono',monospace;font-weight:700;">
             </div>
-            <div class="form-group" style="margin-bottom:8px;"><label>Cantidad</label><input id="cantE" type="number" min="1" placeholder="0"></div>
-            <div class="form-group" style="margin-bottom:8px;">
-              <label>N° de documento (factura / invoice / guía)</label>
-              <input id="docE" placeholder="Ej: F-12345 / Inv-87 / G-22">
+            <div>
+              <label>Tipo</label>
+              <select id="inv-doc-tipo-e">
+                <option value="factura">Factura</option>
+                <option value="invoice">Invoice</option>
+                <option value="guia">Guía de despacho</option>
+                <option value="oc">Orden de compra</option>
+                <option value="otro">Otro</option>
+              </select>
             </div>
-            <div class="form-group" style="margin-bottom:12px;">
+            <div>
               <label>Motivo</label>
               <select id="motivoEntrada"><option>Cargando...</option></select>
             </div>
-            <button class="btn-primary" onclick="entrada()" style="width:100%; background:var(--success);">Registrar entrada</button>
           </div>
-          <div class="card">
-            <div class="card-title" style="margin-bottom:12px; color:var(--danger);">&#8595; Salida de stock</div>
-            <div class="form-group" style="margin-bottom:8px; position:relative;">
-              <label>Producto (SKU o nombre)</label>
-              <input id="skuS" placeholder="Buscar por SKU o nombre..." autocomplete="off" oninput="buscarProductoLive('S')" onfocus="buscarProductoLive('S')" onblur="setTimeout(()=>cerrarSugerencias('S'),200)">
-              <div id="sugerenciasS" class="sku-suggest" style="display:none;"></div>
+
+          <!-- Buscador -->
+          <div class="inv-scan-wrap">
+            <svg class="inv-scan-ico" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input id="skuE" class="inv-scan-inp" placeholder="Buscar SKU o nombre… o escanear código de barras"
+                   autocomplete="off" spellcheck="false"
+                   oninput="invSearch('e')" onfocus="invSearch('e')"
+                   onblur="setTimeout(()=>invClearSug('e'),200)"
+                   onkeydown="invSearchKey(event,'e')">
+            <span class="inv-scan-badge">SCAN</span>
+            <div id="inv-sug-e" class="inv-sug" style="display:none;"></div>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:14px;">Escanea o busca — se agrega a la lista. Ajusta cantidades antes de confirmar.</div>
+
+          <!-- Lista -->
+          <div class="inv-lista-title">
+            <span>Productos a ingresar <span id="inv-count-e" style="color:#6366f1;"></span></span>
+            <button onclick="invClearLista('e')" style="font-size:11px;color:var(--muted);background:transparent;border:none;cursor:pointer;">Limpiar</button>
+          </div>
+          <div id="inv-lista-e">
+            <div id="inv-empty-e" style="text-align:center;padding:28px 0;color:var(--muted);font-size:13px;">Ningún producto agregado aún</div>
+          </div>
+
+          <button class="inv-confirm inv-confirm-e" id="inv-btn-e" onclick="invConfirmarEntrada()" disabled>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="20 6 9 17 4 12"/></svg>
+            Confirmar entrada
+          </button>
+        </div>
+
+        <!-- ══ PANEL SALIDA ══ -->
+        <div id="inv-panel-salida" style="display:none;">
+
+          <div class="inv-oc-strip">
+            <div>
+              <label>N° OC / Referencia *</label>
+              <input id="ocS" placeholder="OC-001 / folio / referencia" style="font-family:'DM Mono',monospace;font-weight:700;" oninput="detectarCanalOC()">
+              <div id="canalDetectado" style="font-size:11px;color:var(--muted);margin-top:4px;"></div>
             </div>
-            <div class="form-group" style="margin-bottom:8px;"><label>Cantidad</label><input id="cantS" type="number" min="1" placeholder="0"></div>
-            <div class="form-group" style="margin-bottom:8px;">
-              <label>N° de orden de compra (OC)</label>
-              <input id="ocS" placeholder="Ej: 2000016358722020 (se detectará el canal)" oninput="detectarCanalOC()">
-              <div id="canalDetectado" style="font-size:11px; color:var(--muted); margin-top:4px;"></div>
-            </div>
-            <div class="form-group" style="margin-bottom:12px;">
+            <div>
               <label>Motivo</label>
               <select id="motivoSalida"><option>Cargando...</option></select>
             </div>
-            <button class="btn-primary" onclick="salida()" style="width:100%; background:var(--danger);">Registrar salida</button>
           </div>
+
+          <div class="inv-scan-wrap">
+            <svg class="inv-scan-ico" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input id="skuS" class="inv-scan-inp" placeholder="Buscar SKU o nombre… o escanear"
+                   autocomplete="off" spellcheck="false"
+                   oninput="invSearch('s')" onfocus="invSearch('s')"
+                   onblur="setTimeout(()=>invClearSug('s'),200)"
+                   onkeydown="invSearchKey(event,'s')">
+            <span class="inv-scan-badge">SCAN</span>
+            <div id="inv-sug-s" class="inv-sug" style="display:none;"></div>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:14px;">Salida 1:1 — cada escaneo agrega 1 unidad a la lista.</div>
+
+          <div class="inv-lista-title">
+            <span>Productos a egresar <span id="inv-count-s" style="color:#ef4444;"></span></span>
+            <button onclick="invClearLista('s')" style="font-size:11px;color:var(--muted);background:transparent;border:none;cursor:pointer;">Limpiar</button>
+          </div>
+          <div id="inv-lista-s">
+            <div id="inv-empty-s" style="text-align:center;padding:28px 0;color:var(--muted);font-size:13px;">Ningún producto agregado aún</div>
+          </div>
+
+          <button class="inv-confirm inv-confirm-s" id="inv-btn-s" onclick="invConfirmarSalida()" disabled>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
+            Confirmar salida
+          </button>
+        </div>
+
+        <!-- ══ PANEL AJUSTE ══ -->
+        <div id="inv-panel-ajuste" style="display:none;">
+
+          <div class="inv-scan-wrap" style="margin-bottom:12px;">
+            <svg class="inv-scan-ico" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input id="skuA" class="inv-scan-inp" placeholder="Buscar producto a ajustar…"
+                   autocomplete="off" spellcheck="false"
+                   oninput="invSearch('a')" onfocus="invSearch('a')"
+                   onblur="setTimeout(()=>invClearSug('a'),200)">
+            <div id="inv-sug-a" class="inv-sug" style="display:none;"></div>
+          </div>
+
+          <div id="inv-aj-sel" style="display:none;background:rgba(99,102,241,.1);border-radius:10px;padding:11px 13px;margin-bottom:14px;">
+            <div id="inv-aj-sku" style="font-size:11px;font-family:'DM Mono',monospace;font-weight:700;color:#6366f1;"></div>
+            <div id="inv-aj-name" style="font-size:13px;color:var(--text);"></div>
+            <div style="font-size:12px;color:var(--muted);margin-top:3px;">Stock actual: <b id="inv-aj-stk" style="color:var(--text);"></b></div>
+          </div>
+
+          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Tipo de ajuste</div>
+          <div class="inv-motivos">
+            <button class="inv-motivo-btn sel" data-m="merma"         onclick="invSelMotivo(this)">🔴 Merma</button>
+            <button class="inv-motivo-btn"     data-m="daño"          onclick="invSelMotivo(this)">🟠 Daño</button>
+            <button class="inv-motivo-btn"     data-m="conteo_fisico" onclick="invSelMotivo(this)">🔵 Conteo físico</button>
+            <button class="inv-motivo-btn"     data-m="robo"          onclick="invSelMotivo(this)">⚫ Robo/hurto</button>
+            <button class="inv-motivo-btn"     data-m="vencimiento"   onclick="invSelMotivo(this)">🟡 Vencimiento</button>
+            <button class="inv-motivo-btn"     data-m="otro"          onclick="invSelMotivo(this)">⚪ Otro</button>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+            <div>
+              <label style="display:block;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Cantidad</label>
+              <input id="inv-aj-cant" type="number" min="1" placeholder="0"
+                     style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:16px;font-weight:700;text-align:center;box-sizing:border-box;"
+                     oninput="invAjPreview()">
+            </div>
+            <div>
+              <label style="display:block;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Dirección</label>
+              <select id="inv-aj-dir" style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;box-sizing:border-box;" oninput="invAjPreview()">
+                <option value="-1">🔻 Baja (disminuir)</option>
+                <option value="1" >🔺 Alza (aumentar)</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label style="display:block;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Notas</label>
+            <input id="inv-aj-notas" placeholder="Describe brevemente la razón…"
+                   style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;box-sizing:border-box;margin-bottom:12px;">
+          </div>
+
+          <div id="inv-aj-preview" class="inv-aj-preview" style="display:none;"></div>
+
+          <button class="inv-confirm inv-confirm-a" id="inv-btn-a" onclick="invConfirmarAjuste()" disabled>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+            Registrar ajuste
+          </button>
         </div>
 
         <!-- Tabla productos -->
-        <div class="inv-toolbar">
+        <div class="inv-toolbar" style="margin-top:24px;">
           <input class="search-input" id="buscador" placeholder="Buscar por nombre o SKU..." oninput="buscar()">
           <span id="totalProductos" style="font-size:12px; color:var(--muted); white-space:nowrap;"></span>
         </div>
@@ -10267,8 +10492,314 @@ async function ejecutarTransferencia(){
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
-// POS — Lógica completa del módulo de inventario
+// INVENTARIO — Tabs Entrada / Salida / Ajuste con listas acumuladas
+// Los endpoints backend /entrada y /salida son los mismos de siempre.
+// El ajuste usa /pos/ajuste (que ya tiene trazabilidad completa).
 // ════════════════════════════════════════════════════════════════════════════════
+
+const _INV = {
+  tab     : 'entrada',
+  items   : { e: [], s: [] },
+  ajSku   : null,
+  ajMotivo: 'merma',
+  clave   : null,   // cachea la clave admin en memoria por sesión
+};
+
+// ── Tabs ──
+function invTab(tab){
+  _INV.tab = tab;
+  ['entrada','salida','ajuste'].forEach(t=>{
+    document.getElementById('invtab-'+t).classList.toggle('active', t===tab);
+    document.getElementById('inv-panel-'+t).style.display = t===tab ? '' : 'none';
+  });
+  const map = {entrada:'skuE', salida:'skuS', ajuste:'skuA'};
+  setTimeout(()=>{ const el=document.getElementById(map[tab]); if(el) el.focus(); }, 80);
+}
+
+// ── Buscador autocomplete ──
+function invSearch(modo){
+  const ids = {e:['skuE','inv-sug-e'], s:['skuS','inv-sug-s'], a:['skuA','inv-sug-a']};
+  const [inpId, sugId] = ids[modo];
+  const inp = document.getElementById(inpId);
+  const sug = document.getElementById(sugId);
+  if(!inp||!sug) return;
+  const q = inp.value.trim().toLowerCase();
+  if(!q){ sug.style.display='none'; return; }
+  const cache = window._productosCache || [];
+  const matches = cache.filter(p=>
+    (p.sku||'').toLowerCase().includes(q) ||
+    (p.nombre||'').toLowerCase().includes(q)
+  ).slice(0,10);
+  if(!matches.length){
+    sug.innerHTML='<div class="inv-sug-item" style="color:var(--muted);cursor:default;">Sin coincidencias</div>';
+    sug.style.display='block'; return;
+  }
+  sug.innerHTML = matches.map(p=>{
+    const stk = p.stock_disponible!==undefined ? p.stock_disponible : p.stock;
+    const col = stk>5?'#22c55e':stk>0?'#f59e0b':'#ef4444';
+    return `<div class="inv-sug-item" onmousedown="invSelProduct('${modo}','${p.sku.replace(/'/g,"\\'")}',event)">
+      <div>
+        <div class="inv-sug-sku">${p.sku}</div>
+        <div class="inv-sug-name">${(p.nombre||'').substring(0,55)}</div>
+      </div>
+      <div class="inv-sug-stk" style="color:${col};">${stk} un.</div>
+    </div>`;
+  }).join('');
+  sug.style.display='block';
+}
+
+function invClearSug(modo){
+  const ids={e:'inv-sug-e',s:'inv-sug-s',a:'inv-sug-a'};
+  const el=document.getElementById(ids[modo]); if(el) el.style.display='none';
+}
+
+function invSearchKey(e, modo){
+  if(e.key==='Escape'){ invClearSug(modo); return; }
+  if(e.key==='Enter'){
+    e.preventDefault();
+    const ids={e:'inv-sug-e',s:'inv-sug-s',a:'inv-sug-a'};
+    const first=document.querySelector(`#${ids[modo]} .inv-sug-item`);
+    if(first) first.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));
+  }
+}
+
+// ── Seleccionar producto ──
+function invSelProduct(modo, sku, evt){
+  if(evt) evt.preventDefault();
+  invClearSug(modo);
+  const p = (window._productosCache||[]).find(x=>x.sku===sku);
+  if(!p) return;
+
+  if(modo==='a'){
+    _INV.ajSku = {...p};
+    document.getElementById('skuA').value = `${p.sku} — ${p.nombre}`;
+    const stk = p.stock_disponible!==undefined?p.stock_disponible:p.stock;
+    document.getElementById('inv-aj-sel').style.display='';
+    document.getElementById('inv-aj-sku').textContent  = p.sku;
+    document.getElementById('inv-aj-name').textContent = p.nombre||'';
+    document.getElementById('inv-aj-stk').textContent  = stk+' unidades';
+    document.getElementById('inv-btn-a').disabled = false;
+    invAjPreview();
+    return;
+  }
+
+  const lista = _INV.items[modo];
+  const exist = lista.find(x=>x.sku===sku);
+  if(exist){ exist.cantidad++; toast(`+1 → ${sku} (${exist.cantidad} total)`); }
+  else { lista.push({sku:p.sku, nombre:p.nombre, stock:p.stock_disponible!==undefined?p.stock_disponible:p.stock, cantidad:1}); }
+  document.getElementById({e:'skuE',s:'skuS'}[modo]).value='';
+  invRenderLista(modo);
+}
+
+// ── Render lista ──
+function invRenderLista(modo){
+  const lista   = _INV.items[modo];
+  const contId  = modo==='e'?'inv-lista-e':'inv-lista-s';
+  const emptyId = modo==='e'?'inv-empty-e':'inv-empty-s';
+  const cntId   = modo==='e'?'inv-count-e':'inv-count-s';
+  const btnId   = modo==='e'?'inv-btn-e'  :'inv-btn-s';
+  const cont    = document.getElementById(contId);
+  if(!cont) return;
+  if(!lista.length){
+    cont.innerHTML=`<div id="${emptyId}" style="text-align:center;padding:28px 0;color:var(--muted);font-size:13px;">Ningún producto agregado aún</div>`;
+    document.getElementById(cntId).textContent='';
+    document.getElementById(btnId).disabled=true;
+    return;
+  }
+  let totalU=0;
+  cont.innerHTML=lista.map((item,idx)=>{
+    totalU+=item.cantidad;
+    return `<div class="inv-row inv-row-${modo}">
+      <div>
+        <div class="inv-row-sku">${item.sku}</div>
+        <div class="inv-row-name">${(item.nombre||'').substring(0,45)}</div>
+        <div class="inv-row-stk">Stock: ${item.stock}</div>
+      </div>
+      <div class="inv-qty-wrap">
+        <button class="inv-qty-btn" onclick="_INV.items['${modo}'][${idx}].cantidad=Math.max(1,_INV.items['${modo}'][${idx}].cantidad-1);invRenderLista('${modo}')">−</button>
+        <input class="inv-qty-inp" type="number" min="1" value="${item.cantidad}"
+               oninput="_INV.items['${modo}'][${idx}].cantidad=Math.max(1,parseInt(this.value)||1);invRenderLista('${modo}')">
+        <button class="inv-qty-btn" onclick="_INV.items['${modo}'][${idx}].cantidad++;invRenderLista('${modo}')">+</button>
+      </div>
+      <button class="inv-row-del" onclick="_INV.items['${modo}'].splice(${idx},1);invRenderLista('${modo}')">×</button>
+    </div>`;
+  }).join('');
+  document.getElementById(cntId).textContent=`(${lista.length} SKU · ${totalU} un.)`;
+  document.getElementById(btnId).disabled=false;
+}
+
+// ── Clave admin (cachea en memoria) ──
+async function invGetClave(){
+  if(_INV.clave) return _INV.clave;
+  return new Promise(resolve=>{
+    const ov=document.createElement('div');
+    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:99999;';
+    ov.innerHTML=`<div style="background:var(--bg);padding:28px;border-radius:16px;min-width:320px;box-shadow:0 12px 48px rgba(0,0,0,.5);border:1px solid var(--border);">
+      <div style="font-size:22px;text-align:center;margin-bottom:4px;">🔒</div>
+      <div style="font-weight:700;font-size:15px;margin-bottom:14px;color:var(--text);text-align:center;">Clave de administrador</div>
+      <input id="_invClaveInp" type="password" placeholder="Ingresar clave"
+             style="width:100%;padding:11px 14px;border-radius:10px;border:1.5px solid var(--border);background:var(--bg2);color:var(--text);font-size:15px;box-sizing:border-box;outline:none;" autofocus>
+      <div style="display:flex;gap:8px;margin-top:14px;">
+        <button id="_invClaveCnl" style="flex:1;padding:9px;border:1px solid var(--border);background:transparent;border-radius:9px;cursor:pointer;color:var(--muted);">Cancelar</button>
+        <button id="_invClaveOk"  style="flex:2;padding:9px;background:#6366f1;color:#fff;border:none;border-radius:9px;cursor:pointer;font-weight:700;">Confirmar</button>
+      </div>
+    </div>`;
+    document.body.appendChild(ov);
+    const inp=ov.querySelector('#_invClaveInp');
+    const ok=()=>{ const v=inp.value.trim(); document.body.removeChild(ov); if(v) _INV.clave=v; resolve(v||null); };
+    ov.querySelector('#_invClaveOk').addEventListener('click', ok);
+    ov.querySelector('#_invClaveCnl').addEventListener('click',()=>{ document.body.removeChild(ov); resolve(null); });
+    inp.addEventListener('keydown', e=>{ if(e.key==='Enter') ok(); });
+  });
+}
+
+// ── CONFIRMAR ENTRADA (llama /entrada una vez por SKU, misma lógica de siempre) ──
+async function invConfirmarEntrada(){
+  const docVal  = (document.getElementById('docE')?.value||'').trim();
+  const motivo  = document.getElementById('motivoEntrada')?.value||'Entrada manual';
+  const lista   = _INV.items.e;
+  if(!docVal){ toast('N° de documento es obligatorio','warn'); return; }
+  if(!lista.length){ toast('Agrega al menos un producto','warn'); return; }
+
+  const clave = await invGetClave();
+  if(!clave){ toast('Acción cancelada'); _INV.clave=null; return; }
+
+  const btn=document.getElementById('inv-btn-e');
+  btn.disabled=true; btn.textContent='Procesando…';
+
+  let ok=0, err=[];
+  for(const item of lista){
+    try{
+      const r=await fetch('/entrada',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({sku:item.sku, cantidad:item.cantidad, motivo, documento:docVal, clave_admin:clave})});
+      const d=await r.json();
+      if(d.error){ if(r.status===403){_INV.clave=null;} err.push(`${item.sku}: ${d.error}`); }
+      else ok++;
+    }catch(e){ err.push(`${item.sku}: ${e.message}`); }
+  }
+
+  if(ok>0){
+    toast(`✅ ${ok} producto${ok>1?'s':''} ingresado${ok>1?'s':''} | Doc: ${docVal}`);
+    _INV.items.e=[];
+    invRenderLista('e');
+    document.getElementById('docE').value='';
+    if(typeof cargar==='function') cargar();
+  }
+  if(err.length) err.forEach(e=>toast(`⚠️ ${e}`,'warn'));
+
+  btn.disabled=false;
+  btn.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="20 6 9 17 4 12"/></svg> Confirmar entrada';
+}
+
+// ── CONFIRMAR SALIDA (llama /salida una vez por SKU) ──
+async function invConfirmarSalida(){
+  const ocVal  = (document.getElementById('ocS')?.value||'').trim();
+  const motivo = document.getElementById('motivoSalida')?.value||'Salida manual';
+  const lista  = _INV.items.s;
+  if(!ocVal){ toast('N° de OC o referencia es obligatorio','warn'); return; }
+  if(!lista.length){ toast('Agrega al menos un producto','warn'); return; }
+
+  const clave = await invGetClave();
+  if(!clave){ toast('Acción cancelada'); _INV.clave=null; return; }
+
+  const btn=document.getElementById('inv-btn-s');
+  btn.disabled=true; btn.textContent='Procesando…';
+
+  let ok=0, err=[];
+  for(const item of lista){
+    try{
+      const r=await fetch('/salida',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({sku:item.sku, cantidad:item.cantidad, motivo, oc:ocVal, clave_admin:clave})});
+      const d=await r.json();
+      if(d.error){ if(r.status===403){_INV.clave=null;} err.push(`${item.sku}: ${d.error}`); }
+      else ok++;
+    }catch(e){ err.push(`${item.sku}: ${e.message}`); }
+  }
+
+  if(ok>0){
+    toast(`✅ ${ok} producto${ok>1?'s':''} egresado${ok>1?'s':''} | OC: ${ocVal}`);
+    _INV.items.s=[];
+    invRenderLista('s');
+    document.getElementById('ocS').value='';
+    document.getElementById('canalDetectado').textContent='';
+    if(typeof cargar==='function') cargar();
+  }
+  if(err.length) err.forEach(e=>toast(`⚠️ ${e}`,'warn'));
+
+  btn.disabled=false;
+  btn.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg> Confirmar salida';
+}
+
+// ── AJUSTE (llama /pos/ajuste con trazabilidad) ──
+function invSelMotivo(btn){
+  document.querySelectorAll('.inv-motivo-btn').forEach(b=>b.classList.remove('sel'));
+  btn.classList.add('sel');
+  _INV.ajMotivo=btn.dataset.m;
+  invAjPreview();
+}
+
+function invAjPreview(){
+  const prev=document.getElementById('inv-aj-preview');
+  if(!prev) return;
+  const p=_INV.ajSku;
+  const cant=parseInt(document.getElementById('inv-aj-cant')?.value||0);
+  const dir =parseInt(document.getElementById('inv-aj-dir')?.value||'-1');
+  if(!p||!cant){ prev.style.display='none'; return; }
+  const stk  = p.stock_disponible!==undefined?p.stock_disponible:p.stock;
+  const delta = cant*dir;
+  const nueva = stk+delta;
+  const dirLbl= dir>0?`🔺 +${cant}`:`🔻 -${cant}`;
+  prev.innerHTML=`<b>${p.sku}</b>: ${stk} → <b style="color:${nueva>=0?'#22c55e':'#ef4444'}">${Math.max(0,nueva)}</b> unidades (${dirLbl} por <em>${_INV.ajMotivo.replace('_',' ')}</em>)`;
+  prev.style.display='';
+}
+
+async function invConfirmarAjuste(){
+  const p=_INV.ajSku;
+  if(!p){ toast('Selecciona un producto','warn'); return; }
+  const cant=parseInt(document.getElementById('inv-aj-cant')?.value||0);
+  if(!cant||cant<=0){ toast('Ingresa una cantidad válida','warn'); return; }
+  const dir  =parseInt(document.getElementById('inv-aj-dir')?.value||'-1');
+  const delta=cant*dir;
+  const stk  =p.stock_disponible!==undefined?p.stock_disponible:p.stock;
+  if((stk+delta)<0&&dir<0){ toast(`Stock insuficiente. Actual: ${stk}. Bajarías: ${cant}`,'error'); return; }
+
+  const clave=await invGetClave();
+  if(!clave){ toast('Acción cancelada'); _INV.clave=null; return; }
+
+  const btn=document.getElementById('inv-btn-a');
+  btn.disabled=true; btn.textContent='Registrando…';
+
+  try{
+    const r=await fetch('/pos/ajuste',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({clave_admin:clave, sku:p.sku, cantidad_ajuste:delta,
+        motivo_ajuste:_INV.ajMotivo, notas:document.getElementById('inv-aj-notas')?.value||'', bodega:'CENTRAL'})});
+    const d=await r.json();
+    if(!r.ok||d.error){
+      if(r.status===403) _INV.clave=null;
+      toast(d.error||'Error al registrar ajuste','error');
+    } else {
+      toast(`✅ Ajuste registrado: ${p.sku} | ${d.cantidad_antes} → ${d.cantidad_despues} un.`);
+      _INV.ajSku=null;
+      document.getElementById('skuA').value='';
+      document.getElementById('inv-aj-sel').style.display='none';
+      document.getElementById('inv-aj-cant').value='';
+      document.getElementById('inv-aj-notas').value='';
+      document.getElementById('inv-aj-preview').style.display='none';
+      document.getElementById('inv-btn-a').disabled=true;
+      const pc=(window._productosCache||[]).find(x=>x.sku===p.sku);
+      if(pc){ pc.stock=d.cantidad_despues; if(pc.stock_disponible!==undefined) pc.stock_disponible=d.cantidad_despues; }
+      if(typeof cargar==='function') cargar();
+    }
+  }catch(e){ toast('Error de red: '+e.message,'error'); }
+  finally{
+    btn.disabled=false;
+    btn.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> Registrar ajuste';
+  }
+}
+
+// Limpiar lista helper
+function invClearLista(modo){ _INV.items[modo]=[]; invRenderLista(modo); }
+
 
 // ── Estado del POS ──
 const _POS = {
