@@ -9809,8 +9809,8 @@ def admin_diagnostico_bd():
         cur.execute("SELECT order_id_texto,fecha FROM ordenes_procesadas WHERE order_id_texto IS NOT NULL ORDER BY fecha DESC LIMIT 10")
         ultimas = [{"orden":r[0],"fecha":r[1].isoformat() if r[1] else None} for r in cur.fetchall()]
         orden_test = request.args.get("orden","3104945440")
-        cur.execute("SELECT id,order_id_texto,fecha FROM ordenes_procesadas WHERE order_id_texto LIKE %s ORDER BY fecha DESC",(f"%{orden_test}%",))
-        marcas = [{"id":r[0],"key":r[1],"fecha":r[2].isoformat() if r[2] else None} for r in cur.fetchall()]
+        cur.execute("SELECT orden_id,order_id_texto,fecha FROM ordenes_procesadas WHERE order_id_texto LIKE %s ORDER BY fecha DESC",(f"%{orden_test}%",))
+        marcas = [{"orden_id":r[0],"key":r[1],"fecha":r[2].isoformat() if r[2] else None} for r in cur.fetchall()]
         cur.close(); conn.close()
         return jsonify({
             "constraint_existe": constraint is not None,
