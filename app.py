@@ -21,7 +21,7 @@ from inventario import (cargar_productos, guardar_productos, guardar_producto,
                         registrar_movimiento, cargar_movimientos, cargar_movimientos_hoy,
                         init_db, orden_ya_procesada, marcar_orden_procesada, actualizar_precios,
                         get_configuracion, set_configuracion, set_lead_time, eliminar_producto,
-                        orden_ya_procesada_texto, marcar_orden_procesada_texto,
+                        orden_ya_procesada_texto, marcar_orden_procesada_texto, intentar_marcar_orden_atomic,
                         init_devoluciones, generar_codigo_dev, crear_devolucion,
                         asignar_codigo_dev, actualizar_devolucion, listar_devoluciones,
                         get_devolucion,
@@ -136,7 +136,7 @@ def _sync_walmart_automatico():
                 if not order_id:
                     continue
                 customer_order_id = str(o.get("customerOrderId", order_id))
-                if orden_ya_procesada_texto(customer_order_id):
+                if not intentar_marcar_orden_atomic(customer_order_id):
                     continue
 
                 lineas = o.get("orderLines", {}).get("orderLine", [])
@@ -205,7 +205,7 @@ def _sync_walmart_automatico():
                         print(f"[Scheduler] Error linea: {e}")
 
                 # FIX: marcar solo UNA vez después de procesar (antes había doble marcar)
-                marcar_orden_procesada_texto(customer_order_id)
+                # [atomic] orden marcada al inicio — no remarcar
                 nuevas += 1
 
         # ── CANCELACIONES WALMART — devolver stock si se canceló una orden ya procesada
@@ -274,7 +274,7 @@ def _sync_walmart_automatico():
                     except Exception as e:
                         print(f"[Scheduler] Error creando alerta: {e}")
 
-                marcar_orden_procesada_texto(cancel_key)
+                # [atomic] orden marcada al inicio — no remarcar
                 reingresadas += 1
 
             if reingresadas:
@@ -352,7 +352,7 @@ def _sync_meli_automatico():
 
                 # ── Órdenes pagadas ──
                 if estado in ("paid", "confirmed"):
-                    if orden_ya_procesada_texto(meli_key):
+                    if not intentar_marcar_orden_atomic(meli_key):
                         continue
 
                     # Parsear fecha de compra
@@ -408,16 +408,16 @@ def _sync_meli_automatico():
                             errores.append(f"MELI {order_id}/{sku_seller}→{sku_lusync}: {e}")
 
                     if items_descontados:
-                        marcar_orden_procesada_texto(meli_key)
+                        # [atomic] orden marcada al inicio — no remarcar
                         nuevas += 1
 
                 # ── Órdenes canceladas ──
                 elif estado in ("cancelled", "canceled"):
-                    if orden_ya_procesada_texto(cancel_key):
+                    if not intentar_marcar_orden_atomic(cancel_key):
                         continue
                     if not orden_ya_procesada_texto(meli_key):
                         # Nunca se procesó la venta, no hay nada que reintegrar
-                        marcar_orden_procesada_texto(cancel_key)
+                        # [atomic] orden marcada al inicio — no remarcar
                         continue
 
                     items_reintegrados = []
@@ -466,7 +466,7 @@ def _sync_meli_automatico():
                         except: pass
                         canceladas += 1
 
-                    marcar_orden_procesada_texto(cancel_key)
+                    # [atomic] orden marcada al inicio — no remarcar
             except Exception as e:
                 errores.append(f"MELI orden: {e}")
 
@@ -530,7 +530,7 @@ def _sync_falabella_automatico():
 
                 # ── Órdenes nuevas (estados que descuentan stock) ──
                 if estado_orden in ("ready_to_ship", "shipped", "delivered", "pending"):
-                    if orden_ya_procesada_texto(fa_key):
+                    if not intentar_marcar_orden_atomic(fa_key):
                         continue
 
                     # FIX CRÍTICO: los items NO vienen en el objeto orden.
@@ -605,16 +605,16 @@ def _sync_falabella_automatico():
                         print(f"[Scheduler Falabella] {order_id} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado.get('bodega','?')}")
 
                     if items_descontados:
-                        marcar_orden_procesada_texto(fa_key)
+                        # [atomic] orden marcada al inicio — no remarcar
                         nuevas += 1
 
                 # ── Órdenes canceladas ──
                 elif estado_orden in ("canceled", "cancelled"):
-                    if orden_ya_procesada_texto(cancel_key):
+                    if not intentar_marcar_orden_atomic(cancel_key):
                         continue
                     if not orden_ya_procesada_texto(fa_key):
                         # nunca se descontó, solo marcar cancelación para no volver
-                        marcar_orden_procesada_texto(cancel_key)
+                        # [atomic] orden marcada al inicio — no remarcar
                         continue
 
                     try:
@@ -663,7 +663,7 @@ def _sync_falabella_automatico():
                             pass
                         canceladas += 1
 
-                    marcar_orden_procesada_texto(cancel_key)
+                    # [atomic] orden marcada al inicio — no remarcar
 
             except Exception as e:
                 errores.append(f"FALABELLA orden: {e}")
@@ -725,10 +725,10 @@ def _sync_paris_automatico():
 
                 # ── Órdenes canceladas ──
                 if es_cancelada:
-                    if orden_ya_procesada_texto(cancel_key):
+                    if not intentar_marcar_orden_atomic(cancel_key):
                         continue
                     if not orden_ya_procesada_texto(pa_key):
-                        marcar_orden_procesada_texto(cancel_key)
+                        # [atomic] orden marcada al inicio — no remarcar
                         continue
                     # Reintegrar: recorrer shipments → items (estructura real de París)
                     items_reintegrados = []
@@ -765,11 +765,11 @@ def _sync_paris_automatico():
                         except:
                             pass
                         canceladas += 1
-                    marcar_orden_procesada_texto(cancel_key)
+                    # [atomic] orden marcada al inicio — no remarcar
                     continue
 
                 # ── Órdenes nuevas: procesar todas las no marcadas ──
-                if orden_ya_procesada_texto(pa_key):
+                if not intentar_marcar_orden_atomic(pa_key):
                     continue
 
                 # FIX CRÍTICO: los items están en shipments[].items[], NO en o.get("items")
@@ -798,6 +798,20 @@ def _sync_paris_automatico():
                         prod = next((p for p in productos if p["sku"] == sku_lusync), None)
                         if not prod:
                             print(f"[Scheduler Paris] SKU '{sku_lusync}' no encontrado")
+                            _msg_mapeo = (
+                                f"La orden <b>{sub_order}</b> de París contiene el SKU "
+                                f"<b>{seller_sku}</b> que no está registrado en Lusync. "
+                                "El stock <b>NO fue descontado</b>. Ve a Mapeo SKUs para registrarlo."
+                            )
+                            crear_alerta(
+                                tipo="sku_sin_mapeo",
+                                titulo=f"SKU sin mapeo — París: {seller_sku}",
+                                mensaje=_msg_mapeo,
+                                canal="Paris",
+                                orden_id=str(sub_order),
+                                sku=seller_sku,
+                                enviar_email=True
+                            )
                             continue
 
                         resultado = descontar_venta(
@@ -819,25 +833,29 @@ def _sync_paris_automatico():
                         print(f"[Scheduler Paris] {sub_order} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado.get('bodega','?')}")
 
                 if items_descontados:
-                    marcar_orden_procesada_texto(pa_key)
+                    # Orden procesada exitosamente — ya está marcada atómicamente desde el inicio
                     nuevas += 1
                 elif not items_descontados and o.get("shipments"):
-                    # NO marcar como procesada si todos los items fallaron por SKU sin mapeo.
-                    # El scheduler reintentará en el próximo ciclo (cada 10 min).
-                    # Solo marcar definitivamente si la orden tiene más de 48h (evitar loops eternos).
+                    # Todos los items fallaron (SKU sin mapeo, etc.)
+                    # Des-marcar la orden para que el scheduler lo reintente en el próximo ciclo
                     try:
                         fecha_str = o.get("createdAt") or o.get("created_at") or ""
+                        horas = 0
                         if fecha_str:
                             from datetime import timezone as _tz
                             fecha_orden = datetime.fromisoformat(fecha_str.replace("Z", "+00:00"))
                             horas = (datetime.now(_tz.utc) - fecha_orden).total_seconds() / 3600
-                            if horas > 48:
-                                marcar_orden_procesada_texto(pa_key)
-                                print(f"[Scheduler Paris] {sub_order} marcada sin items (>48h sin mapeo)")
-                            else:
-                                print(f"[Scheduler Paris] {sub_order} SKU sin mapeo, se reintentará")
+                        if horas > 48:
+                            # Más de 48h sin poder procesar → dejar marcada (evitar loop eterno)
+                            print(f"[Scheduler Paris] {sub_order} marcada sin items (>48h sin mapeo)")
                         else:
-                            print(f"[Scheduler Paris] {sub_order} sin fecha, no marcada")
+                            # Reciente → des-marcar para reintentar cuando se mapee el SKU
+                            from inventario import get_conn as _gc_pa
+                            _c_pa = _gc_pa(); _cr_pa = _c_pa.cursor()
+                            _cr_pa.execute("DELETE FROM ordenes_procesadas WHERE order_id_texto = %s",
+                                          (pa_key,))
+                            _c_pa.commit(); _cr_pa.close(); _c_pa.close()
+                            print(f"[Scheduler Paris] {sub_order} des-marcada — SKU sin mapeo, reintentará")
                     except Exception:
                         pass
 
@@ -912,10 +930,10 @@ def _sync_ripley_automatico():
 
                 # ── Órdenes canceladas ──
                 if estado in ("REFUSED", "CANCELED", "CANCELLED"):
-                    if orden_ya_procesada_texto(cancel_key):
+                    if not intentar_marcar_orden_atomic(cancel_key):
                         continue
                     if not orden_ya_procesada_texto(rp_key):
-                        marcar_orden_procesada_texto(cancel_key)
+                        # [atomic] orden marcada al inicio — no remarcar
                         continue
                     items_reintegrados = []
                     ultimo_sku = None
@@ -951,13 +969,13 @@ def _sync_ripley_automatico():
                         except:
                             pass
                         canceladas += 1
-                    marcar_orden_procesada_texto(cancel_key)
+                    # [atomic] orden marcada al inicio — no remarcar
                     continue
 
                 # ── Órdenes nuevas activas ──
                 if estado not in ("WAITING_ACCEPTANCE", "WAITING_DEBIT", "SHIPPING", "SHIPPED", "RECEIVED"):
                     continue  # estado desconocido, saltar
-                if orden_ya_procesada_texto(rp_key):
+                if not intentar_marcar_orden_atomic(rp_key):
                     continue
 
                 es_fbr = detectar_fulfillment_ripley(o)
@@ -1006,7 +1024,7 @@ def _sync_ripley_automatico():
                     print(f"[Scheduler Ripley] {order_id} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado.get('bodega','?')}")
 
                 if items_descontados:
-                    marcar_orden_procesada_texto(rp_key)
+                    # [atomic] orden marcada al inicio — no remarcar
                     nuevas += 1
 
             except Exception as e:
@@ -1073,7 +1091,7 @@ def _sync_woo_automatico():
             try:
                 order_id = str(o.get("id", ""))
                 woo_key = f"WOO-{order_id}"
-                if orden_ya_procesada_texto(woo_key):
+                if not intentar_marcar_orden_atomic(woo_key):
                     continue
                 items_descontados = []
                 # Parsear fecha real de compra (WooCommerce: date_created en ISO)
@@ -1108,7 +1126,7 @@ def _sync_woo_automatico():
                             items_descontados.append(sku)
                             break
                 if items_descontados:
-                    marcar_orden_procesada_texto(woo_key)
+                    # [atomic] orden marcada al inicio — no remarcar
                     nuevas += 1
             except Exception as e:
                 errores.append(f"Woo orden: {e}")
@@ -1143,7 +1161,7 @@ def _sync_woo_automatico():
                 cancel_key = f"WOO-CANCEL-{order_id}"
                 if orden_ya_procesada_texto(cancel_key): continue
                 if not orden_ya_procesada_texto(woo_key):
-                    marcar_orden_procesada_texto(cancel_key)
+                    # [atomic] orden marcada al inicio — no remarcar
                     continue
                 items_reintegrados = []
                 ultimo_sku = None
@@ -1177,7 +1195,7 @@ def _sync_woo_automatico():
                         )
                     except: pass
                     canceladas += 1
-                marcar_orden_procesada_texto(cancel_key)
+                # [atomic] orden marcada al inicio — no remarcar
             except Exception as e:
                 errores.append(f"Woo cancel: {e}")
 
@@ -1321,11 +1339,11 @@ def _sync_recuperacion():
                 if not order_id:
                     continue
                 customer_order_id = str(o.get("customerOrderId", order_id))
-                if orden_ya_procesada_texto(customer_order_id):
+                if not intentar_marcar_orden_atomic(customer_order_id):
                     continue
 
                 # Marcar ANTES de procesar para evitar dobles descuentos
-                marcar_orden_procesada_texto(customer_order_id)
+                # [atomic] orden marcada al inicio — no remarcar
 
                 lineas = o.get("orderLines", {}).get("orderLine", [])
                 if isinstance(lineas, dict):
@@ -1362,7 +1380,7 @@ def _sync_recuperacion():
                     except Exception as e:
                         print(f"[Recuperación] Error linea: {e}")
 
-                marcar_orden_procesada_texto(customer_order_id)
+                # [atomic] orden marcada al inicio — no remarcar
                 recuperadas += 1
 
         # También recuperar cancelaciones
@@ -1376,7 +1394,7 @@ def _sync_recuperacion():
                 cancel_key = f"CANCEL-{customer_order_id}"
                 if not orden_ya_procesada_texto(customer_order_id):
                     continue
-                if orden_ya_procesada_texto(cancel_key):
+                if not intentar_marcar_orden_atomic(cancel_key):
                     continue
                 lineas = o.get("orderLines", {}).get("orderLine", [])
                 if isinstance(lineas, dict):
@@ -1412,7 +1430,7 @@ def _sync_recuperacion():
                         )
                     except Exception as e:
                         print(f"[Recuperación] Error creando alerta: {e}")
-                marcar_orden_procesada_texto(cancel_key)
+                # [atomic] orden marcada al inicio — no remarcar
         except Exception as e:
             print(f"[Recuperación] Error cancelaciones: {e}")
 
@@ -2543,7 +2561,7 @@ def walmart_sync_debug():
                 if not encontrado:
                     log.append(f"  SKU {sku} no encontrado en Lusync")
 
-            marcar_orden_procesada_texto(customer_order_id)
+            # [atomic] orden marcada al inicio — no remarcar
             nuevas += 1
 
     # ── CANCELACIONES en sync manual
@@ -2557,7 +2575,7 @@ def walmart_sync_debug():
             cancel_key = f"CANCEL-{customer_order_id}"
             if not orden_ya_procesada_texto(customer_order_id):
                 continue
-            if orden_ya_procesada_texto(cancel_key):
+            if not intentar_marcar_orden_atomic(cancel_key):
                 continue
             lineas = o.get("orderLines", {}).get("orderLine", [])
             if isinstance(lineas, dict):
@@ -2594,7 +2612,7 @@ def walmart_sync_debug():
                     )
                 except Exception as e:
                     log.append(f"Error creando alerta: {e}")
-            marcar_orden_procesada_texto(cancel_key)
+            # [atomic] orden marcada al inicio — no remarcar
     except Exception as e:
         log.append(f"Error cancelaciones: {e}")
 
@@ -4198,9 +4216,17 @@ def paris_forzar_orden(sub_order_number):
                     "stock_despues": resultado.get("stock_despues"),
                 })
 
-        # 5. Marcar como procesada si hubo al menos 1 item OK
-        if items_procesados:
-            marcar_orden_procesada_texto(pa_key)
+        # 5. Orden ya fue marcada atómicamente al inicio de forzar_orden
+        # Si no hubo items procesados, des-marcar para permitir reintento
+        if not items_procesados:
+            try:
+                from inventario import get_conn as _gc_fo
+                _c_fo = _gc_fo(); _cr_fo = _c_fo.cursor()
+                _cr_fo.execute("DELETE FROM ordenes_procesadas WHERE order_id_texto = %s",
+                               (f"PARIS-{sub_order_number}",))
+                _c_fo.commit(); _cr_fo.close(); _c_fo.close()
+            except Exception:
+                pass
 
         return jsonify({
             "ok"              : len(items_procesados) > 0,
@@ -4216,6 +4242,110 @@ def paris_forzar_orden(sub_order_number):
                 if items_procesados
                 else "⚠️ No se procesó ningún ítem — revisa items_fallidos"
             )
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/admin/revertir_duplicados/<numero_orden>", methods=["GET"])
+def admin_revertir_duplicados(numero_orden):
+    """Revierte movimientos duplicados de una orden específica.
+    Conserva SOLO el último movimiento registrado y devuelve el stock
+    de los duplicados (los anteriores).
+    Params: token, canal (opcional, default=paris), keep=last|first
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    token = request.args.get("token", "")
+    if not session.get("logged") and token != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+
+    keep = request.args.get("keep", "last")  # last = conservar el más reciente
+
+    try:
+        from inventario import get_conn as _gc, ajustar_stock_bodega
+        conn = _gc(); cur = conn.cursor()
+
+        # Buscar todos los movimientos de esa orden (numero_orden o orden_id)
+        cur.execute("""
+            SELECT id, sku, nombre, cantidad, tipo, canal, fecha, usuario, motivo
+            FROM movimientos
+            WHERE (numero_orden = %s OR orden_id::text = %s)
+              AND tipo = 'salida'
+            ORDER BY fecha ASC
+        """, (numero_orden, numero_orden))
+
+        cols = [d[0] for d in cur.description]
+        movs = [dict(zip(cols, r)) for r in cur.fetchall()]
+
+        if not movs:
+            cur.close(); conn.close()
+            return jsonify({"error": f"No se encontraron movimientos de salida para la orden {numero_orden}"}), 404
+
+        if len(movs) == 1:
+            cur.close(); conn.close()
+            return jsonify({"ok": True, "mensaje": "Solo hay 1 movimiento — no hay duplicados", "movimientos": movs})
+
+        # Determinar cuál conservar
+        conservar = movs[-1] if keep == "last" else movs[0]
+        eliminar  = [m for m in movs if m["id"] != conservar["id"]]
+
+        revertidos = []
+        for m in eliminar:
+            sku      = m["sku"]
+            cantidad = int(m["cantidad"] or 1)
+            bodega   = "CENTRAL"  # default — los duplicados suelen ser de CENTRAL
+
+            # Devolver el stock a la bodega
+            ajustar_stock_bodega(sku, bodega, +cantidad)
+
+            # Actualizar también la tabla productos
+            cur.execute("UPDATE productos SET stock = stock + %s WHERE sku = %s", (cantidad, sku))
+
+            # Eliminar el movimiento duplicado
+            cur.execute("DELETE FROM movimientos WHERE id = %s", (m["id"],))
+
+            revertidos.append({
+                "mov_id"  : m["id"],
+                "sku"     : sku,
+                "cantidad": cantidad,
+                "fecha"   : str(m["fecha"]),
+                "usuario" : m["usuario"],
+                "motivo"  : m["motivo"],
+                "stock_devuelto": cantidad,
+            })
+
+        conn.commit()
+
+        # Sincronizar stock a marketplaces
+        skus_afectados = list(set(m["sku"] for m in eliminar))
+        for sku in skus_afectados:
+            cur.execute("""
+                SELECT COALESCE(SUM(sb.cantidad),0) FROM stock_bodega sb
+                JOIN bodegas b ON b.codigo = sb.bodega_codigo
+                WHERE sb.sku = %s AND b.tipo = 'propia'
+            """, (sku,))
+            stock_disp = int(cur.fetchone()[0] or 0)
+            sincronizar_stock_marketplaces(sku, stock_disp, contexto="revertir_duplicados")
+
+        cur.close(); conn.close()
+
+        registrar_audit(
+            session.get("usuario", "admin_token"), request.remote_addr,
+            "revertir_duplicados",
+            detalle=f"orden={numero_orden} eliminados={len(revertidos)} conservado_id={conservar['id']}"
+        )
+
+        return jsonify({
+            "ok"           : True,
+            "orden"        : numero_orden,
+            "total_movs"   : len(movs),
+            "conservado"   : {"id": conservar["id"], "fecha": str(conservar["fecha"]),
+                               "usuario": conservar["usuario"]},
+            "revertidos"   : revertidos,
+            "skus_sync"    : skus_afectados,
+            "mensaje"      : f"✅ {len(revertidos)} movimiento(s) duplicado(s) revertidos. Stock devuelto y sincronizado."
         })
 
     except Exception as e:
@@ -5828,9 +5958,9 @@ def ruta_meli_sync_ordenes():
                     if estado not in ("paid", "confirmed"):
                         continue
                     meli_key = f"MELI-{order_id}"
-                    if orden_ya_procesada_texto(meli_key):
+                    if not intentar_marcar_orden_atomic(meli_key):
                         continue
-                    marcar_orden_procesada_texto(meli_key)
+                    # [atomic] orden marcada al inicio — no remarcar
 
                     # ── Extraer fecha real de compra del marketplace ────────
                     # MELI devuelve date_created en ISO con timezone (ej: 2026-05-03T18:32:15.000-04:00)
@@ -6398,7 +6528,7 @@ def procesar_webhook_fbm(payload):
             print(f"[FBM Webhook] Tipo {op_type} no procesado (no implementado)")
     
     # Marcar operación como procesada (idempotencia)
-    marcar_orden_procesada_texto(fbm_key)
+    # [atomic] orden marcada al inicio — no remarcar
     
     print(f"[FBM Webhook] OK — Operación {operation_id} ({op_type}): {len(items_procesados)} items procesados")
     return True
@@ -6446,6 +6576,50 @@ def ruta_alertas_leer_todas():
     if not session.get("logged"): return jsonify({"ok": False}), 401
     marcar_todas_leidas()
     return jsonify({"ok": True})
+
+
+@app.route("/alertas/sin_mapeo_pendientes", methods=["GET"])
+def ruta_alertas_sin_mapeo_pendientes():
+    """Devuelve alertas de SKU sin mapeo no leídas — para el banner al abrir el sistema."""
+    if not session.get("logged"): return jsonify({"pendientes": []})
+    try:
+        from inventario import get_conn as _gc
+        conn = _gc(); cur = conn.cursor()
+        cur.execute("""
+            SELECT id, titulo, mensaje, canal, orden_id, sku, fecha
+            FROM alertas
+            WHERE tipo = 'sku_sin_mapeo' AND (leida IS NULL OR leida = FALSE)
+            ORDER BY fecha DESC
+            LIMIT 20
+        """)
+        cols = [d[0] for d in cur.description]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        cur.close(); conn.close()
+        for r in rows:
+            if r.get("fecha") and hasattr(r["fecha"], "isoformat"):
+                r["fecha"] = r["fecha"].isoformat()
+        return jsonify({"pendientes": rows})
+    except Exception as e:
+        return jsonify({"pendientes": [], "error": str(e)})
+
+
+@app.route("/alertas/leer_tipo/<tipo>", methods=["POST"])
+def ruta_alertas_leer_tipo(tipo):
+    """Marca como leídas todas las alertas de un tipo específico."""
+    if not session.get("logged"): return jsonify({"ok": False}), 401
+    try:
+        from inventario import get_conn as _gc
+        conn = _gc(); cur = conn.cursor()
+        cur.execute("""
+            UPDATE alertas SET leida = TRUE
+            WHERE tipo = %s AND (leida IS NULL OR leida = FALSE)
+        """, (tipo,))
+        marcadas = cur.rowcount
+        conn.commit(); cur.close(); conn.close()
+        return jsonify({"ok": True, "marcadas": marcadas})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 
 @app.route("/alertas/config", methods=["GET", "POST"])
 def ruta_alertas_config():
@@ -9229,29 +9403,21 @@ def admin_reprocesar_ordenes():
         return jsonify({"error": f"Error general: {e}"}), 500
     
     cur.close(); conn.close()
-    
-    # ── Disparar el scheduler correspondiente ──
-    schedulers = {
-        "meli":      _sync_meli_automatico,
-        "walmart":   _sync_walmart_automatico,
-        "falabella": _sync_falabella_automatico,
-        "paris":     _sync_paris_automatico,
-        "ripley":    _sync_ripley_automatico,
-        "woo":       _sync_woo_automatico,
-    }
-    
-    scheduler_func = schedulers.get(canal)
-    if scheduler_func:
-        try:
-            # Ejecutar en thread para no bloquear la respuesta
-            import threading
-            t = threading.Thread(target=scheduler_func, daemon=True)
-            t.start()
-            resultados["scheduler_ejecutado"] = True
-            resultados["mensaje"] = f"Scheduler {canal} ejecutándose en background. Las órdenes serán procesadas en los próximos segundos."
-        except Exception as e:
-            resultados["errores"].append(f"Scheduler: {str(e)[:80]}")
-    
+
+    # ── NO lanzar el scheduler automáticamente después de borrar marcas.
+    # Razón: si el scheduler ya está corriendo en su ciclo normal, procesaría
+    # las órdenes dos veces (una por el ciclo + una por este trigger).
+    # El flujo correcto para reprocesar una orden específica es:
+    #   1. /admin/reprocesar_ordenes  → borra la marca
+    #   2. /paris/forzar_orden/{id}   → procesa exactamente esa orden 1 sola vez
+    resultados["scheduler_ejecutado"] = False
+    resultados["mensaje"] = (
+        f"Marcas borradas: {len(resultados['marcas_borradas'])}. "
+        f"Ahora usa /paris/forzar_orden/{{id}} para reprocesar cada orden específica."
+        if resultados["marcas_borradas"]
+        else "No se encontraron marcas para borrar con los prefijos buscados."
+    )
+
     # Audit log
     try:
         registrar_audit(
@@ -9260,7 +9426,7 @@ def admin_reprocesar_ordenes():
             detalle=f"canal={canal} ordenes={','.join(order_ids[:10])} marcas_borradas={len(resultados['marcas_borradas'])}"
         )
     except: pass
-    
+
     return jsonify(resultados)
 
 
@@ -9436,20 +9602,20 @@ def admin_sync_meli_rango():
                             errores.append(f"{order_id}/{sku_seller}→{sku_lusync}: {str(e)[:100]}")
                     
                     if items_descontados:
-                        marcar_orden_procesada_texto(meli_key)
+                        # [atomic] orden marcada al inicio — no remarcar
                         nuevas += 1
                         ordenes_procesadas_ids.append({"id": order_id, "items": items_descontados, "full": es_full})
                 
                 # ── Órdenes canceladas ──
                 elif estado in ("cancelled", "canceled"):
-                    if orden_ya_procesada_texto(cancel_key):
+                    if not intentar_marcar_orden_atomic(cancel_key):
                         continue
                     if not orden_ya_procesada_texto(meli_key):
                         # Nunca se procesó la venta, solo marcar
-                        marcar_orden_procesada_texto(cancel_key)
+                        # [atomic] orden marcada al inicio — no remarcar
                         continue
                     canceladas += 1
-                    marcar_orden_procesada_texto(cancel_key)
+                    # [atomic] orden marcada al inicio — no remarcar
             except Exception as e:
                 errores.append(f"Orden {order_id}: {str(e)[:100]}")
         

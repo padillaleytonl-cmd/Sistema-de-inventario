@@ -51,6 +51,21 @@ def init_db():
         )
     """)
 
+    # UNIQUE constraint en order_id_texto — previene FÍSICAMENTE duplicados en BD
+    cur.execute("ALTER TABLE ordenes_procesadas ADD COLUMN IF NOT EXISTS order_id_texto TEXT")
+    cur.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'ordenes_procesadas_order_id_texto_unique'
+            ) THEN
+                ALTER TABLE ordenes_procesadas
+                ADD CONSTRAINT ordenes_procesadas_order_id_texto_unique
+                UNIQUE (order_id_texto);
+            END IF;
+        END $$;
+    """)
     cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_importacion TIMESTAMP")
     cur.execute("CREATE TABLE IF NOT EXISTS configuracion (clave TEXT PRIMARY KEY, valor TEXT)")
     cur.execute("ALTER TABLE productos ADD COLUMN IF NOT EXISTS lead_time INTEGER DEFAULT 45")
@@ -794,75 +809,39 @@ def marcar_orden_procesada_texto(order_id_texto):
 
 
 def intentar_marcar_orden_atomic(order_id_texto):
-    """Marca una orden como procesada DE FORMA ATÓMICA. 
-    
-    Devuelve:
-    - True si fue marcada AHORA (esta llamada es la "primera")
-    - False si ya estaba marcada (otra llamada concurrente la procesó primero)
-    
-    Resuelve race conditions cuando llegan 2 webhooks simultáneos para la misma orden
-    (típico en MELI con multi-publicación).
-    
-    Estrategia: usa transacción con SELECT FOR UPDATE para bloquear la fila a nivel de BD.
-    Solo el primer webhook que llegue puede insertar; los demás esperan y luego ven la fila.
+    """Marca una orden como procesada DE FORMA ATÓMICA usando INSERT ON CONFLICT.
+
+    Devuelve True  → marcada ahora (primera vez, proceder normalmente).
+    Devuelve False → ya existía (DUPLICADO — no procesar).
+
+    El UNIQUE constraint en order_id_texto hace que PostgreSQL rechace el segundo
+    INSERT antes de que llegue al código Python. Race condition eliminada.
     """
+    import random
     conn = get_conn()
-    cur = conn.cursor()
-    marcada = False
+    cur  = conn.cursor()
     try:
-        # Asegurar columna existe
         cur.execute("ALTER TABLE ordenes_procesadas ADD COLUMN IF NOT EXISTS order_id_texto TEXT")
         conn.commit()
-        
-        # Iniciar transacción explícita
-        cur.execute("BEGIN")
-        
-        # Buscar si ya existe (con LOCK pesimista para evitar race conditions)
         cur.execute("""
-            SELECT 1 FROM ordenes_procesadas 
-            WHERE order_id_texto = %s 
-            LIMIT 1 
-            FOR UPDATE
-        """, (str(order_id_texto),))
-        
-        if cur.fetchone():
-            # Ya existe, otra request la procesó
-            cur.execute("COMMIT")
-            marcada = False
-        else:
-            # No existe, insertarla AHORA (mientras tenemos el lock)
-            import random
-            cur.execute("""
-                INSERT INTO ordenes_procesadas (orden_id, order_id_texto) 
-                VALUES (%s, %s)
-            """, (random.randint(1, 9007199254740991), str(order_id_texto)))
-            cur.execute("COMMIT")
-            marcada = True
+            INSERT INTO ordenes_procesadas (orden_id, order_id_texto)
+            VALUES (%s, %s)
+            ON CONFLICT (order_id_texto) DO NOTHING
+        """, (random.randint(1, 9007199254740991), str(order_id_texto)))
+        insertado = cur.rowcount  # 1 = nuevo, 0 = ya existía
+        conn.commit()
+        return insertado == 1
     except Exception as e:
         print(f"[Marcado atómico] Error: {e}")
         try: conn.rollback()
         except: pass
-        # FALLBACK: usar el método clásico (no atómico pero funcional)
-        try:
-            cur.execute("SELECT 1 FROM ordenes_procesadas WHERE order_id_texto=%s LIMIT 1",
-                       (str(order_id_texto),))
-            if cur.fetchone():
-                marcada = False
-            else:
-                import random
-                cur.execute("""INSERT INTO ordenes_procesadas (orden_id, order_id_texto) 
-                               VALUES (%s, %s)""",
-                           (random.randint(1, 9007199254740991), str(order_id_texto)))
-                conn.commit()
-                marcada = True
-        except Exception as e2:
-            print(f"[Marcado atómico FALLBACK] Error: {e2}")
-            try: conn.rollback()
-            except: pass
-            marcada = False
-    cur.close(); conn.close()
-    return marcada
-    cur.close(); conn.close()
+        return False
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
 
 def orden_ya_procesada(orden_id):
     conn = get_conn()
