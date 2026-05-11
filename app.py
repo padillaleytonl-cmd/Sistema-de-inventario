@@ -9117,7 +9117,7 @@ def admin_reprocesar_ordenes():
         "meli":      ["MELI-", "MELI-CANCEL-"],
         "walmart":   ["WM-", "WM-CANCEL-"],
         "falabella": ["FALABELLA-", "FALABELLA-CANCEL-"],
-        "paris":     ["PARIS-", "PARIS-CANCEL-"],
+        "paris":     ["PARIS-", "PARIS-CANCEL-", "PA-", "PA-CANCEL-"],  # ambos prefijos por migración
         "ripley":    ["RP-", "RP-CANCEL-"],
         "woo":       ["WOO-", "WOO-CANCEL-"],
     }
