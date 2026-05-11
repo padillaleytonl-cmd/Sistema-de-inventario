@@ -13897,5 +13897,418 @@ def admin_paris_force_relogin():
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
+# ════════════════════════════════════════════════════════════════════════════════
+# MÓDULO POS — Entradas, Salidas 1:1 y Ajustes manuales con trazabilidad completa
+# Cada operación registra: documento → líneas → movimiento → stock_bodega
+# Diseñado para alimentar el futuro módulo de Costeo (PEPS / Promedio ponderado)
+# ════════════════════════════════════════════════════════════════════════════════
+
+@app.route("/pos/entrada_lote", methods=["POST"])
+def pos_entrada_lote():
+    """Entrada de múltiples SKUs asociados a un único documento (factura/invoice/guía).
+    Body JSON:
+    {
+        "clave_admin": "...",
+        "documento": { "numero_doc":"F-12345", "tipo_doc":"factura",
+                       "proveedor":"Proveedor SA", "fecha_doc":"2026-05-10",
+                       "moneda":"CLP", "monto_total":500000,
+                       "monto_neto":420168, "iva":79832, "notas":"..." },
+        "items": [
+            { "sku":"SKU001", "cantidad":10, "costo_unitario":15000,
+              "bodega_destino":"CENTRAL", "notas_linea":"" },
+            ...
+        ]
+    }
+    """
+    data = request.json or {}
+    clave_correcta = os.environ.get("LUSYNC_ADMIN_KEY", "")
+    clave_recibida = (data.get("clave_admin") or "").strip()
+    if not clave_correcta:
+        return jsonify({"error": "LUSYNC_ADMIN_KEY no configurada"}), 500
+    if clave_recibida != clave_correcta:
+        registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                        "pos_entrada_DENEGADA", detalle=f"doc={data.get('documento',{}).get('numero_doc')}")
+        return jsonify({"error": "Clave admin incorrecta"}), 403
+
+    doc_data = data.get("documento") or {}
+    items    = data.get("items") or []
+    if not doc_data.get("numero_doc"):
+        return jsonify({"error": "numero_doc es obligatorio"}), 400
+    if not items:
+        return jsonify({"error": "Debe incluir al menos un ítem"}), 400
+
+    usuario  = session.get("usuario", "Luis Padilla")
+    from inventario import (crear_documento_compra, registrar_linea_documento,
+                             ajustar_stock_bodega, get_conn as _get_conn)
+
+    # 1. Crear / recuperar el documento de compra
+    try:
+        doc_id = crear_documento_compra(
+            numero_doc  = doc_data["numero_doc"],
+            tipo_doc    = doc_data.get("tipo_doc","factura"),
+            proveedor   = doc_data.get("proveedor",""),
+            fecha_doc   = doc_data.get("fecha_doc") or None,
+            moneda      = doc_data.get("moneda","CLP"),
+            monto_total = doc_data.get("monto_total") or None,
+            monto_neto  = doc_data.get("monto_neto") or None,
+            iva         = doc_data.get("iva") or None,
+            notas       = doc_data.get("notas",""),
+            usuario     = usuario
+        )
+    except Exception as e:
+        return jsonify({"error": f"Error creando documento: {e}"}), 500
+
+    productos_cache = {p["sku"]: p for p in cargar_productos()}
+    resultados = []
+    errores    = []
+
+    # 2. Procesar cada ítem
+    for item in items:
+        sku      = (item.get("sku") or "").strip()
+        cantidad = int(item.get("cantidad") or 0)
+        costo_u  = float(item.get("costo_unitario") or 0) or None
+        bodega   = (item.get("bodega_destino") or "CENTRAL").strip()
+
+        if not sku or cantidad <= 0:
+            errores.append({"sku": sku, "error": "SKU inválido o cantidad 0"})
+            continue
+
+        p = productos_cache.get(sku)
+        if not p:
+            errores.append({"sku": sku, "error": "Producto no encontrado"})
+            continue
+
+        # 2a. Ajustar stock en la bodega destino
+        try:
+            ajustar_stock_bodega(sku, bodega, cantidad)
+        except Exception as e:
+            errores.append({"sku": sku, "error": f"Error bodega: {e}"}); continue
+
+        # 2b. Actualizar productos.stock (suma total de bodegas propias)
+        p["stock"] += cantidad
+        guardar_producto(p)
+
+        # 2c. Registrar movimiento
+        motivo = f"Entrada POS | Doc: {doc_data['numero_doc']} | Bodega: {bodega}"
+        if costo_u:
+            motivo += f" | Costo u.: ${costo_u:,.0f}"
+        mov_id = registrar_movimiento(
+            "entrada", sku, p["nombre"], cantidad, motivo,
+            usuario=usuario, canal="Manual",
+            documento_ref=doc_data["numero_doc"],
+            origen_registro="pos"
+        )
+
+        # 2d. Linkear movimiento al documento de compra
+        try:
+            _c = _get_conn(); _cur = _c.cursor()
+            _cur.execute("UPDATE movimientos SET documento_compra_id=%s WHERE id=%s", (doc_id, mov_id))
+            _c.commit(); _cur.close(); _c.close()
+        except Exception: pass
+
+        # 2e. Registrar línea en movimientos_documento (trazabilidad de costeo)
+        try:
+            registrar_linea_documento(
+                documento_id   = doc_id,
+                movimiento_id  = mov_id,
+                sku            = sku,
+                nombre         = p["nombre"],
+                cantidad       = cantidad,
+                costo_unitario = costo_u,
+                bodega_destino = bodega,
+                notas_linea    = item.get("notas_linea","")
+            )
+        except Exception as e:
+            print(f"[POS] error linea doc: {e}")
+
+        # 2f. Stock actualizado para sync
+        try:
+            _c = _get_conn(); _cur = _c.cursor()
+            _cur.execute("""SELECT COALESCE(SUM(sb.cantidad),0) FROM stock_bodega sb
+                            JOIN bodegas b ON b.codigo=sb.bodega_codigo
+                            WHERE sb.sku=%s AND b.tipo='propia'""", (sku,))
+            stock_disp = int(_cur.fetchone()[0] or 0)
+            _cur.close(); _c.close()
+        except Exception:
+            stock_disp = p["stock"]
+
+        syncs = sincronizar_stock_marketplaces(sku, stock_disp, contexto="pos_entrada")
+        resultados.append({"sku": sku, "nombre": p["nombre"], "cantidad": cantidad,
+                           "bodega": bodega, "costo_unitario": costo_u,
+                           "stock_disponible": stock_disp, "syncs": syncs})
+
+    registrar_audit(usuario, request.remote_addr, "pos_entrada_lote",
+                    entidad="productos",
+                    detalle=f"doc={doc_data['numero_doc']} items={len(resultados)} errores={len(errores)}")
+
+    return jsonify({
+        "ok": True,
+        "documento_id": doc_id,
+        "numero_doc"  : doc_data["numero_doc"],
+        "procesados"  : resultados,
+        "errores"     : errores
+    })
+
+
+@app.route("/pos/salida_lote", methods=["POST"])
+def pos_salida_lote():
+    """Salida de múltiples SKUs (despacho físico, OC, transferencia, etc.).
+    Body JSON:
+    {
+        "clave_admin": "...",
+        "oc": "OC-2025-001",           -- documento de referencia para la salida
+        "motivo": "Despacho bodega",   -- motivo libre
+        "items": [
+            { "sku":"SKU001", "cantidad":3, "bodega_origen":"CENTRAL" },
+            ...
+        ]
+    }
+    """
+    data = request.json or {}
+    clave_correcta = os.environ.get("LUSYNC_ADMIN_KEY", "")
+    clave_recibida = (data.get("clave_admin") or "").strip()
+    if not clave_correcta:
+        return jsonify({"error": "LUSYNC_ADMIN_KEY no configurada"}), 500
+    if clave_recibida != clave_correcta:
+        registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                        "pos_salida_DENEGADA", detalle=f"oc={data.get('oc')}")
+        return jsonify({"error": "Clave admin incorrecta"}), 403
+
+    items    = data.get("items") or []
+    oc       = (data.get("oc") or "").strip()
+    motivo_g = (data.get("motivo") or "Salida manual POS").strip()
+    usuario  = session.get("usuario", "Luis Padilla")
+
+    if not items:
+        return jsonify({"error": "Debe incluir al menos un ítem"}), 400
+
+    from inventario import ajustar_stock_bodega, get_conn as _get_conn
+
+    productos_cache = {p["sku"]: p for p in cargar_productos()}
+    resultados = []; errores = []
+
+    for item in items:
+        sku      = (item.get("sku") or "").strip()
+        cantidad = int(item.get("cantidad") or 0)
+        bodega   = (item.get("bodega_origen") or "CENTRAL").strip()
+
+        if not sku or cantidad <= 0:
+            errores.append({"sku": sku, "error": "SKU inválido o cantidad 0"}); continue
+        p = productos_cache.get(sku)
+        if not p:
+            errores.append({"sku": sku, "error": "Producto no encontrado"}); continue
+        if p["stock"] < cantidad:
+            errores.append({"sku": sku, "error": f"Stock insuficiente ({p['stock']} disponibles)"}); continue
+
+        try:
+            ajustar_stock_bodega(sku, bodega, -cantidad)
+        except Exception as e:
+            errores.append({"sku": sku, "error": f"Error bodega: {e}"}); continue
+
+        p["stock"] -= cantidad
+        guardar_producto(p)
+
+        canal = _detectar_canal_por_oc(oc) or "Manual"
+        motivo = f"{motivo_g} | OC: {oc}" if oc else motivo_g
+        registrar_movimiento(
+            "salida", sku, p["nombre"], cantidad, motivo,
+            usuario=usuario, canal=canal,
+            numero_orden=oc or None, documento_ref=oc or None,
+            origen_registro="pos"
+        )
+
+        try:
+            _c = _get_conn(); _cur = _c.cursor()
+            _cur.execute("""SELECT COALESCE(SUM(sb.cantidad),0) FROM stock_bodega sb
+                            JOIN bodegas b ON b.codigo=sb.bodega_codigo
+                            WHERE sb.sku=%s AND b.tipo='propia'""", (sku,))
+            stock_disp = int(_cur.fetchone()[0] or 0)
+            _cur.close(); _c.close()
+        except Exception:
+            stock_disp = p["stock"]
+
+        syncs = sincronizar_stock_marketplaces(sku, stock_disp, contexto="pos_salida")
+        resultados.append({"sku": sku, "nombre": p["nombre"], "cantidad": cantidad,
+                           "bodega": bodega, "stock_disponible": stock_disp, "syncs": syncs})
+
+    registrar_audit(usuario, request.remote_addr, "pos_salida_lote",
+                    detalle=f"oc={oc} items={len(resultados)} errores={len(errores)}")
+    return jsonify({"ok": True, "oc": oc, "procesados": resultados, "errores": errores})
+
+
+@app.route("/pos/ajuste", methods=["POST"])
+def pos_ajuste():
+    """Ajuste manual de inventario (merma, daño, conteo físico, robo, vencimiento, otro).
+    Body JSON:
+    {
+        "clave_admin": "...",
+        "sku": "SKU001",
+        "cantidad_ajuste": -5,         -- negativo = baja, positivo = alza
+        "motivo_ajuste": "merma",      -- merma | daño | conteo_fisico | robo | vencimiento | otro
+        "notas": "Producto mojado",
+        "bodega": "CENTRAL"
+    }
+    """
+    data = request.json or {}
+    clave_correcta = os.environ.get("LUSYNC_ADMIN_KEY", "")
+    clave_recibida = (data.get("clave_admin") or "").strip()
+    if not clave_correcta:
+        return jsonify({"error": "LUSYNC_ADMIN_KEY no configurada"}), 500
+    if clave_recibida != clave_correcta:
+        registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
+                        "pos_ajuste_DENEGADO", detalle=f"sku={data.get('sku')}")
+        return jsonify({"error": "Clave admin incorrecta"}), 403
+
+    sku             = (data.get("sku") or "").strip()
+    cantidad_ajuste = int(data.get("cantidad_ajuste") or 0)
+    motivo_ajuste   = (data.get("motivo_ajuste") or "otro").strip()
+    notas           = (data.get("notas") or "").strip()
+    bodega          = (data.get("bodega") or "CENTRAL").strip()
+    usuario         = session.get("usuario", "Luis Padilla")
+
+    MOTIVOS_VALIDOS = {"merma","daño","conteo_fisico","robo","vencimiento","otro"}
+    if not sku:
+        return jsonify({"error": "SKU obligatorio"}), 400
+    if cantidad_ajuste == 0:
+        return jsonify({"error": "cantidad_ajuste no puede ser 0"}), 400
+    if motivo_ajuste not in MOTIVOS_VALIDOS:
+        return jsonify({"error": f"motivo_ajuste debe ser uno de: {', '.join(MOTIVOS_VALIDOS)}"}), 400
+
+    from inventario import (ajustar_stock_bodega, registrar_ajuste_inventario,
+                             get_stock_bodega, get_conn as _get_conn)
+
+    productos_cache = {p["sku"]: p for p in cargar_productos()}
+    p = productos_cache.get(sku)
+    if not p:
+        return jsonify({"error": "Producto no encontrado"}), 404
+
+    cantidad_antes = get_stock_bodega(sku, bodega) or 0
+
+    # Validar que no quede negativo
+    if (cantidad_antes + cantidad_ajuste) < 0:
+        return jsonify({
+            "error": f"Stock insuficiente en bodega {bodega}. Actual: {cantidad_antes}, ajuste: {cantidad_ajuste}"
+        }), 400
+
+    try:
+        ajustar_stock_bodega(sku, bodega, cantidad_ajuste)
+    except Exception as e:
+        return jsonify({"error": f"Error ajustando bodega: {e}"}), 500
+
+    p["stock"] = max(0, p["stock"] + cantidad_ajuste)
+    guardar_producto(p)
+
+    tipo_mov = "entrada" if cantidad_ajuste > 0 else "salida"
+    motivo_completo = f"Ajuste {motivo_ajuste} | Bodega: {bodega} | {notas}" if notas else f"Ajuste {motivo_ajuste} | Bodega: {bodega}"
+    mov_id = registrar_movimiento(
+        tipo_mov, sku, p["nombre"], abs(cantidad_ajuste), motivo_completo,
+        usuario=usuario, canal="Ajuste",
+        documento_ref=f"AJUSTE-{motivo_ajuste.upper()}",
+        origen_registro="pos"
+    )
+
+    try:
+        registrar_ajuste_inventario(
+            sku=sku, nombre=p["nombre"],
+            cantidad_antes=cantidad_antes,
+            cantidad_ajuste=cantidad_ajuste,
+            motivo_ajuste=motivo_ajuste, notas=notas,
+            usuario=usuario, movimiento_id=mov_id
+        )
+    except Exception as e:
+        print(f"[POS ajuste] error registrando ajuste tabla: {e}")
+
+    try:
+        _c = _get_conn(); _cur = _c.cursor()
+        _cur.execute("""SELECT COALESCE(SUM(sb.cantidad),0) FROM stock_bodega sb
+                        JOIN bodegas b ON b.codigo=sb.bodega_codigo
+                        WHERE sb.sku=%s AND b.tipo='propia'""", (sku,))
+        stock_disp = int(_cur.fetchone()[0] or 0)
+        _cur.close(); _c.close()
+    except Exception:
+        stock_disp = p["stock"]
+
+    syncs = sincronizar_stock_marketplaces(sku, stock_disp, contexto="pos_ajuste")
+
+    registrar_audit(usuario, request.remote_addr, f"pos_ajuste_{motivo_ajuste}",
+                    entidad="productos",
+                    detalle=f"sku={sku} antes={cantidad_antes} ajuste={cantidad_ajuste} despues={cantidad_antes+cantidad_ajuste}")
+
+    return jsonify({
+        "ok"              : True,
+        "sku"             : sku,
+        "nombre"          : p["nombre"],
+        "bodega"          : bodega,
+        "cantidad_antes"  : cantidad_antes,
+        "cantidad_ajuste" : cantidad_ajuste,
+        "cantidad_despues": cantidad_antes + cantidad_ajuste,
+        "stock_disponible": stock_disp,
+        "syncs"           : syncs
+    })
+
+
+@app.route("/pos/documentos", methods=["GET"])
+def pos_listar_documentos():
+    """Lista documentos de compra para el historial del POS."""
+    from inventario import listar_documentos_compra
+    limite   = int(request.args.get("limite", 30))
+    offset   = int(request.args.get("offset", 0))
+    tipo_doc = request.args.get("tipo_doc") or None
+    docs = listar_documentos_compra(limite=limite, offset=offset, tipo_doc=tipo_doc)
+    # Serializar fechas
+    for d in docs:
+        for k in ("fecha_doc","fecha_registro"):
+            if d.get(k) and hasattr(d[k], "isoformat"):
+                d[k] = d[k].isoformat()
+        for k in ("monto_total","unidades_totales","lineas"):
+            if d.get(k) is not None:
+                d[k] = float(d[k]) if k == "monto_total" else int(d[k])
+    return jsonify({"ok": True, "documentos": docs})
+
+
+@app.route("/pos/documento/<numero_doc>", methods=["GET"])
+def pos_detalle_documento(numero_doc):
+    """Retorna el detalle completo de un documento (encabezado + líneas)."""
+    from inventario import get_historial_documento
+    doc = get_historial_documento(numero_doc)
+    if not doc:
+        return jsonify({"error": "Documento no encontrado"}), 404
+    # Serializar fechas
+    for k in ("fecha_doc","fecha_registro"):
+        if doc.get(k) and hasattr(doc[k], "isoformat"):
+            doc[k] = doc[k].isoformat()
+    for linea in doc.get("lineas", []):
+        for k in ("costo_unitario","costo_total_linea"):
+            if linea.get(k) is not None:
+                linea[k] = float(linea[k])
+        if linea.get("fecha") and hasattr(linea["fecha"], "isoformat"):
+            linea["fecha"] = linea["fecha"].isoformat()
+    return jsonify({"ok": True, "documento": doc})
+
+
+@app.route("/pos/ajustes_historial", methods=["GET"])
+def pos_ajustes_historial():
+    """Historial de ajustes de inventario para auditoría."""
+    from inventario import get_conn as _get_conn
+    limite = int(request.args.get("limite", 50))
+    try:
+        _c = _get_conn(); _cur = _c.cursor()
+        _cur.execute("""
+            SELECT id, sku, nombre, cantidad_antes, cantidad_ajuste, cantidad_despues,
+                   motivo_ajuste, notas, usuario, fecha
+            FROM ajustes_inventario
+            ORDER BY fecha DESC LIMIT %s
+        """, (limite,))
+        cols = [d[0] for d in _cur.description]
+        rows = [dict(zip(cols, r)) for r in _cur.fetchall()]
+        _cur.close(); _c.close()
+        for r in rows:
+            if r.get("fecha") and hasattr(r["fecha"], "isoformat"):
+                r["fecha"] = r["fecha"].isoformat()
+        return jsonify({"ok": True, "ajustes": rows})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

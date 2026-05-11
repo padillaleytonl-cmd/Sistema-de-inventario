@@ -70,9 +70,230 @@ def init_db():
     cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS stock_antes INTEGER")
     cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS stock_despues INTEGER")
 
+    # ── MÓDULO POS / COSTEO ── tablas de trazabilidad completa ─────────────────
+
+    # documentos_compra: cada factura/invoice/guía de entrada queda aquí
+    # Es el "padre" de todos los movimientos de entrada asociados a ese documento.
+    # Futuro módulo de costeo: costo_total / costo_unitario_promedio viven aquí.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS documentos_compra (
+            id              SERIAL PRIMARY KEY,
+            numero_doc      TEXT NOT NULL,          -- "F-12345" / "INV-87" / "GD-22"
+            tipo_doc        TEXT NOT NULL DEFAULT 'factura',  -- factura | invoice | guia | oc | nota_credito | otro
+            proveedor       TEXT,
+            fecha_doc       DATE,                   -- fecha del documento (no de registro)
+            fecha_registro  TIMESTAMP DEFAULT NOW(),
+            moneda          TEXT DEFAULT 'CLP',
+            monto_total     NUMERIC(14,2),           -- monto bruto del documento
+            monto_neto      NUMERIC(14,2),           -- sin IVA
+            iva             NUMERIC(14,2),
+            notas           TEXT,
+            usuario         TEXT DEFAULT 'Sistema',
+            archivo_ref     TEXT,                   -- nombre del PDF/imagen si se sube en el futuro
+            UNIQUE(numero_doc, tipo_doc)
+        )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_doc_compra_numero ON documentos_compra(numero_doc)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_doc_compra_fecha ON documentos_compra(fecha_doc)")
+
+    # movimientos_documento: líneas del documento (N SKUs por documento)
+    # Cada línea = 1 SKU con su cantidad y costo unitario al momento de la compra.
+    # Esto es lo que alimentará el costeo PEPS/Promedio ponderado en el futuro.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS movimientos_documento (
+            id                  SERIAL PRIMARY KEY,
+            documento_id        INTEGER REFERENCES documentos_compra(id) ON DELETE CASCADE,
+            movimiento_id       INTEGER REFERENCES movimientos(id) ON DELETE SET NULL,
+            sku                 TEXT NOT NULL,
+            nombre              TEXT,
+            cantidad            INTEGER NOT NULL,
+            costo_unitario      NUMERIC(14,4),       -- costo por unidad en la moneda del doc
+            costo_total_linea   NUMERIC(14,2),       -- cantidad * costo_unitario
+            bodega_destino      TEXT DEFAULT 'CENTRAL',
+            lote                TEXT,                -- número de lote si aplica (futuro)
+            fecha_vencimiento   DATE,                -- para productos con vencimiento (futuro)
+            notas_linea         TEXT
+        )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_movdoc_sku ON movimientos_documento(sku)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_movdoc_docid ON movimientos_documento(documento_id)")
+
+    # pos_sesiones: cada vez que alguien abre el POS queda registrada la sesión
+    # para auditoría de quién registró qué en qué turno
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS pos_sesiones (
+            id          SERIAL PRIMARY KEY,
+            usuario     TEXT,
+            ip          TEXT,
+            inicio      TIMESTAMP DEFAULT NOW(),
+            fin         TIMESTAMP,
+            movimientos INTEGER DEFAULT 0,
+            tipo        TEXT DEFAULT 'entrada'      -- entrada | salida | ajuste
+        )
+    """)
+
+    # ajustes_inventario: tabla dedicada para ajustes manuales (no entrada ni salida)
+    # Diferencia con movimientos: aquí queda el "por qué" del ajuste (merma, daño, conteo, etc.)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS ajustes_inventario (
+            id              SERIAL PRIMARY KEY,
+            sku             TEXT NOT NULL,
+            nombre          TEXT,
+            cantidad_antes  INTEGER,
+            cantidad_ajuste INTEGER NOT NULL,        -- puede ser negativo
+            cantidad_despues INTEGER,
+            motivo_ajuste   TEXT NOT NULL,           -- 'merma' | 'daño' | 'conteo_fisico' | 'robo' | 'vencimiento' | 'otro'
+            notas           TEXT,
+            usuario         TEXT,
+            fecha           TIMESTAMP DEFAULT NOW(),
+            movimiento_id   INTEGER REFERENCES movimientos(id) ON DELETE SET NULL,
+            clave_admin_ok  BOOLEAN DEFAULT TRUE
+        )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ajustes_sku ON ajustes_inventario(sku)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ajustes_fecha ON ajustes_inventario(fecha)")
+
+    # Columna extra en movimientos para linkear con documento_compra
+    cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS documento_compra_id INTEGER REFERENCES documentos_compra(id) ON DELETE SET NULL")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_mov_doc_compra ON movimientos(documento_compra_id)")
+
     conn.commit()
     cur.close()
     conn.close()
+
+
+# ── FUNCIONES DE TRAZABILIDAD POS ──────────────────────────────────────────────
+
+def crear_documento_compra(numero_doc, tipo_doc, proveedor, fecha_doc, moneda,
+                            monto_total, monto_neto, iva, notas, usuario):
+    """Registra el encabezado del documento (factura/invoice/guía).
+    Retorna el id del documento creado, o el id existente si ya existe (idempotente).
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            INSERT INTO documentos_compra
+                (numero_doc, tipo_doc, proveedor, fecha_doc, moneda,
+                 monto_total, monto_neto, iva, notas, usuario)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (numero_doc, tipo_doc) DO UPDATE
+                SET proveedor=EXCLUDED.proveedor,
+                    monto_total=COALESCE(EXCLUDED.monto_total, documentos_compra.monto_total),
+                    notas=COALESCE(EXCLUDED.notas, documentos_compra.notas)
+            RETURNING id
+        """, (numero_doc, tipo_doc, proveedor or None, fecha_doc or None, moneda or 'CLP',
+              monto_total or None, monto_neto or None, iva or None, notas or None, usuario))
+        doc_id = cur.fetchone()[0]
+        conn.commit()
+        return doc_id
+    except Exception as e:
+        conn.rollback()
+        print(f"[POS] crear_documento_compra error: {e}")
+        raise
+    finally:
+        cur.close(); conn.close()
+
+def registrar_linea_documento(documento_id, movimiento_id, sku, nombre,
+                               cantidad, costo_unitario, bodega_destino, notas_linea):
+    """Registra una línea (ítem) dentro de un documento de compra."""
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        costo_total = (costo_unitario * cantidad) if costo_unitario else None
+        cur.execute("""
+            INSERT INTO movimientos_documento
+                (documento_id, movimiento_id, sku, nombre, cantidad,
+                 costo_unitario, costo_total_linea, bodega_destino, notas_linea)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (documento_id, movimiento_id, sku, nombre, cantidad,
+              costo_unitario or None, costo_total, bodega_destino or 'CENTRAL', notas_linea or None))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"[POS] registrar_linea_documento error: {e}")
+        raise
+    finally:
+        cur.close(); conn.close()
+
+def registrar_ajuste_inventario(sku, nombre, cantidad_antes, cantidad_ajuste,
+                                 motivo_ajuste, notas, usuario, movimiento_id=None):
+    """Registra un ajuste manual de inventario (merma, daño, conteo físico, etc.)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cantidad_despues = cantidad_antes + cantidad_ajuste
+        cur.execute("""
+            INSERT INTO ajustes_inventario
+                (sku, nombre, cantidad_antes, cantidad_ajuste, cantidad_despues,
+                 motivo_ajuste, notas, usuario, movimiento_id)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            RETURNING id
+        """, (sku, nombre, cantidad_antes, cantidad_ajuste, cantidad_despues,
+              motivo_ajuste, notas or None, usuario, movimiento_id))
+        ajuste_id = cur.fetchone()[0]
+        conn.commit()
+        return ajuste_id
+    except Exception as e:
+        conn.rollback()
+        print(f"[POS] registrar_ajuste error: {e}")
+        raise
+    finally:
+        cur.close(); conn.close()
+
+def get_historial_documento(numero_doc):
+    """Retorna el documento y todas sus líneas para trazabilidad."""
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM documentos_compra WHERE numero_doc=%s ORDER BY id DESC LIMIT 1", (numero_doc,))
+        doc_row = cur.fetchone()
+        if not doc_row:
+            return None
+        cols_doc = [d[0] for d in cur.description]
+        doc = dict(zip(cols_doc, doc_row))
+        cur.execute("""
+            SELECT md.*, m.fecha, m.motivo
+            FROM movimientos_documento md
+            LEFT JOIN movimientos m ON m.id = md.movimiento_id
+            WHERE md.documento_id = %s
+            ORDER BY md.id
+        """, (doc['id'],))
+        cols_lin = [d[0] for d in cur.description]
+        doc['lineas'] = [dict(zip(cols_lin, r)) for r in cur.fetchall()]
+        return doc
+    except Exception as e:
+        print(f"[POS] get_historial_documento error: {e}")
+        return None
+    finally:
+        cur.close(); conn.close()
+
+def listar_documentos_compra(limite=50, offset=0, tipo_doc=None):
+    """Lista los últimos documentos con resumen de líneas."""
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        filtro = "WHERE dc.tipo_doc=%s" if tipo_doc else ""
+        params = [tipo_doc] if tipo_doc else []
+        params += [limite, offset]
+        cur.execute(f"""
+            SELECT dc.id, dc.numero_doc, dc.tipo_doc, dc.proveedor, dc.fecha_doc,
+                   dc.fecha_registro, dc.moneda, dc.monto_total, dc.usuario,
+                   COUNT(md.id) AS lineas, COALESCE(SUM(md.cantidad),0) AS unidades_totales
+            FROM documentos_compra dc
+            LEFT JOIN movimientos_documento md ON md.documento_id = dc.id
+            {filtro}
+            GROUP BY dc.id
+            ORDER BY dc.fecha_registro DESC
+            LIMIT %s OFFSET %s
+        """, params)
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
+    except Exception as e:
+        print(f"[POS] listar_documentos error: {e}")
+        return []
+    finally:
+        cur.close(); conn.close()
 
 def get_configuracion():
     conn = get_conn()
