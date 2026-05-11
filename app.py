@@ -3517,12 +3517,18 @@ def admin_mapear_sku():
     Ejemplo: /admin/mapear_sku?sku_lusync=SDCMR001&canal=paris&sku_canal=SDCR2021-1&token=XXX
     """
     bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
-    token_recibido = request.args.get("token") or (request.json or {}).get("token", "")
+    _json_data = (request.get_json(silent=True) or {}) if request.is_json else {}
+    token_recibido = request.args.get("token") or _json_data.get("token", "")
     autorizado = session.get("logged") or (token_recibido == bypass_token)
     if not autorizado:
         return jsonify({"error": "no autorizado"}), 401
 
-    data = request.json or {}
+    data = {}
+    try:
+        if request.is_json:
+            data = request.get_json(silent=True) or {}
+    except Exception:
+        data = {}
     sku_lusync = (request.args.get("sku_lusync") or data.get("sku_lusync") or "").strip()
     canal      = (request.args.get("canal")      or data.get("canal")      or "").strip().lower()
     sku_canal  = (request.args.get("sku_canal")  or data.get("sku_canal")  or "").strip()
