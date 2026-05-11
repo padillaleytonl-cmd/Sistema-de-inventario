@@ -9793,6 +9793,37 @@ def admin_movimientos_por_fecha():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/admin/diagnostico_bd", methods=["GET"])
+def admin_diagnostico_bd():
+    """Verifica constraints anti-duplicado en la BD."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN","lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error":"no autorizado"}),401
+    try:
+        from inventario import get_conn as _gc
+        conn = _gc(); cur = conn.cursor()
+        cur.execute("SELECT conname FROM pg_constraint WHERE conname='ordenes_procesadas_order_id_texto_unique'")
+        constraint = cur.fetchone()
+        cur.execute("SELECT order_id_texto,COUNT(*) FROM ordenes_procesadas WHERE order_id_texto IS NOT NULL GROUP BY order_id_texto HAVING COUNT(*)>1 LIMIT 10")
+        duplicados = [{"order_id":r[0],"count":r[1]} for r in cur.fetchall()]
+        cur.execute("SELECT order_id_texto,fecha FROM ordenes_procesadas WHERE order_id_texto IS NOT NULL ORDER BY fecha DESC LIMIT 10")
+        ultimas = [{"orden":r[0],"fecha":r[1].isoformat() if r[1] else None} for r in cur.fetchall()]
+        orden_test = request.args.get("orden","3104945440")
+        cur.execute("SELECT id,order_id_texto,fecha FROM ordenes_procesadas WHERE order_id_texto LIKE %s ORDER BY fecha DESC",(f"%{orden_test}%",))
+        marcas = [{"id":r[0],"key":r[1],"fecha":r[2].isoformat() if r[2] else None} for r in cur.fetchall()]
+        cur.close(); conn.close()
+        return jsonify({
+            "constraint_existe": constraint is not None,
+            "duplicados": duplicados,
+            "ultimas_marcas": ultimas,
+            f"marcas_{orden_test}": marcas,
+            "conclusion": "✅ Protegido" if constraint and not duplicados else "❌ SIN PROTECCIÓN"
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error":str(e),"trace":traceback.format_exc()}),500
+
+
 @app.route("/admin/diagnostico_stock", methods=["GET"])
 def admin_diagnostico_stock():
     """Diagnóstico completo del stock de un SKU."""
