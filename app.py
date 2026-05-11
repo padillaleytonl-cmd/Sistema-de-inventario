@@ -694,9 +694,9 @@ def _sync_paris_automatico():
         errores = []
 
         # Traer sin filtro de estado (Paris no filtra bien por estado en la API)
-        # dias=15 para cubrir órdenes con delay de procesamiento o fines de semana
+        # dias=7 — ventana suficiente; el UNIQUE constraint evita duplicados
         try:
-            ordenes = obtener_ordenes_paris_todas(dias=15)
+            ordenes = obtener_ordenes_paris_todas(dias=7, max_paginas=10)
         except Exception as e:
             print(f"[Scheduler Paris] Error obteniendo órdenes: {e}")
             return
@@ -1208,22 +1208,30 @@ def _sync_woo_automatico():
 
 # ── Registrar todos los schedulers (escalonados) ──
 # Walmart cada 5 min (existente)
-scheduler.add_job(_sync_walmart_automatico, "interval", minutes=5, id="walmart_sync")
-# MELI cada 5 min (más vendido = más reactivo)
+# max_instances=1 + coalesce=True en todos: evita ejecuciones simultáneas
+# misfire_grace_time=60: si el scheduler se retrasa, no acumula ejecuciones perdidas
+scheduler.add_job(_sync_walmart_automatico, "interval", minutes=5, id="walmart_sync",
+                  max_instances=1, coalesce=True, misfire_grace_time=60)
+# MELI cada 5 min
 scheduler.add_job(_sync_meli_automatico, "interval", minutes=5, id="meli_sync",
-                  next_run_time=(datetime.now() + timedelta(seconds=120)))
-# Falabella cada 10 min (2do en volumen)
+                  next_run_time=(datetime.now() + timedelta(seconds=120)),
+                  max_instances=1, coalesce=True, misfire_grace_time=60)
+# Falabella cada 10 min
 scheduler.add_job(_sync_falabella_automatico, "interval", minutes=10, id="falabella_sync",
-                  next_run_time=(datetime.now() + timedelta(seconds=180)))
+                  next_run_time=(datetime.now() + timedelta(seconds=180)),
+                  max_instances=1, coalesce=True, misfire_grace_time=60)
 # París cada 10 min
 scheduler.add_job(_sync_paris_automatico, "interval", minutes=10, id="paris_sync",
-                  next_run_time=(datetime.now() + timedelta(seconds=360)))
+                  next_run_time=(datetime.now() + timedelta(seconds=360)),
+                  max_instances=1, coalesce=True, misfire_grace_time=120)
 # Ripley cada 10 min
 scheduler.add_job(_sync_ripley_automatico, "interval", minutes=10, id="ripley_sync",
-                  next_run_time=(datetime.now() + timedelta(seconds=480)))
-# Woo cada 10 min (último por menor volumen)
+                  next_run_time=(datetime.now() + timedelta(seconds=480)),
+                  max_instances=1, coalesce=True, misfire_grace_time=60)
+# Woo cada 10 min
 scheduler.add_job(_sync_woo_automatico, "interval", minutes=10, id="woo_sync",
-                  next_run_time=(datetime.now() + timedelta(seconds=600)))
+                  next_run_time=(datetime.now() + timedelta(seconds=600)),
+                  max_instances=1, coalesce=True, misfire_grace_time=60)
 
 
 # ════════════════════════════════════════════════════════════════════════════

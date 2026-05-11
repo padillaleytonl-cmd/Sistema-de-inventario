@@ -1,5 +1,6 @@
 import os
 import psycopg2
+from psycopg2 import pool as psycopg2_pool
 from datetime import datetime, timezone, timedelta
 import pytz
 
@@ -9,15 +10,41 @@ TZ_CHILE = pytz.timezone('America/Santiago')
 def now_chile():
     return datetime.now(TZ_CHILE)
 
+# Pool de conexiones — máximo 5 conexiones simultáneas (Render free tier tiene límite bajo)
+_pool = None
+
+def _get_pool():
+    global _pool
+    if _pool is None or _pool.closed:
+        _pool = psycopg2_pool.ThreadedConnectionPool(
+            minconn=1,
+            maxconn=5,
+            dsn=os.environ.get("DATABASE_URL")
+        )
+    return _pool
+
 def get_conn():
-    return psycopg2.connect(os.environ.get("DATABASE_URL"))
+    """Obtiene una conexión del pool. Usar con try/finally para devolverla."""
+    try:
+        return _get_pool().getconn()
+    except Exception:
+        # Fallback a conexión directa si el pool falla
+        return psycopg2.connect(os.environ.get("DATABASE_URL"))
+
+def release_conn(conn):
+    """Devuelve la conexión al pool."""
+    try:
+        if conn and not conn.closed:
+            _get_pool().putconn(conn)
+    except Exception:
+        try: conn.close()
+        except: pass
 
 def init_db():
     conn = get_conn()
-    cur = conn.cursor()
+    cur  = conn.cursor()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS productos (
-            sku TEXT PRIMARY KEY,
             nombre TEXT,
             stock INTEGER,
             precio_normal NUMERIC(12,2) DEFAULT 0,
@@ -53,19 +80,32 @@ def init_db():
 
     # UNIQUE constraint en order_id_texto — previene FÍSICAMENTE duplicados en BD
     cur.execute("ALTER TABLE ordenes_procesadas ADD COLUMN IF NOT EXISTS order_id_texto TEXT")
-    cur.execute("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM pg_constraint
-                WHERE conname = 'ordenes_procesadas_order_id_texto_unique'
-            ) THEN
-                ALTER TABLE ordenes_procesadas
-                ADD CONSTRAINT ordenes_procesadas_order_id_texto_unique
-                UNIQUE (order_id_texto);
-            END IF;
-        END $$;
-    """)
+    # Intentar crear el constraint de forma segura — si hay duplicados existentes lo omite
+    try:
+        cur.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'ordenes_procesadas_order_id_texto_unique'
+                ) THEN
+                    -- Limpiar duplicados antes de crear el constraint
+                    DELETE FROM ordenes_procesadas a
+                    USING ordenes_procesadas b
+                    WHERE a.id > b.id
+                    AND a.order_id_texto = b.order_id_texto
+                    AND a.order_id_texto IS NOT NULL;
+                    -- Crear constraint solo si no existe
+                    ALTER TABLE ordenes_procesadas
+                    ADD CONSTRAINT ordenes_procesadas_order_id_texto_unique
+                    UNIQUE (order_id_texto);
+                END IF;
+            END $$;
+        """)
+        conn.commit()
+    except Exception as _e_unique:
+        conn.rollback()
+        print(f"[init_db] UNIQUE constraint omitido (no crítico): {_e_unique}")
     cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_importacion TIMESTAMP")
     cur.execute("CREATE TABLE IF NOT EXISTS configuracion (clave TEXT PRIMARY KEY, valor TEXT)")
     cur.execute("ALTER TABLE productos ADD COLUMN IF NOT EXISTS lead_time INTEGER DEFAULT 45")
@@ -174,7 +214,7 @@ def init_db():
 
     conn.commit()
     cur.close()
-    conn.close()
+    release_conn(conn)
 
 
 # ── FUNCIONES DE TRAZABILIDAD POS ──────────────────────────────────────────────

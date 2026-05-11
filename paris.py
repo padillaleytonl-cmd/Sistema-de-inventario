@@ -245,20 +245,27 @@ def obtener_orden_paris(sub_order_number):
         return None
 
 
-def obtener_ordenes_paris_todas(dias=30, estado=None):
-    """Obtiene TODAS las órdenes con paginación automática."""
+def obtener_ordenes_paris_todas(dias=30, estado=None, max_paginas=20):
+    """Obtiene TODAS las órdenes con paginación automática.
+    max_paginas: límite de seguridad para evitar loops infinitos.
+    """
     todas = []
     offset = 0
     limite = 50
+    pagina = 0
 
-    while True:
+    while pagina < max_paginas:
         batch = obtener_ordenes_paris(dias=dias, estado=estado, limite=limite, offset=offset)
         if not batch:
             break
         todas.extend(batch)
+        pagina += 1
         if len(batch) < limite:
             break
         offset += limite
+
+    if pagina >= max_paginas:
+        print(f"[Paris] Límite de {max_paginas} páginas alcanzado — {len(todas)} órdenes obtenidas")
 
     return todas
 
