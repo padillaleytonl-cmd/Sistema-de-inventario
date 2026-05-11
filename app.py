@@ -786,10 +786,23 @@ def _sync_paris_automatico():
                 except Exception:
                     fecha_compra_pa = None
 
+                # Consolidar ítems por seller_sku — París puede repetir el mismo SKU
+                # en múltiples shipments de la misma orden (bug conocido de su API)
+                _items_paris = {}
                 for ship in (o.get("shipments") or []):
                     for item in (ship.get("items") or []):
                         seller_sku = (item.get("seller_sku") or item.get("sellerSku") or "").strip()
                         cantidad = int(item.get("quantity") or 1)
+                        if not seller_sku:
+                            continue
+                        if seller_sku in _items_paris:
+                            _items_paris[seller_sku] += cantidad
+                        else:
+                            _items_paris[seller_sku] = cantidad
+
+                for seller_sku, cantidad in _items_paris.items():
+                        seller_sku = seller_sku
+                        cantidad = cantidad
                         if not seller_sku:
                             continue
 
@@ -4156,20 +4169,39 @@ def paris_forzar_orden(sub_order_number):
         pa_key     = f"PARIS-{sub_order_number}"
         cancel_key = f"PARIS-CANCEL-{sub_order_number}"
 
-        # 2. Borrar marca previa para reprocesar
+        # 2. Verificar si ya fue procesada
         ya_estaba = orden_ya_procesada_texto(pa_key)
+
+        # Si ya está marcada, NO reprocesar a menos que se pase ?forzar=si explícitamente
+        # Esto evita que un doble clic o llamada accidental duplique el stock
         if ya_estaba:
+            forzar = request.args.get("forzar", "").lower()
+            if forzar != "si":
+                return jsonify({
+                    "ok": False,
+                    "ya_procesada": True,
+                    "orden": sub_order_number,
+                    "mensaje": (
+                        f"⚠️ La orden {sub_order_number} ya fue procesada. "
+                        f"El stock NO fue modificado. "
+                        f"Si necesitas reprocesarla igual, agrega ?forzar=si a la URL."
+                    )
+                })
+            # Con ?forzar=si: borrar marca y reprocesar
             _c = _gc(); _cur = _c.cursor()
             _cur.execute("DELETE FROM ordenes_procesadas WHERE order_id_texto IN (%s, %s)",
                          (pa_key, cancel_key))
             _c.commit(); _cur.close(); _c.close()
+            print(f"[forzar_orden] Marca borrada manualmente con ?forzar=si: {pa_key}")
 
         # 3. Estado de la orden
         estado = (orden.get("status") or orden.get("itemStatus") or orden.get("orderStatus") or "").lower()
         es_cd  = detectar_fulfillment_paris(orden)
         tipo_str = "Fulfillment" if es_cd else "Seller"
 
-        # 4. Procesar items
+        # 4. Procesar items — deduplicar SKUs antes de descontar
+        # París puede devolver el mismo SKU en múltiples shipments de la misma orden.
+        # Consolidamos por seller_sku sumando cantidades para no descontar dos veces.
         items_procesados = []
         items_fallidos   = []
         shipments = orden.get("shipments") or []
@@ -4184,10 +4216,25 @@ def paris_forzar_orden(sub_order_number):
                 "campos_orden": list(orden.keys())
             })
 
+        # Consolidar ítems por seller_sku (suma cantidades de todos los shipments)
+        items_consolidados = {}
         for ship in shipments:
             for item in (ship.get("items") or []):
                 seller_sku = (item.get("seller_sku") or item.get("sellerSku") or "").strip()
                 cantidad   = int(item.get("quantity") or 1)
+                if not seller_sku:
+                    items_fallidos.append({"error": "item sin seller_sku", "item": item})
+                    continue
+                if seller_sku in items_consolidados:
+                    items_consolidados[seller_sku]["cantidad"] += cantidad
+                else:
+                    items_consolidados[seller_sku] = {"seller_sku": seller_sku, "cantidad": cantidad}
+
+        print(f"[forzar_orden] {sub_order_number}: {len(items_consolidados)} SKUs únicos tras consolidar shipments")
+
+        for seller_sku, item_data in items_consolidados.items():
+                seller_sku = item_data["seller_sku"]
+                cantidad   = item_data["cantidad"]
                 if not seller_sku:
                     items_fallidos.append({"error": "item sin seller_sku", "item": item})
                     continue
