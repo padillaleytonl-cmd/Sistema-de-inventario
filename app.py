@@ -14310,5 +14310,444 @@ def pos_ajustes_historial():
         return jsonify({"error": str(e)}), 500
 
 
+# ── ENDPOINT CONSOLIDADO PARA GRÁFICOS DEL MODAL DE VENTAS ──────────────────
+@app.route("/ventas/graficos", methods=["GET"])
+def ventas_graficos():
+    """Devuelve todos los datos necesarios para los gráficos del modal:
+    - ventas_por_dia: [{fecha, entradas, salidas, unidades}]
+    - ventas_por_canal: [{canal, unidades, monto_est}]
+    - top_productos: [{sku, nombre, unidades, monto_est}]
+    - resumen: {total_ordenes, total_unidades, monto_estimado, canal_top, producto_top}
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    desde = request.args.get("desde") or request.args.get("fecha_desde") or ""
+    hasta = request.args.get("hasta") or request.args.get("fecha_hasta") or ""
+
+    try:
+        from inventario import get_conn as _gc
+        conn = _gc(); cur = conn.cursor()
+
+        where = "m.tipo = 'salida' AND m.canal NOT IN ('Manual','Ajuste','Sistema')"
+        params = []
+        if desde:
+            where += " AND DATE(m.fecha) >= %s"; params.append(desde)
+        if hasta:
+            where += " AND DATE(m.fecha) <= %s"; params.append(hasta)
+
+        # 1. Ventas por día
+        cur.execute(f"""
+            SELECT DATE(m.fecha) AS dia,
+                   COUNT(DISTINCT COALESCE(m.orden_id::text, m.numero_orden, m.id::text)) AS ordenes,
+                   SUM(m.cantidad) AS unidades,
+                   COALESCE(SUM(m.cantidad * COALESCE(p.precio_oferta, p.precio_normal, 0)), 0) AS monto
+            FROM movimientos m
+            LEFT JOIN productos p ON p.sku = m.sku
+            WHERE {where}
+            GROUP BY DATE(m.fecha)
+            ORDER BY DATE(m.fecha)
+        """, params)
+        ventas_por_dia = [
+            {"fecha": str(r[0]), "ordenes": int(r[1] or 0),
+             "unidades": int(r[2] or 0), "monto": float(r[3] or 0)}
+            for r in cur.fetchall()
+        ]
+
+        # 2. Ventas por canal
+        cur.execute(f"""
+            SELECT m.canal,
+                   COUNT(DISTINCT COALESCE(m.orden_id::text, m.numero_orden, m.id::text)) AS ordenes,
+                   SUM(m.cantidad) AS unidades,
+                   COALESCE(SUM(m.cantidad * COALESCE(p.precio_oferta, p.precio_normal, 0)), 0) AS monto
+            FROM movimientos m
+            LEFT JOIN productos p ON p.sku = m.sku
+            WHERE {where}
+            GROUP BY m.canal
+            ORDER BY unidades DESC
+        """, params)
+        ventas_por_canal = [
+            {"canal": r[0] or "Otro", "ordenes": int(r[1] or 0),
+             "unidades": int(r[2] or 0), "monto": float(r[3] or 0)}
+            for r in cur.fetchall()
+        ]
+
+        # 3. Top 10 productos
+        cur.execute(f"""
+            SELECT m.sku, m.nombre,
+                   SUM(m.cantidad) AS unidades,
+                   COALESCE(SUM(m.cantidad * COALESCE(p.precio_oferta, p.precio_normal, 0)), 0) AS monto
+            FROM movimientos m
+            LEFT JOIN productos p ON p.sku = m.sku
+            WHERE {where}
+            GROUP BY m.sku, m.nombre
+            ORDER BY unidades DESC
+            LIMIT 10
+        """, params)
+        top_productos = [
+            {"sku": r[0], "nombre": (r[1] or r[0] or "")[:45],
+             "unidades": int(r[2] or 0), "monto": float(r[3] or 0)}
+            for r in cur.fetchall()
+        ]
+
+        # 4. Resumen global
+        total_u = sum(r["unidades"] for r in ventas_por_dia)
+        total_o = sum(r["ordenes"]  for r in ventas_por_dia)
+        monto_t = sum(r["monto"]    for r in ventas_por_dia)
+        canal_t = ventas_por_canal[0]["canal"] if ventas_por_canal else "—"
+        prod_t  = top_productos[0]["nombre"]   if top_productos    else "—"
+
+        cur.close(); conn.close()
+
+        return jsonify({
+            "ok": True,
+            "ventas_por_dia"  : ventas_por_dia,
+            "ventas_por_canal": ventas_por_canal,
+            "top_productos"   : top_productos,
+            "resumen": {
+                "total_ordenes" : total_o,
+                "total_unidades": total_u,
+                "monto_estimado": monto_t,
+                "canal_top"     : canal_t,
+                "producto_top"  : prod_t,
+            }
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# MÓDULO REPORTE DE VENTAS — consolida órdenes de todos los marketplaces
+# Devuelve filas listas para exportar a CSV/Excel
+# ════════════════════════════════════════════════════════════════════════════════
+
+@app.route("/ventas/reporte", methods=["GET"])
+def ventas_reporte():
+    """Construye reporte de ventas consolidado por rango de fechas."""
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        fecha_desde = request.args.get("fecha_desde") or ""
+        fecha_hasta = request.args.get("fecha_hasta") or ""
+        canales_str = request.args.get("canales") or ""
+        filas = _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str)
+        return jsonify({"ok": True, "filas": filas, "total": len(filas)})
+    except Exception as e:
+        import traceback
+        print(f"[ventas_reporte] ERROR: {e}\n{traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 500
+
+
+def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
+    """Función interna: construye las filas del reporte consultando APIs de cada canal.
+    Retorna lista de dicts listos para JSON o CSV.
+    """
+    canales_req = [c.strip().lower() for c in (canales_str or "").split(",") if c.strip()]
+    filas = []
+
+    # ── MERCADOLIBRE ──────────────────────────────────────────────────────────
+    if not canales_req or "mercadolibre" in canales_req:
+        try:
+            from mercadolibre import obtener_todas_ordenes_meli_rango, meli_headers, MELI_API_URL
+            import requests as _req
+            # Convertir fechas a formato MELI
+            df = f"{fecha_desde}T00:00:00.000-04:00" if fecha_desde else None
+            dt = f"{fecha_hasta}T23:59:59.000-04:00" if fecha_hasta else None
+            ordenes_meli = obtener_todas_ordenes_meli_rango(df, dt) if df else []
+            hdrs = meli_headers()
+
+            for o in ordenes_meli:
+                if o.get("status") not in ("paid", "confirmed", "payment_required"):
+                    continue
+                order_id   = str(o.get("id", ""))
+                buyer      = o.get("buyer") or {}
+                payments   = o.get("payments") or [{}]
+                pago_meth  = (payments[0].get("payment_method_id") or "") if payments else ""
+                shipping   = o.get("shipping") or {}
+                ship_id    = shipping.get("id")
+                tracking_n = ""
+                direccion = comuna = metodo_envio = ""
+
+                # Consultar detalle de envío
+                if ship_id:
+                    try:
+                        sr = _req.get(f"{MELI_API_URL}/shipments/{ship_id}", headers=hdrs, timeout=10)
+                        if sr.status_code == 200:
+                            sd = sr.json()
+                            tracking_n   = sd.get("tracking_number") or ""
+                            metodo_envio = (sd.get("logistic_type") or sd.get("shipping_mode") or "")
+                            dest = sd.get("destination") or {}
+                            addr = dest.get("shipping_address") or {}
+                            direccion = f"{addr.get('street_name','')} {addr.get('street_number','')}".strip()
+                            comuna    = addr.get("city", {}).get("name","") if isinstance(addr.get("city"),dict) else addr.get("city","")
+                    except Exception:
+                        pass
+
+                # Consultar datos de comprador (necesita permiso "buyer info")
+                nombre = buyer.get("first_name") or buyer.get("nickname") or ""
+                apellido = buyer.get("last_name") or ""
+                email  = buyer.get("email") or ""
+                telefono = buyer.get("phone", {}).get("number","") if isinstance(buyer.get("phone"),dict) else ""
+                rut    = ""  # MELI no expone RUT en API estándar
+
+                for item in (o.get("order_items") or []):
+                    it     = item.get("item") or {}
+                    sku_s  = (it.get("seller_custom_field") or it.get("seller_sku") or "").strip()
+                    prod   = it.get("title") or ""
+                    qty    = int(item.get("quantity") or 1)
+                    precio = float(item.get("unit_price") or 0)
+                    envio  = float((payments[0].get("shipping_cost") or 0)) if payments else 0
+
+                    for _ in range(qty):
+                        filas.append({
+                            "canal"          : "MercadoLibre",
+                            "orden"          : order_id,
+                            "nombre"         : nombre,
+                            "apellido"       : apellido,
+                            "rut"            : rut,
+                            "telefono"       : telefono,
+                            "email"          : email,
+                            "producto"       : prod,
+                            "sku_seller"     : sku_s,
+                            "cantidad"       : 1,
+                            "precio_pagado"  : precio,
+                            "valor_envio"    : envio,
+                            "direccion"      : direccion,
+                            "comuna"         : comuna,
+                            "metodo_pago"    : pago_meth,
+                            "metodo_envio"   : metodo_envio,
+                            "tracking"       : tracking_n,
+                            "fecha"          : (o.get("date_created") or "")[:10],
+                        })
+        except Exception as e:
+            print(f"[Reporte ventas] MELI error: {e}")
+
+    # ── PARIS ─────────────────────────────────────────────────────────────────
+    if not canales_req or "paris" in canales_req:
+        try:
+            from paris import obtener_ordenes_paris_todas
+            from datetime import datetime as _dt, timedelta as _td
+            dias = 30
+            if fecha_desde:
+                try:
+                    d0 = _dt.strptime(fecha_desde, "%Y-%m-%d")
+                    dias = ((_dt.utcnow() if not fecha_hasta else _dt.strptime(fecha_hasta, "%Y-%m-%d")) - d0).days + 1
+                    dias = max(1, min(dias, 365))
+                except Exception:
+                    pass
+            ordenes_paris = obtener_ordenes_paris_todas(dias=dias)
+
+            for o in ordenes_paris:
+                created = (o.get("createdAt") or "")[:10]
+                if fecha_desde and created < fecha_desde: continue
+                if fecha_hasta and created > fecha_hasta: continue
+
+                order_id  = str(o.get("subOrderNumber") or o.get("orderNumber") or "")
+                customer  = o.get("customer") or {}
+                shipping_a= o.get("shippingAddress") or {}
+                nombre    = customer.get("firstName") or customer.get("name") or ""
+                apellido  = customer.get("lastName") or ""
+                email     = customer.get("email") or ""
+                telefono  = customer.get("phone") or ""
+                rut       = customer.get("documentNumber") or customer.get("rut") or ""
+                direccion = f"{shipping_a.get('streetName','')} {shipping_a.get('streetNumber','')}".strip()
+                comuna    = shipping_a.get("city") or shipping_a.get("commune") or ""
+                tracking_n= o.get("trackingNumber") or ""
+                metodo_envio = o.get("logisticType") or o.get("shippingType") or ""
+                metodo_pago  = o.get("paymentMethod") or ""
+
+                for item in (o.get("items") or o.get("subOrderItems") or []):
+                    sku_s  = item.get("sellerSku") or item.get("sku") or ""
+                    prod   = item.get("productName") or item.get("title") or ""
+                    qty    = int(item.get("quantity") or 1)
+                    precio = float(item.get("unitPrice") or item.get("price") or 0)
+                    envio  = float(o.get("shippingCost") or 0)
+
+                    for _ in range(qty):
+                        filas.append({
+                            "canal"         : "Paris",
+                            "orden"         : order_id,
+                            "nombre"        : nombre,
+                            "apellido"      : apellido,
+                            "rut"           : rut,
+                            "telefono"      : telefono,
+                            "email"         : email,
+                            "producto"      : prod,
+                            "sku_seller"    : sku_s,
+                            "cantidad"      : 1,
+                            "precio_pagado" : precio,
+                            "valor_envio"   : envio,
+                            "direccion"     : direccion,
+                            "comuna"        : comuna,
+                            "metodo_pago"   : metodo_pago,
+                            "metodo_envio"  : metodo_envio,
+                            "tracking"      : tracking_n,
+                            "fecha"         : created,
+                        })
+        except Exception as e:
+            print(f"[Reporte ventas] Paris error: {e}")
+
+    # ── WALMART ───────────────────────────────────────────────────────────────
+    if not canales_req or "walmart" in canales_req:
+        try:
+            from walmart import walmart_headers, WALMART_BASE_URL
+            import requests as _req2
+            params_wm = {"limit": 200}
+            if fecha_desde: params_wm["createdStartDate"] = f"{fecha_desde}T00:00:00"
+            if fecha_hasta: params_wm["createdEndDate"]   = f"{fecha_hasta}T23:59:59"
+            r_wm = _req2.get(f"{WALMART_BASE_URL}/v3/orders",
+                              headers=walmart_headers(), params=params_wm, timeout=20)
+            if r_wm.status_code == 200:
+                data_wm = r_wm.json()
+                ordenes_wm = (data_wm.get("list", {}) or {}).get("elements", {}).get("order", []) or []
+
+                for o in (ordenes_wm if isinstance(ordenes_wm, list) else [ordenes_wm]):
+                    order_id   = str(o.get("customerOrderId") or "")
+                    created    = (o.get("orderDate") or "")[:10]
+                    customer_e = o.get("customerEmailId") or ""
+                    shipping_i = o.get("shippingInfo") or {}
+                    addr       = (shipping_i.get("postalAddress") or {})
+                    nombre     = addr.get("name") or ""
+                    apellido   = ""
+                    if " " in nombre:
+                        partes = nombre.split(" ", 1); nombre = partes[0]; apellido = partes[1]
+                    direccion  = addr.get("address1") or ""
+                    comuna     = addr.get("city") or ""
+                    metodo_envio = shipping_i.get("methodCode") or ""
+                    metodo_pago  = (o.get("paymentData") or {}).get("paymentType") or ""
+
+                    for line in (o.get("orderLines") or {}).get("orderLine", []):
+                        item       = (line.get("item") or {})
+                        prod       = item.get("productName") or ""
+                        sku_s      = (line.get("sellerOrderId") or item.get("sku") or "")
+                        qty        = int((line.get("orderLineQuantity") or {}).get("amount") or 1)
+                        precio     = float(((line.get("charges") or {}).get("charge") or [{}])[0].get("chargeAmount", {}).get("amount") or 0) if (line.get("charges") or {}).get("charge") else 0
+                        tracking_n = ""
+                        for pkg in (line.get("fulfillment") or {}).get("trackingInfo", []):
+                            tracking_n = pkg.get("trackingNumber") or ""
+                            break
+
+                        for _ in range(qty):
+                            filas.append({
+                                "canal"         : "Walmart",
+                                "orden"         : order_id,
+                                "nombre"        : nombre,
+                                "apellido"      : apellido,
+                                "rut"           : "",
+                                "telefono"      : "",
+                                "email"         : customer_e,
+                                "producto"      : prod,
+                                "sku_seller"    : sku_s,
+                                "cantidad"      : 1,
+                                "precio_pagado" : precio,
+                                "valor_envio"   : 0,
+                                "direccion"     : direccion,
+                                "comuna"        : comuna,
+                                "metodo_pago"   : metodo_pago,
+                                "metodo_envio"  : metodo_envio,
+                                "tracking"      : tracking_n,
+                                "fecha"         : created,
+                            })
+        except Exception as e:
+            print(f"[Reporte ventas] Walmart error: {e}")
+
+    # ── MOVIMIENTOS locales como fallback (Ripley, Falabella, Woo) ───────────
+    if not canales_req or any(c in canales_req for c in ("ripley","falabella","woocommerce","woo")):
+        try:
+            from inventario import get_conn as _gc2
+            _c = _gc2(); _cur = _c.cursor()
+            where_parts = ["tipo = 'salida'", "canal NOT IN ('MercadoLibre','Paris','Walmart','Manual','Ajuste','Sistema')"]
+            params_mv = []
+            if fecha_desde:
+                where_parts.append("DATE(fecha) >= %s"); params_mv.append(fecha_desde)
+            if fecha_hasta:
+                where_parts.append("DATE(fecha) <= %s"); params_mv.append(fecha_hasta)
+            if canales_req:
+                placeholders = ",".join(["%s"] * len(canales_req))
+                where_parts.append(f"LOWER(canal) IN ({placeholders})")
+                params_mv.extend(canales_req)
+            _cur.execute(f"""
+                SELECT sku, nombre, cantidad, canal, numero_orden, documento_ref,
+                       TO_CHAR(fecha,'YYYY-MM-DD'), motivo
+                FROM movimientos
+                WHERE {' AND '.join(where_parts)}
+                ORDER BY fecha DESC LIMIT 500
+            """, params_mv)
+            for r in _cur.fetchall():
+                filas.append({
+                    "canal"         : r[3],
+                    "orden"         : r[4] or r[5] or "",
+                    "nombre"        : "",
+                    "apellido"      : "",
+                    "rut"           : "",
+                    "telefono"      : "",
+                    "email"         : "",
+                    "producto"      : r[1],
+                    "sku_seller"    : r[0],
+                    "cantidad"      : 1,
+                    "precio_pagado" : 0,
+                    "valor_envio"   : 0,
+                    "direccion"     : "",
+                    "comuna"        : "",
+                    "metodo_pago"   : "",
+                    "metodo_envio"  : "",
+                    "tracking"      : "",
+                    "fecha"         : r[6] or "",
+                })
+            _cur.close(); _c.close()
+        except Exception as e:
+            print(f"[Reporte ventas] movimientos fallback error: {e}")
+
+    # Ordenar por fecha desc
+    filas.sort(key=lambda x: x.get("fecha",""), reverse=True)
+    return filas
+
+
+@app.route("/ventas/export_csv", methods=["GET"])
+def ventas_export_csv():
+    """Exporta el reporte de ventas como CSV descargable directamente."""
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    import io, csv
+    from flask import Response
+
+    fecha_desde = request.args.get("fecha_desde") or ""
+    fecha_hasta = request.args.get("fecha_hasta") or ""
+    canales_str = request.args.get("canales") or ""
+
+    # Llamar directamente a la función interna reutilizable
+    try:
+        filas = _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    COLUMNAS = [
+        ("canal","Canal"), ("orden","N° Orden"), ("fecha","Fecha"),
+        ("nombre","Nombre"), ("apellido","Apellido"), ("rut","RUT"),
+        ("telefono","Teléfono"), ("email","Correo"),
+        ("producto","Producto"), ("sku_seller","SKU Seller"),
+        ("cantidad","Cantidad"), ("precio_pagado","Precio pagado"),
+        ("valor_envio","Valor envío"), ("direccion","Dirección"),
+        ("comuna","Comuna"), ("metodo_pago","Método de pago"),
+        ("metodo_envio","Método de envío"), ("tracking","N° Seguimiento"),
+    ]
+
+    output = io.StringIO()
+    output.write("\ufeff")  # BOM para Excel en español
+    writer = csv.writer(output, delimiter=";")
+    writer.writerow([c[1] for c in COLUMNAS])
+    for fila in filas:
+        writer.writerow([str(fila.get(c[0],"") or "") for c in COLUMNAS])
+
+    nombre_archivo = f"ventas_lusync_{fecha_desde or 'all'}_{fecha_hasta or 'all'}.csv"
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={nombre_archivo}"}
+    )
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

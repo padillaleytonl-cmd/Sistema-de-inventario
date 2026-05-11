@@ -11791,8 +11791,14 @@ async function vtaCargarGraficos(){
   try {
     // Cargar gráficos (BD local, rápido)
     const rg = await fetch(`/ventas/graficos?desde=${desde}&hasta=${hasta}`);
+    // Verificar content-type antes de parsear — evita el "Unexpected token '<'"
+    const ct = rg.headers.get('content-type') || '';
+    if(!ct.includes('json')){
+      const txt = await rg.text();
+      throw new Error(`El servidor devolvió HTML en vez de JSON (status ${rg.status}). Verifica que la sesión esté activa.`);
+    }
     const dg = await rg.json();
-    if(!rg.ok||dg.error){ throw new Error(dg.error||'Error stats'); }
+    if(!rg.ok||dg.error){ throw new Error(dg.error||`Error ${rg.status}`); }
 
     _cargarChartJs(()=>{
       vtaRenderGraficos(dg);
@@ -11801,7 +11807,7 @@ async function vtaCargarGraficos(){
     });
 
   } catch(e){
-    document.getElementById('vta-estado').innerHTML=`<div style="padding:40px;text-align:center;color:var(--danger);">Error: ${e.message}</div>`;
+    document.getElementById('vta-estado').innerHTML=`<div style="padding:40px;text-align:center;color:var(--danger);font-size:13px;"><b>Error al cargar el reporte</b><br><span style="color:var(--muted);font-size:12px;">${e.message}</span></div>`;
   } finally {
     btn.textContent='Actualizar'; btn.disabled=false;
   }
@@ -11908,7 +11914,10 @@ async function vtaCargarTablaDetalle(desde, hasta, canal){
   if(btnTabla) btnTabla.textContent = 'Cargando datos de órdenes… ↓';
   try {
     const r = await fetch(`/ventas/reporte?fecha_desde=${desde}&fecha_hasta=${hasta}&canales=${canal||''}`);
+    const ct = r.headers.get('content-type') || '';
+    if(!ct.includes('json')) throw new Error(`Respuesta inesperada del servidor (status ${r.status})`);
     const d = await r.json();
+    if(d.error) throw new Error(d.error);
     _VTA.filas = d.filas || [];
     vtaRenderTablaDetalle(_VTA.filas);
     if(btnTabla) btnTabla.textContent = `Ver tabla de órdenes (${_VTA.filas.length} líneas) ↓`;
