@@ -11544,7 +11544,7 @@ async function posCargarMiniHistorial(){
         </div>
         <div>
           <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Canal</div>
-          <select id="vta-canal-fil" style="padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--white);color:var(--text);font-size:13px;">
+          <select id="vta-canal-fil" onchange="vtaCargarGraficos()" style="padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--white);color:var(--text);font-size:13px;">
             <option value="">Todos</option>
             <option value="mercadolibre">MercadoLibre</option>
             <option value="paris">París</option>
@@ -11559,10 +11559,10 @@ async function posCargarMiniHistorial(){
           Actualizar
         </button>
         <div style="display:flex;gap:6px;margin-left:4px;">
+          <button onclick="vtaAtajo(0)"  class="vta-atajo">Hoy</button>
           <button onclick="vtaAtajo(7)"  class="vta-atajo">7d</button>
           <button onclick="vtaAtajo(15)" class="vta-atajo">15d</button>
           <button onclick="vtaAtajo(30)" class="vta-atajo">30d</button>
-          <button onclick="vtaMes()"     class="vta-atajo">Mes</button>
         </div>
         <div style="margin-left:auto;display:flex;gap:8px;">
           <button onclick="vtaDescargarCSV()" id="vta-btn-csv"
@@ -11734,15 +11734,13 @@ document.getElementById('modalVentas').addEventListener('click', e=>{
   if(e.target===document.getElementById('modalVentas')) cerrarModalVentas();
 });
 
+// Atajo de fecha — cambia rango Y recarga automáticamente
 function vtaAtajo(dias){
-  const h=new Date(), d=new Date(); d.setDate(h.getDate()-dias);
+  const h=new Date(), d=new Date();
+  d.setDate(h.getDate()-dias);
   document.getElementById('vta-desde').value=_vf(d);
   document.getElementById('vta-hasta').value=_vf(h);
-}
-function vtaMes(){
-  const h=new Date();
-  document.getElementById('vta-desde').value=`${h.getFullYear()}-${String(h.getMonth()+1).padStart(2,'0')}-01`;
-  document.getElementById('vta-hasta').value=_vf(h);
+  vtaCargarGraficos();
 }
 function _vf(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 
@@ -11970,12 +11968,36 @@ function vtaToggleTabla(){
 }
 
 function vtaDescargarCSV(){
-  const {fecha_desde,fecha_hasta,canales}=_VTA.params;
-  if(!fecha_desde){ toast('Consulta primero el reporte','warn'); return; }
-  const a=document.createElement('a');
-  a.href=`/ventas/export_csv?fecha_desde=${fecha_desde}&fecha_hasta=${fecha_hasta}&canales=${canales||''}`;
-  a.download=`ventas_lusync_${fecha_desde}_${fecha_hasta}.csv`;
+  if(!_VTA.filas || !_VTA.filas.length){
+    toast('Consulta primero el reporte para tener datos que exportar','warn');
+    return;
+  }
+  const COLS=[
+    ['canal','Canal'],['orden','N° Orden'],['fecha','Fecha'],
+    ['nombre','Nombre'],['apellido','Apellido'],['rut','RUT'],
+    ['telefono','Teléfono'],['email','Correo'],
+    ['producto','Producto'],['sku_seller','SKU Seller'],
+    ['cantidad','Cantidad'],['precio_pagado','Precio pagado'],
+    ['valor_envio','Valor envío'],['direccion','Dirección'],
+    ['comuna','Comuna'],['metodo_pago','Método de pago'],
+    ['metodo_envio','Método de envío'],['tracking','N° Seguimiento'],
+  ];
+  // BOM + cabecera + filas
+  let csv = '\ufeff' + COLS.map(c=>c[1]).join(';') + '\r\n';
+  for(const f of _VTA.filas){
+    csv += COLS.map(([k])=>{
+      const v = String(f[k]??'').replace(/;/g,',').replace(/\r?\n/g,' ');
+      return v;
+    }).join(';') + '\r\n';
+  }
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  const {fecha_desde, fecha_hasta} = _VTA.params;
+  a.href     = url;
+  a.download = `ventas_lusync_${fecha_desde||'all'}_${fecha_hasta||'all'}.csv`;
   a.click();
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
 }
 </script>
 </body>
