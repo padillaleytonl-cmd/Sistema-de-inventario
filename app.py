@@ -822,9 +822,24 @@ def _sync_paris_automatico():
                     marcar_orden_procesada_texto(pa_key)
                     nuevas += 1
                 elif not items_descontados and o.get("shipments"):
-                    # Tiene shipments pero todos los items fallaron (SKU no mapeado, etc.)
-                    # Marcar igual para no reintentar infinitamente
-                    marcar_orden_procesada_texto(pa_key)
+                    # NO marcar como procesada si todos los items fallaron por SKU sin mapeo.
+                    # El scheduler reintentará en el próximo ciclo (cada 10 min).
+                    # Solo marcar definitivamente si la orden tiene más de 48h (evitar loops eternos).
+                    try:
+                        fecha_str = o.get("createdAt") or o.get("created_at") or ""
+                        if fecha_str:
+                            from datetime import timezone as _tz
+                            fecha_orden = datetime.fromisoformat(fecha_str.replace("Z", "+00:00"))
+                            horas = (datetime.now(_tz.utc) - fecha_orden).total_seconds() / 3600
+                            if horas > 48:
+                                marcar_orden_procesada_texto(pa_key)
+                                print(f"[Scheduler Paris] {sub_order} marcada sin items (>48h sin mapeo)")
+                            else:
+                                print(f"[Scheduler Paris] {sub_order} SKU sin mapeo, se reintentará")
+                        else:
+                            print(f"[Scheduler Paris] {sub_order} sin fecha, no marcada")
+                    except Exception:
+                        pass
 
             except Exception as e:
                 errores.append(f"PA orden: {e}")
