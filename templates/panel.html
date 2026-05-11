@@ -2569,7 +2569,11 @@ tbody td {
         <div class="page-date">Registro completo de entradas y salidas</div>
         <div style="font-size:13px;color:var(--muted);margin-top:2px;font-family:'DM Mono',monospace;" id="relojMov"></div>
       </div>
-      <div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button onclick="abrirModalVentas()" style="display:flex;align-items:center;gap:6px;padding:8px 16px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 2px 10px rgba(99,102,241,.3);">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          Reporte de ventas
+        </button>
         <button onclick="borrarTodosMovimientos()" style="padding:8px 14px;border:0.5px solid #DC2626;background:#FEE2E2;color:#991B1B;border-radius:8px;font-size:12px;cursor:pointer;font-weight:500;display:inline-flex;align-items:center;gap:6px;" title="DESARROLLO: borra todos los movimientos">
           🗑 Borrar historial
         </button>
@@ -11511,5 +11515,459 @@ async function posCargarMiniHistorial(){
         </div>
       </div>
     </div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     MODAL REPORTE DE VENTAS — con gráficos
+════════════════════════════════════════════════════════════════ -->
+<div id="modalVentas" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9000;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto;">
+  <div style="background:var(--white);border-radius:16px;width:100%;max-width:1100px;margin:auto;box-shadow:0 20px 60px rgba(0,0,0,.2);">
+
+    <!-- HEADER -->
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:20px 24px;border-bottom:1px solid var(--border);">
+      <div>
+        <div style="font-size:17px;font-weight:700;color:var(--text);">📊 Reporte de Ventas</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px;">Análisis de movimientos de salida por canal, producto y fecha</div>
+      </div>
+      <button onclick="cerrarModalVentas()" style="background:transparent;border:none;font-size:22px;color:var(--muted);cursor:pointer;line-height:1;padding:4px 8px;">×</button>
+    </div>
+
+    <!-- FILTROS -->
+    <div style="padding:16px 24px;background:var(--bg);border-bottom:1px solid var(--border);">
+      <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+        <div>
+          <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Desde</div>
+          <input id="vta-desde" type="date" style="padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--white);color:var(--text);font-size:13px;">
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Hasta</div>
+          <input id="vta-hasta" type="date" style="padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--white);color:var(--text);font-size:13px;">
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Canal</div>
+          <select id="vta-canal-fil" style="padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--white);color:var(--text);font-size:13px;">
+            <option value="">Todos</option>
+            <option value="mercadolibre">MercadoLibre</option>
+            <option value="paris">París</option>
+            <option value="walmart">Walmart</option>
+            <option value="ripley">Ripley</option>
+            <option value="falabella">Falabella</option>
+            <option value="woocommerce">WooCommerce</option>
+          </select>
+        </div>
+        <button onclick="vtaCargarGraficos()" id="vta-btn-graf"
+          style="padding:8px 20px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+          Actualizar
+        </button>
+        <div style="display:flex;gap:6px;margin-left:4px;">
+          <button onclick="vtaAtajo(7)"  class="vta-atajo">7d</button>
+          <button onclick="vtaAtajo(15)" class="vta-atajo">15d</button>
+          <button onclick="vtaAtajo(30)" class="vta-atajo">30d</button>
+          <button onclick="vtaMes()"     class="vta-atajo">Mes</button>
+        </div>
+        <div style="margin-left:auto;display:flex;gap:8px;">
+          <button onclick="vtaDescargarCSV()" id="vta-btn-csv"
+            style="padding:8px 16px;background:#22c55e;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:6px;">
+            ↓ CSV
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- KPIs -->
+    <div id="vta-kpis" style="display:none;padding:16px 24px;border-bottom:1px solid var(--border);display:none;">
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;">
+        <div style="background:var(--bg);border-radius:10px;padding:14px 16px;text-align:center;border:1px solid var(--border);">
+          <div style="font-size:24px;font-weight:800;color:#6366f1;" id="kpi-ordenes">—</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px;">Órdenes</div>
+        </div>
+        <div style="background:var(--bg);border-radius:10px;padding:14px 16px;text-align:center;border:1px solid var(--border);">
+          <div style="font-size:24px;font-weight:800;color:var(--success);" id="kpi-unidades">—</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px;">Unidades</div>
+        </div>
+        <div style="background:var(--bg);border-radius:10px;padding:14px 16px;text-align:center;border:1px solid var(--border);">
+          <div style="font-size:18px;font-weight:800;color:var(--text);" id="kpi-monto">—</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px;">Monto est.</div>
+        </div>
+        <div style="background:var(--bg);border-radius:10px;padding:14px 16px;text-align:center;border:1px solid var(--border);">
+          <div style="font-size:14px;font-weight:700;color:var(--text);" id="kpi-canal">—</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px;">Canal líder</div>
+        </div>
+        <div style="background:var(--bg);border-radius:10px;padding:14px 16px;text-align:center;border:1px solid var(--border);">
+          <div style="font-size:11px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" id="kpi-prod">—</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px;">Producto top</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- GRÁFICOS -->
+    <div id="vta-graficos" style="display:none;padding:20px 24px;">
+      <div style="display:grid;grid-template-columns:1fr 320px;gap:20px;margin-bottom:20px;">
+        <!-- Ventas por día -->
+        <div style="background:var(--bg);border-radius:12px;padding:16px;border:1px solid var(--border);">
+          <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:14px;">Unidades vendidas por día</div>
+          <div style="position:relative;height:180px;">
+            <canvas id="chart-dia"></canvas>
+          </div>
+        </div>
+        <!-- Donut canales -->
+        <div style="background:var(--bg);border-radius:12px;padding:16px;border:1px solid var(--border);">
+          <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:14px;">Distribución por canal</div>
+          <div style="position:relative;height:180px;">
+            <canvas id="chart-canal"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Top productos + tabla detalle -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+        <!-- Bar top productos -->
+        <div style="background:var(--bg);border-radius:12px;padding:16px;border:1px solid var(--border);">
+          <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:14px;">Top 10 productos más vendidos</div>
+          <div style="position:relative;height:220px;">
+            <canvas id="chart-prods"></canvas>
+          </div>
+        </div>
+        <!-- Tabla por canal -->
+        <div style="background:var(--bg);border-radius:12px;padding:16px;border:1px solid var(--border);">
+          <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:12px;">Desglose por canal</div>
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead>
+              <tr style="border-bottom:1px solid var(--border);">
+                <th style="text-align:left;padding:6px 8px;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;">Canal</th>
+                <th style="text-align:right;padding:6px 8px;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;">Órdenes</th>
+                <th style="text-align:right;padding:6px 8px;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;">Unidades</th>
+                <th style="text-align:right;padding:6px 8px;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;">Monto est.</th>
+              </tr>
+            </thead>
+            <tbody id="vta-tabla-canal"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Botón ver tabla detalle -->
+      <div style="margin-top:16px;text-align:center;">
+        <button onclick="vtaToggleTabla()" id="vta-btn-tabla"
+          style="padding:9px 24px;background:var(--white);border:1px solid var(--border);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;color:var(--text);">
+          Ver tabla de órdenes detallada ↓
+        </button>
+      </div>
+      <div id="vta-tabla-wrap" style="display:none;margin-top:14px;border-radius:10px;border:1px solid var(--border);overflow:hidden;">
+        <div style="max-height:360px;overflow-y:auto;">
+          <table id="vta-tabla" style="width:100%;border-collapse:collapse;font-size:11px;">
+            <thead>
+              <tr style="background:var(--bg);position:sticky;top:0;">
+                <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);white-space:nowrap;">Canal</th>
+                <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);white-space:nowrap;">N° Orden</th>
+                <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Fecha</th>
+                <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Nombre</th>
+                <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Apellido</th>
+                <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">RUT</th>
+                <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Teléfono</th>
+                <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Correo</th>
+                <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Producto</th>
+                <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">SKU Seller</th>
+                <th style="padding:8px 10px;text-align:right;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Cant.</th>
+                <th style="padding:8px 10px;text-align:right;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Precio</th>
+                <th style="padding:8px 10px;text-align:right;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Envío</th>
+                <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Dirección</th>
+                <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Comuna</th>
+                <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Método pago</th>
+                <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Método envío</th>
+                <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Seguimiento</th>
+              </tr>
+            </thead>
+            <tbody id="vta-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Estado inicial / carga -->
+    <div id="vta-estado" style="padding:48px;text-align:center;color:var(--hint);">
+      <div style="font-size:32px;margin-bottom:10px;opacity:.4;">📊</div>
+      <div style="font-size:14px;">Selecciona un rango y presiona <b>Actualizar</b></div>
+    </div>
+
+  </div>
+</div>
+
+<style>
+.vta-atajo { padding:5px 10px;font-size:11px;font-weight:600;border:1px solid var(--border);border-radius:20px;background:var(--white);color:var(--muted);cursor:pointer;transition:all .15s; }
+.vta-atajo:hover { border-color:#6366f1;color:#6366f1; }
+.vb { display:inline-block;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;text-transform:uppercase; }
+.vb-ml  { background:rgba(255,220,0,.2);color:#7a5500; }
+.vb-pa  { background:rgba(99,102,241,.12);color:#4338ca; }
+.vb-wm  { background:rgba(0,160,80,.1);color:#065f46; }
+.vb-ri  { background:rgba(220,38,38,.1);color:#991b1b; }
+.vb-fa  { background:rgba(20,184,166,.1);color:#0f766e; }
+.vb-woo { background:rgba(124,58,237,.1);color:#6d28d9; }
+.vb-ot  { background:rgba(148,163,184,.1);color:#475569; }
+#vta-tabla td { padding:8px 10px;border-bottom:1px solid rgba(0,0,0,.04);color:var(--text);vertical-align:middle; }
+#vta-tabla tr:hover td { background:rgba(99,102,241,.04); }
+</style>
+
+<script>
+// ── Chart.js cargado dinámicamente ──
+let _chartJsLoaded = false;
+let _chartDia = null, _chartCanal = null, _chartProds = null;
+const _VTA = { params:{}, filas:[] };
+
+function _cargarChartJs(cb){
+  if(window.Chart){ cb(); return; }
+  if(_chartJsLoaded){ setTimeout(()=>_cargarChartJs(cb), 80); return; }
+  _chartJsLoaded = true;
+  const s = document.createElement('script');
+  s.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js';
+  s.onload = cb; document.head.appendChild(s);
+}
+
+function abrirModalVentas(){
+  const m = document.getElementById('modalVentas');
+  m.style.display = 'flex';
+  if(!document.getElementById('vta-desde').value) vtaAtajo(30);
+}
+function cerrarModalVentas(){
+  document.getElementById('modalVentas').style.display = 'none';
+}
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') cerrarModalVentas(); });
+document.getElementById('modalVentas').addEventListener('click', e=>{
+  if(e.target===document.getElementById('modalVentas')) cerrarModalVentas();
+});
+
+function vtaAtajo(dias){
+  const h=new Date(), d=new Date(); d.setDate(h.getDate()-dias);
+  document.getElementById('vta-desde').value=_vf(d);
+  document.getElementById('vta-hasta').value=_vf(h);
+}
+function vtaMes(){
+  const h=new Date();
+  document.getElementById('vta-desde').value=`${h.getFullYear()}-${String(h.getMonth()+1).padStart(2,'0')}-01`;
+  document.getElementById('vta-hasta').value=_vf(h);
+}
+function _vf(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+
+function vtaBadge(canal){
+  const c=(canal||'').toLowerCase();
+  if(c.includes('mercado')) return 'vb-ml';
+  if(c.includes('paris'))   return 'vb-pa';
+  if(c.includes('walmart')) return 'vb-wm';
+  if(c.includes('ripley'))  return 'vb-ri';
+  if(c.includes('falabella'))return 'vb-fa';
+  if(c.includes('woo'))     return 'vb-woo';
+  return 'vb-ot';
+}
+
+// Paleta de colores por canal
+const CANAL_COLORS = {
+  'mercadolibre': '#FFD600', 'meli':'#FFD600',
+  'paris':   '#6366f1',
+  'walmart': '#0071CE',
+  'ripley':  '#E30613',
+  'falabella':'#7AB648',
+  'woocommerce':'#7c3aed','woo':'#7c3aed',
+};
+function canalColor(nombre){
+  const k = (nombre||'').toLowerCase().replace(/\s/g,'');
+  for(const [key,val] of Object.entries(CANAL_COLORS))
+    if(k.includes(key)) return val;
+  return '#94a3b8';
+}
+
+async function vtaCargarGraficos(){
+  const desde  = document.getElementById('vta-desde').value;
+  const hasta  = document.getElementById('vta-hasta').value;
+  const canal  = document.getElementById('vta-canal-fil').value;
+  const btn    = document.getElementById('vta-btn-graf');
+  if(!desde||!hasta){ toast('Selecciona rango de fechas','warn'); return; }
+
+  btn.textContent='Cargando…'; btn.disabled=true;
+  document.getElementById('vta-estado').innerHTML='<div style="padding:40px;text-align:center;color:var(--muted);font-size:14px;">Consultando datos…</div>';
+  document.getElementById('vta-estado').style.display='';
+  document.getElementById('vta-graficos').style.display='none';
+  document.getElementById('vta-kpis').style.display='none';
+
+  _VTA.params = {fecha_desde:desde, fecha_hasta:hasta, canales:canal};
+
+  try {
+    // Cargar gráficos (BD local, rápido)
+    const rg = await fetch(`/ventas/graficos?desde=${desde}&hasta=${hasta}`);
+    const dg = await rg.json();
+    if(!rg.ok||dg.error){ throw new Error(dg.error||'Error stats'); }
+
+    _cargarChartJs(()=>{
+      vtaRenderGraficos(dg);
+      // Cargar tabla de detalle en background (APIs externas, más lento)
+      vtaCargarTablaDetalle(desde, hasta, canal);
+    });
+
+  } catch(e){
+    document.getElementById('vta-estado').innerHTML=`<div style="padding:40px;text-align:center;color:var(--danger);">Error: ${e.message}</div>`;
+  } finally {
+    btn.textContent='Actualizar'; btn.disabled=false;
+  }
+}
+
+function vtaRenderGraficos(d){
+  const res = d.resumen || {};
+  // KPIs
+  document.getElementById('kpi-ordenes').textContent  = (res.total_ordenes||0).toLocaleString('es-CL');
+  document.getElementById('kpi-unidades').textContent = (res.total_unidades||0).toLocaleString('es-CL');
+  document.getElementById('kpi-monto').textContent    = '$ '+Math.round(res.monto_estimado||0).toLocaleString('es-CL');
+  document.getElementById('kpi-canal').textContent    = res.canal_top||'—';
+  document.getElementById('kpi-prod').textContent     = res.producto_top||'—';
+  document.getElementById('vta-kpis').style.display   = '';
+
+  // ── Chart 1: Línea / área — ventas por día ──
+  const dias  = d.ventas_por_dia || [];
+  const labels_d = dias.map(r=>{ const p=r.fecha.split('-'); return `${p[2]}/${p[1]}`; });
+  const data_u   = dias.map(r=>r.unidades);
+
+  if(_chartDia){ _chartDia.destroy(); }
+  _chartDia = new Chart(document.getElementById('chart-dia'), {
+    type:'line',
+    data:{
+      labels: labels_d,
+      datasets:[{
+        label:'Unidades',
+        data: data_u,
+        borderColor:'#6366f1', backgroundColor:'rgba(99,102,241,.1)',
+        borderWidth:2, pointRadius:3, pointBackgroundColor:'#6366f1',
+        fill:true, tension:.35
+      }]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false} },
+      scales:{
+        x:{ grid:{display:false}, ticks:{font:{size:10}, maxTicksLimit:8} },
+        y:{ beginAtZero:true, grid:{color:'rgba(0,0,0,.06)'}, ticks:{font:{size:10}} }
+      }
+    }
+  });
+
+  // ── Chart 2: Donut — canales ──
+  const canales = d.ventas_por_canal || [];
+  const labels_c = canales.map(r=>r.canal);
+  const data_c   = canales.map(r=>r.unidades);
+  const colors_c = canales.map(r=>canalColor(r.canal));
+
+  if(_chartCanal){ _chartCanal.destroy(); }
+  _chartCanal = new Chart(document.getElementById('chart-canal'), {
+    type:'doughnut',
+    data:{ labels:labels_c, datasets:[{ data:data_c, backgroundColor:colors_c, borderWidth:2, borderColor:'#fff' }] },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ position:'bottom', labels:{ font:{size:10}, padding:8, boxWidth:10 } } },
+      cutout:'65%'
+    }
+  });
+
+  // ── Chart 3: Barras horizontales — top productos ──
+  const prods   = d.top_productos || [];
+  const labels_p= prods.map(r=>r.nombre.length>22?r.nombre.substring(0,22)+'…':r.nombre);
+  const data_p  = prods.map(r=>r.unidades);
+
+  if(_chartProds){ _chartProds.destroy(); }
+  _chartProds = new Chart(document.getElementById('chart-prods'), {
+    type:'bar',
+    data:{
+      labels:labels_p,
+      datasets:[{ label:'Unidades', data:data_p,
+        backgroundColor:'rgba(99,102,241,.7)', borderRadius:4, borderSkipped:false }]
+    },
+    options:{
+      indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false} },
+      scales:{
+        x:{ beginAtZero:true, grid:{color:'rgba(0,0,0,.06)'}, ticks:{font:{size:10}} },
+        y:{ grid:{display:false}, ticks:{font:{size:10}} }
+      }
+    }
+  });
+
+  // ── Tabla desglose por canal ──
+  const tbody = document.getElementById('vta-tabla-canal');
+  tbody.innerHTML = canales.length ? canales.map(r=>{
+    const cls = vtaBadge(r.canal);
+    const monto = r.monto ? '$ '+Math.round(r.monto).toLocaleString('es-CL') : '—';
+    return `<tr>
+      <td style="padding:8px;border-bottom:1px solid var(--border);"><span class="vb ${cls}">${r.canal}</span></td>
+      <td style="padding:8px;border-bottom:1px solid var(--border);text-align:right;">${r.ordenes}</td>
+      <td style="padding:8px;border-bottom:1px solid var(--border);text-align:right;font-weight:700;">${r.unidades}</td>
+      <td style="padding:8px;border-bottom:1px solid var(--border);text-align:right;font-family:'DM Mono',monospace;font-size:11px;">${monto}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="4" style="padding:16px;text-align:center;color:var(--hint);">Sin datos</td></tr>';
+
+  document.getElementById('vta-estado').style.display   = 'none';
+  document.getElementById('vta-graficos').style.display = '';
+}
+
+// Tabla detalle — consulta APIs externas en background
+async function vtaCargarTablaDetalle(desde, hasta, canal){
+  const btnTabla = document.getElementById('vta-btn-tabla');
+  if(btnTabla) btnTabla.textContent = 'Cargando datos de órdenes… ↓';
+  try {
+    const r = await fetch(`/ventas/reporte?fecha_desde=${desde}&fecha_hasta=${hasta}&canales=${canal||''}`);
+    const d = await r.json();
+    _VTA.filas = d.filas || [];
+    vtaRenderTablaDetalle(_VTA.filas);
+    if(btnTabla) btnTabla.textContent = `Ver tabla de órdenes (${_VTA.filas.length} líneas) ↓`;
+  } catch(e){
+    if(btnTabla) btnTabla.textContent = 'Error cargando tabla — reintentar';
+    console.warn('[VTA] tabla detalle:', e);
+  }
+}
+
+function vtaRenderTablaDetalle(filas){
+  const tbody = document.getElementById('vta-tbody');
+  if(!tbody) return;
+  if(!filas.length){
+    tbody.innerHTML='<tr><td colspan="18" style="padding:24px;text-align:center;color:var(--hint);">Sin datos de órdenes disponibles para este período</td></tr>';
+    return;
+  }
+  tbody.innerHTML = filas.map(f=>{
+    const cls = vtaBadge(f.canal);
+    const fmt = v => parseFloat(v||0).toLocaleString('es-CL',{minimumFractionDigits:0});
+    return `<tr>
+      <td><span class="vb ${cls}">${f.canal||''}</span></td>
+      <td style="font-family:'DM Mono',monospace;font-size:10px;">${f.orden||'—'}</td>
+      <td>${f.fecha||'—'}</td>
+      <td>${f.nombre||'—'}</td>
+      <td>${f.apellido||'—'}</td>
+      <td style="font-family:'DM Mono',monospace;font-size:10px;">${f.rut||'—'}</td>
+      <td>${f.telefono||'—'}</td>
+      <td style="font-size:10px;">${f.email||'—'}</td>
+      <td style="max-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${f.producto||''}">${f.producto||'—'}</td>
+      <td style="font-family:'DM Mono',monospace;font-size:10px;">${f.sku_seller||'—'}</td>
+      <td style="text-align:right;">${f.cantidad||1}</td>
+      <td style="text-align:right;font-family:'DM Mono',monospace;">$\u00a0${fmt(f.precio_pagado)}</td>
+      <td style="text-align:right;font-family:'DM Mono',monospace;">$\u00a0${fmt(f.valor_envio)}</td>
+      <td>${f.direccion||'—'}</td>
+      <td>${f.comuna||'—'}</td>
+      <td>${f.metodo_pago||'—'}</td>
+      <td>${f.metodo_envio||'—'}</td>
+      <td style="font-family:'DM Mono',monospace;font-size:10px;">${f.tracking||'—'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function vtaToggleTabla(){
+  const wrap = document.getElementById('vta-tabla-wrap');
+  const btn  = document.getElementById('vta-btn-tabla');
+  const open = wrap.style.display==='none'||!wrap.style.display;
+  wrap.style.display = open ? '' : 'none';
+  if(open) btn.textContent = btn.textContent.replace('↓','↑');
+  else     btn.textContent = btn.textContent.replace('↑','↓');
+}
+
+function vtaDescargarCSV(){
+  const {fecha_desde,fecha_hasta,canales}=_VTA.params;
+  if(!fecha_desde){ toast('Consulta primero el reporte','warn'); return; }
+  const a=document.createElement('a');
+  a.href=`/ventas/export_csv?fecha_desde=${fecha_desde}&fecha_hasta=${fecha_hasta}&canales=${canales||''}`;
+  a.download=`ventas_lusync_${fecha_desde}_${fecha_hasta}.csv`;
+  a.click();
+}
+</script>
 </body>
 </html>
