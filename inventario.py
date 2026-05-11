@@ -212,6 +212,7 @@ def init_db():
     cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS documento_compra_id INTEGER REFERENCES documentos_compra(id) ON DELETE SET NULL")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_mov_doc_compra ON movimientos(documento_compra_id)")
 
+
     conn.commit()
     cur.close()
     release_conn(conn)
@@ -449,10 +450,13 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
     cur.execute("""
         INSERT INTO movimientos (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id, fecha_importacion, numero_orden, documento_ref)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
     """, (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id, ahora, numero_orden, documento_ref))
+    mov_id = cur.fetchone()[0]
     conn.commit()
     cur.close()
-    conn.close()
+    release_conn(conn)
+    return mov_id
 
     # ── SYNC UNIVERSAL: cualquier movimiento de stock sincroniza a todos los canales ──
     # Se ejecuta en background para no bloquear la respuesta
