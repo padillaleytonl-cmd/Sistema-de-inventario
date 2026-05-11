@@ -694,9 +694,9 @@ def _sync_paris_automatico():
         errores = []
 
         # Traer sin filtro de estado (Paris no filtra bien por estado en la API)
-        # dias=7 para cubrir órdenes recientes con margen
+        # dias=15 para cubrir órdenes con delay de procesamiento o fines de semana
         try:
-            ordenes = obtener_ordenes_paris_todas(dias=7)
+            ordenes = obtener_ordenes_paris_todas(dias=15)
         except Exception as e:
             print(f"[Scheduler Paris] Error obteniendo órdenes: {e}")
             return
@@ -709,9 +709,9 @@ def _sync_paris_automatico():
                 if not sub_order:
                     continue
 
-                # FIX: usar PARIS- como prefijo (consistente con scheduler manual en paris.py)
-                pa_key  = f"PARIS-{sub_order}"
-                cancel_key = f"PA-CANCEL-{sub_order}"
+                # Prefijos consistentes con paris.py y reprocesar_ordenes
+                pa_key     = f"PARIS-{sub_order}"
+                cancel_key = f"PARIS-CANCEL-{sub_order}"
 
                 # FIX: el estado en París viene en itemStatus dentro de shipments[].items[],
                 # NO a nivel de la orden. Tomar el estado general de la orden si existe,
@@ -4001,6 +4001,145 @@ def ruta_paris_forzar_sync():
         return jsonify({"ok": ok, "sku": sku, "stock_enviado": prod["stock"]})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/paris/forzar_orden/<sub_order_number>", methods=["POST", "GET"])
+def paris_forzar_orden(sub_order_number):
+    """Fuerza el procesamiento de una orden París específica ahora mismo.
+    Útil cuando el scheduler no la captó (orden antigua, estado raro, etc.).
+    Borra la marca si ya existía y la reprocesa completa.
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from paris import obtener_orden_paris, obtener_ordenes_paris_todas
+        from inventario import (orden_ya_procesada_texto, marcar_orden_procesada_texto,
+                                obtener_sku_lusync_por_canal, get_conn as _gc)
+        from bodegas_logic import descontar_venta, detectar_fulfillment_paris
+
+        # 1. Buscar la orden — primero por endpoint directo, luego en listado
+        orden = None
+        fuente = "directo"
+        try:
+            orden = obtener_orden_paris(sub_order_number)
+        except Exception:
+            pass
+
+        if not orden:
+            fuente = "listado_30d"
+            todas = obtener_ordenes_paris_todas(dias=30)
+            for o in todas:
+                if str(o.get("subOrderNumber","")) == str(sub_order_number):
+                    orden = o; break
+
+        if not orden:
+            fuente = "listado_90d"
+            todas = obtener_ordenes_paris_todas(dias=90)
+            for o in todas:
+                if str(o.get("subOrderNumber","")) == str(sub_order_number):
+                    orden = o; break
+
+        if not orden:
+            return jsonify({
+                "ok": False,
+                "error": f"Orden {sub_order_number} no encontrada en Paris API (buscado hasta 90 días)",
+                "sugerencia": "Verifica el número de sub-orden en el panel de París"
+            }), 404
+
+        pa_key     = f"PARIS-{sub_order_number}"
+        cancel_key = f"PARIS-CANCEL-{sub_order_number}"
+
+        # 2. Borrar marca previa para reprocesar
+        ya_estaba = orden_ya_procesada_texto(pa_key)
+        if ya_estaba:
+            _c = _gc(); _cur = _c.cursor()
+            _cur.execute("DELETE FROM ordenes_procesadas WHERE order_id_texto IN (%s, %s)",
+                         (pa_key, cancel_key))
+            _c.commit(); _cur.close(); _c.close()
+
+        # 3. Estado de la orden
+        estado = (orden.get("status") or orden.get("itemStatus") or orden.get("orderStatus") or "").lower()
+        es_cd  = detectar_fulfillment_paris(orden)
+        tipo_str = "Fulfillment" if es_cd else "Seller"
+
+        # 4. Procesar items
+        items_procesados = []
+        items_fallidos   = []
+        shipments = orden.get("shipments") or []
+
+        if not shipments:
+            return jsonify({
+                "ok": False,
+                "orden": sub_order_number,
+                "estado": estado,
+                "fuente": fuente,
+                "error": "La orden no tiene shipments — estructura inesperada de París",
+                "campos_orden": list(orden.keys())
+            })
+
+        for ship in shipments:
+            for item in (ship.get("items") or []):
+                seller_sku = (item.get("seller_sku") or item.get("sellerSku") or "").strip()
+                cantidad   = int(item.get("quantity") or 1)
+                if not seller_sku:
+                    items_fallidos.append({"error": "item sin seller_sku", "item": item})
+                    continue
+
+                sku_lusync = obtener_sku_lusync_por_canal("paris", seller_sku) or seller_sku
+                productos  = cargar_productos()
+                prod = next((p for p in productos if p["sku"] == sku_lusync), None)
+                if not prod:
+                    items_fallidos.append({
+                        "seller_sku": seller_sku,
+                        "sku_lusync": sku_lusync,
+                        "error": "SKU no encontrado en inventario Lusync"
+                    })
+                    continue
+
+                resultado = descontar_venta(
+                    sku=sku_lusync, cantidad=cantidad,
+                    canal="Paris", fulfillment=es_cd,
+                    orden_id=sub_order_number,
+                    motivo=f"Venta Paris {tipo_str} (forzado manual)",
+                    usuario=session.get("usuario", "Admin"),
+                    origen_registro="manual"
+                )
+                sincronizar_stock_marketplaces(
+                    sku_lusync, resultado.get("stock_despues", 0),
+                    contexto="paris_forzado"
+                )
+                items_procesados.append({
+                    "seller_sku"   : seller_sku,
+                    "sku_lusync"   : sku_lusync,
+                    "cantidad"     : cantidad,
+                    "bodega"       : resultado.get("bodega", "?"),
+                    "stock_antes"  : resultado.get("stock_antes"),
+                    "stock_despues": resultado.get("stock_despues"),
+                })
+
+        # 5. Marcar como procesada si hubo al menos 1 item OK
+        if items_procesados:
+            marcar_orden_procesada_texto(pa_key)
+
+        return jsonify({
+            "ok"              : len(items_procesados) > 0,
+            "orden"           : sub_order_number,
+            "estado_api"      : estado,
+            "tipo"            : tipo_str,
+            "fuente"          : fuente,
+            "ya_estaba_marcada": ya_estaba,
+            "items_procesados": items_procesados,
+            "items_fallidos"  : items_fallidos,
+            "mensaje"         : (
+                f"✅ {len(items_procesados)} ítem(s) procesado(s) correctamente"
+                if items_procesados
+                else "⚠️ No se procesó ningún ítem — revisa items_fallidos"
+            )
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
 
 
 # /paris/forzar_sync_todos movido a paris.py (Blueprint)
@@ -8963,7 +9102,7 @@ def admin_reprocesar_ordenes():
         "meli":      ["MELI-", "MELI-CANCEL-"],
         "walmart":   ["WM-", "WM-CANCEL-"],
         "falabella": ["FALABELLA-", "FALABELLA-CANCEL-"],
-        "paris":     ["PA-", "PA-CANCEL-"],
+        "paris":     ["PARIS-", "PARIS-CANCEL-"],
         "ripley":    ["RP-", "RP-CANCEL-"],
         "woo":       ["WOO-", "WOO-CANCEL-"],
     }
