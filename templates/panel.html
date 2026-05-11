@@ -1922,111 +1922,6 @@ tbody td {
 
   <div id="sec-inventario" class="main" style="display:none;">
 
-    <style>
-      /* ── INV tokens (scope inventario) — usa variables del sistema, NO dark fallbacks ── */
-      .inv-tabs { display:flex; gap:6px; background:var(--white); padding:6px; border-radius:12px; margin-bottom:20px; border:1px solid var(--border); }
-      .inv-tab  { flex:1; padding:10px 0; border:none; background:transparent; color:var(--muted);
-                  border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; transition:all .18s; }
-      .inv-tab.active { background:#6366f1; color:#fff; box-shadow:0 2px 12px rgba(99,102,241,.35); }
-      .inv-tab:hover:not(.active) { background:rgba(99,102,241,.08); color:#6366f1; }
-
-      .inv-scan-wrap { position:relative; margin-bottom:6px; }
-      .inv-scan-inp  { width:100%; padding:13px 48px 13px 44px; font-size:15px; font-weight:500;
-                       background:var(--white); border:1.5px solid var(--border);
-                       border-radius:12px; color:var(--text); outline:none; box-sizing:border-box; transition:border .18s; }
-      .inv-scan-inp:focus { border-color:#6366f1; box-shadow:0 0 0 3px rgba(99,102,241,.12); }
-      .inv-scan-ico  { position:absolute; left:13px; top:50%; transform:translateY(-50%); color:var(--muted); pointer-events:none; }
-      .inv-scan-badge{ position:absolute; right:13px; top:50%; transform:translateY(-50%);
-                       font-size:10px; font-weight:700; color:#6366f1; background:rgba(99,102,241,.1);
-                       padding:3px 8px; border-radius:20px; }
-      .inv-sug { position:absolute; left:0; right:0; top:calc(100% + 6px);
-                 background:var(--white); border:1px solid var(--border);
-                 border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.12);
-                 z-index:200; overflow:hidden; max-height:300px; overflow-y:auto; }
-      .inv-sug-item { padding:11px 15px; cursor:pointer; border-bottom:1px solid var(--border);
-                      display:flex; justify-content:space-between; align-items:center; transition:background .1s; }
-      .inv-sug-item:last-child { border-bottom:none; }
-      .inv-sug-item:hover { background:rgba(99,102,241,.06); }
-      .inv-sug-sku  { font-size:11px; font-weight:700; color:#6366f1; font-family:'DM Mono',monospace; }
-      .inv-sug-name { font-size:12px; color:var(--text); margin-top:2px; }
-      .inv-sug-stk  { font-size:11px; font-weight:600; white-space:nowrap; }
-
-      .inv-lista-title { font-size:11px; font-weight:700; color:var(--muted); text-transform:uppercase;
-                         letter-spacing:.06em; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; }
-      .inv-row { display:grid; align-items:center; background:var(--white);
-                 padding:11px 13px; border-radius:10px; margin-bottom:7px;
-                 border:1px solid var(--border); transition:box-shadow .15s; }
-      .inv-row:hover { box-shadow:0 2px 8px rgba(0,0,0,.08); }
-      .inv-row-e { grid-template-columns:1fr auto auto; gap:10px; }
-      .inv-row-s { grid-template-columns:1fr auto auto; gap:10px; }
-      .inv-row-sku  { font-size:10px; font-family:'DM Mono',monospace; color:#6366f1; font-weight:700; }
-      .inv-row-name { font-size:12px; color:var(--text); }
-      .inv-row-stk  { font-size:11px; color:var(--muted); }
-      .inv-qty-wrap { display:flex; align-items:center; gap:5px; }
-      .inv-qty-btn  { width:26px; height:26px; border:none; background:rgba(99,102,241,.1); border-radius:6px;
-                      color:#6366f1; font-size:16px; font-weight:700; cursor:pointer;
-                      display:flex; align-items:center; justify-content:center; transition:background .1s; }
-      .inv-qty-btn:hover { background:rgba(99,102,241,.2); }
-      .inv-qty-inp  { width:50px; text-align:center; padding:4px 6px; border-radius:6px;
-                      border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:13px; font-weight:600; }
-      .inv-row-del  { background:transparent; border:none; color:var(--muted); cursor:pointer;
-                      font-size:18px; padding:2px 6px; border-radius:6px; transition:color .1s; }
-      .inv-row-del:hover { color:#ef4444; }
-
-      /* franja documento / OC */
-      .inv-doc-strip { background:var(--white); border:1px solid var(--border); border-radius:10px;
-                       padding:14px 16px; margin-bottom:14px; display:grid;
-                       grid-template-columns:1fr 1fr 1fr; gap:10px; }
-      .inv-doc-strip label { display:block; font-size:10px; font-weight:700; color:var(--muted);
-                              text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px; }
-      .inv-doc-strip input, .inv-doc-strip select {
-        width:100%; padding:8px 10px; border-radius:7px; border:1px solid var(--border);
-        background:var(--bg); color:var(--text); font-size:12px; box-sizing:border-box; }
-      .inv-oc-strip { background:var(--white); border:1px solid var(--border); border-radius:10px;
-                      padding:14px 16px; margin-bottom:14px; display:grid;
-                      grid-template-columns:1fr 1fr; gap:10px; }
-      .inv-oc-strip label { display:block; font-size:10px; font-weight:700; color:var(--muted);
-                             text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px; }
-      .inv-oc-strip input, .inv-oc-strip select {
-        width:100%; padding:8px 10px; border-radius:7px; border:1px solid var(--border);
-        background:var(--bg); color:var(--text); font-size:12px; box-sizing:border-box; }
-
-      /* motivos ajuste */
-      .inv-motivos { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; margin:12px 0; }
-      .inv-motivo-btn { padding:9px 6px; border:1.5px solid var(--border); border-radius:9px;
-                        background:var(--white); color:var(--text); font-size:11px; font-weight:600;
-                        cursor:pointer; text-align:center; transition:all .15s; }
-      .inv-motivo-btn:hover, .inv-motivo-btn.sel { border-color:#6366f1; background:rgba(99,102,241,.08); color:#6366f1; }
-
-      /* ajuste — campos y preview */
-      .inv-aj-field { margin-bottom:12px; }
-      .inv-aj-field label { display:block; font-size:10px; font-weight:700; color:var(--muted);
-                             text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px; }
-      .inv-aj-field input, .inv-aj-field select {
-        width:100%; padding:9px 12px; border-radius:8px; border:1px solid var(--border);
-        background:var(--white); color:var(--text); font-size:13px; box-sizing:border-box; }
-      .inv-aj-sel-card { background:var(--info-bg); border:1px solid rgba(99,102,241,.2);
-                         border-radius:10px; padding:11px 13px; margin-bottom:14px; }
-      .inv-aj-preview { background:var(--info-bg); border-radius:8px; padding:11px 13px;
-                        font-size:12px; border:1px solid rgba(99,102,241,.15); margin-bottom:14px; color:var(--text); }
-
-      /* botón confirmar */
-      .inv-confirm { width:100%; padding:13px; border:none; border-radius:11px; font-size:14px;
-                     font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center;
-                     gap:9px; margin-top:16px; transition:opacity .15s, transform .1s; }
-      .inv-confirm:hover  { opacity:.9; }
-      .inv-confirm:active { transform:scale(.98); }
-      .inv-confirm:disabled { opacity:.4; cursor:not-allowed; }
-      .inv-confirm-e { background:#22c55e; color:#fff; box-shadow:0 4px 18px rgba(34,197,94,.25); }
-      .inv-confirm-s { background:#ef4444; color:#fff; box-shadow:0 4px 18px rgba(239,68,68,.25); }
-      .inv-confirm-a { background:linear-gradient(135deg,#7c3aed,#6366f1); color:#fff; box-shadow:0 4px 18px rgba(99,102,241,.3); }
-
-      @media(max-width:640px){
-        .inv-doc-strip { grid-template-columns:1fr 1fr; }
-        .inv-motivos   { grid-template-columns:repeat(2,1fr); }
-      }
-    </style>
-
     <div class="page-header">
       <div>
         <div class="page-title">Inventario</div>
@@ -2042,182 +1937,189 @@ tbody td {
     <div class="layout-inv">
       <div>
 
-        <!-- ── TABS ── -->
-        <div class="inv-tabs" role="tablist">
-          <button class="inv-tab active" id="invtab-entrada"  onclick="invTab('entrada')"  role="tab">📥 Entrada</button>
-          <button class="inv-tab"        id="invtab-salida"   onclick="invTab('salida')"   role="tab">📤 Salida</button>
-          <button class="inv-tab"        id="invtab-ajuste"   onclick="invTab('ajuste')"   role="tab">⚖️ Ajuste</button>
+        <!-- Tabs -->
+        <div style="display:flex;gap:6px;background:var(--white);padding:5px;border-radius:10px;border:1px solid var(--border);margin-bottom:18px;">
+          <button id="invtab-entrada" onclick="invTab('entrada')"
+            style="flex:1;padding:9px 0;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;background:#6366f1;color:#fff;transition:all .15s;">
+            📥 Entrada
+          </button>
+          <button id="invtab-salida" onclick="invTab('salida')"
+            style="flex:1;padding:9px 0;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;background:transparent;color:var(--muted);transition:all .15s;">
+            📤 Salida
+          </button>
+          <button id="invtab-ajuste" onclick="invTab('ajuste')"
+            style="flex:1;padding:9px 0;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;background:transparent;color:var(--muted);transition:all .15s;">
+            ⚖️ Ajuste
+          </button>
         </div>
 
-        <!-- ══ PANEL ENTRADA ══ -->
+        <!-- ═══ ENTRADA ═══ -->
         <div id="inv-panel-entrada">
 
-          <!-- Documento de respaldo -->
-          <div class="inv-doc-strip">
+          <!-- Franja documento -->
+          <div style="background:var(--white);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
             <div>
-              <label>N° Documento *</label>
-              <input id="docE" placeholder="F-12345 / INV-87 / GD-22" style="font-family:'DM Mono',monospace;font-weight:700;">
+              <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">N° Documento *</div>
+              <input id="docE" placeholder="F-12345 / INV-87 / GD-22"
+                style="width:100%;padding:8px 10px;border-radius:7px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;font-weight:600;box-sizing:border-box;font-family:'DM Mono',monospace;">
             </div>
             <div>
-              <label>Tipo</label>
-              <select id="inv-doc-tipo-e">
+              <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Tipo</div>
+              <select id="inv-doc-tipo-e" style="width:100%;padding:8px 10px;border-radius:7px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;box-sizing:border-box;">
                 <option value="factura">Factura</option>
                 <option value="invoice">Invoice</option>
-                <option value="guia">Guía de despacho</option>
+                <option value="guia">Guía despacho</option>
                 <option value="oc">Orden de compra</option>
                 <option value="otro">Otro</option>
               </select>
             </div>
             <div>
-              <label>Motivo</label>
-              <select id="motivoEntrada"><option>Cargando...</option></select>
+              <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Motivo</div>
+              <select id="motivoEntrada" style="width:100%;padding:8px 10px;border-radius:7px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;box-sizing:border-box;"><option>Cargando...</option></select>
             </div>
           </div>
 
           <!-- Buscador -->
-          <div class="inv-scan-wrap">
-            <svg class="inv-scan-ico" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <input id="skuE" class="inv-scan-inp" placeholder="Buscar SKU o nombre… o escanear código de barras"
-                   autocomplete="off" spellcheck="false"
-                   oninput="invSearch('e')" onfocus="invSearch('e')"
-                   onblur="setTimeout(()=>invClearSug('e'),200)"
-                   onkeydown="invSearchKey(event,'e')">
-            <span class="inv-scan-badge">SCAN</span>
-            <div id="inv-sug-e" class="inv-sug" style="display:none;"></div>
+          <div style="position:relative;margin-bottom:8px;">
+            <svg style="position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input id="skuE" placeholder="Buscar por SKU o nombre del producto…"
+              autocomplete="off" spellcheck="false"
+              oninput="invSearch('e')" onfocus="invSearch('e')" onblur="setTimeout(()=>invClearSug('e'),200)" onkeydown="invSearchKey(event,'e')"
+              style="width:100%;padding:11px 14px 11px 40px;border:1.5px solid var(--border);border-radius:10px;background:var(--white);color:var(--text);font-size:14px;box-sizing:border-box;outline:none;"
+              onfocus="this.style.borderColor='#6366f1'" onblur="this.style.borderColor=''">
+            <div id="inv-sug-e" style="display:none;position:absolute;left:0;right:0;top:calc(100% + 5px);background:var(--white);border:1px solid var(--border);border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.1);z-index:200;max-height:280px;overflow-y:auto;"></div>
           </div>
-          <div style="font-size:11px;color:var(--muted);margin-bottom:14px;">Escanea o busca — se agrega a la lista. Ajusta cantidades antes de confirmar.</div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:14px;">Busca o escanea código de barras — se agrega a la lista. Ajusta cantidades antes de confirmar.</div>
 
           <!-- Lista -->
-          <div class="inv-lista-title">
-            <span>Productos a ingresar <span id="inv-count-e" style="color:#6366f1;"></span></span>
-            <button onclick="invClearLista('e')" style="font-size:11px;color:var(--muted);background:transparent;border:none;cursor:pointer;">Limpiar</button>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <span style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">Productos a ingresar <span id="inv-count-e" style="color:#6366f1;"></span></span>
+            <button onclick="invClearLista('e')" style="font-size:11px;color:var(--muted);background:transparent;border:none;cursor:pointer;padding:2px 6px;">Limpiar</button>
           </div>
           <div id="inv-lista-e">
-            <div id="inv-empty-e" style="text-align:center;padding:28px 0;color:var(--muted);font-size:13px;">Ningún producto agregado aún</div>
+            <div id="inv-empty-e" style="text-align:center;padding:24px;color:var(--hint);font-size:13px;background:var(--white);border:1px dashed var(--border);border-radius:10px;">
+              Ningún producto agregado — busca arriba
+            </div>
           </div>
 
-          <button class="inv-confirm inv-confirm-e" id="inv-btn-e" onclick="invConfirmarEntrada()" disabled>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="20 6 9 17 4 12"/></svg>
-            Confirmar entrada
+          <button id="inv-btn-e" onclick="invConfirmarEntrada()" disabled
+            style="width:100%;padding:12px;background:#22c55e;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;margin-top:14px;display:flex;align-items:center;justify-content:center;gap:8px;opacity:.45;">
+            ✓ Confirmar entrada
           </button>
         </div>
 
-        <!-- ══ PANEL SALIDA ══ -->
+        <!-- ═══ SALIDA ═══ -->
         <div id="inv-panel-salida" style="display:none;">
 
-          <div class="inv-oc-strip">
+          <div style="background:var(--white);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">
             <div>
-              <label>N° OC / Referencia *</label>
-              <input id="ocS" placeholder="OC-001 / folio / referencia" style="font-family:'DM Mono',monospace;font-weight:700;" oninput="detectarCanalOC()">
+              <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">N° OC / Referencia *</div>
+              <input id="ocS" placeholder="OC-001 / folio / referencia" oninput="detectarCanalOC()"
+                style="width:100%;padding:8px 10px;border-radius:7px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;font-weight:600;box-sizing:border-box;font-family:'DM Mono',monospace;">
               <div id="canalDetectado" style="font-size:11px;color:var(--muted);margin-top:4px;"></div>
             </div>
             <div>
-              <label>Motivo</label>
-              <select id="motivoSalida"><option>Cargando...</option></select>
+              <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Motivo</div>
+              <select id="motivoSalida" style="width:100%;padding:8px 10px;border-radius:7px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;box-sizing:border-box;"><option>Cargando...</option></select>
             </div>
           </div>
 
-          <div class="inv-scan-wrap">
-            <svg class="inv-scan-ico" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <input id="skuS" class="inv-scan-inp" placeholder="Buscar SKU o nombre… o escanear"
-                   autocomplete="off" spellcheck="false"
-                   oninput="invSearch('s')" onfocus="invSearch('s')"
-                   onblur="setTimeout(()=>invClearSug('s'),200)"
-                   onkeydown="invSearchKey(event,'s')">
-            <span class="inv-scan-badge">SCAN</span>
-            <div id="inv-sug-s" class="inv-sug" style="display:none;"></div>
+          <div style="position:relative;margin-bottom:8px;">
+            <svg style="position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input id="skuS" placeholder="Buscar por SKU o nombre del producto…"
+              autocomplete="off" spellcheck="false"
+              oninput="invSearch('s')" onfocus="invSearch('s')" onblur="setTimeout(()=>invClearSug('s'),200)" onkeydown="invSearchKey(event,'s')"
+              style="width:100%;padding:11px 14px 11px 40px;border:1.5px solid var(--border);border-radius:10px;background:var(--white);color:var(--text);font-size:14px;box-sizing:border-box;outline:none;">
+            <div id="inv-sug-s" style="display:none;position:absolute;left:0;right:0;top:calc(100% + 5px);background:var(--white);border:1px solid var(--border);border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.1);z-index:200;max-height:280px;overflow-y:auto;"></div>
           </div>
           <div style="font-size:11px;color:var(--muted);margin-bottom:14px;">Salida 1:1 — cada escaneo agrega 1 unidad a la lista.</div>
 
-          <div class="inv-lista-title">
-            <span>Productos a egresar <span id="inv-count-s" style="color:#ef4444;"></span></span>
-            <button onclick="invClearLista('s')" style="font-size:11px;color:var(--muted);background:transparent;border:none;cursor:pointer;">Limpiar</button>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <span style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">Productos a egresar <span id="inv-count-s" style="color:#ef4444;"></span></span>
+            <button onclick="invClearLista('s')" style="font-size:11px;color:var(--muted);background:transparent;border:none;cursor:pointer;padding:2px 6px;">Limpiar</button>
           </div>
           <div id="inv-lista-s">
-            <div id="inv-empty-s" style="text-align:center;padding:28px 0;color:var(--muted);font-size:13px;">Ningún producto agregado aún</div>
+            <div id="inv-empty-s" style="text-align:center;padding:24px;color:var(--hint);font-size:13px;background:var(--white);border:1px dashed var(--border);border-radius:10px;">
+              Ningún producto agregado — busca arriba
+            </div>
           </div>
 
-          <button class="inv-confirm inv-confirm-s" id="inv-btn-s" onclick="invConfirmarSalida()" disabled>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
-            Confirmar salida
+          <button id="inv-btn-s" onclick="invConfirmarSalida()" disabled
+            style="width:100%;padding:12px;background:#ef4444;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;margin-top:14px;display:flex;align-items:center;justify-content:center;gap:8px;opacity:.45;">
+            ↓ Confirmar salida
           </button>
         </div>
 
-        <!-- ══ PANEL AJUSTE ══ -->
+        <!-- ═══ AJUSTE ═══ -->
         <div id="inv-panel-ajuste" style="display:none;">
 
-          <div class="inv-scan-wrap" style="margin-bottom:12px;">
-            <svg class="inv-scan-ico" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <input id="skuA" class="inv-scan-inp" placeholder="Buscar producto a ajustar…"
-                   autocomplete="off" spellcheck="false"
-                   oninput="invSearch('a')" onfocus="invSearch('a')"
-                   onblur="setTimeout(()=>invClearSug('a'),200)">
-            <div id="inv-sug-a" class="inv-sug" style="display:none;"></div>
+          <div style="position:relative;margin-bottom:14px;">
+            <svg style="position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input id="skuA" placeholder="Buscar producto a ajustar…"
+              autocomplete="off" spellcheck="false"
+              oninput="invSearch('a')" onfocus="invSearch('a')" onblur="setTimeout(()=>invClearSug('a'),200)"
+              style="width:100%;padding:11px 14px 11px 40px;border:1.5px solid var(--border);border-radius:10px;background:var(--white);color:var(--text);font-size:14px;box-sizing:border-box;outline:none;">
+            <div id="inv-sug-a" style="display:none;position:absolute;left:0;right:0;top:calc(100% + 5px);background:var(--white);border:1px solid var(--border);border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.1);z-index:200;max-height:280px;overflow-y:auto;"></div>
           </div>
 
-          <div id="inv-aj-sel" style="display:none;background:rgba(99,102,241,.1);border-radius:10px;padding:11px 13px;margin-bottom:14px;">
+          <div id="inv-aj-sel" style="display:none;background:var(--info-bg);border:1px solid rgba(99,102,241,.2);border-radius:10px;padding:12px 14px;margin-bottom:14px;">
             <div id="inv-aj-sku" style="font-size:11px;font-family:'DM Mono',monospace;font-weight:700;color:#6366f1;"></div>
-            <div id="inv-aj-name" style="font-size:13px;color:var(--text);"></div>
-            <div style="font-size:12px;color:var(--muted);margin-top:3px;">Stock actual: <b id="inv-aj-stk" style="color:var(--text);"></b></div>
+            <div id="inv-aj-name" style="font-size:13px;color:var(--text);margin-top:2px;"></div>
+            <div style="font-size:12px;color:var(--muted);margin-top:4px;">Stock actual: <b id="inv-aj-stk" style="color:var(--text);"></b></div>
           </div>
 
-          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Tipo de ajuste</div>
-          <div class="inv-motivos">
-            <button class="inv-motivo-btn sel" data-m="merma"         onclick="invSelMotivo(this)">🔴 Merma</button>
-            <button class="inv-motivo-btn"     data-m="daño"          onclick="invSelMotivo(this)">🟠 Daño</button>
-            <button class="inv-motivo-btn"     data-m="conteo_fisico" onclick="invSelMotivo(this)">🔵 Conteo físico</button>
-            <button class="inv-motivo-btn"     data-m="robo"          onclick="invSelMotivo(this)">⚫ Robo/hurto</button>
-            <button class="inv-motivo-btn"     data-m="vencimiento"   onclick="invSelMotivo(this)">🟡 Vencimiento</button>
-            <button class="inv-motivo-btn"     data-m="otro"          onclick="invSelMotivo(this)">⚪ Otro</button>
+          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">Tipo de ajuste</div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:14px;">
+            <button class="inv-motivo-btn sel" data-m="merma"         onclick="invSelMotivo(this)" style="padding:9px 6px;border:1.5px solid #6366f1;border-radius:9px;background:rgba(99,102,241,.08);color:#6366f1;font-size:11px;font-weight:600;cursor:pointer;transition:all .15s;">🔴 Merma</button>
+            <button class="inv-motivo-btn"     data-m="daño"          onclick="invSelMotivo(this)" style="padding:9px 6px;border:1.5px solid var(--border);border-radius:9px;background:var(--white);color:var(--text);font-size:11px;font-weight:600;cursor:pointer;transition:all .15s;">🟠 Daño</button>
+            <button class="inv-motivo-btn"     data-m="conteo_fisico" onclick="invSelMotivo(this)" style="padding:9px 6px;border:1.5px solid var(--border);border-radius:9px;background:var(--white);color:var(--text);font-size:11px;font-weight:600;cursor:pointer;transition:all .15s;">🔵 Conteo físico</button>
+            <button class="inv-motivo-btn"     data-m="robo"          onclick="invSelMotivo(this)" style="padding:9px 6px;border:1.5px solid var(--border);border-radius:9px;background:var(--white);color:var(--text);font-size:11px;font-weight:600;cursor:pointer;transition:all .15s;">⚫ Robo/hurto</button>
+            <button class="inv-motivo-btn"     data-m="vencimiento"   onclick="invSelMotivo(this)" style="padding:9px 6px;border:1.5px solid var(--border);border-radius:9px;background:var(--white);color:var(--text);font-size:11px;font-weight:600;cursor:pointer;transition:all .15s;">🟡 Vencimiento</button>
+            <button class="inv-motivo-btn"     data-m="otro"          onclick="invSelMotivo(this)" style="padding:9px 6px;border:1.5px solid var(--border);border-radius:9px;background:var(--white);color:var(--text);font-size:11px;font-weight:600;cursor:pointer;transition:all .15s;">⚪ Otro</button>
           </div>
 
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
             <div>
-              <label style="display:block;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Cantidad</label>
-              <input id="inv-aj-cant" type="number" min="1" placeholder="0"
-                     style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:16px;font-weight:700;text-align:center;box-sizing:border-box;"
-                     oninput="invAjPreview()">
+              <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Cantidad</div>
+              <input id="inv-aj-cant" type="number" min="1" placeholder="0" oninput="invAjPreview()"
+                style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--white);color:var(--text);font-size:18px;font-weight:700;text-align:center;box-sizing:border-box;">
             </div>
             <div>
-              <label style="display:block;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Dirección</label>
-              <select id="inv-aj-dir" style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;box-sizing:border-box;" oninput="invAjPreview()">
+              <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Dirección</div>
+              <select id="inv-aj-dir" oninput="invAjPreview()"
+                style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--white);color:var(--text);font-size:13px;box-sizing:border-box;">
                 <option value="-1">🔻 Baja (disminuir)</option>
-                <option value="1" >🔺 Alza (aumentar)</option>
+                <option value="1">🔺 Alza (aumentar)</option>
               </select>
             </div>
           </div>
 
-          <div>
-            <label style="display:block;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Notas</label>
-            <input id="inv-aj-notas" placeholder="Describe brevemente la razón…"
-                   style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;box-sizing:border-box;margin-bottom:12px;">
+          <div style="margin-bottom:14px;">
+            <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Notas</div>
+            <input id="inv-aj-notas" placeholder="Describe brevemente la razón del ajuste…"
+              style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid var(--border);background:var(--white);color:var(--text);font-size:13px;box-sizing:border-box;">
           </div>
 
-          <div id="inv-aj-preview" class="inv-aj-preview" style="display:none;"></div>
+          <div id="inv-aj-preview" style="display:none;background:var(--info-bg);border:1px solid rgba(99,102,241,.15);border-radius:8px;padding:11px 13px;font-size:13px;margin-bottom:14px;color:var(--text);"></div>
 
-          <button class="inv-confirm inv-confirm-a" id="inv-btn-a" onclick="invConfirmarAjuste()" disabled>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-            Registrar ajuste
+          <button id="inv-btn-a" onclick="invConfirmarAjuste()" disabled
+            style="width:100%;padding:12px;background:linear-gradient(135deg,#7c3aed,#6366f1);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;opacity:.45;">
+            ✓ Registrar ajuste
           </button>
         </div>
 
         <!-- Tabla productos -->
         <div class="inv-toolbar" style="margin-top:24px;">
           <input class="search-input" id="buscador" placeholder="Buscar por nombre o SKU..." oninput="buscar()">
-          <span id="totalProductos" style="font-size:12px; color:var(--muted); white-space:nowrap;"></span>
+          <span id="totalProductos" style="font-size:12px;color:var(--muted);white-space:nowrap;"></span>
         </div>
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>SKU</th>
-                <th>Nombre</th>
-                <th>Stock</th>
-                <th>Precio Normal</th>
-                <th>Precio Oferta</th>
-                <th>Estado</th>
-                <th>Acción</th>
-                <th></th>
+                <th>SKU</th><th>Nombre</th><th>Stock</th>
+                <th>Precio Normal</th><th>Precio Oferta</th>
+                <th>Estado</th><th>Acción</th><th></th>
               </tr>
             </thead>
             <tbody id="tabla"></tbody>
@@ -2226,17 +2128,14 @@ tbody td {
       </div>
 
       <!-- Historial lateral -->
-      <div class="card" style="align-self:start; position:sticky; top:72px;">
-        <div class="card-header">
-          <div class="card-title">Historial</div>
-        </div>
+      <div class="card" style="align-self:start;position:sticky;top:72px;">
+        <div class="card-header"><div class="card-title">Historial</div></div>
         <div class="hist-list" id="historial">
-          <div style="color:var(--hint); font-size:12px;">Sin movimientos aún</div>
+          <div style="color:var(--hint);font-size:12px;">Sin movimientos aún</div>
         </div>
       </div>
     </div>
   </div>
-
   <!-- ══════════════════════════════════════════════════════════════════════════
        SECCIÓN POS — Punto de ingreso / egreso de inventario con trazabilidad
        Tabs: Entrada (con documento) | Salida 1:1 | Ajuste manual
@@ -3721,7 +3620,7 @@ function showSection(sec, btn){
   if(sec === 'skumapeo') cargarSkuMapeo();
   if(sec === 'canales' && typeof cargarCanales === 'function') cargarCanales();
   if(sec === 'dashboard' && typeof cargarDashboardCompleto === 'function') cargarDashboardCompleto();
-  if(sec === 'inventario') cargarTipificaciones();
+  if(sec === 'inventario') { cargarTipificaciones(); if(!_productosCache.length) cargar(); }
   if(sec === 'pos') posInit();
   if(sec === 'configuracion'){
     if(gear) gear.classList.add('active');
@@ -10509,8 +10408,13 @@ const _INV = {
 function invTab(tab){
   _INV.tab = tab;
   ['entrada','salida','ajuste'].forEach(t=>{
-    document.getElementById('invtab-'+t).classList.toggle('active', t===tab);
-    document.getElementById('inv-panel-'+t).style.display = t===tab ? '' : 'none';
+    const btn = document.getElementById('invtab-'+t);
+    const panel = document.getElementById('inv-panel-'+t);
+    if(btn){
+      btn.style.background = t===tab ? '#6366f1' : 'transparent';
+      btn.style.color      = t===tab ? '#fff'    : 'var(--muted)';
+    }
+    if(panel) panel.style.display = t===tab ? '' : 'none';
   });
   const map = {entrada:'skuE', salida:'skuS', ajuste:'skuA'};
   setTimeout(()=>{ const el=document.getElementById(map[tab]); if(el) el.focus(); }, 80);
@@ -10525,7 +10429,7 @@ function invSearch(modo){
   if(!inp||!sug) return;
   const q = inp.value.trim().toLowerCase();
   if(!q){ sug.style.display='none'; return; }
-  const cache = window._productosCache || [];
+  const cache = _productosCache;
   const matches = cache.filter(p=>
     (p.sku||'').toLowerCase().includes(q) ||
     (p.nombre||'').toLowerCase().includes(q)
@@ -10567,7 +10471,7 @@ function invSearchKey(e, modo){
 function invSelProduct(modo, sku, evt){
   if(evt) evt.preventDefault();
   invClearSug(modo);
-  const p = (window._productosCache||[]).find(x=>x.sku===sku);
+  const p = (_productosCache).find(x=>x.sku===sku);
   if(!p) return;
 
   if(modo==='a'){
@@ -10578,7 +10482,8 @@ function invSelProduct(modo, sku, evt){
     document.getElementById('inv-aj-sku').textContent  = p.sku;
     document.getElementById('inv-aj-name').textContent = p.nombre||'';
     document.getElementById('inv-aj-stk').textContent  = stk+' unidades';
-    document.getElementById('inv-btn-a').disabled = false;
+    const btnA = document.getElementById('inv-btn-a');
+    if(btnA){ btnA.disabled=false; btnA.style.opacity='1'; btnA.style.cursor='pointer'; }
     invAjPreview();
     return;
   }
@@ -10593,39 +10498,47 @@ function invSelProduct(modo, sku, evt){
 
 // ── Render lista ──
 function invRenderLista(modo){
-  const lista   = _INV.items[modo];
-  const contId  = modo==='e'?'inv-lista-e':'inv-lista-s';
-  const emptyId = modo==='e'?'inv-empty-e':'inv-empty-s';
-  const cntId   = modo==='e'?'inv-count-e':'inv-count-s';
-  const btnId   = modo==='e'?'inv-btn-e'  :'inv-btn-s';
-  const cont    = document.getElementById(contId);
+  const lista  = _INV.items[modo];
+  const contId = modo==='e' ? 'inv-lista-e' : 'inv-lista-s';
+  const cntId  = modo==='e' ? 'inv-count-e' : 'inv-count-s';
+  const btnId  = modo==='e' ? 'inv-btn-e'   : 'inv-btn-s';
+  const cont   = document.getElementById(contId);
+  const btn    = document.getElementById(btnId);
   if(!cont) return;
+
   if(!lista.length){
-    cont.innerHTML=`<div id="${emptyId}" style="text-align:center;padding:28px 0;color:var(--muted);font-size:13px;">Ningún producto agregado aún</div>`;
-    document.getElementById(cntId).textContent='';
-    document.getElementById(btnId).disabled=true;
+    cont.innerHTML = `<div style="text-align:center;padding:24px;color:var(--hint);font-size:13px;background:var(--white);border:1px dashed var(--border);border-radius:10px;">Ningún producto agregado — busca arriba</div>`;
+    if(document.getElementById(cntId)) document.getElementById(cntId).textContent='';
+    if(btn){ btn.disabled=true; btn.style.opacity='.45'; btn.style.cursor='not-allowed'; }
     return;
   }
+
   let totalU=0;
-  cont.innerHTML=lista.map((item,idx)=>{
-    totalU+=item.cantidad;
-    return `<div class="inv-row inv-row-${modo}">
-      <div>
-        <div class="inv-row-sku">${item.sku}</div>
-        <div class="inv-row-name">${(item.nombre||'').substring(0,45)}</div>
-        <div class="inv-row-stk">Stock: ${item.stock}</div>
+  cont.innerHTML = lista.map((item,idx)=>{
+    totalU += item.cantidad;
+    const accentColor = modo==='e' ? '#22c55e' : '#ef4444';
+    return `<div style="display:flex;align-items:center;gap:10px;background:var(--white);padding:10px 13px;border-radius:9px;margin-bottom:6px;border:1px solid var(--border);">
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:10px;font-family:'DM Mono',monospace;font-weight:700;color:#6366f1;">${item.sku}</div>
+        <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${(item.nombre||'').substring(0,50)}</div>
+        <div style="font-size:11px;color:var(--muted);">Stock: ${item.stock}</div>
       </div>
-      <div class="inv-qty-wrap">
-        <button class="inv-qty-btn" onclick="_INV.items['${modo}'][${idx}].cantidad=Math.max(1,_INV.items['${modo}'][${idx}].cantidad-1);invRenderLista('${modo}')">−</button>
-        <input class="inv-qty-inp" type="number" min="1" value="${item.cantidad}"
-               oninput="_INV.items['${modo}'][${idx}].cantidad=Math.max(1,parseInt(this.value)||1);invRenderLista('${modo}')">
-        <button class="inv-qty-btn" onclick="_INV.items['${modo}'][${idx}].cantidad++;invRenderLista('${modo}')">+</button>
+      <div style="display:flex;align-items:center;gap:5px;">
+        <button onclick="_INV.items['${modo}'][${idx}].cantidad=Math.max(1,_INV.items['${modo}'][${idx}].cantidad-1);invRenderLista('${modo}')"
+          style="width:26px;height:26px;border:none;background:rgba(99,102,241,.1);border-radius:6px;color:#6366f1;font-size:16px;font-weight:700;cursor:pointer;">−</button>
+        <input type="number" min="1" value="${item.cantidad}"
+          oninput="_INV.items['${modo}'][${idx}].cantidad=Math.max(1,parseInt(this.value)||1)"
+          style="width:50px;text-align:center;padding:4px 6px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;font-weight:600;">
+        <button onclick="_INV.items['${modo}'][${idx}].cantidad++;invRenderLista('${modo}')"
+          style="width:26px;height:26px;border:none;background:rgba(99,102,241,.1);border-radius:6px;color:#6366f1;font-size:16px;font-weight:700;cursor:pointer;">+</button>
       </div>
-      <button class="inv-row-del" onclick="_INV.items['${modo}'].splice(${idx},1);invRenderLista('${modo}')">×</button>
+      <button onclick="_INV.items['${modo}'].splice(${idx},1);invRenderLista('${modo}')"
+        style="background:transparent;border:none;color:var(--muted);cursor:pointer;font-size:18px;padding:2px 6px;border-radius:6px;" title="Eliminar">×</button>
     </div>`;
   }).join('');
-  document.getElementById(cntId).textContent=`(${lista.length} SKU · ${totalU} un.)`;
-  document.getElementById(btnId).disabled=false;
+
+  if(document.getElementById(cntId)) document.getElementById(cntId).textContent=`(${lista.length} SKU · ${totalU} un.)`;
+  if(btn){ btn.disabled=false; btn.style.opacity='1'; btn.style.cursor='pointer'; }
 }
 
 // ── Clave admin (cachea en memoria) ──
@@ -10732,9 +10645,15 @@ async function invConfirmarSalida(){
 
 // ── AJUSTE (llama /pos/ajuste con trazabilidad) ──
 function invSelMotivo(btn){
-  document.querySelectorAll('.inv-motivo-btn').forEach(b=>b.classList.remove('sel'));
-  btn.classList.add('sel');
-  _INV.ajMotivo=btn.dataset.m;
+  document.querySelectorAll('#inv-panel-ajuste .inv-motivo-btn').forEach(b=>{
+    b.style.borderColor = 'var(--border)';
+    b.style.background  = 'var(--white)';
+    b.style.color       = 'var(--text)';
+  });
+  btn.style.borderColor = '#6366f1';
+  btn.style.background  = 'rgba(99,102,241,.08)';
+  btn.style.color       = '#6366f1';
+  _INV.ajMotivo = btn.dataset.m;
   invAjPreview();
 }
 
@@ -10785,8 +10704,9 @@ async function invConfirmarAjuste(){
       document.getElementById('inv-aj-cant').value='';
       document.getElementById('inv-aj-notas').value='';
       document.getElementById('inv-aj-preview').style.display='none';
-      document.getElementById('inv-btn-a').disabled=true;
-      const pc=(window._productosCache||[]).find(x=>x.sku===p.sku);
+      const btnA=document.getElementById('inv-btn-a');
+      if(btnA){ btnA.disabled=true; btnA.style.opacity='.45'; btnA.style.cursor='not-allowed'; }
+      const pc=(_productosCache).find(x=>x.sku===p.sku);
       if(pc){ pc.stock=d.cantidad_despues; if(pc.stock_disponible!==undefined) pc.stock_disponible=d.cantidad_despues; }
       if(typeof cargar==='function') cargar();
     }
@@ -10868,7 +10788,7 @@ function posSearch(modo){
   if(!inp||!sug) return;
   const q = inp.value.trim().toLowerCase();
   if(!q){ sug.style.display='none'; return; }
-  const cache = window._productosCache || [];
+  const cache = _productosCache;
   const matches = cache.filter(p=>
     (p.sku||'').toLowerCase().includes(q) ||
     (p.nombre||'').toLowerCase().includes(q)
@@ -10916,7 +10836,7 @@ function posSelProduct(modo, sku, evt){
   const inputId = {e:'pos-search-e',s:'pos-search-s',a:'pos-search-a'}[modo];
   posClearSug(modo);
 
-  const p = (window._productosCache||[]).find(x=>x.sku===sku);
+  const p = (_productosCache).find(x=>x.sku===sku);
   if(!p) return;
 
   if(modo==='a'){
@@ -11228,7 +11148,7 @@ async function posConfirmarAjuste(){
       document.getElementById('pos-aj-notas').value='';
       document.getElementById('pos-aj-preview').style.display='none';
       // Actualizar cache local
-      const pc=(window._productosCache||[]).find(x=>x.sku===p.sku);
+      const pc=(_productosCache).find(x=>x.sku===p.sku);
       if(pc){ pc.stock=d.cantidad_despues; if(pc.stock_disponible!==undefined)pc.stock_disponible=d.cantidad_despues; }
       if(typeof cargar==='function') cargar();
     }
