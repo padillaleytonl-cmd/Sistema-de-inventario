@@ -417,13 +417,18 @@ def actualizar_precios(sku, precio_normal, precio_oferta):
     cur.close()
     conn.close()
 
-def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistema", canal="Sistema", orden_id=None, fecha_override=None, numero_orden=None, documento_ref=None):
+def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistema",
+                          canal="Sistema", orden_id=None, fecha_override=None,
+                          numero_orden=None, documento_ref=None,
+                          fecha_compra_marketplace=None, origen_registro=None):
     """
     Registra un movimiento de stock con trazabilidad documental.
 
     Args:
         numero_orden: N° de orden del marketplace (para salidas)
-        documento_ref: N° de documento físico (factura/invoice/guía/OC) — siempre obligatorio para movs manuales
+        documento_ref: N° de documento físico (factura/invoice/guía/OC)
+        fecha_compra_marketplace: fecha REAL en que el cliente compró en el marketplace
+        origen_registro: 'webhook' | 'scheduler' | 'manual' | 'pos' | 'sistema'
     """
     conn = get_conn()
     cur = conn.cursor()
@@ -434,8 +439,11 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_importacion TIMESTAMP")
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS numero_orden TEXT DEFAULT NULL")
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS documento_ref TEXT DEFAULT NULL")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_compra_marketplace TIMESTAMP")
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS origen_registro TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_mov_documento_ref ON movimientos(documento_ref)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_mov_numero_orden ON movimientos(numero_orden)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_mov_fecha_compra_mp ON movimientos(fecha_compra_marketplace)")
         conn.commit()
     except:
         conn.rollback()
@@ -447,11 +455,26 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
             fecha = fecha_override
     else:
         fecha = ahora
+
+    # Normalizar fecha_compra_marketplace a hora Chile sin tzinfo
+    fecha_compra_mp_norm = None
+    if fecha_compra_marketplace:
+        try:
+            if hasattr(fecha_compra_marketplace, 'tzinfo') and fecha_compra_marketplace.tzinfo:
+                fecha_compra_mp_norm = fecha_compra_marketplace.astimezone(TZ_CHILE).replace(tzinfo=None)
+            else:
+                fecha_compra_mp_norm = fecha_compra_marketplace
+        except Exception:
+            fecha_compra_mp_norm = None
+
     cur.execute("""
-        INSERT INTO movimientos (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id, fecha_importacion, numero_orden, documento_ref)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO movimientos (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha,
+                                  orden_id, fecha_importacion, numero_orden, documento_ref,
+                                  fecha_compra_marketplace, origen_registro)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
-    """, (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id, ahora, numero_orden, documento_ref))
+    """, (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id, ahora,
+          numero_orden, documento_ref, fecha_compra_mp_norm, origen_registro))
     mov_id = cur.fetchone()[0]
     conn.commit()
     cur.close()

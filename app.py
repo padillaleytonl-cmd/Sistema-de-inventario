@@ -78,6 +78,43 @@ app.register_blueprint(falabella_bp)
 #   sincronizar_stock_marketplaces(sku, nuevo_stock)
 # ════════════════════════════════════════════════════════════════════════════
 
+def _asegurar_fecha_compra(canal, orden_id, fecha_compra, sku=None):
+    """Asegura que el último movimiento de salida de esta orden tenga fecha_compra_marketplace.
+    Se llama después de descontar_venta porque bodegas_logic.descontar_venta puede no
+    escribir esa columna. Idempotente."""
+    if not fecha_compra or not orden_id:
+        return
+    try:
+        from inventario import get_conn as _gc, TZ_CHILE
+        fc = fecha_compra
+        if hasattr(fc, 'tzinfo') and fc.tzinfo:
+            fc = fc.astimezone(TZ_CHILE).replace(tzinfo=None)
+        conn = _gc(); cur = conn.cursor()
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_compra_marketplace TIMESTAMP")
+        if sku:
+            cur.execute("""
+                UPDATE movimientos SET fecha_compra_marketplace = %s
+                WHERE id = (
+                    SELECT id FROM movimientos
+                    WHERE canal = %s
+                      AND (COALESCE(orden_id::text,'') = %s OR COALESCE(numero_orden,'') = %s)
+                      AND sku = %s AND tipo = 'salida'
+                      AND fecha_compra_marketplace IS NULL
+                    ORDER BY fecha DESC LIMIT 1
+                )
+            """, (fc, canal, str(orden_id), str(orden_id), sku))
+        else:
+            cur.execute("""
+                UPDATE movimientos SET fecha_compra_marketplace = %s
+                WHERE canal = %s
+                  AND (COALESCE(orden_id::text,'') = %s OR COALESCE(numero_orden,'') = %s)
+                  AND tipo = 'salida' AND fecha_compra_marketplace IS NULL
+            """, (fc, canal, str(orden_id), str(orden_id)))
+        conn.commit(); cur.close(); conn.close()
+    except Exception as e:
+        print(f"[_asegurar_fecha_compra] {canal} {orden_id}: {e}")
+
+
 def sincronizar_stock_marketplaces(sku, stock, contexto="manual"):
     """Sincroniza el stock de un SKU con TODOS los marketplaces conectados.
 
@@ -193,6 +230,7 @@ def _sync_walmart_automatico():
                             usuario="Sistema",
                             fecha_compra_marketplace=fecha_compra_wm
                         )
+                        _asegurar_fecha_compra("Walmart", customer_order_id, fecha_compra_wm, sku=sku_lusync)
                         print(f"[Scheduler] {customer_order_id} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado['bodega']}")
 
                         # Sync a otros canales SOLO si fue Seller (afectó Central)
@@ -597,6 +635,7 @@ def _sync_falabella_automatico():
                             fecha_compra_marketplace=fecha_compra_fa,
                             origen_registro="scheduler"
                         )
+                        _asegurar_fecha_compra("Falabella", order_id, fecha_compra_fa, sku=sku_lusync)
                         sincronizar_stock_marketplaces(
                             sku_lusync, resultado.get("stock_despues", 0),
                             contexto="falabella_orden_bg"
@@ -838,6 +877,7 @@ def _sync_paris_automatico():
                             fecha_compra_marketplace=fecha_compra_pa,
                             origen_registro="scheduler"
                         )
+                        _asegurar_fecha_compra("Paris", sub_order, fecha_compra_pa, sku=sku_lusync)
                         sincronizar_stock_marketplaces(
                             sku_lusync, resultado.get("stock_despues", 0),
                             contexto="paris_orden_bg"
@@ -1029,6 +1069,7 @@ def _sync_ripley_automatico():
                         fecha_compra_marketplace=fecha_compra_rp,
                         origen_registro="scheduler"
                     )
+                    _asegurar_fecha_compra("Ripley", order_id, fecha_compra_rp, sku=sku_lusync)
                     sincronizar_stock_marketplaces(
                         sku_lusync, resultado.get("stock_despues", 0),
                         contexto="ripley_orden_bg"
@@ -1131,8 +1172,11 @@ def _sync_woo_automatico():
                                 "salida", p["sku"], p["nombre"], cantidad,
                                 f"Venta Web (Woo) orden {order_id}",
                                 usuario="Sistema", canal="Web", orden_id=order_id,
-                                fecha_override=fecha_compra_woo
+                                fecha_override=fecha_compra_woo,
+                                fecha_compra_marketplace=fecha_compra_woo,
+                                origen_registro="scheduler"
                             )
+                            _asegurar_fecha_compra("Web", order_id, fecha_compra_woo, sku=p["sku"])
                             sincronizar_stock_marketplaces(
                                 p["sku"], p["stock"], contexto="woo_orden_bg"
                             )
@@ -9791,6 +9835,124 @@ def admin_movimientos_por_fecha():
         try: cur.close(); conn.close()
         except: pass
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/rellenar_fechas_compra", methods=["GET"])
+def admin_rellenar_fechas_compra():
+    """Rellena fecha_compra_marketplace en movimientos viejos consultando las APIs.
+    Recorre movimientos de salida sin fecha_compra y consulta el detalle de cada orden.
+    Útil para movimientos creados antes de que se grabara correctamente esa columna.
+
+    Params: canal (paris|walmart|falabella|mercadolibre|web|todos), limite (default 100), token
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN","lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error":"no autorizado"}),401
+
+    canal_pedido = (request.args.get("canal") or "todos").lower()
+    limite       = int(request.args.get("limite", 100))
+
+    try:
+        from inventario import get_conn as _gc, TZ_CHILE
+        from datetime import datetime as _dt
+        conn = _gc(); cur = conn.cursor()
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_compra_marketplace TIMESTAMP")
+        conn.commit()
+
+        # Filtro por canal si corresponde
+        where = "tipo='salida' AND fecha_compra_marketplace IS NULL AND COALESCE(orden_id::text,numero_orden,'') <> ''"
+        params = []
+        canales_map = {
+            "paris":"Paris", "walmart":"Walmart", "falabella":"Falabella",
+            "mercadolibre":"MercadoLibre", "meli":"MercadoLibre",
+            "web":"Web", "ripley":"Ripley"
+        }
+        canal_filter = canales_map.get(canal_pedido)
+        if canal_filter:
+            where += " AND canal = %s"; params.append(canal_filter)
+        elif canal_pedido != "todos":
+            return jsonify({"error":"canal inválido", "validos": list(canales_map.keys())+["todos"]}),400
+
+        cur.execute(f"""
+            SELECT id, canal, COALESCE(orden_id::text, numero_orden) AS orden, sku
+            FROM movimientos
+            WHERE {where}
+            ORDER BY fecha DESC LIMIT %s
+        """, params + [limite])
+        movs = cur.fetchall()
+        cur.close(); conn.close()
+
+        actualizados = []
+        errores = []
+
+        # Agrupar por orden para minimizar llamadas API
+        ordenes_unicas = {}
+        for mov_id, canal, orden, sku in movs:
+            if not orden: continue
+            key = f"{canal}|{orden}"
+            ordenes_unicas.setdefault(key, []).append((mov_id, sku))
+
+        for key, ids_skus in ordenes_unicas.items():
+            canal, orden = key.split("|", 1)
+            fecha_compra = None
+            try:
+                if canal == "Paris":
+                    from paris import obtener_orden_paris
+                    o = obtener_orden_paris(orden)
+                    if o:
+                        ds = o.get("createdAt") or o.get("created_at") or ""
+                        if ds: fecha_compra = _dt.fromisoformat(ds.replace("Z","+00:00"))
+                elif canal == "Walmart":
+                    from walmart import walmart_headers, WALMART_BASE_URL
+                    import requests as _r
+                    r = _r.get(f"{WALMART_BASE_URL}/v3/orders/{orden}", headers=walmart_headers(), timeout=10)
+                    if r.status_code == 200:
+                        ds = r.json().get("orderDate") or r.json().get("orderPlacedTime")
+                        if ds: fecha_compra = _dt.fromisoformat(str(ds).replace("Z","+00:00"))
+                elif canal == "Falabella":
+                    from falabella import obtener_orden_falabella
+                    o = obtener_orden_falabella(orden)
+                    if o:
+                        ds = o.get("CreatedAt") or o.get("created_at")
+                        if ds: fecha_compra = _dt.fromisoformat(str(ds).replace("Z","+00:00")) if "T" in str(ds) else _dt.strptime(str(ds)[:19], "%Y-%m-%d %H:%M:%S")
+                elif canal == "MercadoLibre":
+                    from mercadolibre import obtener_orden_meli
+                    o = obtener_orden_meli(orden)
+                    if o:
+                        ds = o.get("date_created")
+                        if ds: fecha_compra = _dt.fromisoformat(ds.replace("Z","+00:00"))
+                elif canal == "Web":
+                    # Para Woo, usar la fecha que ya está en la columna fecha (que es fecha_override)
+                    pass
+
+                if fecha_compra:
+                    # Normalizar a Chile
+                    if hasattr(fecha_compra, 'tzinfo') and fecha_compra.tzinfo:
+                        fecha_compra = fecha_compra.astimezone(TZ_CHILE).replace(tzinfo=None)
+                    conn = _gc(); cur = conn.cursor()
+                    for mov_id, sku in ids_skus:
+                        cur.execute("UPDATE movimientos SET fecha_compra_marketplace = %s WHERE id = %s",
+                                   (fecha_compra, mov_id))
+                        actualizados.append({"id": mov_id, "canal": canal, "orden": orden, "sku": sku,
+                                            "fecha_compra": fecha_compra.isoformat()})
+                    conn.commit(); cur.close(); conn.close()
+                else:
+                    errores.append({"canal": canal, "orden": orden, "razon": "no se obtuvo fecha"})
+            except Exception as e:
+                errores.append({"canal": canal, "orden": orden, "razon": str(e)[:100]})
+
+        return jsonify({
+            "ok": True,
+            "movimientos_revisados": len(movs),
+            "ordenes_consultadas": len(ordenes_unicas),
+            "actualizados": len(actualizados),
+            "errores_count": len(errores),
+            "actualizados_detalle": actualizados[:30],
+            "errores_detalle": errores[:30]
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
 @app.route("/admin/diagnostico_bd", methods=["GET"])
