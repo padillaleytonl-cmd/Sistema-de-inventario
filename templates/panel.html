@@ -2021,12 +2021,18 @@ tbody td {
         </div>
       </div>
 
+    </div>
+    <!-- Actividad reciente (ancho completo) -->
+    <div style="margin-top:14px;">
       <div class="card">
         <div class="card-header">
-          <div class="card-title">Actividad reciente</div>
-          <span class="card-tag">Últimos movimientos</span>
+          <div>
+            <div class="card-title">Últimos movimientos</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:2px;">Entradas, salidas y ajustes recientes en todas las bodegas</div>
+          </div>
+          <a href="#" onclick="showSection('movimientos');return false;" class="card-tag" style="cursor:pointer;">Ver todos →</a>
         </div>
-        <div class="activity-list" id="actividadList" style="max-height:280px;overflow-y:auto;">
+        <div id="actividadList" style="max-height:420px;overflow-y:auto;">
           <div style="color:var(--hint);font-size:12px;padding:12px;">Cargando…</div>
         </div>
       </div>
@@ -8517,25 +8523,90 @@ async function cargarActividad() {
       lista.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:12px;padding:30px;">Sin actividad reciente</div>';
       return;
     }
-    let html = '';
+
+    // Header de tabla
+    let html = `<div style="display:grid;grid-template-columns:28px 1fr 70px 60px 50px 60px;gap:10px;align-items:center;padding:8px 4px;background:var(--bg2);font-weight:500;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:0.05em;border-bottom:0.5px solid var(--border);">
+      <div></div><div>Producto</div><div>Canal</div><div>Cantidad</div><div>Bodega</div><div style="text-align:right;">Hora</div>
+    </div>`;
+
     movs.forEach(m => {
-      const isEntrada = m.tipo === 'entrada';
-      const icon = isEntrada ? '↑' : '↓';
-      const color = isEntrada ? '#059669' : '#dc2626';
-      const canalColor = COLORES_CANAL[m.canal] || '#6b7280';
-      html += `<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:0.5px solid var(--border);">
-        <div style="font-size:14px;font-weight:700;color:${color};width:18px;text-align:center;">${icon}</div>
-        <div style="flex:1;min-width:0;">
-          <div style="font-size:12px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${m.nombre || m.sku}</div>
-          <div style="font-size:10px;color:var(--muted);">
-            <span style="color:${canalColor};font-weight:600;">${m.canal}</span> · ${m.fecha} ${m.hora}
-          </div>
+      const tipo = (m.tipo || '').toLowerCase();
+      const isEntrada = tipo === 'entrada';
+      const isSalida = tipo === 'salida';
+      const isAjuste = tipo === 'ajuste';
+
+      // Icono de tipo
+      let dotBg, dotColor, dotChar;
+      if (isEntrada) { dotBg = '#EAF3DE'; dotColor = '#3B6D11'; dotChar = '+'; }
+      else if (isSalida) { dotBg = '#E1F5EE'; dotColor = '#0F6E56'; dotChar = '−'; }
+      else { dotBg = '#FAEEDA'; dotColor = '#854F0B'; dotChar = '±'; }
+
+      // Cantidad coloreada
+      const cantidadColor = isEntrada ? '#3B6D11' : (isSalida ? '#993C1D' : '#854F0B');
+      const cantidadPrefijo = isEntrada ? '+' : (isSalida ? '−' : '');
+      const cantidad = `${cantidadPrefijo}${m.cantidad || 0} u`;
+
+      // Canal con logo
+      const ocNum = m.numero_orden || m.orden_id || '';
+      const subtitulo = ocNum ? `${m.sku} · OC-${ocNum}` : `${m.sku} · ${isEntrada ? 'entrada manual' : (isAjuste ? 'ajuste' : 'sin orden')}`;
+
+      const canalNormalizado = (() => {
+        const c = (m.canal || '').toLowerCase().trim();
+        if (['manual'].includes(c)) return null;
+        if (['ajuste','adjustment'].includes(c)) return null;
+        if (['sistema','system','pos'].includes(c)) return null;
+        return m.canal;
+      })();
+
+      let canalHtml;
+      if (canalNormalizado) {
+        const L = getLogoCanal(canalNormalizado);
+        canalHtml = `<span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:5px;background:${L.bg};color:${L.color};font-weight:700;font-size:9px;" title="${canalNormalizado}">${L.label}</span>`;
+      } else {
+        const tag = (m.canal || 'Sistema');
+        canalHtml = `<span style="font-size:10px;color:var(--muted);font-weight:500;">${tag}</span>`;
+      }
+
+      const bodega = m.bodega || '—';
+      const hora = m.hora || m.fecha || '';
+
+      html += `<div style="display:grid;grid-template-columns:28px 1fr 70px 60px 50px 60px;gap:10px;align-items:center;padding:9px 4px;border-bottom:0.5px solid var(--border);font-size:12px;cursor:pointer;" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'" onclick="abrirDetalleMovimiento('${ocNum || (m.sku||'')}', '${(m.sku||'').replace(/'/g,'\\\\\\'')}')">
+        <div style="width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;background:${dotBg};color:${dotColor};">${dotChar}</div>
+        <div style="min-width:0;overflow:hidden;">
+          <div style="font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${m.nombre || m.sku}</div>
+          <div style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${subtitulo}</div>
         </div>
-        <div style="font-size:13px;font-weight:600;color:${color};">${isEntrada?'+':'-'}${m.cantidad}</div>
+        <div>${canalHtml}</div>
+        <div style="color:${cantidadColor};font-weight:600;font-size:11px;">${cantidad}</div>
+        <div style="color:var(--muted);font-size:11px;">${bodega}</div>
+        <div style="text-align:right;color:var(--muted);font-family:'DM Mono',monospace;font-size:11px;">${hora}</div>
       </div>`;
     });
+
+    // Footer link a movimientos completos
+    html += `<div style="padding:10px 4px 0;text-align:center;">
+      <a href="#" onclick="showSection('movimientos');return false;" style="font-size:11px;color:#534AB7;font-weight:500;text-decoration:none;">Ver historial completo →</a>
+    </div>`;
+
     lista.innerHTML = html;
   } catch(e) { console.error('Actividad error:', e); }
+}
+
+// Click en una fila → abre la sección de movimientos con foco en esa orden
+function abrirDetalleMovimiento(orden, sku) {
+  showSection('movimientos');
+  // Si hay buscador, pre-cargar la búsqueda
+  setTimeout(() => {
+    const buscadores = document.querySelectorAll('input[placeholder*="orden"], input[placeholder*="SKU"], #movBuscador, #buscadorMovimientos');
+    for (const b of buscadores) {
+      if (b && (b.placeholder || '').toLowerCase().match(/orden|sku|buscar/)) {
+        b.value = orden || sku;
+        b.dispatchEvent(new Event('input', {bubbles:true}));
+        b.scrollIntoView({behavior:'smooth', block:'center'});
+        break;
+      }
+    }
+  }, 200);
 }
 
 async function cargarDashboardCompleto() {
