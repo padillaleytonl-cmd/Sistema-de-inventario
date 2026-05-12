@@ -617,6 +617,9 @@ def _sync_falabella_automatico():
                 order_id = str(o.get("OrderId") or o.get("orderId") or o.get("id") or "")
                 if not order_id:
                     continue
+                # OrderNumber = número amigable que ve el cliente en Falabella (ej "3235355242")
+                # OrderId = ID interno corto para APIs (ej "1153216340")
+                order_number = str(o.get("OrderNumber") or o.get("orderNumber") or order_id)
                 # Estado puede venir en Statuses[0].Status o en Status directo
                 statuses = o.get("Statuses") or []
                 if isinstance(statuses, list) and statuses:
@@ -696,6 +699,21 @@ def _sync_falabella_automatico():
                             origen_registro="scheduler"
                         )
                         _asegurar_fecha_compra("Falabella", order_id, fecha_compra_fa, sku=sku_lusync)
+                        # Setear numero_orden = OrderNumber (lo que se ve en seller center)
+                        try:
+                            from inventario import get_conn as _gc_fan
+                            _c_fan = _gc_fan(); _cur_fan = _c_fan.cursor()
+                            _cur_fan.execute("""
+                                UPDATE movimientos SET numero_orden = %s
+                                WHERE canal = 'Falabella'
+                                  AND (orden_id::text = %s OR numero_orden = %s)
+                                  AND sku = %s
+                                  AND tipo = 'salida'
+                                  AND (numero_orden IS NULL OR numero_orden = orden_id::text)
+                            """, (order_number, str(order_id), str(order_id), sku_lusync))
+                            _c_fan.commit(); _cur_fan.close(); _c_fan.close()
+                        except Exception as e_no:
+                            print(f"[Scheduler Falabella] no pude setear numero_orden: {e_no}")
                         sincronizar_stock_marketplaces(
                             sku_lusync, resultado.get("stock_despues", 0),
                             contexto="falabella_orden_bg"
@@ -755,8 +773,9 @@ def _sync_falabella_automatico():
 
                         registrar_movimiento(
                             "entrada", prod["sku"], prod["nombre"], cantidad,
-                            f"Cancelación Falabella orden {order_id}",
+                            f"Cancelación Falabella orden {order_number}",
                             usuario="Sistema", canal="Falabella", orden_id=order_id,
+                            numero_orden=order_number,
                             fecha_compra_marketplace=fecha_compra_fa_cancel,
                             origen_registro="scheduler"
                         )
@@ -10117,43 +10136,29 @@ def admin_falabella_orden_raw(order_id):
 
 @app.route("/admin/movimiento_detalle/<orden>", methods=["GET"])
 def admin_movimiento_detalle(orden):
-    """Devuelve detalle de movimientos con esa orden y permite corregir fecha.
-    Uso ver: /admin/movimiento_detalle/1153216340?token=XXX
-    Uso corregir: /admin/movimiento_detalle/1153216340?token=XXX&fecha_compra=2026-05-08T20:30:00
+    """Ver y/o corregir movimientos por orden.
+    Params query:
+      - fecha_compra=2026-05-08T20:30:00  → actualiza fecha_compra_marketplace
+      - numero_orden=3235355242           → actualiza numero_orden
+    Uso:
+      Ver:       /admin/movimiento_detalle/1153216340?token=XXX
+      Corregir:  /admin/movimiento_detalle/1153216340?numero_orden=3235355242&fecha_compra=2026-05-08T20:30:00&token=XXX
     """
     bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN","lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error":"no autorizado"}),401
 
-    fecha_nueva = request.args.get("fecha_compra", "")
+    fecha_nueva  = request.args.get("fecha_compra", "")
+    numero_nuevo = request.args.get("numero_orden", "")
 
     try:
         from inventario import get_conn as _gc, TZ_CHILE
         from datetime import datetime as _dt
 
         conn = _gc(); cur = conn.cursor()
-
-        # Buscar el/los movimientos
-        cur.execute("""
-            SELECT id, tipo, sku, nombre, cantidad, canal, fecha,
-                   fecha_compra_marketplace, fecha_importacion,
-                   COALESCE(orden_id::text, numero_orden) AS orden, motivo
-            FROM movimientos
-            WHERE COALESCE(orden_id::text,'') = %s
-               OR COALESCE(numero_orden,'') = %s
-            ORDER BY fecha DESC
-        """, (str(orden), str(orden)))
-        cols = [d[0] for d in cur.description]
-        movs = [dict(zip(cols, r)) for r in cur.fetchall()]
-
-        # Serializar fechas
-        for m in movs:
-            for k in ("fecha", "fecha_compra_marketplace", "fecha_importacion"):
-                if m.get(k) and hasattr(m[k], "isoformat"):
-                    m[k] = m[k].isoformat()
+        cambios = {}
 
         # Si se pasó fecha_compra, hacer UPDATE
-        actualizado = None
         if fecha_nueva:
             try:
                 fc = _dt.fromisoformat(fecha_nueva.replace("Z","+00:00"))
@@ -10164,17 +10169,49 @@ def admin_movimiento_detalle(orden):
                     WHERE COALESCE(orden_id::text,'') = %s
                        OR COALESCE(numero_orden,'') = %s
                 """, (fc, str(orden), str(orden)))
-                actualizado = cur.rowcount
-                conn.commit()
+                cambios["fecha_compra_actualizada"] = cur.rowcount
             except Exception as e:
-                actualizado = f"error: {e}"
+                cambios["fecha_compra_error"] = str(e)
+
+        # Si se pasó numero_orden, hacer UPDATE
+        if numero_nuevo:
+            try:
+                cur.execute("""
+                    UPDATE movimientos SET numero_orden = %s
+                    WHERE COALESCE(orden_id::text,'') = %s
+                       OR COALESCE(numero_orden,'') = %s
+                """, (str(numero_nuevo), str(orden), str(orden)))
+                cambios["numero_orden_actualizado"] = cur.rowcount
+            except Exception as e:
+                cambios["numero_orden_error"] = str(e)
+
+        if cambios:
+            conn.commit()
+
+        # Mostrar estado actual de los movimientos
+        cur.execute("""
+            SELECT id, tipo, sku, nombre, cantidad, canal, fecha,
+                   fecha_compra_marketplace, fecha_importacion,
+                   COALESCE(orden_id::text,'') AS oid,
+                   COALESCE(numero_orden,'') AS no, motivo
+            FROM movimientos
+            WHERE COALESCE(orden_id::text,'') = %s
+               OR COALESCE(numero_orden,'') = %s
+            ORDER BY fecha DESC
+        """, (str(orden), str(numero_nuevo or orden)))
+        cols = [d[0] for d in cur.description]
+        movs = [dict(zip(cols, r)) for r in cur.fetchall()]
+        for m in movs:
+            for k in ("fecha", "fecha_compra_marketplace", "fecha_importacion"):
+                if m.get(k) and hasattr(m[k], "isoformat"):
+                    m[k] = m[k].isoformat()
 
         cur.close(); conn.close()
 
         return jsonify({
-            "orden": orden,
+            "busqueda": orden,
             "movimientos": movs,
-            "actualizados": actualizado
+            "cambios": cambios or None
         })
     except Exception as e:
         import traceback
