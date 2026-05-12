@@ -10093,6 +10093,28 @@ def admin_rellenar_fechas_compra():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/admin/falabella_orden_raw/<order_id>", methods=["GET"])
+def admin_falabella_orden_raw(order_id):
+    """Devuelve la respuesta cruda de Falabella para una orden, para ver qué campos trae.
+    Útil para identificar el "número amigable" vs el OrderId interno."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN","lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error":"no autorizado"}),401
+    try:
+        from falabella import obtener_orden_falabella, obtener_items_orden_falabella
+        orden = obtener_orden_falabella(order_id)
+        items = obtener_items_orden_falabella(order_id) or []
+        return jsonify({
+            "orden_completa": orden,
+            "items_completos": items,
+            "campos_orden": list(orden.keys()) if orden else None,
+            "campos_item_0": list(items[0].keys()) if items else None,
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 @app.route("/admin/movimiento_detalle/<orden>", methods=["GET"])
 def admin_movimiento_detalle(orden):
     """Devuelve detalle de movimientos con esa orden y permite corregir fecha.
