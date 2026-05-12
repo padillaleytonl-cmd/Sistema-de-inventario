@@ -227,9 +227,17 @@ def actualizar_stock_falabella(sku, cantidad):
         formato="JSON"
     )
     if res["ok"]:
-        print(f"[Falabella] Stock {sku}={cantidad} OK (ProductUpdate)")
+        # Falabella ProductUpdate es ASYNC: devuelve FeedId, el cambio se aplica en cola
+        feed_id = ""
+        try:
+            data = res.get("data", {})
+            feed_id = (data.get("SuccessResponse", {}).get("Body", {}).get("FeedId")
+                       or data.get("FeedId") or "")
+        except Exception:
+            pass
+        print(f"[Falabella] Stock {sku}={cantidad} ACEPTADO FeedId={feed_id} (puede tardar 1-15 min)")
         return True
-    print(f"[Falabella] Stock {sku} ERROR: {res.get('error')}")
+    print(f"[Falabella] Stock {sku} ERROR: {res.get('error')} body: {str(res.get('data',''))[:200]}")
     return False
 
 

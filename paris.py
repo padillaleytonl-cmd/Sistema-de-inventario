@@ -128,8 +128,9 @@ def actualizar_stock_paris(sku_lusync, cantidad):
                 timeout=15
             )
             ok = res.status_code in [200, 201]
-            print(f"[Paris Stock] SKU:{sku_paris} Qty:{cantidad} Status:{res.status_code}")
-            log.append(f"  {sku_paris}: status {res.status_code} {'OK' if ok else 'FAIL'}")
+            # Loggear el body siempre para diagnosticar respuestas async que dicen 200 pero rechazan
+            print(f"[Paris Stock] SKU:{sku_paris} Qty:{cantidad} Status:{res.status_code} Body:{res.text[:400]}")
+            log.append(f"  {sku_paris}: status {res.status_code} {'OK' if ok else 'FAIL'} body:{res.text[:200]}")
             if ok:
                 exitosas += 1
             else:
