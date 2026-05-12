@@ -4411,13 +4411,20 @@ function renderTorta(movimientos, productos){
   // Orden fijo de canales para colores consistentes
   const ORDEN_CANALES = ['WooCommerce','Walmart','MercadoLibre','Falabella','Ripley','Paris','Manual'];
   const COLORES_CANAL = {
-    'WooCommerce': '#2563eb',
-    'Walmart': '#059669',
-    'MercadoLibre': '#f59e0b',
-    'Falabella': '#e94560',
-    'Ripley': '#7c3aed',
-    'Paris': '#0369a1',
-    'Manual': '#6b7280'
+    'MercadoLibre': '#FFE600',
+    'Paris':        '#4F5AFF',
+    'Falabella':    '#ADD500',
+    'Walmart':      '#0071DC',
+    'Ripley':       '#5F3D76',
+    'Web':          '#873EFF',
+    'WooCommerce':  '#873EFF',
+    'Hites':        '#FF8200',
+    'Shopify':      '#95BF47',
+    'VTEX':         '#F71963',
+    'Jumseller':    '#FF6B35',
+    'Prestashop':   '#DF0067',
+    'Magento':      '#EE672F',
+    'Manual':       '#6b7280'
   };
   movimientos.filter(m => esVentaReal(m)).forEach(m => {
     const canal = m.canal || 'Manual';
@@ -8027,17 +8034,45 @@ document.getElementById('syncParisModal').addEventListener('click', function(e){
 // ════════════════════════════════════════════════════════════════
 
 const COLORES_CANAL = {
-  // Colores oficiales de cada marketplace
-  WooCommerce: '#7F54B3', WC: '#7F54B3',  // morado oficial WooCommerce
-  Walmart: '#0071CE',     WM: '#0071CE',  // azul oficial Walmart
-  Paris: '#0F265C',       PA: '#0F265C', 'París': '#0F265C',  // azul oscuro París
-  Falabella: '#00B25E',   FA: '#00B25E',  // verde oficial Falabella
-  Ripley: '#A01B7A',      RP: '#A01B7A',  // rosa/púrpura oficial Ripley
-  MercadoLibre: '#FFE600', ML: '#FFE600', // amarillo oficial MercadoLibre
-  Hites: '#E30613',       HI: '#E30613',  // rojo oficial Hites
-  Manual: '#6b7280',
-  Sistema: '#6b7280'
+  // Colores oficiales de cada marketplace (Lusync corporate palette)
+  MercadoLibre: '#FFE600', ML: '#FFE600',
+  Paris:        '#4F5AFF', PA: '#4F5AFF', 'París': '#4F5AFF',
+  Falabella:    '#ADD500', FA: '#ADD500',
+  Walmart:      '#0071DC', WM: '#0071DC',
+  Ripley:       '#5F3D76', RP: '#5F3D76',
+  Web:          '#873EFF', WE: '#873EFF',
+  WooCommerce:  '#873EFF', WC: '#873EFF',  // Web genérico
+  Hites:        '#FF8200', HI: '#FF8200',
+  Shopify:      '#95BF47',
+  VTEX:         '#F71963',
+  Jumseller:    '#FF6B35',
+  Prestashop:   '#DF0067',
+  Magento:      '#EE672F',
+  Manual:       '#6b7280',
+  Sistema:      '#6b7280'
 };
+
+// Logos de canales (iniciales + colores) para los pills/badges del dashboard
+const LOGOS_CANAL = {
+  MercadoLibre: {label:'ML', bg:'#FFE600', color:'#1A1A1A'},
+  Paris:        {label:'PA', bg:'#4F5AFF', color:'white'},
+  'París':      {label:'PA', bg:'#4F5AFF', color:'white'},
+  Falabella:    {label:'FA', bg:'#ADD500', color:'#1A1A1A'},
+  Walmart:      {label:'WM', bg:'#0071DC', color:'white'},
+  Ripley:       {label:'RP', bg:'#5F3D76', color:'white'},
+  Web:          {label:'WE', bg:'#873EFF', color:'white'},
+  WooCommerce:  {label:'WE', bg:'#873EFF', color:'white'},
+  Hites:        {label:'HI', bg:'#FF8200', color:'white'},
+  Shopify:      {label:'SH', bg:'#95BF47', color:'white'},
+  VTEX:         {label:'VT', bg:'#F71963', color:'white'},
+  Jumseller:    {label:'JU', bg:'#FF6B35', color:'white'},
+  Prestashop:   {label:'PS', bg:'#DF0067', color:'white'},
+  Magento:      {label:'MG', bg:'#EE672F', color:'white'}
+};
+
+function getLogoCanal(canal){
+  return LOGOS_CANAL[canal] || {label:(canal||'??').substring(0,2).toUpperCase(), bg:'#E8E6E0', color:'#1F1E1B'};
+}
 
 // Lista de canales que SIEMPRE deben aparecer en el gráfico de ventas
 const TODOS_LOS_CANALES = ['WooCommerce', 'Walmart', 'Paris', 'MercadoLibre', 'Falabella', 'Ripley', 'Hites'];
@@ -8145,8 +8180,13 @@ async function cargarKPIs() {
     } else {
       let bh = '';
       Object.entries(ventasPorCanal).sort((a,b)=>b[1]-a[1]).forEach(([canal, total]) => {
-        const color = COLORES_CANAL[canal] || '#94a3b8';
-        bh += `<span style="font-size:11px;background:${color}20;color:${color};padding:3px 9px;border-radius:14px;font-weight:600;border:0.5px solid ${color}40;">${canal}: ${total}</span>`;
+        const L = getLogoCanal(canal);
+        const totalCanal = Object.entries(ventasPorCanal).find(([c])=>c===canal);
+        // Calcular monto si está disponible
+        bh += `<span style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px 4px 4px;border-radius:20px;font-size:11px;font-weight:500;background:var(--bg2);border:0.5px solid var(--border);color:var(--text);" title="${canal}: ${total} unidades">
+          <span style="width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:9px;background:${L.bg};color:${L.color};">${L.label}</span>
+          ${total}u
+        </span>`;
       });
       badgesEl.innerHTML = bh;
     }
@@ -8165,14 +8205,24 @@ async function cargarKPIs() {
     if (Object.keys(ventasPorCanal).length === 0) {
       desgloseEl.innerHTML = '<span style="font-size:12px;color:var(--muted);">Sin ventas en el período</span>';
     } else {
+      // Cambiamos a layout vertical: una fila por canal con barra horizontal proporcional
+      desgloseEl.style.flexDirection = 'column';
+      desgloseEl.style.gap = '0';
+      const maxTotal = Math.max(...Object.values(ventasPorCanal));
       let dh = '';
       Object.entries(ventasPorCanal).sort((a,b)=>b[1]-a[1]).forEach(([canal, total]) => {
+        const L = getLogoCanal(canal);
         const color = COLORES_CANAL[canal] || '#94a3b8';
         const pct = totalUnidades ? ((total/totalUnidades)*100).toFixed(1) : 0;
-        dh += `<div style="background:${color}15;border:0.5px solid ${color}40;border-radius:10px;padding:8px 12px;flex:1;min-width:140px;">
-          <div style="font-size:11px;color:${color};font-weight:600;">${canal}</div>
-          <div style="font-size:18px;font-weight:700;color:var(--text);margin-top:2px;">${total} <span style="font-size:11px;color:var(--muted);font-weight:500;">unidades</span></div>
-          <div style="font-size:10px;color:var(--muted);">${pct}% del total</div>
+        const widthPct = maxTotal ? (total/maxTotal*100).toFixed(1) : 0;
+        dh += `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:0.5px solid var(--border);cursor:pointer;" onclick="abrirModalKpi('ventas')">
+          <span style="width:24px;height:24px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:10px;background:${L.bg};color:${L.color};flex-shrink:0;">${L.label}</span>
+          <div style="font-size:12px;font-weight:500;color:var(--text);min-width:90px;">${canal}</div>
+          <div style="flex:1;height:6px;background:var(--bg2);border-radius:3px;overflow:hidden;">
+            <div style="height:100%;width:${widthPct}%;background:${color};"></div>
+          </div>
+          <div style="font-size:11px;color:var(--text);font-weight:500;text-align:right;width:70px;">${total} u</div>
+          <div style="font-size:10px;color:var(--muted);width:45px;text-align:right;">${pct}%</div>
         </div>`;
       });
       desgloseEl.innerHTML = dh;
