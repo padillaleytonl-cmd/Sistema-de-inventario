@@ -121,12 +121,17 @@ def sincronizar_stock_marketplaces(sku, stock, contexto="manual"):
     Args:
         sku: SKU Lusync del producto
         stock: nuevo stock total (entero)
-        contexto: descripción para logs (ej: "entrada_manual", "venta_meli", etc.)
+        contexto: descripción para logs
 
     Returns:
         dict con resultado por canal: {"meli": "ok", "falabella": "error: ...", ...}
 
-    NUNCA lanza excepciones. Si algo falla, se registra en el log y devuelve "error".
+    REGLAS DE ÉXITO/FALLA:
+    - Si la función lanza excepción → error
+    - Si retorna dict con ok:False → error (con detalle)
+    - Si retorna dict con exitosas > 0 → ok
+    - Si retorna dict sin publicaciones → 'sin_publicaciones' (NO se considera error)
+    - Si retorna None o algo que no es dict → ok (compatibilidad legacy)
     """
     resultado = {}
     canales = [
@@ -139,11 +144,57 @@ def sincronizar_stock_marketplaces(sku, stock, contexto="manual"):
     ]
     for nombre_canal, fn in canales:
         try:
-            fn(sku, stock)
-            resultado[nombre_canal] = "ok"
+            ret = fn(sku, stock)
+            # Inspeccionar el retorno con detalle
+            if isinstance(ret, dict):
+                exitosas = int(ret.get("exitosas", 0) or 0)
+                fallidas = int(ret.get("fallidas", 0) or 0)
+                total    = int(ret.get("total_publicaciones", 0) or 0)
+                ok_flag  = ret.get("ok", None)
+
+                if total == 0:
+                    # Sin publicaciones mapeadas — NO es error real
+                    resultado[nombre_canal] = "sin_publicaciones"
+                    print(f"[SyncCentral][{contexto}] {nombre_canal}: SKU {sku} sin publicaciones (no se actualiza)")
+                elif fallidas > 0 and exitosas == 0:
+                    log_str = " | ".join(ret.get("log", [])[:3])
+                    resultado[nombre_canal] = f"error: {fallidas}/{total} fallaron — {log_str[:120]}"
+                    print(f"[SyncCentral][{contexto}] {nombre_canal} FALLÓ para SKU {sku} ({fallidas}/{total}): {log_str}")
+                elif fallidas > 0 and exitosas > 0:
+                    resultado[nombre_canal] = f"parcial: {exitosas} ok, {fallidas} fallaron"
+                    print(f"[SyncCentral][{contexto}] {nombre_canal} PARCIAL para SKU {sku}: {exitosas}/{total}")
+                elif exitosas > 0:
+                    resultado[nombre_canal] = f"ok ({exitosas}/{total})"
+                elif ok_flag is False:
+                    resultado[nombre_canal] = f"error: {ret.get('log', ['fallo'])[0] if ret.get('log') else 'sin detalle'}"
+                    print(f"[SyncCentral][{contexto}] {nombre_canal} falló con ok:False para SKU {sku}")
+                else:
+                    resultado[nombre_canal] = "ok"
+            else:
+                # Función legacy que no retorna dict — asumir ok si no hubo excepción
+                resultado[nombre_canal] = "ok"
         except Exception as e:
             resultado[nombre_canal] = f"error: {str(e)[:80]}"
-            print(f"[SyncCentral][{contexto}] {nombre_canal} falló para SKU {sku}: {e}")
+            print(f"[SyncCentral][{contexto}] {nombre_canal} EXCEPCIÓN para SKU {sku}: {e}")
+
+    # Si CUALQUIER canal con publicaciones falló, crear una alerta para que se note
+    canales_con_error = [c for c, v in resultado.items() if v.startswith("error") or v.startswith("parcial")]
+    if canales_con_error:
+        try:
+            crear_alerta(
+                tipo="error_sync",
+                titulo=f"Stock no sincronizado — SKU {sku}",
+                mensaje=(
+                    f"El SKU <b>{sku}</b> NO se sincronizó correctamente con: "
+                    f"<b>{', '.join(canales_con_error)}</b>. "
+                    f"Contexto: {contexto}. Detalles: {resultado}"
+                ),
+                sku=sku,
+                enviar_email=True
+            )
+        except Exception as e_al:
+            print(f"[SyncCentral] no pude crear alerta: {e_al}")
+
     return resultado
 
 # ── SYNC AUTOMÁTICO WALMART CADA 5 MINUTOS ──
@@ -9930,22 +9981,34 @@ def admin_rellenar_fechas_compra():
                     r = _r.get(f"{WALMART_BASE_URL}/v3/orders/{orden}", headers=walmart_headers(), timeout=10)
                     if r.status_code == 200:
                         data_wm = r.json()
-                        # Walmart anida: order.orderDate o directamente orderDate
                         order_obj = data_wm.get("order") or data_wm
                         ds = (order_obj.get("orderDate") or order_obj.get("orderPlacedTime")
                               or order_obj.get("orderTimestamp"))
                         if ds:
                             try:
-                                # Walmart suele devolver epoch en milisegundos (ej: 1714588800000)
                                 if isinstance(ds, (int, float)) or (isinstance(ds, str) and ds.isdigit()):
                                     epoch_ms = int(ds)
-                                    # Si es muy grande es ms, si no es segundos
                                     fecha_compra = _dt.fromtimestamp(epoch_ms / 1000 if epoch_ms > 9999999999 else epoch_ms)
                                 else:
-                                    # ISO string
                                     fecha_compra = _dt.fromisoformat(str(ds).replace("Z","+00:00"))
                             except Exception as _e:
                                 print(f"[rellenar Walmart] no parsea fecha '{ds}': {_e}")
+                    elif r.status_code == 404:
+                        # Orden archivada por Walmart (>30-90 días) — usar columna fecha como fallback
+                        _c_wm = _gc(); _cur_wm = _c_wm.cursor()
+                        _cur_wm.execute("""
+                            SELECT fecha FROM movimientos
+                            WHERE canal = 'Walmart'
+                              AND (COALESCE(orden_id::text,'') = %s OR COALESCE(numero_orden,'') = %s)
+                              AND tipo = 'salida'
+                              AND fecha IS NOT NULL
+                            ORDER BY fecha ASC LIMIT 1
+                        """, (str(orden), str(orden)))
+                        _row_wm = _cur_wm.fetchone()
+                        _cur_wm.close(); _c_wm.close()
+                        if _row_wm and _row_wm[0]:
+                            fecha_compra = _row_wm[0]
+                            print(f"[rellenar Walmart] {orden} archivada (404), usando fecha local como fallback")
                 elif canal == "Falabella":
                     from falabella import obtener_orden_falabella
                     o = obtener_orden_falabella(orden)
