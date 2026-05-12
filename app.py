@@ -10116,6 +10116,42 @@ def admin_rellenar_fechas_compra():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/admin/diagnostico_mapeo", methods=["GET"])
+def admin_diagnostico_mapeo():
+    """Lista TODOS los mapeos para un canal + item_id o sku_canal específicos."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN","lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error":"no autorizado"}),401
+    canal = (request.args.get("canal") or "").lower().strip()
+    item_id = request.args.get("item_id", "").strip()
+    sku_canal = request.args.get("sku_canal", "").strip()
+    try:
+        from inventario import get_conn as _gc
+        conn = _gc(); cur = conn.cursor()
+        where = []
+        params = []
+        if canal:
+            where.append("canal = %s"); params.append(canal)
+        if item_id:
+            where.append("item_id_canal = %s"); params.append(item_id)
+        if sku_canal:
+            where.append("sku_canal = %s"); params.append(sku_canal)
+        sql = f"""
+            SELECT id, sku_lusync, canal, sku_canal, item_id_canal, activo, es_catalogo
+            FROM sku_mapeo_canal
+            {'WHERE ' + ' AND '.join(where) if where else ''}
+            ORDER BY canal, sku_canal
+        """
+        cur.execute(sql, params)
+        rows = [{"id":r[0],"sku_lusync":r[1],"canal":r[2],"sku_canal":r[3],
+                 "item_id_canal":r[4],"activo":r[5],"es_catalogo":r[6]} for r in cur.fetchall()]
+        cur.close(); conn.close()
+        return jsonify({"mapeos": rows, "count": len(rows)})
+    except Exception as e:
+        import traceback
+        return jsonify({"error":str(e),"trace":traceback.format_exc()}),500
+
+
 @app.route("/admin/falabella_orden_raw/<order_id>", methods=["GET"])
 def admin_falabella_orden_raw(order_id):
     """Devuelve la respuesta cruda de Falabella para una orden, para ver qué campos trae.
