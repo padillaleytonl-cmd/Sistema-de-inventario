@@ -541,7 +541,8 @@ def cargar_movimientos(limite=20):
                TO_CHAR(fecha_compra_marketplace, 'DD/MM/YYYY HH24:MI'),
                COALESCE(origen_registro, 'sistema'),
                stock_antes,
-               stock_despues
+               stock_despues,
+               COALESCE(numero_orden, '')
         FROM movimientos ORDER BY fecha DESC LIMIT %s
     """, (limite,))
     rows = cur.fetchall()
@@ -553,7 +554,8 @@ def cargar_movimientos(limite=20):
              "fecha_compra":r[12] or "",
              "origen":r[13] or "sistema",
              "stock_antes": r[14] if r[14] is not None else None,
-             "stock_despues": r[15] if r[15] is not None else None
+             "stock_despues": r[15] if r[15] is not None else None,
+             "numero_orden": r[16] or ""
              } for r in rows]
 
 
@@ -1604,7 +1606,8 @@ def stats_ventas_por_canal_dia(fecha_desde, fecha_hasta):
             WHERE tipo = 'salida'
               AND DATE(fecha) BETWEEN %s AND %s
               AND canal IS NOT NULL
-              AND LOWER(TRIM(canal)) NOT IN ('manual', 'sistema', '')
+              AND LOWER(TRIM(canal)) NOT IN ('manual', 'sistema', 'ajuste', 'pos', 'devolucion', 'devolución', '')
+              AND (motivo IS NULL OR LOWER(motivo) NOT LIKE '%ajuste%')
             GROUP BY dia, canal_norm
             ORDER BY dia ASC
         """, (fecha_desde, fecha_hasta))
@@ -1626,7 +1629,8 @@ def stats_top_productos_vendidos(fecha_desde, fecha_hasta, limite=10):
             WHERE tipo = 'salida'
               AND DATE(fecha) BETWEEN %s AND %s
               AND canal IS NOT NULL
-              AND canal NOT IN ('Manual', 'Sistema', 'manual', 'sistema', '')
+              AND LOWER(TRIM(canal)) NOT IN ('manual', 'sistema', 'ajuste', 'pos', 'devolucion', 'devolución', '')
+              AND (motivo IS NULL OR LOWER(motivo) NOT LIKE '%ajuste%')
             GROUP BY sku, nombre
             ORDER BY total DESC
             LIMIT %s
@@ -1702,14 +1706,15 @@ def stats_kpis_dashboard(fecha_desde, fecha_hasta):
         "alertas_no_leidas": 0
     }
     try:
-        # Ventas en el período (excluye Manual/Sistema, solo canales marketplace)
+        # Ventas en el período (excluye Manual/Sistema/Ajuste, solo canales marketplace reales)
         cur.execute("""
             SELECT COALESCE(SUM(cantidad), 0), COUNT(DISTINCT orden_id)
             FROM movimientos
             WHERE tipo = 'salida'
               AND DATE(fecha) BETWEEN %s AND %s
               AND canal IS NOT NULL
-              AND canal NOT IN ('Manual', 'Sistema', 'manual', 'sistema', '')
+              AND LOWER(TRIM(canal)) NOT IN ('manual', 'sistema', 'ajuste', 'pos', 'devolucion', 'devolución', '')
+              AND (motivo IS NULL OR LOWER(motivo) NOT LIKE '%ajuste%')
         """, (fecha_desde, fecha_hasta))
         r = cur.fetchone()
         kpis["ventas_periodo"]  = int(r[0] or 0)
