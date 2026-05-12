@@ -8570,7 +8570,10 @@ async function cargarActividad() {
       const bodega = m.bodega || '—';
       const hora = m.hora || m.fecha || '';
 
-      html += `<div style="display:grid;grid-template-columns:28px 1fr 70px 60px 50px 60px;gap:10px;align-items:center;padding:9px 4px;border-bottom:0.5px solid var(--border);font-size:12px;cursor:pointer;" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'" onclick="abrirDetalleMovimiento('${ocNum || (m.sku||'')}', '${(m.sku||'').replace(/'/g,'\\\\\\'')}')">
+      const _skuSafe = (m.sku || '').replace(/"/g, '&quot;');
+      const _ordenSafe = String(ocNum || m.sku || '').replace(/"/g, '&quot;');
+
+      html += `<div style="display:grid;grid-template-columns:28px 1fr 70px 60px 50px 60px;gap:10px;align-items:center;padding:9px 4px;border-bottom:0.5px solid var(--border);font-size:12px;cursor:pointer;" data-orden="${_ordenSafe}" data-sku="${_skuSafe}" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'" onclick="abrirDetalleMovimiento(this.dataset.orden, this.dataset.sku)">
         <div style="width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;background:${dotBg};color:${dotColor};">${dotChar}</div>
         <div style="min-width:0;overflow:hidden;">
           <div style="font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${m.nombre || m.sku}</div>
