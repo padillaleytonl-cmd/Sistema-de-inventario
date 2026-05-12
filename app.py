@@ -10068,6 +10068,67 @@ def admin_rellenar_fechas_compra():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/admin/paris_test_stock", methods=["GET"])
+def admin_paris_test_stock():
+    """Prueba los distintos formatos de actualización de stock en Paris para diagnosticar.
+    Uso: /admin/paris_test_stock?sku_seller=CDBRWA001&sku_marketplace=MKM0RWUKKM-1&cantidad=6&token=XXX
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN","lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error":"no autorizado"}),401
+
+    sku_seller       = request.args.get("sku_seller", "CDBRWA001")
+    sku_marketplace  = request.args.get("sku_marketplace", "MKM0RWUKKM-1")
+    cantidad         = int(request.args.get("cantidad", "6"))
+
+    try:
+        from paris import PARIS_BASE_URL, paris_headers
+        import requests as _r
+        resultados = {}
+
+        # 1. /v1/stock/sku-seller con sku_seller
+        r1 = _r.post(
+            f"{PARIS_BASE_URL}/v1/stock/sku-seller",
+            headers=paris_headers(),
+            json={"skus":[{"sku_seller": sku_seller, "quantity": cantidad}]},
+            timeout=15
+        )
+        resultados["v1_sku_seller"] = {
+            "payload": {"sku_seller": sku_seller, "quantity": cantidad},
+            "status": r1.status_code, "body": r1.text[:800]
+        }
+
+        # 2. /v2/stock con sku_marketplace
+        r2 = _r.post(
+            f"{PARIS_BASE_URL}/v2/stock",
+            headers=paris_headers(),
+            json={"skus":[{"sku": sku_marketplace, "quantity": cantidad}]},
+            timeout=15
+        )
+        resultados["v2_sku_marketplace"] = {
+            "payload": {"sku": sku_marketplace, "quantity": cantidad},
+            "status": r2.status_code, "body": r2.text[:800]
+        }
+
+        # 3. /v1/stock/sku-seller con marketplace_sku
+        r3 = _r.post(
+            f"{PARIS_BASE_URL}/v1/stock/sku-seller",
+            headers=paris_headers(),
+            json={"skus":[{"sku_seller": sku_marketplace, "quantity": cantidad}]},
+            timeout=15
+        )
+        resultados["v1_sku_seller_con_marketplace_sku"] = {
+            "payload": {"sku_seller": sku_marketplace, "quantity": cantidad},
+            "status": r3.status_code, "body": r3.text[:800]
+        }
+
+        return jsonify({"ok": True, "pruebas": resultados})
+
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 @app.route("/admin/diagnostico_bd", methods=["GET"])
 def admin_diagnostico_bd():
     """Verifica constraints anti-duplicado en la BD."""
