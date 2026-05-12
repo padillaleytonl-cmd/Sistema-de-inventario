@@ -259,16 +259,25 @@ def _sync_walmart_automatico():
                             print(f"[Scheduler] SKU '{sku_lusync}' no encontrado en inventario")
                             continue
 
-                        # Parsear fecha real de compra (Walmart: orderDate o createdAt en ISO)
+                        # Parsear fecha real de compra (Walmart: orderDate puede ser epoch ms o ISO)
                         fecha_compra_wm = None
                         try:
-                            date_str = (o.get("orderDate") or o.get("createdAt") or
-                                        o.get("orderPlacedTime") or "")
-                            if date_str:
-                                fecha_compra_wm = datetime.fromisoformat(
-                                    str(date_str).replace("Z", "+00:00")
-                                )
-                        except Exception:
+                            date_raw = (o.get("orderDate") or o.get("createdAt") or
+                                        o.get("orderPlacedTime") or o.get("orderTimestamp") or "")
+                            if date_raw:
+                                # Walmart suele devolver epoch en milisegundos (ej: 1714588800000)
+                                if isinstance(date_raw, (int, float)) or (isinstance(date_raw, str) and str(date_raw).isdigit()):
+                                    epoch_ms = int(date_raw)
+                                    fecha_compra_wm = datetime.fromtimestamp(
+                                        epoch_ms / 1000 if epoch_ms > 9999999999 else epoch_ms
+                                    )
+                                else:
+                                    # ISO string
+                                    fecha_compra_wm = datetime.fromisoformat(
+                                        str(date_raw).replace("Z", "+00:00")
+                                    )
+                        except Exception as _e_wm:
+                            print(f"[Scheduler Walmart] no parsea fecha '{date_raw}': {_e_wm}")
                             fecha_compra_wm = None
 
                         resultado = descontar_venta_inteligente(
@@ -731,11 +740,27 @@ def _sync_falabella_automatico():
 
                         prod["stock"] += cantidad
                         guardar_producto(prod)
+
+                        # Parsear fecha real de compra de la orden cancelada
+                        fecha_compra_fa_cancel = None
+                        try:
+                            date_str = (o.get("CreatedAt") or o.get("created_at") or "")
+                            if date_str:
+                                if "T" in str(date_str):
+                                    fecha_compra_fa_cancel = datetime.fromisoformat(str(date_str).replace("Z","+00:00"))
+                                else:
+                                    fecha_compra_fa_cancel = datetime.strptime(str(date_str)[:19], "%Y-%m-%d %H:%M:%S")
+                        except Exception:
+                            pass
+
                         registrar_movimiento(
                             "entrada", prod["sku"], prod["nombre"], cantidad,
                             f"Cancelación Falabella orden {order_id}",
-                            usuario="Sistema", canal="Falabella", orden_id=order_id
+                            usuario="Sistema", canal="Falabella", orden_id=order_id,
+                            fecha_compra_marketplace=fecha_compra_fa_cancel,
+                            origen_registro="scheduler"
                         )
+                        _asegurar_fecha_compra("Falabella", order_id, fecha_compra_fa_cancel, sku=prod["sku"])
                         sincronizar_stock_marketplaces(
                             prod["sku"], prod["stock"], contexto="falabella_cancelacion_bg"
                         )
@@ -10062,6 +10087,72 @@ def admin_rellenar_fechas_compra():
             "errores_count": len(errores),
             "actualizados_detalle": actualizados[:30],
             "errores_detalle": errores[:30]
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/admin/movimiento_detalle/<orden>", methods=["GET"])
+def admin_movimiento_detalle(orden):
+    """Devuelve detalle de movimientos con esa orden y permite corregir fecha.
+    Uso ver: /admin/movimiento_detalle/1153216340?token=XXX
+    Uso corregir: /admin/movimiento_detalle/1153216340?token=XXX&fecha_compra=2026-05-08T20:30:00
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN","lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error":"no autorizado"}),401
+
+    fecha_nueva = request.args.get("fecha_compra", "")
+
+    try:
+        from inventario import get_conn as _gc, TZ_CHILE
+        from datetime import datetime as _dt
+
+        conn = _gc(); cur = conn.cursor()
+
+        # Buscar el/los movimientos
+        cur.execute("""
+            SELECT id, tipo, sku, nombre, cantidad, canal, fecha,
+                   fecha_compra_marketplace, fecha_importacion,
+                   COALESCE(orden_id::text, numero_orden) AS orden, motivo
+            FROM movimientos
+            WHERE COALESCE(orden_id::text,'') = %s
+               OR COALESCE(numero_orden,'') = %s
+            ORDER BY fecha DESC
+        """, (str(orden), str(orden)))
+        cols = [d[0] for d in cur.description]
+        movs = [dict(zip(cols, r)) for r in cur.fetchall()]
+
+        # Serializar fechas
+        for m in movs:
+            for k in ("fecha", "fecha_compra_marketplace", "fecha_importacion"):
+                if m.get(k) and hasattr(m[k], "isoformat"):
+                    m[k] = m[k].isoformat()
+
+        # Si se pasó fecha_compra, hacer UPDATE
+        actualizado = None
+        if fecha_nueva:
+            try:
+                fc = _dt.fromisoformat(fecha_nueva.replace("Z","+00:00"))
+                if hasattr(fc, 'tzinfo') and fc.tzinfo:
+                    fc = fc.astimezone(TZ_CHILE).replace(tzinfo=None)
+                cur.execute("""
+                    UPDATE movimientos SET fecha_compra_marketplace = %s
+                    WHERE COALESCE(orden_id::text,'') = %s
+                       OR COALESCE(numero_orden,'') = %s
+                """, (fc, str(orden), str(orden)))
+                actualizado = cur.rowcount
+                conn.commit()
+            except Exception as e:
+                actualizado = f"error: {e}"
+
+        cur.close(); conn.close()
+
+        return jsonify({
+            "orden": orden,
+            "movimientos": movs,
+            "actualizados": actualizado
         })
     except Exception as e:
         import traceback
