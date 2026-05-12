@@ -9907,8 +9907,23 @@ def admin_rellenar_fechas_compra():
                     import requests as _r
                     r = _r.get(f"{WALMART_BASE_URL}/v3/orders/{orden}", headers=walmart_headers(), timeout=10)
                     if r.status_code == 200:
-                        ds = r.json().get("orderDate") or r.json().get("orderPlacedTime")
-                        if ds: fecha_compra = _dt.fromisoformat(str(ds).replace("Z","+00:00"))
+                        data_wm = r.json()
+                        # Walmart anida: order.orderDate o directamente orderDate
+                        order_obj = data_wm.get("order") or data_wm
+                        ds = (order_obj.get("orderDate") or order_obj.get("orderPlacedTime")
+                              or order_obj.get("orderTimestamp"))
+                        if ds:
+                            try:
+                                # Walmart suele devolver epoch en milisegundos (ej: 1714588800000)
+                                if isinstance(ds, (int, float)) or (isinstance(ds, str) and ds.isdigit()):
+                                    epoch_ms = int(ds)
+                                    # Si es muy grande es ms, si no es segundos
+                                    fecha_compra = _dt.fromtimestamp(epoch_ms / 1000 if epoch_ms > 9999999999 else epoch_ms)
+                                else:
+                                    # ISO string
+                                    fecha_compra = _dt.fromisoformat(str(ds).replace("Z","+00:00"))
+                            except Exception as _e:
+                                print(f"[rellenar Walmart] no parsea fecha '{ds}': {_e}")
                 elif canal == "Falabella":
                     from falabella import obtener_orden_falabella
                     o = obtener_orden_falabella(orden)
@@ -9922,8 +9937,21 @@ def admin_rellenar_fechas_compra():
                         ds = o.get("date_created")
                         if ds: fecha_compra = _dt.fromisoformat(ds.replace("Z","+00:00"))
                 elif canal == "Web":
-                    # Para Woo, usar la fecha que ya está en la columna fecha (que es fecha_override)
-                    pass
+                    # Para Web (Woo) los movimientos viejos tienen la fecha real en la columna `fecha`
+                    # (porque se grababa vía fecha_override). Copiar desde ahí.
+                    _c_w = _gc(); _cur_w = _c_w.cursor()
+                    _cur_w.execute("""
+                        SELECT fecha FROM movimientos
+                        WHERE canal = 'Web'
+                          AND (COALESCE(orden_id::text,'') = %s OR COALESCE(numero_orden,'') = %s)
+                          AND tipo = 'salida'
+                          AND fecha IS NOT NULL
+                        ORDER BY fecha DESC LIMIT 1
+                    """, (str(orden), str(orden)))
+                    _row_w = _cur_w.fetchone()
+                    _cur_w.close(); _c_w.close()
+                    if _row_w and _row_w[0]:
+                        fecha_compra = _row_w[0]
 
                 if fecha_compra:
                     # Normalizar a Chile
