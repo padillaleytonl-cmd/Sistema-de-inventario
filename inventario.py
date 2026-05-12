@@ -1219,6 +1219,10 @@ def obtener_sku_lusync_por_canal(canal, sku_canal=None, item_id_canal=None):
 
     Returns:
         str con el SKU Lusync, o None si no hay match.
+
+    NOTA: Si la publicación tiene VARIANTES (mismo item_id, múltiples sku_canal),
+    es CRÍTICO matchear por AMBOS campos para descontar la variante correcta.
+    Si solo se busca por item_id, devolvería cualquier variante al azar.
     """
     if not (sku_canal or item_id_canal):
         return None
@@ -1226,19 +1230,19 @@ def obtener_sku_lusync_por_canal(canal, sku_canal=None, item_id_canal=None):
     canal = (canal or "").lower().strip()
     conn = get_conn(); cur = conn.cursor()
 
-    # Prioridad 1: buscar por item_id_canal (más específico)
-    if item_id_canal:
+    # Prioridad 1: match EXACTO por item_id + sku_canal (resuelve variantes correctamente)
+    if item_id_canal and sku_canal:
         cur.execute("""
             SELECT sku_lusync FROM sku_mapeo_canal
-            WHERE canal = %s AND item_id_canal = %s AND activo = TRUE
+            WHERE canal = %s AND item_id_canal = %s AND sku_canal = %s AND activo = TRUE
             LIMIT 1
-        """, (canal, str(item_id_canal)))
+        """, (canal, str(item_id_canal), sku_canal))
         r = cur.fetchone()
         if r:
             cur.close(); conn.close()
             return r[0]
 
-    # Prioridad 2: buscar por sku_canal
+    # Prioridad 2: buscar por sku_canal (más específico — sku canal único globalmente)
     if sku_canal:
         cur.execute("""
             SELECT sku_lusync FROM sku_mapeo_canal
@@ -1249,6 +1253,23 @@ def obtener_sku_lusync_por_canal(canal, sku_canal=None, item_id_canal=None):
         if r:
             cur.close(); conn.close()
             return r[0]
+
+    # Prioridad 3: buscar por item_id_canal SOLO si tiene 1 sola variante
+    # (publicación sin variantes — el item_id apunta directo a un SKU)
+    if item_id_canal:
+        cur.execute("""
+            SELECT sku_lusync, COUNT(*) OVER() AS total FROM sku_mapeo_canal
+            WHERE canal = %s AND item_id_canal = %s AND activo = TRUE
+            LIMIT 1
+        """, (canal, str(item_id_canal)))
+        r = cur.fetchone()
+        if r and r[1] == 1:
+            # Solo si hay exactamente 1 mapeo para ese item_id (sin variantes)
+            cur.close(); conn.close()
+            return r[0]
+        elif r and r[1] > 1:
+            # Hay múltiples variantes — NO devolver nada, debe venir sku_canal
+            print(f"[obtener_sku_lusync] item_id {item_id_canal} tiene {r[1]} variantes — se requiere sku_canal específico")
 
     cur.close(); conn.close()
     return None
