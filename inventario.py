@@ -10,6 +10,162 @@ TZ_CHILE = pytz.timezone('America/Santiago')
 def now_chile():
     return datetime.now(TZ_CHILE)
 
+
+# ════════════════════════════════════════════════════════════════════════════
+# CANALES DE VENTA — fuente única de verdad
+# ════════════════════════════════════════════════════════════════════════════
+# Lista BLANCA: solo los canales que aparecen acá cuentan como "venta real".
+# Cualquier otro (Manual, Sistema, Ajuste, POS, Devolución, etc.) NO es venta.
+# Para agregar un canal nuevo, basta con sumarlo a esta tupla.
+
+CANALES_VENTA_ACTIVOS = (
+    'MercadoLibre', 'Paris', 'Falabella', 'Walmart', 'Ripley', 'Web', 'Hites',
+    'Shopify', 'VTEX', 'Jumseller', 'Prestashop', 'Magento'
+)
+
+# SQL helper para usar en queries: "WHERE canal IN (...lista...)"
+def _sql_in_canales():
+    return ", ".join(f"'{c}'" for c in CANALES_VENTA_ACTIVOS)
+
+
+def normalizar_canal(canal):
+    """Normaliza el nombre del canal antes de guardarlo en BD.
+    Convierte 'meli', 'MELI', 'mercadolibre' → 'MercadoLibre' (capitalización oficial).
+    Devuelve 'Sistema' si no se reconoce.
+    """
+    if not canal:
+        return 'Sistema'
+    mapeo = {
+        'meli': 'MercadoLibre', 'mercadolibre': 'MercadoLibre', 'ml': 'MercadoLibre',
+        'paris': 'Paris', 'cencosud': 'Paris', 'pa': 'Paris',
+        'falabella': 'Falabella', 'fala': 'Falabella', 'fa': 'Falabella',
+        'walmart': 'Walmart', 'wm': 'Walmart',
+        'ripley': 'Ripley', 'rp': 'Ripley',
+        'web': 'Web', 'woocommerce': 'Web', 'woo': 'Web', 'tienda': 'Web',
+        'shopify': 'Shopify', 'vtex': 'VTEX', 'jumseller': 'Jumseller',
+        'prestashop': 'Prestashop', 'magento': 'Magento',
+        'hites': 'Hites', 'hi': 'Hites',
+        'manual': 'Manual', 'sistema': 'Sistema', 'ajuste': 'Ajuste',
+        'pos': 'POS', 'devolucion': 'Devolución', 'devolución': 'Devolución'
+    }
+    return mapeo.get(canal.strip().lower(), canal.strip())
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# FERIADOS CHILE + cálculo de plazo 72h hábiles
+# ════════════════════════════════════════════════════════════════════════════
+# Lista hardcoded de feriados oficiales. Se sincroniza con tabla feriados en BD
+# que permite agregar/editar desde panel admin.
+
+FERIADOS_CHILE_2026 = [
+    "2026-01-01",  # Año Nuevo
+    "2026-04-03",  # Viernes Santo
+    "2026-04-04",  # Sábado Santo
+    "2026-05-01",  # Día del Trabajador
+    "2026-05-21",  # Día de las Glorias Navales
+    "2026-06-20",  # Día Nacional Pueblos Indígenas
+    "2026-06-29",  # San Pedro y San Pablo
+    "2026-07-16",  # Virgen del Carmen
+    "2026-08-15",  # Asunción de la Virgen
+    "2026-09-18",  # Independencia Nacional
+    "2026-09-19",  # Glorias del Ejército
+    "2026-10-12",  # Encuentro de Dos Mundos
+    "2026-10-31",  # Día de las Iglesias Evangélicas
+    "2026-11-01",  # Día de Todos los Santos
+    "2026-12-08",  # Inmaculada Concepción
+    "2026-12-25",  # Navidad
+]
+
+FERIADOS_CHILE_2027 = [
+    "2027-01-01", "2027-03-26", "2027-03-27", "2027-05-01", "2027-05-21",
+    "2027-06-21", "2027-06-29", "2027-07-16", "2027-08-15", "2027-09-17",
+    "2027-09-18", "2027-09-19", "2027-09-20", "2027-10-12", "2027-10-31",
+    "2027-11-01", "2027-12-08", "2027-12-25",
+]
+
+
+def init_feriados():
+    """Crea tabla feriados y precarga los oficiales si no existen."""
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS feriados (
+                fecha DATE PRIMARY KEY,
+                nombre TEXT,
+                tipo TEXT DEFAULT 'oficial'
+            )
+        """)
+        for f in FERIADOS_CHILE_2026 + FERIADOS_CHILE_2027:
+            cur.execute("INSERT INTO feriados (fecha) VALUES (%s) ON CONFLICT (fecha) DO NOTHING", (f,))
+        conn.commit()
+    except Exception as e:
+        print(f"[init_feriados] {e}")
+        conn.rollback()
+    finally:
+        cur.close()
+        try: release_conn(conn)
+        except: conn.close()
+
+
+def es_dia_habil(fecha):
+    """True si la fecha es lunes-viernes y NO es feriado oficial."""
+    if fecha.weekday() >= 5:  # 5=sábado, 6=domingo
+        return False
+    try:
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("SELECT 1 FROM feriados WHERE fecha = %s", (fecha.date() if hasattr(fecha, 'date') else fecha,))
+        es_feriado = cur.fetchone() is not None
+        cur.close()
+        try: release_conn(conn)
+        except: conn.close()
+        return not es_feriado
+    except Exception:
+        return True  # Si BD falla, asumir hábil
+
+
+def calcular_deadline_72h_habiles(fecha_inicio):
+    """Suma 3 días hábiles a la fecha (saltando fines de semana + feriados).
+    Devuelve datetime sin tzinfo (en hora Chile).
+    """
+    from datetime import timedelta as _td
+    if hasattr(fecha_inicio, 'tzinfo') and fecha_inicio.tzinfo:
+        fecha = fecha_inicio.astimezone(TZ_CHILE).replace(tzinfo=None)
+    else:
+        fecha = fecha_inicio
+    dias_sumados = 0
+    fecha_actual = fecha
+    while dias_sumados < 3:
+        fecha_actual = fecha_actual + _td(days=1)
+        if es_dia_habil(fecha_actual):
+            dias_sumados += 1
+    return fecha_actual
+
+
+def horas_habiles_restantes(deadline):
+    """Calcula horas hábiles restantes hasta el deadline.
+    - Negativo: ya venció (horas vencidas en negativo)
+    - 0-24: urgente
+    - 24-48: atención
+    - 48+: en plazo
+    """
+    from datetime import timedelta as _td
+    ahora = now_chile().replace(tzinfo=None)
+    if hasattr(deadline, 'tzinfo') and deadline.tzinfo:
+        deadline = deadline.astimezone(TZ_CHILE).replace(tzinfo=None)
+    if ahora >= deadline:
+        diff = ahora - deadline
+        return -(diff.total_seconds() / 3600)
+    # Contar solo horas hábiles entre ahora y deadline
+    horas_total = 0
+    cursor = ahora
+    while cursor < deadline:
+        siguiente = min(cursor + _td(hours=1), deadline)
+        if es_dia_habil(cursor):
+            horas_total += (siguiente - cursor).total_seconds() / 3600
+        cursor = siguiente
+    return horas_total
+
+
 # Pool de conexiones — máximo 5 conexiones simultáneas (Render free tier tiene límite bajo)
 _pool = None
 
@@ -1587,27 +1743,15 @@ def stats_ventas_por_canal_dia(fecha_desde, fecha_hasta):
     Solo cuenta canales reales de marketplace, excluye 'Manual', 'Sistema', NULL."""
     conn = get_conn(); cur = conn.cursor()
     try:
-        cur.execute("""
+        canales_sql = _sql_in_canales()
+        cur.execute(f"""
             SELECT TO_CHAR(DATE(fecha), 'YYYY-MM-DD') AS dia,
-                   CASE LOWER(TRIM(canal))
-                     WHEN 'mercadolibre' THEN 'MercadoLibre'
-                     WHEN 'meli'         THEN 'MercadoLibre'
-                     WHEN 'falabella'    THEN 'Falabella'
-                     WHEN 'paris'        THEN 'Paris'
-                     WHEN 'ripley'       THEN 'Ripley'
-                     WHEN 'walmart'      THEN 'Walmart'
-                     WHEN 'woocommerce'  THEN 'Web'
-                     WHEN 'web'          THEN 'Web'
-                     WHEN 'woo'          THEN 'Web'
-                     ELSE INITCAP(canal)
-                   END AS canal_norm,
+                   canal AS canal_norm,
                    COALESCE(SUM(cantidad), 0) AS total
             FROM movimientos
             WHERE tipo = 'salida'
               AND DATE(fecha) BETWEEN %s AND %s
-              AND canal IS NOT NULL
-              AND LOWER(TRIM(canal)) NOT IN ('manual', 'sistema', 'ajuste', 'pos', 'devolucion', 'devolución', '')
-              AND (motivo IS NULL OR LOWER(motivo) NOT LIKE '%ajuste%')
+              AND canal IN ({canales_sql})
             GROUP BY dia, canal_norm
             ORDER BY dia ASC
         """, (fecha_desde, fecha_hasta))
@@ -1623,14 +1767,13 @@ def stats_top_productos_vendidos(fecha_desde, fecha_hasta, limite=10):
     Solo cuenta canales reales de marketplace, excluye Manual/Sistema."""
     conn = get_conn(); cur = conn.cursor()
     try:
-        cur.execute("""
+        canales_sql = _sql_in_canales()
+        cur.execute(f"""
             SELECT sku, nombre, COALESCE(SUM(cantidad), 0) AS total
             FROM movimientos
             WHERE tipo = 'salida'
               AND DATE(fecha) BETWEEN %s AND %s
-              AND canal IS NOT NULL
-              AND LOWER(TRIM(canal)) NOT IN ('manual', 'sistema', 'ajuste', 'pos', 'devolucion', 'devolución', '')
-              AND (motivo IS NULL OR LOWER(motivo) NOT LIKE '%ajuste%')
+              AND canal IN ({canales_sql})
             GROUP BY sku, nombre
             ORDER BY total DESC
             LIMIT %s
@@ -1706,15 +1849,14 @@ def stats_kpis_dashboard(fecha_desde, fecha_hasta):
         "alertas_no_leidas": 0
     }
     try:
-        # Ventas en el período (excluye Manual/Sistema/Ajuste, solo canales marketplace reales)
-        cur.execute("""
+        # Ventas en el período (LISTA BLANCA: solo canales reales de marketplace)
+        canales_sql = _sql_in_canales()
+        cur.execute(f"""
             SELECT COALESCE(SUM(cantidad), 0), COUNT(DISTINCT orden_id)
             FROM movimientos
             WHERE tipo = 'salida'
               AND DATE(fecha) BETWEEN %s AND %s
-              AND canal IS NOT NULL
-              AND LOWER(TRIM(canal)) NOT IN ('manual', 'sistema', 'ajuste', 'pos', 'devolucion', 'devolución', '')
-              AND (motivo IS NULL OR LOWER(motivo) NOT LIKE '%ajuste%')
+              AND canal IN ({canales_sql})
         """, (fecha_desde, fecha_hasta))
         r = cur.fetchone()
         kpis["ventas_periodo"]  = int(r[0] or 0)

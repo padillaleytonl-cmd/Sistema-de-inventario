@@ -47,6 +47,11 @@ app.secret_key = "clave_super_segura"
 
 init_db()
 init_devoluciones()
+try:
+    from inventario import init_feriados
+    init_feriados()
+except Exception as e:
+    print(f"[init_feriados] {e}")
 init_audit()
 init_sku_mapeo()
 init_alertas()
@@ -5874,12 +5879,11 @@ def ruta_stats_propia_vs_fulfillment():
     if not session.get("logged"): return jsonify({}), 401
     desde, hasta = _parse_rango_fechas()
     try:
-        from inventario import get_conn, listar_bodegas
+        from inventario import get_conn, listar_bodegas, CANALES_VENTA_ACTIVOS
         conn = get_conn(); cur = conn.cursor()
+        canales_sql = ", ".join(f"'{c}'" for c in CANALES_VENTA_ACTIVOS)
 
-        # Query: agrupar movimientos de salida por bodega y calcular monto + cantidad
-        # Para el monto: cantidad × precio del producto
-        cur.execute("""
+        cur.execute(f"""
             SELECT
               COALESCE(m.bodega_codigo, 'CENTRAL') AS bodega,
               COUNT(DISTINCT m.orden_id) AS ventas,
@@ -5888,7 +5892,7 @@ def ruta_stats_propia_vs_fulfillment():
             FROM movimientos m
             LEFT JOIN productos p ON p.sku = m.sku
             WHERE m.tipo = 'salida'
-              AND m.canal NOT IN ('Manual', 'Sistema')
+              AND m.canal IN ({canales_sql})
               AND m.fecha::date BETWEEN %s AND %s
             GROUP BY COALESCE(m.bodega_codigo, 'CENTRAL')
         """, (desde, hasta))
@@ -10274,6 +10278,250 @@ def admin_paris_test_stock():
 
         return jsonify({"ok": True, "pruebas": resultados})
 
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/stats/devoluciones_estado")
+def ruta_stats_devoluciones_estado():
+    """Resumen del estado de devoluciones para dashboard.
+    Devuelve: conteos por estado, por urgencia (vencidas/urgente/atención/en plazo),
+    por canal y lista de las más próximas a vencer.
+    """
+    if not session.get("logged"): return jsonify({}), 401
+    try:
+        from inventario import get_conn as _gc, horas_habiles_restantes, calcular_deadline_72h_habiles
+        conn = _gc(); cur = conn.cursor()
+
+        # Conteo por estado
+        cur.execute("""
+            SELECT estado, COUNT(*) FROM devoluciones
+            GROUP BY estado
+        """)
+        por_estado = {r[0] or 'sin_estado': int(r[1]) for r in cur.fetchall()}
+
+        # Conteo por canal
+        cur.execute("""
+            SELECT canal, COUNT(*) FROM devoluciones
+            WHERE canal IS NOT NULL AND canal <> ''
+            GROUP BY canal
+        """)
+        por_canal = [{"canal": r[0], "count": int(r[1])} for r in cur.fetchall()]
+
+        # Pendientes con deadline (las que requieren revisión)
+        cur.execute("""
+            SELECT id, codigo, oc_origen, canal, sku, nombre, estado,
+                   fecha_solicitud, fecha_deadline
+            FROM devoluciones
+            WHERE estado IN ('pendiente', 'recibida', 'en_transito', 'en_revision')
+            ORDER BY fecha_deadline ASC NULLS LAST
+        """)
+        pendientes = []
+        urgencia = {"vencidas": 0, "urgente": 0, "atencion": 0, "en_plazo": 0}
+        for r in cur.fetchall():
+            id_, codigo, oc, canal, sku, nombre, estado, fs, fd = r
+            # Si no tiene deadline, calcularlo desde fecha_solicitud
+            if not fd and fs:
+                fd = calcular_deadline_72h_habiles(fs)
+                # Persistir el deadline calculado
+                cur.execute("UPDATE devoluciones SET fecha_deadline = %s WHERE id = %s", (fd, id_))
+
+            horas = horas_habiles_restantes(fd) if fd else None
+            if horas is None:
+                clasificacion = "sin_deadline"
+            elif horas < 0:
+                clasificacion = "vencida"
+                urgencia["vencidas"] += 1
+            elif horas < 24:
+                clasificacion = "urgente"
+                urgencia["urgente"] += 1
+            elif horas < 48:
+                clasificacion = "atencion"
+                urgencia["atencion"] += 1
+            else:
+                clasificacion = "en_plazo"
+                urgencia["en_plazo"] += 1
+
+            pendientes.append({
+                "id": id_, "codigo": codigo, "oc_origen": oc, "canal": canal,
+                "sku": sku, "nombre": nombre, "estado": estado,
+                "fecha_solicitud": fs.isoformat() if fs else None,
+                "fecha_deadline": fd.isoformat() if fd else None,
+                "horas_restantes": round(horas, 1) if horas is not None else None,
+                "clasificacion": clasificacion
+            })
+
+        conn.commit()
+        cur.close(); conn.close()
+
+        return jsonify({
+            "por_estado": por_estado,
+            "por_canal": por_canal,
+            "urgencia": urgencia,
+            "pendientes": pendientes[:20],  # Top 20 más urgentes
+            "total_pendientes": len([p for p in pendientes if p["clasificacion"] != "sin_deadline"])
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/stats/ultimos_movimientos")
+def ruta_stats_ultimos_movimientos():
+    """Últimos N movimientos para dashboard."""
+    if not session.get("logged"): return jsonify([]), 401
+    limite = int(request.args.get("limite", 10))
+    try:
+        from inventario import cargar_movimientos
+        movs = cargar_movimientos(limite=limite)
+        return jsonify(movs)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/stats/ingresos_periodo")
+def ruta_stats_ingresos_periodo():
+    """Ingresos financieros del período (monto, unidades, órdenes, ticket promedio + desglose por canal)."""
+    if not session.get("logged"): return jsonify({}), 401
+    desde, hasta = _parse_rango_fechas()
+    try:
+        from inventario import get_conn as _gc, CANALES_VENTA_ACTIVOS
+        conn = _gc(); cur = conn.cursor()
+        canales_sql = ", ".join(f"'{c}'" for c in CANALES_VENTA_ACTIVOS)
+
+        # Totales generales
+        cur.execute(f"""
+            SELECT
+                COALESCE(SUM(m.cantidad * COALESCE(p.precio_oferta, p.precio_normal, 0)), 0) AS monto,
+                COALESCE(SUM(m.cantidad), 0) AS unidades,
+                COUNT(DISTINCT m.orden_id) AS ordenes
+            FROM movimientos m
+            LEFT JOIN productos p ON p.sku = m.sku
+            WHERE m.tipo = 'salida'
+              AND m.canal IN ({canales_sql})
+              AND DATE(m.fecha) BETWEEN %s AND %s
+        """, (desde, hasta))
+        r = cur.fetchone()
+        monto = float(r[0] or 0)
+        unidades = int(r[1] or 0)
+        ordenes = int(r[2] or 0)
+        ticket_promedio = round(monto / ordenes, 0) if ordenes > 0 else 0
+
+        # Desglose por canal
+        cur.execute(f"""
+            SELECT m.canal,
+                   COALESCE(SUM(m.cantidad * COALESCE(p.precio_oferta, p.precio_normal, 0)), 0) AS monto,
+                   COALESCE(SUM(m.cantidad), 0) AS unidades,
+                   COUNT(DISTINCT m.orden_id) AS ventas
+            FROM movimientos m
+            LEFT JOIN productos p ON p.sku = m.sku
+            WHERE m.tipo = 'salida'
+              AND m.canal IN ({canales_sql})
+              AND DATE(m.fecha) BETWEEN %s AND %s
+            GROUP BY m.canal
+            ORDER BY monto DESC
+        """, (desde, hasta))
+        por_canal = []
+        for row in cur.fetchall():
+            m_canal = float(row[1] or 0)
+            por_canal.append({
+                "canal": row[0],
+                "monto": m_canal,
+                "unidades": int(row[2] or 0),
+                "ventas": int(row[3] or 0),
+                "porcentaje": round((m_canal / monto * 100), 1) if monto > 0 else 0
+            })
+
+        cur.close(); conn.close()
+
+        return jsonify({
+            "monto_total": monto,
+            "unidades": unidades,
+            "ordenes": ordenes,
+            "ticket_promedio": ticket_promedio,
+            "por_canal": por_canal,
+            "rango": {"desde": desde, "hasta": hasta}
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/admin/diagnostico_dashboard", methods=["GET"])
+def admin_diagnostico_dashboard():
+    """Compara qué cuenta cada función de stats para entender inconsistencias.
+    Uso: /admin/diagnostico_dashboard?desde=2026-05-12&hasta=2026-05-12&token=XXX
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN","lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error":"no autorizado"}),401
+
+    desde = request.args.get("desde", "")
+    hasta = request.args.get("hasta", "")
+    if not desde or not hasta:
+        return jsonify({"error":"Falta ?desde=YYYY-MM-DD&hasta=YYYY-MM-DD"}),400
+
+    try:
+        from inventario import get_conn as _gc
+        conn = _gc(); cur = conn.cursor()
+
+        # 1. TODOS los movimientos del período sin filtro
+        cur.execute("""
+            SELECT tipo, sku, canal, motivo, cantidad,
+                   COALESCE(bodega_codigo,'CENTRAL') AS bod,
+                   TO_CHAR(fecha,'YYYY-MM-DD HH24:MI') AS f,
+                   orden_id, numero_orden
+            FROM movimientos
+            WHERE DATE(fecha) BETWEEN %s AND %s
+            ORDER BY fecha DESC
+        """, (desde, hasta))
+        todos = [{"tipo":r[0],"sku":r[1],"canal":r[2],"motivo":(r[3] or '')[:60],
+                  "cantidad":r[4],"bodega":r[5],"fecha":r[6],
+                  "orden_id":r[7],"numero_orden":r[8]} for r in cur.fetchall()]
+
+        # 2. Lo que cuenta stats_kpis_dashboard
+        cur.execute("""
+            SELECT COALESCE(SUM(cantidad),0) AS unidades, COUNT(DISTINCT orden_id) AS ordenes
+            FROM movimientos
+            WHERE tipo='salida' AND DATE(fecha) BETWEEN %s AND %s
+              AND canal IS NOT NULL
+              AND LOWER(TRIM(canal)) NOT IN ('manual','sistema','ajuste','pos','devolucion','devolución','')
+        """, (desde, hasta))
+        kpis = cur.fetchone()
+
+        # 3. Lo que cuenta propia_vs_fulfillment (por bodega)
+        cur.execute("""
+            SELECT COALESCE(bodega_codigo,'CENTRAL') AS bod,
+                   COUNT(DISTINCT orden_id) AS v,
+                   COALESCE(SUM(cantidad),0) AS u
+            FROM movimientos
+            WHERE tipo='salida'
+              AND LOWER(TRIM(COALESCE(canal,''))) NOT IN ('manual','sistema','ajuste','pos','devolucion','devolución','')
+              AND DATE(fecha) BETWEEN %s AND %s
+            GROUP BY bodega_codigo
+        """, (desde, hasta))
+        por_bodega = [{"bodega":r[0],"ventas":r[1],"unidades":r[2]} for r in cur.fetchall()]
+
+        # 4. Canales únicos en el período (para detectar valores raros)
+        cur.execute("""
+            SELECT DISTINCT canal, COUNT(*) FROM movimientos
+            WHERE DATE(fecha) BETWEEN %s AND %s AND tipo='salida'
+            GROUP BY canal
+        """, (desde, hasta))
+        canales = [{"canal":r[0],"count":r[1]} for r in cur.fetchall()]
+
+        cur.close(); conn.close()
+
+        return jsonify({
+            "periodo": f"{desde} a {hasta}",
+            "total_movimientos": len(todos),
+            "todos_movimientos": todos,
+            "kpis_dashboard_dice": {"unidades":int(kpis[0] or 0), "ordenes":int(kpis[1] or 0)},
+            "propia_vs_fulfillment_dice": por_bodega,
+            "canales_distintos_periodo": canales,
+            "ayuda": "Si 'kpis' = 0 pero 'propia_vs_fulfillment' = X, mira 'canales_distintos' para ver qué canal raro está excluyendo"
+        })
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500

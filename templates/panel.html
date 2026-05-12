@@ -1873,7 +1873,7 @@ tbody td {
       <div class="card" id="cardPropiaFulfillment">
         <div class="card-header">
           <div>
-            <div class="card-title">Ventas: Propia vs Fulfillment</div>
+            <div class="card-title">Ventas según modelo · Bodega propia vs Fulfillment</div>
             <div style="font-size:11px;color:var(--muted);margin-top:2px;">Distribución del período seleccionado</div>
           </div>
           <button class="btn-secondary" style="font-size:11px;" onclick="abrirModalPropiaFulfillment()">Ver detalle</button>
@@ -1934,6 +1934,92 @@ tbody td {
 
       <div class="card">
         <div class="card-header">
+          <div>
+            <div class="card-title">Devoluciones por revisar</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:2px;">Estado y plazo de revisión · 72h hábiles (sin fines de semana ni feriados)</div>
+          </div>
+          <a href="#" onclick="showSec('sec-devoluciones');return false;" class="card-tag" style="cursor:pointer;">Ver todas →</a>
+        </div>
+
+        <div id="devVencidasBanner" style="display:none;background:#FCEBEB;border:1px solid #F7C1C1;border-radius:10px;padding:10px 14px;margin-bottom:12px;align-items:center;gap:10px;cursor:pointer;" onclick="showSec('sec-devoluciones');">
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#E24B4A;box-shadow:0 0 0 0 rgba(226,75,74,0.5);animation:dvpulse 1.5s infinite;"></span>
+          <div style="flex:1;">
+            <div style="font-size:12px;font-weight:600;color:#791F1F;" id="devVencidasTitle">⚠ Devoluciones VENCIDAS sin revisar</div>
+            <div style="font-size:11px;color:#A32D2D;margin-top:2px;">Pasaron más de 72h hábiles desde la solicitud · acción urgente requerida</div>
+          </div>
+          <span style="font-size:11px;color:#791F1F;font-weight:500;">Ver detalle →</span>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:14px;" id="devEstados">
+          <div style="background:white;border:1px solid var(--border);border-left:3px solid #BA7517;border-radius:10px;padding:12px 14px;cursor:pointer;" onclick="showSec('sec-devoluciones');">
+            <div style="font-size:10px;text-transform:uppercase;font-weight:600;letter-spacing:0.05em;color:#854F0B;">Pendientes</div>
+            <div style="font-size:22px;font-weight:600;line-height:1;margin-top:6px;color:var(--text);" id="devCountPendiente">0</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:3px;">por revisar</div>
+          </div>
+          <div style="background:white;border:1px solid var(--border);border-left:3px solid #185FA5;border-radius:10px;padding:12px 14px;cursor:pointer;" onclick="showSec('sec-devoluciones');">
+            <div style="font-size:10px;text-transform:uppercase;font-weight:600;letter-spacing:0.05em;color:#0C447C;">En tránsito</div>
+            <div style="font-size:22px;font-weight:600;line-height:1;margin-top:6px;color:var(--text);" id="devCountTransito">0</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:3px;">vienen de vuelta</div>
+          </div>
+          <div style="background:white;border:1px solid var(--border);border-left:3px solid #534AB7;border-radius:10px;padding:12px 14px;cursor:pointer;" onclick="showSec('sec-devoluciones');">
+            <div style="font-size:10px;text-transform:uppercase;font-weight:600;letter-spacing:0.05em;color:#3C3489;">Recibidas</div>
+            <div style="font-size:22px;font-weight:600;line-height:1;margin-top:6px;color:var(--text);" id="devCountRecibida">0</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:3px;">en inspección</div>
+          </div>
+          <div style="background:white;border:1px solid var(--border);border-left:3px solid #0F6E56;border-radius:10px;padding:12px 14px;cursor:pointer;" onclick="showSec('sec-devoluciones');">
+            <div style="font-size:10px;text-transform:uppercase;font-weight:600;letter-spacing:0.05em;color:#085041;">Resueltas</div>
+            <div style="font-size:22px;font-weight:600;line-height:1;margin-top:6px;color:var(--text);" id="devCountResuelta">0</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:3px;">este período</div>
+          </div>
+          <div style="background:white;border:1px solid var(--border);border-left:3px solid #993C1D;border-radius:10px;padding:12px 14px;cursor:pointer;" onclick="showSec('sec-devoluciones');">
+            <div style="font-size:10px;text-transform:uppercase;font-weight:600;letter-spacing:0.05em;color:#712B13;">Rechazadas</div>
+            <div style="font-size:22px;font-weight:600;line-height:1;margin-top:6px;color:var(--text);" id="devCountRechazada">0</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:3px;">no aplica</div>
+          </div>
+        </div>
+
+        <div style="border-top:1px solid var(--border);margin:14px 0 10px;"></div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.05em;font-weight:500;color:var(--muted);margin-bottom:8px;">⏱ Por vencer revisión <span style="font-size:11px;font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0;">— plazo 72h hábiles</span></div>
+
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px;">
+          <div style="background:#FCEBEB;padding:10px 12px;border-radius:8px;display:flex;align-items:center;gap:10px;cursor:pointer;" onclick="showSec('sec-devoluciones');">
+            <div style="font-size:22px;font-weight:700;color:#791F1F;line-height:1;" id="devUrgVencidas">0</div>
+            <div style="flex:1;">
+              <div style="font-size:11px;font-weight:600;color:#791F1F;text-transform:uppercase;letter-spacing:0.05em;">Vencidas</div>
+              <div style="font-size:11px;color:#A32D2D;">Pasó el plazo</div>
+            </div>
+          </div>
+          <div style="background:#FAEEDA;padding:10px 12px;border-radius:8px;display:flex;align-items:center;gap:10px;cursor:pointer;" onclick="showSec('sec-devoluciones');">
+            <div style="font-size:22px;font-weight:700;color:#633806;line-height:1;" id="devUrgUrgente">0</div>
+            <div style="flex:1;">
+              <div style="font-size:11px;font-weight:600;color:#854F0B;text-transform:uppercase;letter-spacing:0.05em;">Urgente</div>
+              <div style="font-size:11px;color:#854F0B;">&lt; 24h hábiles</div>
+            </div>
+          </div>
+          <div style="background:#FAEEDA;opacity:0.7;padding:10px 12px;border-radius:8px;display:flex;align-items:center;gap:10px;cursor:pointer;" onclick="showSec('sec-devoluciones');">
+            <div style="font-size:22px;font-weight:700;color:#854F0B;line-height:1;" id="devUrgAtencion">0</div>
+            <div style="flex:1;">
+              <div style="font-size:11px;font-weight:600;color:#854F0B;text-transform:uppercase;letter-spacing:0.05em;">Atención</div>
+              <div style="font-size:11px;color:#854F0B;">24h - 48h hábiles</div>
+            </div>
+          </div>
+          <div style="background:#EAF3DE;padding:10px 12px;border-radius:8px;display:flex;align-items:center;gap:10px;cursor:pointer;" onclick="showSec('sec-devoluciones');">
+            <div style="font-size:22px;font-weight:700;color:#27500A;line-height:1;" id="devUrgEnPlazo">0</div>
+            <div style="flex:1;">
+              <div style="font-size:11px;font-weight:600;color:#27500A;text-transform:uppercase;letter-spacing:0.05em;">En plazo</div>
+              <div style="font-size:11px;color:#3B6D11;">&gt; 48h hábiles</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.05em;font-weight:500;color:var(--muted);margin-bottom:8px;">Por canal de origen</div>
+        <div id="devPorCanal" style="display:flex;gap:8px;flex-wrap:wrap;">
+          <div style="font-size:11px;color:var(--muted);">Cargando…</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
           <div class="card-title">Actividad reciente</div>
           <span class="card-tag">Últimos movimientos</span>
         </div>
@@ -1943,6 +2029,10 @@ tbody td {
       </div>
     </div>
   </div>
+
+<style>
+@keyframes dvpulse { 0% { box-shadow: 0 0 0 0 rgba(226,75,74,0.5);} 70% { box-shadow: 0 0 0 8px rgba(226,75,74,0);} 100% { box-shadow: 0 0 0 0 rgba(226,75,74,0);} }
+</style>
 
   <div id="sec-inventario" class="main" style="display:none;">
 
@@ -8405,8 +8495,69 @@ async function cargarDashboardCompleto() {
     cargarChartDistribucion(),
     cargarStockCritico(),
     cargarActividad(),
-    cargarPropiaVsFulfillment()
+    cargarPropiaVsFulfillment(),
+    cargarDevolucionesPanel()
   ]);
+}
+
+// ─── CARD: Devoluciones por revisar ───────────────
+async function cargarDevolucionesPanel(){
+  try {
+    const res = await fetch('/stats/devoluciones_estado');
+    const d = await res.json();
+    if(d.error){ console.error('[devoluciones]', d.error); return; }
+
+    // Contadores por estado
+    const setNum = (id, val) => { const el = document.getElementById(id); if(el) el.textContent = (val || 0).toLocaleString('es-CL'); };
+    setNum('devCountPendiente', d.por_estado?.pendiente);
+    setNum('devCountTransito', (d.por_estado?.en_transito || 0) + (d.por_estado?.['en tránsito'] || 0));
+    setNum('devCountRecibida', (d.por_estado?.recibida || 0) + (d.por_estado?.en_revision || 0));
+    setNum('devCountResuelta', d.por_estado?.resuelta);
+    setNum('devCountRechazada', d.por_estado?.rechazada);
+
+    // Urgencia
+    const u = d.urgencia || {};
+    setNum('devUrgVencidas', u.vencidas);
+    setNum('devUrgUrgente', u.urgente);
+    setNum('devUrgAtencion', u.atencion);
+    setNum('devUrgEnPlazo', u.en_plazo);
+
+    // Banner vencidas
+    const banner = document.getElementById('devVencidasBanner');
+    const bannerTitle = document.getElementById('devVencidasTitle');
+    if(banner){
+      if((u.vencidas || 0) > 0){
+        banner.style.display = 'flex';
+        if(bannerTitle) bannerTitle.textContent = `⚠ ${u.vencidas} devolución${u.vencidas > 1 ? 'es' : ''} VENCIDA${u.vencidas > 1 ? 'S' : ''} sin revisar`;
+      } else {
+        banner.style.display = 'none';
+      }
+    }
+
+    // Por canal — pills con logos
+    const cont = document.getElementById('devPorCanal');
+    if(cont){
+      const logos = {
+        'MercadoLibre': {bg:'#FFE600',color:'#1A1A1A',label:'ML'},
+        'Paris':        {bg:'#4F5AFF',color:'white',label:'PA'},
+        'Falabella':    {bg:'#ADD500',color:'#1A1A1A',label:'FA'},
+        'Walmart':      {bg:'#0071DC',color:'white',label:'WM'},
+        'Ripley':       {bg:'#5F3D76',color:'white',label:'RP'},
+        'Web':          {bg:'#873EFF',color:'white',label:'WE'},
+        'Hites':        {bg:'#FF8200',color:'white',label:'HI'},
+      };
+      const pills = (d.por_canal || []).map(c => {
+        const L = logos[c.canal] || {bg:'#E8E6E0',color:'#1F1E1B',label:c.canal.substring(0,2).toUpperCase()};
+        return `<span style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px 4px 4px;border-radius:20px;font-size:11px;font-weight:500;background:var(--bg2);border:1px solid var(--border);color:var(--text);cursor:pointer;" onclick="showSec('sec-devoluciones');">
+          <span style="width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:9px;background:${L.bg};color:${L.color};">${L.label}</span>
+          ${c.count} devolución${c.count > 1 ? 'es' : ''}
+        </span>`;
+      }).join('');
+      cont.innerHTML = pills || '<div style="font-size:11px;color:var(--muted);">Sin devoluciones registradas</div>';
+    }
+  } catch(e) {
+    console.error('[cargarDevolucionesPanel]', e);
+  }
 }
 
 // ─── CARD: Propia vs Fulfillment ───────────────
