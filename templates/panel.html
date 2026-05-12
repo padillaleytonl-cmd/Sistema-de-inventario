@@ -1764,11 +1764,27 @@ tbody td {
           <button class="dash-period" data-dias="90" onclick="dashPeriodo(90,this)">90d</button>
         </div>
         <button class="btn-secondary" onclick="cargarDashboardCompleto()" title="Refrescar">↻</button>
+        <!-- Botón Configurar vista (módulos visibles) -->
+        <div style="position:relative;">
+          <button class="btn-secondary" id="btnConfigVista" onclick="toggleConfigVista(event)" title="Mostrar/ocultar módulos del dashboard" style="display:inline-flex;align-items:center;gap:5px;">
+            <span style="font-size:13px;">⊞</span>
+            <span>Configurar vista</span>
+            <span style="font-size:9px;opacity:0.6;">▾</span>
+          </button>
+          <div id="configVistaDropdown" style="display:none;position:absolute;right:0;top:calc(100% + 6px);background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:8px;width:280px;box-shadow:0 4px 12px rgba(0,0,0,0.08);z-index:1000;">
+            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;padding:6px 10px;letter-spacing:0.05em;font-weight:600;">Mostrar módulos</div>
+            <div id="configVistaItems" style="max-height:340px;overflow-y:auto;"></div>
+            <div style="border-top:1px solid var(--border);margin:6px 0;"></div>
+            <div onclick="resetVistaDashboard()" style="padding:8px 10px;border-radius:6px;cursor:pointer;font-size:12px;color:#534AB7;font-weight:500;display:flex;align-items:center;gap:8px;" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'">
+              ↺ Restablecer por defecto
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
     <!-- KPIs -->
-    <div class="metrics-grid">
+    <div class="metrics-grid" data-modulo="kpis">
       <div class="metric-card" style="border-top:3px solid #2563eb;">
         <div class="metric-label" style="color:#2563eb;">📦 Productos en inventario</div>
         <div class="metric-value" id="kpiProductos">—</div>
@@ -1805,7 +1821,7 @@ tbody td {
     </div>
 
     <!-- Card resumen de ingresos del período -->
-    <div class="card" style="margin-top:16px;">
+    <div class="card" data-modulo="ventas_ingresos" style="margin-top:16px;">
       <div class="card-header">
         <div class="card-title">Ventas — ingresos del período</div>
         <span class="card-tag" id="cardIngresoRange">—</span>
@@ -1837,8 +1853,8 @@ tbody td {
     </div>
 
     <!-- Gráficos -->
-    <div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-top:16px;">
-      <div class="card">
+    <div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-top:16px;" id="dashGraficosGrid">
+      <div class="card" data-modulo="ventas_canal_tiempo">
         <div class="card-header">
           <div class="card-title">Ventas por canal en el tiempo</div>
           <span class="card-tag" id="chartVentasCanalRange">—</span>
@@ -1848,7 +1864,7 @@ tbody td {
         </div>
       </div>
 
-      <div class="card">
+      <div class="card" data-modulo="ventas_canal_donut">
         <div class="card-header">
           <div class="card-title">Ventas por canal</div>
           <div style="display:flex;gap:6px;align-items:center;">
@@ -1869,7 +1885,7 @@ tbody td {
     </div>
 
     <!-- Card Propia vs Fulfillment (NUEVO) -->
-    <div style="margin-top:14px;">
+    <div data-modulo="propia_vs_full" style="margin-top:14px;">
       <div class="card" id="cardPropiaFulfillment">
         <div class="card-header">
           <div>
@@ -1886,8 +1902,8 @@ tbody td {
     </div>
 
     <!-- Distribución stock + Top productos -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
-      <div class="card">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;" id="dashDistTopGrid">
+      <div class="card" data-modulo="distribucion_canal">
         <div class="card-header">
           <div class="card-title">Distribución stock por canal</div>
           <span class="card-tag">Stock disponible mapeado</span>
@@ -1897,7 +1913,7 @@ tbody td {
         </div>
       </div>
 
-      <div class="card">
+      <div class="card" data-modulo="top_productos">
         <div class="card-header">
           <div class="card-title">Top 10 productos más vendidos</div>
         </div>
@@ -1908,7 +1924,7 @@ tbody td {
     </div>
 
     <!-- Movimientos diarios -->
-    <div style="margin-top:14px;">
+    <div data-modulo="movimientos_diarios" style="margin-top:14px;">
       <div class="card">
         <div class="card-header">
           <div class="card-title">Movimientos diarios</div>
@@ -1921,7 +1937,7 @@ tbody td {
     </div>
 
     <!-- Devoluciones por revisar (ancho completo) -->
-    <div style="margin-top:14px;">
+    <div data-modulo="devoluciones" style="margin-top:14px;">
       <div class="card">
         <div class="card-header">
           <div>
@@ -2010,7 +2026,7 @@ tbody td {
     </div>
 
     <!-- Tablas operativas -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
+    <div data-modulo="stock_critico" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
       <div class="card">
         <div class="card-header">
           <div class="card-title">Stock crítico</div>
@@ -2023,7 +2039,7 @@ tbody td {
 
     </div>
     <!-- Actividad reciente (ancho completo) -->
-    <div style="margin-top:14px;">
+    <div data-modulo="ultimos_movimientos" style="margin-top:14px;">
       <div class="card">
         <div class="card-header">
           <div>
@@ -4220,28 +4236,8 @@ function actualizarDashboard(productos, movimientos){
     }
   }
 
-  // Actividad reciente — ahora movimientos son objetos JSON
-  const actEl = document.getElementById('actividadList');
-  if(actEl){
-    if(!movimientos.length){
-      actEl.innerHTML = '<div style="color:var(--hint);font-size:12px;">Sin actividad reciente</div>';
-    } else {
-      actEl.innerHTML = movimientos.slice(0,6).map(m => {
-        const isEntrada = m.tipo === 'entrada';
-        const isVenta = CANALES_VENTA.includes(m.canal);
-        const iconClass = isVenta ? 'icon-venta' : isEntrada ? 'icon-entrada' : 'icon-salida';
-        const iconLetter = isVenta ? 'V' : isEntrada ? 'E' : 'S';
-        const signo = isEntrada ? '+' : '-';
-        const canalAbrev = {'WooCommerce':'WC','Walmart':'WM','Paris':'PA','MercadoLibre':'ML'};
-        const desc = isVenta ? `${canalAbrev[m.canal]||m.canal} · ${m.nombre}` : `${m.motivo} · ${m.nombre}`;
-        return `<div class="activity-row">
-          <div class="activity-icon ${iconClass}">${iconLetter}</div>
-          <div class="activity-desc">${desc}</div>
-          <div class="activity-time">${m.hora || 'reciente'}</div>
-        </div>`;
-      }).join('');
-    }
-  }
+  // Actividad reciente — render manejado por cargarActividad() en el dashboard nuevo
+  // (este bloque solía pintar acá, ahora se delega para evitar sobreescritura)
 
   // Gráfico con plazo actual
   renderGrafico(plazoActual, movimientos, productosGlobal);
@@ -8612,6 +8608,112 @@ function abrirDetalleMovimiento(orden, sku) {
   }, 200);
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// CONFIGURACIÓN DE VISTA — qué módulos mostrar/ocultar en el dashboard
+// ════════════════════════════════════════════════════════════════════════
+
+const MODULOS_DASHBOARD = [
+  { id: 'kpis',                  nombre: 'KPIs (4 tarjetas)',                  default: true },
+  { id: 'ventas_ingresos',       nombre: 'Ventas — ingresos del período',      default: true },
+  { id: 'ventas_canal_tiempo',   nombre: 'Ventas por canal en el tiempo',      default: true },
+  { id: 'ventas_canal_donut',    nombre: 'Distribución por canal (donut)',     default: true },
+  { id: 'propia_vs_full',        nombre: 'Bodega propia vs Fulfillment',       default: true },
+  { id: 'distribucion_canal',    nombre: 'Distribución stock por canal',       default: true },
+  { id: 'top_productos',         nombre: 'Top 10 productos más vendidos',      default: true },
+  { id: 'movimientos_diarios',   nombre: 'Movimientos diarios (entradas/salidas)', default: true },
+  { id: 'devoluciones',          nombre: 'Devoluciones por revisar',           default: true },
+  { id: 'stock_critico',         nombre: 'Stock crítico',                      default: true },
+  { id: 'ultimos_movimientos',   nombre: 'Últimos movimientos',                default: true },
+];
+
+const VISTA_STORAGE_KEY = 'lusync_dashboard_vista_v1';
+
+function getVistaConfig() {
+  try {
+    const raw = localStorage.getItem(VISTA_STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch(e) {}
+  // Por defecto: todos visibles
+  const defecto = {};
+  MODULOS_DASHBOARD.forEach(m => { defecto[m.id] = m.default; });
+  return defecto;
+}
+
+function setVistaConfig(cfg) {
+  try { localStorage.setItem(VISTA_STORAGE_KEY, JSON.stringify(cfg)); } catch(e) {}
+}
+
+function aplicarVistaDashboard() {
+  const cfg = getVistaConfig();
+  MODULOS_DASHBOARD.forEach(m => {
+    const visible = cfg[m.id] !== false; // Si no está explícitamente false, mostrar
+    document.querySelectorAll(`[data-modulo="${m.id}"]`).forEach(el => {
+      el.style.display = visible ? '' : 'none';
+    });
+  });
+}
+
+function renderConfigVistaDropdown() {
+  const cfg = getVistaConfig();
+  const cont = document.getElementById('configVistaItems');
+  if (!cont) return;
+  let html = '';
+  MODULOS_DASHBOARD.forEach(m => {
+    const visible = cfg[m.id] !== false;
+    html += `<div onclick="toggleModulo('${m.id}')" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;cursor:pointer;font-size:12px;color:var(--text);" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'">
+      <span style="width:14px;height:14px;border:1.5px solid ${visible?'#534AB7':'var(--border)'};background:${visible?'#534AB7':'transparent'};color:white;border-radius:3px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;">${visible?'✓':''}</span>
+      <span>${m.nombre}</span>
+    </div>`;
+  });
+  cont.innerHTML = html;
+}
+
+function toggleConfigVista(ev) {
+  if (ev) { ev.stopPropagation(); }
+  const d = document.getElementById('configVistaDropdown');
+  if (!d) return;
+  if (d.style.display === 'none' || !d.style.display) {
+    renderConfigVistaDropdown();
+    d.style.display = 'block';
+    // Cerrar al click fuera
+    setTimeout(() => {
+      document.addEventListener('click', cerrarConfigVistaSiFuera);
+    }, 0);
+  } else {
+    d.style.display = 'none';
+  }
+}
+
+function cerrarConfigVistaSiFuera(ev) {
+  const d = document.getElementById('configVistaDropdown');
+  const b = document.getElementById('btnConfigVista');
+  if (!d) return;
+  if (d.contains(ev.target) || (b && b.contains(ev.target))) return;
+  d.style.display = 'none';
+  document.removeEventListener('click', cerrarConfigVistaSiFuera);
+}
+
+function toggleModulo(idModulo) {
+  const cfg = getVistaConfig();
+  cfg[idModulo] = !(cfg[idModulo] !== false); // Si era true (o undefined), pasar a false. Si era false, pasar a true.
+  setVistaConfig(cfg);
+  aplicarVistaDashboard();
+  renderConfigVistaDropdown();
+}
+
+function resetVistaDashboard() {
+  try { localStorage.removeItem(VISTA_STORAGE_KEY); } catch(e) {}
+  aplicarVistaDashboard();
+  renderConfigVistaDropdown();
+  if (typeof toast === 'function') toast('Vista restablecida por defecto');
+}
+
+// Aplicar la configuración al cargar la página
+document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(aplicarVistaDashboard, 100);
+});
+
+
 async function cargarDashboardCompleto() {
   await Promise.all([
     cargarKPIs(),
@@ -8625,6 +8727,8 @@ async function cargarDashboardCompleto() {
     cargarPropiaVsFulfillment(),
     cargarDevolucionesPanel()
   ]);
+  // Re-aplicar la configuración de vista al final
+  if (typeof aplicarVistaDashboard === 'function') aplicarVistaDashboard();
 }
 
 // ─── CARD: Devoluciones por revisar ───────────────
