@@ -9837,6 +9837,28 @@ def admin_movimientos_por_fecha():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/admin/walmart_orden_raw/<orden>", methods=["GET"])
+def admin_walmart_orden_raw(orden):
+    """Devuelve la respuesta cruda de la API de Walmart para una orden,
+    para diagnosticar qué campos de fecha trae."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN","lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error":"no autorizado"}),401
+    try:
+        from walmart import walmart_headers, WALMART_BASE_URL
+        import requests as _r
+        r = _r.get(f"{WALMART_BASE_URL}/v3/orders/{orden}", headers=walmart_headers(), timeout=15)
+        return jsonify({
+            "status_code": r.status_code,
+            "url": f"{WALMART_BASE_URL}/v3/orders/{orden}",
+            "raw_response": r.json() if r.status_code == 200 else r.text[:2000],
+            "top_level_keys": list(r.json().keys()) if r.status_code == 200 else None,
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 @app.route("/admin/rellenar_fechas_compra", methods=["GET"])
 def admin_rellenar_fechas_compra():
     """Rellena fecha_compra_marketplace en movimientos viejos consultando las APIs.
