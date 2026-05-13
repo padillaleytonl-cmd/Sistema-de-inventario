@@ -174,7 +174,8 @@ def recrear_policies():
 
 def habilitar_rls(tabla):
     """Activa RLS en una tabla específica.
-    Una vez activado, las queries SIN context verán datos vacíos.
+    También activa FORCE para que el OWNER de la tabla también respete RLS
+    (sin FORCE, los OWNERs bypasean RLS automáticamente en Postgres).
     """
     if tabla not in TABLAS_TENANT:
         return {"error": f"{tabla} no está en la lista de tablas tenant"}
@@ -182,10 +183,9 @@ def habilitar_rls(tabla):
     conn = get_conn(); cur = conn.cursor()
     try:
         cur.execute(f"ALTER TABLE {tabla} ENABLE ROW LEVEL SECURITY")
-        # NOTA: NO usamos FORCE — eso obligaría incluso a superuser DB,
-        # podría bloquear queries de mantenimiento
+        cur.execute(f"ALTER TABLE {tabla} FORCE ROW LEVEL SECURITY")
         conn.commit()
-        return {"ok": True, "tabla": tabla, "estado": "RLS habilitado"}
+        return {"ok": True, "tabla": tabla, "estado": "RLS habilitado + forzado (owner también filtra)"}
     except Exception as e:
         conn.rollback()
         return {"error": str(e)}
@@ -195,12 +195,15 @@ def habilitar_rls(tabla):
 
 
 def deshabilitar_rls(tabla):
-    """Desactiva RLS en una tabla. ROLLBACK rápido si algo falla."""
+    """Desactiva RLS en una tabla. ROLLBACK rápido si algo falla.
+    Desactiva tanto ENABLE como FORCE.
+    """
     if tabla not in TABLAS_TENANT:
         return {"error": f"{tabla} no está en la lista de tablas tenant"}
 
     conn = get_conn(); cur = conn.cursor()
     try:
+        cur.execute(f"ALTER TABLE {tabla} NO FORCE ROW LEVEL SECURITY")
         cur.execute(f"ALTER TABLE {tabla} DISABLE ROW LEVEL SECURITY")
         conn.commit()
         return {"ok": True, "tabla": tabla, "estado": "RLS deshabilitado"}
