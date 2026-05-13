@@ -10743,6 +10743,127 @@ def admin_rls_test_aislamiento():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/admin/tenancy/form_crear_super_admin", methods=["GET"])
+def admin_tenancy_form_crear_super_admin():
+    """Formulario HTML simple para crear el primer super-admin Lusync sin curl."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if request.args.get("token") != bypass_token:
+        return "<h1>No autorizado</h1>", 401
+
+    # Verificar si ya hay admins (auto-bloqueo)
+    try:
+        from inventario import get_conn, release_conn
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM lusync_admins")
+        n = cur.fetchone()[0]
+        cur.close(); release_conn(conn)
+        if n > 0:
+            return f"""
+            <html><body style="font-family:system-ui;max-width:600px;margin:60px auto;padding:20px;">
+            <h2>⚠️ Ya existen super-admins</h2>
+            <p>Hay {n} super-admin(s) creado(s). Por seguridad, este formulario solo funciona cuando la tabla está vacía.</p>
+            <p>Si necesitas resetear, contactarme.</p>
+            </body></html>
+            """, 403
+    except Exception as e:
+        pass
+
+    return f"""
+    <!DOCTYPE html>
+    <html><head><title>Crear Super-Admin Lusync</title></head>
+    <body style="font-family:system-ui,sans-serif;max-width:500px;margin:60px auto;padding:30px;background:#fafaf9;border-radius:12px;">
+        <h2 style="margin:0 0 10px;">🔐 Crear Super-Admin Lusync</h2>
+        <p style="color:#666;font-size:14px;margin-bottom:24px;">Este es tu acceso maestro al panel de Lusync. Solo se puede crear UNA vez.</p>
+
+        <form id="frm" onsubmit="enviar(event)">
+            <div style="margin-bottom:16px;">
+                <label style="display:block;font-size:13px;font-weight:600;margin-bottom:4px;">Email</label>
+                <input id="email" type="email" value="padillaleytonl@gmail.com" required
+                       style="width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;">
+            </div>
+
+            <div style="margin-bottom:16px;">
+                <label style="display:block;font-size:13px;font-weight:600;margin-bottom:4px;">Nombre</label>
+                <input id="nombre" type="text" value="Luis Padilla" required
+                       style="width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;">
+            </div>
+
+            <div style="margin-bottom:16px;">
+                <label style="display:block;font-size:13px;font-weight:600;margin-bottom:4px;">Contraseña</label>
+                <input id="password" type="password" required minlength="8"
+                       placeholder="Mínimo 8 caracteres"
+                       style="width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;">
+                <small style="color:#888;font-size:11px;">Mín 8 caracteres. Ideal: letras + números + símbolos.</small>
+            </div>
+
+            <div style="margin-bottom:24px;">
+                <label style="display:block;font-size:13px;font-weight:600;margin-bottom:4px;">Confirmar contraseña</label>
+                <input id="password2" type="password" required minlength="8"
+                       style="width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;">
+            </div>
+
+            <button type="submit" style="width:100%;padding:12px;background:#534AB7;color:white;border:0;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;">
+                Crear Super-Admin
+            </button>
+        </form>
+
+        <div id="resultado" style="margin-top:20px;padding:12px;border-radius:6px;display:none;"></div>
+
+        <script>
+        async function enviar(e) {{
+            e.preventDefault();
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const password2 = document.getElementById('password2').value;
+            const nombre = document.getElementById('nombre').value;
+            const r = document.getElementById('resultado');
+
+            if (password !== password2) {{
+                r.style.display = 'block';
+                r.style.background = '#fee2e2';
+                r.style.color = '#991b1b';
+                r.innerText = '❌ Las contraseñas no coinciden';
+                return;
+            }}
+
+            r.style.display = 'block';
+            r.style.background = '#f3f4f6';
+            r.style.color = '#374151';
+            r.innerText = '⏳ Creando...';
+
+            try {{
+                const res = await fetch('/admin/tenancy/crear_super_admin', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{
+                        email: email,
+                        password: password,
+                        nombre: nombre,
+                        token: '{bypass_token}'
+                    }})
+                }});
+                const data = await res.json();
+                if (data.ok) {{
+                    r.style.background = '#dcfce7';
+                    r.style.color = '#166534';
+                    r.innerHTML = '✅ <b>Super-admin creado</b><br>Email: ' + data.email + '<br>ID: ' + data.admin_id + '<br><br>Guarda tu contraseña en un lugar seguro. Mañana la usarás en /admin/lusync/login.';
+                    document.getElementById('frm').style.display = 'none';
+                }} else {{
+                    r.style.background = '#fee2e2';
+                    r.style.color = '#991b1b';
+                    r.innerText = '❌ ' + (data.error || 'Error desconocido');
+                }}
+            }} catch (err) {{
+                r.style.background = '#fee2e2';
+                r.style.color = '#991b1b';
+                r.innerText = '❌ Error: ' + err.message;
+            }}
+        }}
+        </script>
+    </body></html>
+    """
+
+
 @app.route("/admin/rls/test_marcar_orden", methods=["GET"])
 def admin_rls_test_marcar_orden():
     """Prueba directa de intentar_marcar_orden_atomic para diagnosticar bloqueo RLS."""
