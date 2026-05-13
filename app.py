@@ -216,7 +216,69 @@ def sincronizar_stock_marketplaces(sku, stock, contexto="manual"):
 
     return resultado
 
+# ════════════════════════════════════════════════════════════════════════════
+# DECORADOR: con_tenant_default
+# ════════════════════════════════════════════════════════════════════════════
+# Envuelve schedulers y otras funciones de background para que sus get_conn()
+# tengan tenant context. Mientras solo hay 1 tenant (Babymine, id=1),
+# se itera sobre todos los tenants activos en BD.
+#
+# Funcionamiento: usa threading.local para que get_conn() pueda leer el tenant
+# actual incluso sin sesión Flask.
+
+import threading
+_thread_tenant = threading.local()
+
+def get_thread_tenant():
+    """Devuelve el tenant_id seteado para este thread, o None."""
+    return getattr(_thread_tenant, "tenant_id", None)
+
+def set_thread_tenant(tenant_id, is_admin=False):
+    """Setea tenant_id para el thread actual."""
+    _thread_tenant.tenant_id = int(tenant_id) if tenant_id else None
+    _thread_tenant.is_admin = bool(is_admin)
+
+def clear_thread_tenant():
+    """Limpia el tenant del thread."""
+    _thread_tenant.tenant_id = None
+    _thread_tenant.is_admin = False
+
+
+def con_tenant_default(func):
+    """Decorador: ejecuta func() una vez por cada tenant activo en BD.
+    Mientras solo hay 1 tenant (Babymine), corre 1 vez con tenant_id=1.
+    """
+    from functools import wraps
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            from inventario import get_conn as _gc, release_conn as _rc
+            conn = _gc(is_admin=True)  # admin para listar todos los tenants
+            cur = conn.cursor()
+            cur.execute("SELECT id FROM tenants WHERE estado = 'activo' ORDER BY id ASC")
+            tenant_ids = [r[0] for r in cur.fetchall()]
+            cur.close()
+            _rc(conn)
+        except Exception as e:
+            print(f"[con_tenant_default] Error listando tenants: {e}, usando default=1")
+            tenant_ids = [1]
+
+        for tid in tenant_ids:
+            try:
+                set_thread_tenant(tid, is_admin=False)
+                print(f"[{func.__name__}] Ejecutando para tenant_id={tid}")
+                func(*args, **kwargs)
+            except Exception as e:
+                import traceback
+                print(f"[{func.__name__}] Error tenant {tid}: {e}")
+                traceback.print_exc()
+            finally:
+                clear_thread_tenant()
+    return wrapper
+
+
 # ── SYNC AUTOMÁTICO WALMART CADA 5 MINUTOS ──
+@con_tenant_default
 def _sync_walmart_automatico():
     """Tarea de background: sincroniza órdenes Walmart sin requerir sesión"""
     # FIX: lock anti-overlapping igual que los demás canales
@@ -408,7 +470,7 @@ def _sync_walmart_automatico():
     finally:
         _sync_walmart_automatico._running = False
 
-scheduler = BackgroundScheduler(daemon=True)
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # SYNC AUTOMÁTICO MULTI-MARKETPLACE
@@ -438,6 +500,7 @@ _sync_locks = {
 }
 
 
+@con_tenant_default
 def _sync_meli_automatico():
     """Sync órdenes + cancelaciones MercadoLibre cada 5 min."""
     if _sync_locks["meli"]["running"]:
@@ -594,6 +657,7 @@ def _sync_meli_automatico():
         _sync_locks["meli"]["running"] = False
 
 
+@con_tenant_default
 def _sync_falabella_automatico():
     """Sync órdenes + cancelaciones Falabella cada 10 min."""
     if _sync_locks["falabella"]["running"]:
@@ -831,6 +895,7 @@ def _sync_falabella_automatico():
         _sync_locks["falabella"]["running"] = False
 
 
+@con_tenant_default
 def _sync_paris_automatico():
     """Sync órdenes + cancelaciones París cada 10 min."""
     if _sync_locks["paris"]["running"]:
@@ -1376,6 +1441,8 @@ def _sync_woo_automatico():
     finally:
         _sync_locks["woo"]["running"] = False
 
+
+scheduler = BackgroundScheduler(daemon=True)
 
 # ── Registrar todos los schedulers (escalonados) ──
 # Walmart cada 5 min (existente)

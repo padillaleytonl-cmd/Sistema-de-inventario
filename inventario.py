@@ -182,43 +182,59 @@ def _get_pool():
 def get_conn(tenant_id=None, is_admin=False):
     """Obtiene una conexión del pool. Usar con try/finally para devolverla.
 
-    Multi-tenancy:
-        - Si se pasa tenant_id explícito, setea app.tenant_id en la conexión.
-        - Si no se pasa y hay sesión Flask con tenant_id, lo usa.
-        - Si no hay nada, NO setea (comportamiento legacy para schedulers).
-        - is_admin=True bypassa RLS (para super-admin Lusync y mantenimiento).
+    Multi-tenancy: prioridad de fuente del tenant_id:
+        1. Argumento explícito (tenant_id=X)
+        2. Sesión Flask (si hay request context)
+        3. Threading.local (schedulers / background threads)
+        4. Nada → no setea (legacy)
+
+    is_admin=True bypassa RLS (para super-admin Lusync y mantenimiento).
 
     Esta función es 100% retrocompatible: get_conn() sin args funciona igual que antes.
     """
     try:
         conn = _get_pool().getconn()
     except Exception:
-        # Fallback a conexión directa si el pool falla
         conn = psycopg2.connect(os.environ.get("DATABASE_URL"))
 
-    # Setear context tenant si aplica
     try:
-        # Si se pasó explícito, usarlo
+        # Prioridad 1: argumento explícito
         if tenant_id is not None:
             _set_rls_context(conn, int(tenant_id), is_admin)
         else:
-            # Intentar leer de sesión Flask (si estamos en request context)
+            # Prioridad 2: sesión Flask
+            tid_from_session = None
+            admin_from_session = False
             try:
                 from flask import session, has_request_context
                 if has_request_context():
-                    sess_tid = session.get("tenant_id")
-                    sess_admin = bool(session.get("is_lusync_admin"))
-                    if sess_tid:
-                        _set_rls_context(conn, int(sess_tid), sess_admin)
-                    elif sess_admin:
-                        # Super admin sin tenant específico — ve todo
-                        _set_rls_context(conn, 0, True)
+                    tid_from_session = session.get("tenant_id")
+                    admin_from_session = bool(session.get("is_lusync_admin"))
             except Exception:
-                # Sin Flask context (scheduler, webhook sin auth) → no setear nada
-                # Las queries verán todo si RLS está deshabilitado (= comportamiento actual)
                 pass
+
+            if tid_from_session:
+                _set_rls_context(conn, int(tid_from_session), admin_from_session)
+            elif admin_from_session:
+                _set_rls_context(conn, 0, True)
+            else:
+                # Prioridad 3: threading.local (schedulers)
+                try:
+                    from app import get_thread_tenant
+                    tid_thread = get_thread_tenant()
+                    if tid_thread:
+                        # Leer flag is_admin del thread
+                        try:
+                            from app import _thread_tenant
+                            adm_thread = getattr(_thread_tenant, "is_admin", False)
+                        except Exception:
+                            adm_thread = False
+                        _set_rls_context(conn, int(tid_thread), adm_thread)
+                    # Si tampoco hay thread tenant, no seteamos nada (legacy)
+                except Exception:
+                    # app.py todavía no importable (circular) - ignorar
+                    pass
     except Exception as e:
-        # Setear context NUNCA debe romper get_conn
         print(f"[get_conn] Warning: no se pudo setear tenant context: {e}")
 
     return conn
