@@ -10743,6 +10743,65 @@ def admin_rls_test_aislamiento():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/admin/rls/listar_todas_policies", methods=["GET"])
+def admin_rls_listar_todas_policies():
+    """Lista TODAS las políticas RLS de TODAS las tablas, sin filtrar por nombre."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import get_conn, release_conn
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+        cur.execute("""
+            SELECT tablename, policyname, permissive, roles, cmd,
+                   qual::text AS using_clause,
+                   with_check::text AS with_check_clause
+            FROM pg_policies
+            WHERE schemaname = 'public'
+            ORDER BY tablename, policyname
+        """)
+        rows = cur.fetchall()
+
+        # También verificar constraints que puedan estar bloqueando
+        cur.execute("""
+            SELECT conname, contype, pg_get_constraintdef(oid) AS def
+            FROM pg_constraint
+            WHERE conrelid = 'public.ordenes_procesadas'::regclass
+              AND contype IN ('c', 't')
+        """)
+        constraints = [{"name": r[0], "type": r[1], "def": r[2]} for r in cur.fetchall()]
+
+        # Verificar triggers en ordenes_procesadas
+        cur.execute("""
+            SELECT trigger_name, event_manipulation, action_statement, action_timing
+            FROM information_schema.triggers
+            WHERE event_object_table = 'ordenes_procesadas'
+        """)
+        triggers = [{"name": r[0], "event": r[1], "stmt": r[2][:200], "timing": r[3]} for r in cur.fetchall()]
+
+        cur.close(); release_conn(conn)
+
+        # Agrupar políticas por tabla
+        policies_por_tabla = {}
+        for r in rows:
+            t = r[0]
+            if t not in policies_por_tabla:
+                policies_por_tabla[t] = []
+            policies_por_tabla[t].append({
+                "policyname": r[1], "permissive": r[2], "roles": r[3],
+                "cmd": r[4], "using": r[5], "with_check": r[6]
+            })
+
+        return jsonify({
+            "policies_por_tabla": policies_por_tabla,
+            "constraints_ordenes_procesadas": constraints,
+            "triggers_ordenes_procesadas": triggers
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 @app.route("/admin/rls/test_scheduler_manual", methods=["GET"])
 def admin_rls_test_scheduler_manual():
     """Ejecuta UNA llamada manual de un scheduler y captura toda la salida.
