@@ -3630,13 +3630,49 @@ def home():
 
 @app.route("/login_check", methods=["POST"])
 def login_check():
-    data = request.json
-    if data.get("user") == USUARIO and data.get("password") == PASSWORD:
+    """Login multi-vía:
+    1) Intenta validar email + password contra tabla `usuarios` (nuevo sistema multi-tenant)
+    2) Si falla, fallback a las constantes USUARIO/PASSWORD (login legacy de Babymine)
+    """
+    data = request.json or {}
+    user_input = (data.get("user") or "").strip()
+    pass_input = (data.get("password") or "").strip()
+
+    if not user_input or not pass_input:
+        return {"ok": False}
+
+    # ─── VÍA 1: tabla usuarios (nuevo) ───
+    try:
+        from tenancy import autenticar_usuario
+        # autenticar_usuario espera email; si el input parece email, intentar
+        if "@" in user_input:
+            auth = autenticar_usuario(user_input, pass_input)
+            if auth and not auth.get("error"):
+                session["logged"] = True
+                session["usuario"] = auth["email"]
+                session["tenant_id"] = auth["tenant_id"]
+                session["user_id"] = auth["user_id"]
+                session["rol"] = auth.get("rol", "admin")
+                session["nombre"] = auth.get("nombre")
+                session.permanent = True
+                registrar_audit(auth["email"], request.remote_addr, "login",
+                                detalle=f"Login vía usuarios (tenant {auth['tenant_id']})")
+                return {"ok": True}
+    except Exception as e:
+        print(f"[login_check] Error vía usuarios: {e}")
+
+    # ─── VÍA 2: constantes USUARIO/PASSWORD (legacy Babymine) ───
+    if user_input == USUARIO and pass_input == PASSWORD:
         session["logged"] = True
-        session["usuario"] = data.get("user")
-        registrar_audit(data.get("user"), request.remote_addr, "login", detalle="Inicio de sesión exitoso")
+        session["usuario"] = user_input
+        session["tenant_id"] = 1  # Babymine
+        session.permanent = True
+        registrar_audit(user_input, request.remote_addr, "login",
+                        detalle="Login vía legacy (USUARIO/PASSWORD)")
         return {"ok": True}
-    registrar_audit(data.get("user","?"), request.remote_addr, "login", resultado="fallido", detalle="Clave incorrecta")
+
+    registrar_audit(user_input or "?", request.remote_addr, "login",
+                    resultado="fallido", detalle="Credenciales inválidas")
     return {"ok": False}
 
 @app.route("/logout")
@@ -10954,7 +10990,7 @@ def admin_lusync_dashboard():
             mrr_t = float(t.get("precio_uf") or 0)
 
             filas_tenants += f"""
-            <tr style="border-bottom:1px solid #f1efe8;">
+            <tr style="border-bottom:1px solid #f1efe8;cursor:pointer;" onclick="window.location='/admin/lusync/tenant/{tid}'">
                 <td style="padding:11px 12px;">
                     <div style="font-weight:500;">{t['nombre']}</div>
                     <div style="font-size:10px;color:#888780;">{t.get('email_contacto') or '—'}</div>
@@ -10974,7 +11010,7 @@ def admin_lusync_dashboard():
                 <td style="padding:11px 12px;">{mkts_badges}</td>
                 <td style="padding:11px 12px;color:#534AB7;font-weight:500;">{mrr_t:.1f} UF</td>
                 <td style="padding:11px 12px;font-size:11px;color:#888780;">{act_str}</td>
-                <td style="padding:11px 12px;text-align:right;">
+                <td style="padding:11px 12px;text-align:right;" onclick="event.stopPropagation();">
                     <a href="/admin/lusync/impersonate/{tid}" style="font-size:11px;color:#534AB7;text-decoration:none;font-weight:500;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;">Ver como</a>
                 </td>
             </tr>
@@ -11010,6 +11046,7 @@ def admin_lusync_dashboard():
                     <div style="font-size:9px;text-transform:uppercase;color:#888780;letter-spacing:0.1em;padding:4px 8px;font-weight:600;margin-top:14px;">Sistema</div>
                     <a href="/admin/rls/health_check?token=lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw" target="_blank" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">🩺 Health check</a>
                     <a href="/admin/tenancy/diagnostico?token=lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw" target="_blank" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">🔍 Diagnóstico</a>
+                    <a href="/admin/lusync/fernet_key" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">🔐 Fernet Key</a>
 
                     <div style="position:absolute;bottom:18px;left:14px;width:202px;border-top:1px solid #2a2926;padding-top:14px;">
                         <div style="font-size:11px;color:white;font-weight:500;">{session.get('lusync_admin_nombre')}</div>
@@ -11028,7 +11065,7 @@ def admin_lusync_dashboard():
                             <div style="font-size:12px;color:#888780;margin-top:3px;">Gestión de tenants · {len(tenants)} totales · MRR {mrr_uf:.1f} UF (~${mrr_clp:,} CLP)</div>
                         </div>
                         <div>
-                            <button onclick="alert('Próxima sesión: form de nuevo cliente')" style="background:#534AB7;color:white;padding:9px 16px;border-radius:7px;font-size:13px;font-weight:500;border:0;cursor:pointer;">+ Nuevo cliente</button>
+                            <a href="/admin/lusync/nuevo_cliente" style="background:#534AB7;color:white;padding:9px 16px;border-radius:7px;font-size:13px;font-weight:500;border:0;cursor:pointer;text-decoration:none;display:inline-block;">+ Nuevo cliente</a>
                         </div>
                     </div>
 
@@ -11090,6 +11127,750 @@ def admin_lusync_dashboard():
     except Exception as e:
         import traceback
         return f"<pre>Error: {e}\n\n{traceback.format_exc()}</pre>", 500
+
+
+@app.route("/admin/lusync/tenant/<int:tenant_id>/conectar_marketplace", methods=["GET", "POST"])
+@requiere_lusync_admin
+def admin_lusync_conectar_marketplace(tenant_id):
+    """Form para conectar un marketplace a un tenant.
+    Las credenciales se encriptan con Fernet antes de guardar.
+    """
+    if request.method == "GET":
+        try:
+            from tenancy import listar_tenants
+            tenants = listar_tenants()
+            tenant = next((t for t in tenants if t["id"] == tenant_id), None)
+            if not tenant:
+                return "<h1>Tenant no encontrado</h1>", 404
+        except Exception as e:
+            return f"<pre>{e}</pre>", 500
+
+        return f"""
+        <!DOCTYPE html>
+        <html><head><title>Conectar MKT · {tenant['nombre']}</title></head>
+        <body style="margin:0;font-family:system-ui;background:#fafaf9;padding:24px;">
+            <div style="max-width:600px;margin:20px auto;background:white;border:1px solid #e8e6e0;border-radius:12px;padding:28px;">
+                <a href="/admin/lusync/tenant/{tenant_id}" style="color:#534AB7;text-decoration:none;font-size:12px;">← Volver al detalle</a>
+                <h2 style="margin:14px 0 6px;">🛍️ Conectar Marketplace</h2>
+                <p style="font-size:13px;color:#666;margin-bottom:20px;">Tenant: <b>{tenant['nombre']}</b></p>
+
+                <form id="frm" onsubmit="enviar(event)">
+
+                    <div style="margin-bottom:14px;">
+                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Marketplace *</label>
+                        <select id="canal" onchange="cambiarCampos()" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:6px;font-size:13px;box-sizing:border-box;">
+                            <option value="">— Elige marketplace —</option>
+                            <option value="mercadolibre">MercadoLibre (OAuth: refresh_token)</option>
+                            <option value="falabella">Falabella (API key + secret)</option>
+                            <option value="paris">Paris (API key + secret)</option>
+                            <option value="walmart">Walmart (Client ID + Client Secret)</option>
+                            <option value="ripley">Ripley (API key + secret)</option>
+                            <option value="hites">Hites (API key + secret)</option>
+                            <option value="web">Web/WooCommerce (URL + Consumer Key + Secret)</option>
+                            <option value="shopify">Shopify (Store URL + Access Token)</option>
+                        </select>
+                    </div>
+
+                    <div style="margin-bottom:14px;">
+                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Alias (opcional)</label>
+                        <input id="alias" placeholder="ej: Cuenta Principal" value="default"
+                               style="width:100%;padding:9px;border:1px solid #ddd;border-radius:6px;font-size:13px;box-sizing:border-box;">
+                        <small style="color:#888;font-size:10px;">Para distinguir si el cliente tiene varias cuentas del mismo MKT.</small>
+                    </div>
+
+                    <div id="campos_dinamicos" style="display:none;">
+                        <fieldset style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:14px;">
+                            <legend style="font-size:11px;font-weight:600;color:#534AB7;text-transform:uppercase;padding:0 8px;">Credenciales</legend>
+
+                            <div id="campos_inputs"></div>
+                        </fieldset>
+                    </div>
+
+                    <div style="margin-bottom:14px;padding:10px;background:#dbeafe;border-radius:6px;font-size:11px;color:#1e40af;">
+                        🔒 Las credenciales se encriptan con Fernet antes de guardarse. Solo Lusync con la LUSYNC_FERNET_KEY puede desencriptarlas.
+                    </div>
+
+                    <button type="submit" style="width:100%;padding:12px;background:#534AB7;color:white;border:0;border-radius:7px;font-size:14px;font-weight:600;cursor:pointer;">
+                        Conectar marketplace
+                    </button>
+                </form>
+
+                <div id="resultado" style="margin-top:16px;padding:14px;border-radius:8px;display:none;"></div>
+            </div>
+
+            <script>
+            const camposPorCanal = {{
+                'mercadolibre': [
+                    {{nombre: 'client_id', label: 'Client ID', placeholder: 'App ID de MELI'}},
+                    {{nombre: 'client_secret', label: 'Client Secret', placeholder: 'Secret de MELI'}},
+                    {{nombre: 'refresh_token', label: 'Refresh Token', placeholder: 'TG-...'}}
+                ],
+                'falabella': [
+                    {{nombre: 'api_key', label: 'User ID (email)', placeholder: 'user@empresa.cl'}},
+                    {{nombre: 'api_secret', label: 'API Key', placeholder: 'tu_api_key_aqui'}}
+                ],
+                'paris': [
+                    {{nombre: 'usuario', label: 'Usuario', placeholder: 'usuario_paris'}},
+                    {{nombre: 'password', label: 'Password Paris', placeholder: '••••••••'}}
+                ],
+                'walmart': [
+                    {{nombre: 'client_id', label: 'Client ID', placeholder: 'Walmart Partner Client ID'}},
+                    {{nombre: 'client_secret', label: 'Client Secret', placeholder: 'Walmart Secret'}}
+                ],
+                'ripley': [
+                    {{nombre: 'api_key', label: 'API Key', placeholder: 'Mirakl API Key'}}
+                ],
+                'hites': [
+                    {{nombre: 'api_key', label: 'API Key', placeholder: 'API Key Hites'}}
+                ],
+                'web': [
+                    {{nombre: 'site_url', label: 'URL del sitio', placeholder: 'https://tutienda.cl'}},
+                    {{nombre: 'consumer_key', label: 'Consumer Key', placeholder: 'ck_...'}},
+                    {{nombre: 'consumer_secret', label: 'Consumer Secret', placeholder: 'cs_...'}}
+                ],
+                'shopify': [
+                    {{nombre: 'store_url', label: 'Store URL', placeholder: 'mistore.myshopify.com'}},
+                    {{nombre: 'access_token', label: 'Admin API Access Token', placeholder: 'shpat_...'}}
+                ]
+            }};
+
+            function cambiarCampos() {{
+                const canal = document.getElementById('canal').value;
+                const campos = camposPorCanal[canal];
+                const contenedor = document.getElementById('campos_dinamicos');
+                const inputs = document.getElementById('campos_inputs');
+
+                if (!campos) {{
+                    contenedor.style.display = 'none';
+                    return;
+                }}
+
+                inputs.innerHTML = '';
+                campos.forEach(c => {{
+                    inputs.innerHTML += `
+                        <div style="margin-bottom:12px;">
+                            <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">${{c.label}}</label>
+                            <input data-campo="${{c.nombre}}" placeholder="${{c.placeholder}}" required
+                                   style="width:100%;padding:9px;border:1px solid #ddd;border-radius:6px;font-size:13px;font-family:monospace;box-sizing:border-box;">
+                        </div>
+                    `;
+                }});
+                contenedor.style.display = 'block';
+            }}
+
+            async function enviar(e) {{
+                e.preventDefault();
+                const r = document.getElementById('resultado');
+                const canal = document.getElementById('canal').value;
+                const alias = document.getElementById('alias').value || 'default';
+                if (!canal) {{
+                    r.style.display='block';r.style.background='#fee2e2';r.style.color='#991b1b';
+                    r.innerText = '❌ Elige un marketplace primero';
+                    return;
+                }}
+
+                const credenciales = {{}};
+                document.querySelectorAll('[data-campo]').forEach(inp => {{
+                    credenciales[inp.dataset.campo] = inp.value;
+                }});
+
+                r.style.display='block';r.style.background='#f3f4f6';r.style.color='#374151';
+                r.innerText = '⏳ Encriptando y guardando...';
+
+                try {{
+                    const res = await fetch('/admin/lusync/tenant/{tenant_id}/conectar_marketplace', {{
+                        method: 'POST',
+                        headers: {{'Content-Type': 'application/json'}},
+                        body: JSON.stringify({{canal, alias, credenciales}})
+                    }});
+                    const data = await res.json();
+                    if (data.ok) {{
+                        r.style.background='#dcfce7';r.style.color='#166534';
+                        r.innerHTML = '✅ <b>Marketplace conectado</b><br>Credencial ID: ' + data.cred_id + '<br><br>' +
+                            '<a href="/admin/lusync/tenant/{tenant_id}" style="color:#534AB7;">→ Ver detalle del tenant</a>';
+                        document.getElementById('frm').style.display = 'none';
+                    }} else {{
+                        r.style.background='#fee2e2';r.style.color='#991b1b';
+                        r.innerText = '❌ ' + (data.error || 'Error');
+                    }}
+                }} catch(err) {{
+                    r.style.background='#fee2e2';r.style.color='#991b1b';
+                    r.innerText = '❌ ' + err.message;
+                }}
+            }}
+            </script>
+        </body></html>
+        """
+
+    # POST: guardar credenciales encriptadas
+    try:
+        data = request.json or {}
+        canal = (data.get("canal") or "").strip().lower()
+        alias = (data.get("alias") or "default").strip()
+        credenciales = data.get("credenciales") or {}
+
+        if not canal:
+            return jsonify({"error": "Canal obligatorio"}), 400
+        if not credenciales:
+            return jsonify({"error": "Credenciales obligatorias"}), 400
+
+        from tenancy import guardar_credenciales_canal
+        cred_id = guardar_credenciales_canal(tenant_id, canal, credenciales, alias=alias)
+        return jsonify({"ok": True, "cred_id": cred_id, "canal": canal, "alias": alias})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()[:500]}), 500
+
+
+@app.route("/admin/lusync/nuevo_cliente", methods=["GET", "POST"])
+@requiere_lusync_admin
+def admin_lusync_nuevo_cliente():
+    """Formulario para crear un nuevo tenant + usuario admin."""
+    if request.method == "GET":
+        return """
+        <!DOCTYPE html>
+        <html><head><title>Nuevo Cliente · Lusync</title></head>
+        <body style="margin:0;font-family:system-ui;background:#fafaf9;padding:24px;">
+            <div style="max-width:560px;margin:20px auto;background:white;border:1px solid #e8e6e0;border-radius:12px;padding:28px;">
+                <a href="/admin/lusync" style="color:#534AB7;text-decoration:none;font-size:12px;">← Volver al panel master</a>
+                <h2 style="margin:14px 0 6px;">➕ Nuevo Cliente Lusync</h2>
+                <p style="font-size:13px;color:#666;margin-bottom:22px;">Crea un nuevo tenant + usuario admin. El cliente recibe sus credenciales y puede entrar inmediatamente.</p>
+
+                <form id="frm" onsubmit="enviar(event)">
+
+                    <fieldset style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:14px;">
+                        <legend style="font-size:11px;font-weight:600;color:#534AB7;text-transform:uppercase;padding:0 8px;">Empresa</legend>
+
+                        <div style="margin-bottom:12px;">
+                            <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Nombre comercial *</label>
+                            <input id="nombre" required placeholder="ej: Mini Mundo Kids"
+                                   style="width:100%;padding:9px;border:1px solid #ddd;border-radius:6px;font-size:13px;box-sizing:border-box;">
+                        </div>
+                        <div style="margin-bottom:12px;">
+                            <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Razón social</label>
+                            <input id="razon_social" placeholder="ej: Comercial Mini Mundo SPA"
+                                   style="width:100%;padding:9px;border:1px solid #ddd;border-radius:6px;font-size:13px;box-sizing:border-box;">
+                        </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                            <div>
+                                <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">RUT</label>
+                                <input id="rut" placeholder="76.123.456-7"
+                                       style="width:100%;padding:9px;border:1px solid #ddd;border-radius:6px;font-size:13px;box-sizing:border-box;">
+                            </div>
+                            <div>
+                                <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Teléfono</label>
+                                <input id="telefono" placeholder="+56 9..."
+                                       style="width:100%;padding:9px;border:1px solid #ddd;border-radius:6px;font-size:13px;box-sizing:border-box;">
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <fieldset style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:14px;">
+                        <legend style="font-size:11px;font-weight:600;color:#534AB7;text-transform:uppercase;padding:0 8px;">Plan</legend>
+
+                        <div>
+                            <select id="plan" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:6px;font-size:13px;box-sizing:border-box;">
+                                <option value="trial">Trial · Gratis (50 órdenes/mes)</option>
+                                <option value="starter">Starter · 1 UF/mes (300 órdenes)</option>
+                                <option value="pro" selected>Pro · 3 UF/mes (1500 órdenes) — Recomendado</option>
+                                <option value="enterprise">Enterprise · 5 UF/mes (5000 órdenes)</option>
+                            </select>
+                        </div>
+                    </fieldset>
+
+                    <fieldset style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:18px;">
+                        <legend style="font-size:11px;font-weight:600;color:#534AB7;text-transform:uppercase;padding:0 8px;">Usuario admin del cliente</legend>
+
+                        <div style="margin-bottom:12px;">
+                            <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Email *</label>
+                            <input id="email" type="email" required placeholder="contacto@empresa.cl"
+                                   style="width:100%;padding:9px;border:1px solid #ddd;border-radius:6px;font-size:13px;box-sizing:border-box;">
+                        </div>
+                        <div style="margin-bottom:12px;">
+                            <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Nombre del usuario</label>
+                            <input id="nombre_usuario" placeholder="Juan Pérez"
+                                   style="width:100%;padding:9px;border:1px solid #ddd;border-radius:6px;font-size:13px;box-sizing:border-box;">
+                        </div>
+                        <div>
+                            <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Password temporal *</label>
+                            <div style="display:flex;gap:6px;">
+                                <input id="password" required placeholder="Mín 8 caracteres" minlength="8"
+                                       style="flex:1;padding:9px;border:1px solid #ddd;border-radius:6px;font-size:13px;box-sizing:border-box;">
+                                <button type="button" onclick="generarPwd()" style="padding:9px 12px;background:#f3f4f6;border:1px solid #ddd;border-radius:6px;font-size:11px;cursor:pointer;">🎲 Generar</button>
+                            </div>
+                            <small style="color:#888;font-size:10px;">El cliente puede cambiarla después.</small>
+                        </div>
+                    </fieldset>
+
+                    <div style="margin-bottom:14px;padding:10px;background:#dbeafe;border-radius:6px;font-size:11px;color:#1e40af;">
+                        ℹ️ Se creará el tenant + el usuario admin. Después podrás conectar marketplaces desde la vista de detalle.
+                    </div>
+
+                    <button type="submit" style="width:100%;padding:12px;background:#534AB7;color:white;border:0;border-radius:7px;font-size:14px;font-weight:600;cursor:pointer;">
+                        Crear cliente
+                    </button>
+                </form>
+
+                <div id="resultado" style="margin-top:16px;padding:14px;border-radius:8px;display:none;"></div>
+            </div>
+
+            <script>
+            function generarPwd() {
+                const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%';
+                let p = '';
+                for (let i = 0; i < 12; i++) p += chars.charAt(Math.floor(Math.random()*chars.length));
+                document.getElementById('password').value = p;
+            }
+            async function enviar(e) {
+                e.preventDefault();
+                const r = document.getElementById('resultado');
+                r.style.display = 'block';
+                r.style.background = '#f3f4f6';
+                r.style.color = '#374151';
+                r.innerText = '⏳ Creando...';
+
+                const body = {
+                    nombre: document.getElementById('nombre').value,
+                    razon_social: document.getElementById('razon_social').value,
+                    rut: document.getElementById('rut').value,
+                    telefono: document.getElementById('telefono').value,
+                    plan_codigo: document.getElementById('plan').value,
+                    email: document.getElementById('email').value,
+                    nombre_usuario: document.getElementById('nombre_usuario').value,
+                    password: document.getElementById('password').value
+                };
+
+                try {
+                    const res = await fetch('/admin/lusync/nuevo_cliente', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(body)
+                    });
+                    const data = await res.json();
+                    if (data.ok) {
+                        r.style.background = '#dcfce7';
+                        r.style.color = '#166534';
+                        r.innerHTML = '✅ <b>Cliente creado correctamente</b><br><br>' +
+                            'Tenant ID: ' + data.tenant_id + '<br>' +
+                            'Usuario ID: ' + data.user_id + '<br><br>' +
+                            '<b>Credenciales para enviar al cliente:</b><br>' +
+                            'URL: <code>https://sistema-de-inventario-pymes.onrender.com/</code><br>' +
+                            'Email: <code>' + body.email + '</code><br>' +
+                            'Password: <code>' + body.password + '</code><br><br>' +
+                            '<a href="/admin/lusync/tenant/' + data.tenant_id + '" style="color:#534AB7;font-weight:600;">→ Ir al detalle del tenant</a> · ' +
+                            '<a href="/admin/lusync" style="color:#534AB7;">Volver al panel</a>';
+                        document.getElementById('frm').style.display = 'none';
+                    } else {
+                        r.style.background = '#fee2e2';
+                        r.style.color = '#991b1b';
+                        r.innerText = '❌ ' + (data.error || 'Error desconocido');
+                    }
+                } catch (err) {
+                    r.style.background = '#fee2e2';
+                    r.style.color = '#991b1b';
+                    r.innerText = '❌ Error: ' + err.message;
+                }
+            }
+            </script>
+        </body></html>
+        """
+
+    # POST: crear el cliente
+    try:
+        data = request.json or {}
+        nombre = (data.get("nombre") or "").strip()
+        razon_social = (data.get("razon_social") or "").strip() or None
+        rut = (data.get("rut") or "").strip() or None
+        telefono = (data.get("telefono") or "").strip() or None
+        plan_codigo = (data.get("plan_codigo") or "pro").strip().lower()
+        email = (data.get("email") or "").strip().lower()
+        nombre_usuario = (data.get("nombre_usuario") or "").strip() or None
+        password = (data.get("password") or "").strip()
+
+        # Validaciones
+        if not nombre:
+            return jsonify({"error": "Nombre comercial obligatorio"}), 400
+        if not email or "@" not in email:
+            return jsonify({"error": "Email válido obligatorio"}), 400
+        if len(password) < 8:
+            return jsonify({"error": "Password mínimo 8 caracteres"}), 400
+        if plan_codigo not in ("trial", "starter", "pro", "enterprise"):
+            return jsonify({"error": "Plan inválido"}), 400
+
+        # Verificar que el email no esté duplicado (en algún tenant)
+        from inventario import get_conn, release_conn
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+        cur.execute("SELECT id, tenant_id FROM usuarios WHERE email = %s LIMIT 1", (email,))
+        existente = cur.fetchone()
+        cur.close(); release_conn(conn)
+        if existente:
+            return jsonify({"error": f"Email ya en uso por tenant {existente[1]}"}), 400
+
+        # Crear tenant + usuario
+        from tenancy import crear_tenant, crear_usuario
+        tenant_id = crear_tenant(
+            nombre=nombre, razon_social=razon_social, rut=rut,
+            email_contacto=email, telefono=telefono,
+            plan_codigo=plan_codigo, notas="Creado desde panel master Lusync"
+        )
+        user_id = crear_usuario(
+            tenant_id=tenant_id, email=email, password=password,
+            nombre=nombre_usuario, rol="admin"
+        )
+
+        return jsonify({
+            "ok": True,
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "email": email
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()[:500]}), 500
+
+
+@app.route("/admin/lusync/fernet_key", methods=["GET"])
+@requiere_lusync_admin
+def admin_lusync_fernet_key():
+    """Muestra la LUSYNC_FERNET_KEY actual o genera una nueva.
+    Si la variable de entorno NO existe, genera key temporal y la muestra.
+    DEBES copiarla a Render → Environment para que persista entre deploys.
+    """
+    import os
+    actual = os.environ.get("LUSYNC_FERNET_KEY", "")
+
+    try:
+        from cryptography.fernet import Fernet
+    except ImportError:
+        return jsonify({"error": "cryptography no instalado. Agrega 'cryptography>=41.0.0' a requirements.txt"}), 500
+
+    nueva = None
+    if not actual:
+        nueva = Fernet.generate_key().decode()
+
+    return f"""
+    <!DOCTYPE html>
+    <html><head><title>Fernet Key · Lusync</title></head>
+    <body style="margin:0;font-family:system-ui;background:#fafaf9;padding:24px;">
+        <div style="max-width:700px;margin:20px auto;background:white;border:1px solid #e8e6e0;border-radius:12px;padding:28px;">
+            <a href="/admin/lusync" style="color:#534AB7;text-decoration:none;font-size:12px;">← Volver al panel master</a>
+            <h2 style="margin:14px 0 6px;">🔐 Lusync Fernet Key</h2>
+            <p style="font-size:13px;color:#666;margin-bottom:20px;">Clave para encriptar credenciales de marketplace de los clientes.</p>
+
+            <div style="background:{'#dcfce7' if actual else '#fef3c7'};padding:14px 16px;border-radius:8px;margin-bottom:16px;">
+                <div style="font-size:13px;font-weight:600;color:{'#166534' if actual else '#92400e'};">
+                    {'✅ LUSYNC_FERNET_KEY configurada en env' if actual else '⚠️ LUSYNC_FERNET_KEY NO está configurada'}
+                </div>
+                {'<div style="font-size:11px;color:#666;margin-top:4px;">Las credenciales se encriptan/desencriptan correctamente.</div>' if actual else '<div style="font-size:11px;color:#92400e;margin-top:4px;">Sin esta variable, las credenciales se pierden cada deploy.</div>'}
+            </div>
+
+            {f'''
+            <div style="background:#fff;border:2px solid #fbbf24;padding:16px;border-radius:8px;margin-bottom:16px;">
+                <div style="font-size:12px;font-weight:600;color:#92400e;margin-bottom:8px;">🔑 Key generada (TEMPORAL):</div>
+                <div style="font-family:monospace;font-size:12px;background:#1f1e1b;color:#fbbf24;padding:10px;border-radius:6px;word-break:break-all;user-select:all;">{nueva}</div>
+                <div style="font-size:11px;color:#666;margin-top:10px;">
+                    <b>👉 Pasos para hacerla permanente:</b>
+                    <ol style="margin:6px 0 0;padding-left:18px;line-height:1.6;">
+                        <li>Render Dashboard → tu servicio → Environment</li>
+                        <li>Add Environment Variable</li>
+                        <li>Key: <code>LUSYNC_FERNET_KEY</code></li>
+                        <li>Value: pega el string de arriba ↑</li>
+                        <li>Save Changes (Render redeployará)</li>
+                    </ol>
+                </div>
+            </div>
+            ''' if nueva else ''}
+
+            {f'''
+            <div style="background:#f3f4f6;padding:12px 16px;border-radius:8px;">
+                <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:6px;">Key actual (primeros caracteres):</div>
+                <div style="font-family:monospace;font-size:11px;color:#666;">{actual[:20]}...{actual[-8:] if len(actual) > 28 else ''}</div>
+            </div>
+            ''' if actual else ''}
+
+            <div style="background:#fee2e2;color:#991b1b;padding:12px 14px;border-radius:8px;margin-top:14px;font-size:11px;">
+                ⚠️ <b>NUNCA</b> cambies esta key una vez que tengas credenciales encriptadas en BD. Si la pierdes, no podrás desencriptar las credenciales existentes y los clientes tendrán que volver a conectar sus marketplaces.
+            </div>
+        </div>
+    </body></html>
+    """
+
+
+@app.route("/admin/lusync/tenant/<int:tenant_id>", methods=["GET"])
+@requiere_lusync_admin
+def admin_lusync_tenant_detalle(tenant_id):
+    """Vista detalle de un tenant — info completa + acciones."""
+    try:
+        from tenancy import listar_tenants
+        from inventario import get_conn, release_conn
+
+        tenants = listar_tenants()
+        tenant = next((t for t in tenants if t["id"] == tenant_id), None)
+        if not tenant:
+            return f"<h1>Tenant {tenant_id} no encontrado</h1>", 404
+
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+
+        # Métricas del tenant
+        cur.execute("SELECT COUNT(*) FROM productos WHERE tenant_id = %s", (tenant_id,))
+        n_productos = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM movimientos WHERE tenant_id = %s", (tenant_id,))
+        n_movimientos = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM ordenes_procesadas WHERE tenant_id = %s AND fecha >= NOW() - INTERVAL '30 days'", (tenant_id,))
+        n_ordenes_mes = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM bodegas WHERE tenant_id = %s", (tenant_id,))
+        n_bodegas = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM sku_mapeo_canal WHERE tenant_id = %s", (tenant_id,))
+        n_mapeos = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM usuarios WHERE tenant_id = %s AND activo = TRUE", (tenant_id,))
+        n_usuarios = cur.fetchone()[0]
+
+        # Usuarios del tenant
+        cur.execute("""
+            SELECT id, email, nombre, rol, activo, ultimo_login, fecha_creacion
+            FROM usuarios WHERE tenant_id = %s ORDER BY id ASC
+        """, (tenant_id,))
+        usuarios = []
+        for r in cur.fetchall():
+            usuarios.append({
+                "id": r[0], "email": r[1], "nombre": r[2], "rol": r[3],
+                "activo": r[4], "ultimo_login": r[5].isoformat() if r[5] else None,
+                "fecha_creacion": r[6].isoformat() if r[6] else None
+            })
+
+        # Marketplaces conectados
+        cur.execute("""
+            SELECT canal, nombre_alias, estado_validacion, ultima_validacion, fecha_creacion
+            FROM credenciales_marketplace WHERE tenant_id = %s AND activo = TRUE
+            ORDER BY canal
+        """, (tenant_id,))
+        mkts = []
+        for r in cur.fetchall():
+            mkts.append({
+                "canal": r[0], "alias": r[1] or "default",
+                "estado": r[2] or "—",
+                "ultima_validacion": r[3].isoformat() if r[3] else None,
+                "fecha_creacion": r[4].isoformat() if r[4] else None
+            })
+
+        cur.close(); release_conn(conn)
+
+        plan_color = {
+            "trial": ("#f1efe8", "#6b7280"), "starter": ("#ede9fe", "#5b21b6"),
+            "pro": ("#dbeafe", "#1e40af"), "enterprise": ("#fce7f3", "#9f1239")
+        }.get(tenant.get("plan_codigo"), ("#f1efe8", "#6b7280"))
+
+        usuarios_html = ""
+        for u in usuarios:
+            rol_color = {"admin": "#534AB7", "operador": "#10B981", "viewer": "#6B7280"}.get(u["rol"], "#888780")
+            usuarios_html += f"""
+            <tr style="border-bottom:1px solid #f1efe8;">
+                <td style="padding:8px 10px;font-size:12px;">{u['email']}</td>
+                <td style="padding:8px 10px;font-size:12px;">{u['nombre'] or '—'}</td>
+                <td style="padding:8px 10px;"><span style="font-size:9px;background:#f1efe8;color:{rol_color};padding:2px 7px;border-radius:8px;font-weight:600;text-transform:uppercase;">{u['rol']}</span></td>
+                <td style="padding:8px 10px;font-size:11px;color:#888780;">{u['ultimo_login'][:10] if u['ultimo_login'] else 'Nunca'}</td>
+            </tr>
+            """
+        if not usuarios_html:
+            usuarios_html = '<tr><td colspan="4" style="padding:14px;text-align:center;color:#888780;font-size:12px;">Sin usuarios todavía</td></tr>'
+
+        mkts_html = ""
+        for m in mkts:
+            est_color = "#dcfce7" if m["estado"] == "ok" else "#fef3c7" if not m["estado"] or m["estado"] == "—" else "#fee2e2"
+            est_text = "#166534" if m["estado"] == "ok" else "#92400e" if not m["estado"] or m["estado"] == "—" else "#991b1b"
+            mkts_html += f"""
+            <tr style="border-bottom:1px solid #f1efe8;">
+                <td style="padding:8px 10px;font-size:12px;font-weight:500;text-transform:capitalize;">{m['canal']}</td>
+                <td style="padding:8px 10px;font-size:12px;">{m['alias']}</td>
+                <td style="padding:8px 10px;"><span style="font-size:9px;background:{est_color};color:{est_text};padding:2px 7px;border-radius:8px;font-weight:600;text-transform:uppercase;">{m['estado'] or 'pendiente'}</span></td>
+                <td style="padding:8px 10px;font-size:11px;color:#888780;">{m['fecha_creacion'][:10] if m['fecha_creacion'] else '—'}</td>
+            </tr>
+            """
+        if not mkts_html:
+            mkts_html = '<tr><td colspan="4" style="padding:14px;text-align:center;color:#888780;font-size:12px;">Sin marketplaces conectados</td></tr>'
+
+        estado_color = "#dcfce7" if tenant["estado"] == "activo" else "#fee2e2"
+        estado_text = "#166534" if tenant["estado"] == "activo" else "#991b1b"
+        boton_estado = "Suspender" if tenant["estado"] == "activo" else "Reactivar"
+        accion_estado = "suspender" if tenant["estado"] == "activo" else "reactivar"
+
+        return f"""
+        <!DOCTYPE html>
+        <html lang="es"><head><meta charset="UTF-8"><title>{tenant['nombre']} · Lusync</title></head>
+        <body style="margin:0;font-family:system-ui,-apple-system,sans-serif;background:#fafaf9;min-height:100vh;padding:24px;">
+            <div style="max-width:1100px;margin:0 auto;">
+
+                <div style="margin-bottom:20px;">
+                    <a href="/admin/lusync" style="color:#534AB7;text-decoration:none;font-size:12px;">← Volver al panel master</a>
+                </div>
+
+                <!-- Header del tenant -->
+                <div style="background:white;border:1px solid #e8e6e0;border-radius:12px;padding:20px 24px;margin-bottom:14px;">
+                    <div style="display:flex;justify-content:space-between;align-items:start;">
+                        <div>
+                            <h1 style="margin:0 0 4px;font-size:22px;color:#1f1e1b;">{tenant['nombre']}</h1>
+                            <div style="font-size:13px;color:#888780;">{tenant.get('razon_social') or '—'} · RUT {tenant.get('rut') or '—'}</div>
+                            <div style="font-size:12px;color:#888780;margin-top:4px;">📧 {tenant.get('email_contacto') or '—'}</div>
+                        </div>
+                        <div style="text-align:right;">
+                            <div style="display:flex;gap:6px;margin-bottom:8px;">
+                                <span style="font-size:10px;padding:4px 10px;border-radius:10px;font-weight:600;text-transform:uppercase;background:{plan_color[0]};color:{plan_color[1]};">{(tenant.get('plan_codigo') or '—').upper()}</span>
+                                <span style="font-size:10px;padding:4px 10px;border-radius:10px;font-weight:600;text-transform:uppercase;background:{estado_color};color:{estado_text};">{tenant['estado']}</span>
+                            </div>
+                            <div style="font-size:13px;color:#534AB7;font-weight:600;">{float(tenant.get('precio_uf') or 0):.1f} UF/mes</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Métricas -->
+                <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:14px;">
+                    <div style="background:white;border:1px solid #e8e6e0;border-radius:8px;padding:10px 12px;">
+                        <div style="font-size:9px;text-transform:uppercase;color:#888780;font-weight:600;">Productos</div>
+                        <div style="font-size:20px;font-weight:600;margin-top:2px;">{n_productos}</div>
+                    </div>
+                    <div style="background:white;border:1px solid #e8e6e0;border-radius:8px;padding:10px 12px;">
+                        <div style="font-size:9px;text-transform:uppercase;color:#888780;font-weight:600;">Movimientos</div>
+                        <div style="font-size:20px;font-weight:600;margin-top:2px;">{n_movimientos}</div>
+                    </div>
+                    <div style="background:white;border:1px solid #e8e6e0;border-radius:8px;padding:10px 12px;">
+                        <div style="font-size:9px;text-transform:uppercase;color:#888780;font-weight:600;">Órdenes 30d</div>
+                        <div style="font-size:20px;font-weight:600;margin-top:2px;">{n_ordenes_mes}</div>
+                    </div>
+                    <div style="background:white;border:1px solid #e8e6e0;border-radius:8px;padding:10px 12px;">
+                        <div style="font-size:9px;text-transform:uppercase;color:#888780;font-weight:600;">Bodegas</div>
+                        <div style="font-size:20px;font-weight:600;margin-top:2px;">{n_bodegas}</div>
+                    </div>
+                    <div style="background:white;border:1px solid #e8e6e0;border-radius:8px;padding:10px 12px;">
+                        <div style="font-size:9px;text-transform:uppercase;color:#888780;font-weight:600;">Mapeos SKU</div>
+                        <div style="font-size:20px;font-weight:600;margin-top:2px;">{n_mapeos}</div>
+                    </div>
+                    <div style="background:white;border:1px solid #e8e6e0;border-radius:8px;padding:10px 12px;">
+                        <div style="font-size:9px;text-transform:uppercase;color:#888780;font-weight:600;">Usuarios</div>
+                        <div style="font-size:20px;font-weight:600;margin-top:2px;">{n_usuarios}</div>
+                    </div>
+                </div>
+
+                <!-- Acciones rápidas -->
+                <div style="display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap;">
+                    <a href="/admin/lusync/impersonate/{tenant_id}" style="background:#534AB7;color:white;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:500;text-decoration:none;">👁 Ver como cliente</a>
+                    <a href="/admin/lusync/tenant/{tenant_id}/conectar_marketplace" style="background:#10b981;color:white;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:500;text-decoration:none;">+ Conectar marketplace</a>
+                    <button onclick="cambiarEstado({tenant_id}, '{accion_estado}')" style="background:white;color:#1f1e1b;border:1px solid #e5e7eb;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">{boton_estado}</button>
+                    <button onclick="cambiarPlan({tenant_id})" style="background:white;color:#1f1e1b;border:1px solid #e5e7eb;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">Cambiar plan</button>
+                </div>
+
+                <!-- Usuarios -->
+                <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;overflow:hidden;margin-bottom:14px;">
+                    <div style="padding:14px 16px;border-bottom:1px solid #e8e6e0;font-weight:600;font-size:13px;">Usuarios del tenant</div>
+                    <table style="width:100%;border-collapse:collapse;">
+                        <thead style="background:#fafaf9;">
+                            <tr>
+                                <th style="padding:8px 10px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;">Email</th>
+                                <th style="padding:8px 10px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;">Nombre</th>
+                                <th style="padding:8px 10px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;">Rol</th>
+                                <th style="padding:8px 10px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;">Último login</th>
+                            </tr>
+                        </thead>
+                        <tbody>{usuarios_html}</tbody>
+                    </table>
+                </div>
+
+                <!-- Marketplaces -->
+                <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;overflow:hidden;">
+                    <div style="padding:14px 16px;border-bottom:1px solid #e8e6e0;font-weight:600;font-size:13px;">Marketplaces conectados</div>
+                    <table style="width:100%;border-collapse:collapse;">
+                        <thead style="background:#fafaf9;">
+                            <tr>
+                                <th style="padding:8px 10px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;">Canal</th>
+                                <th style="padding:8px 10px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;">Alias</th>
+                                <th style="padding:8px 10px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;">Estado</th>
+                                <th style="padding:8px 10px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;">Conectado</th>
+                            </tr>
+                        </thead>
+                        <tbody>{mkts_html}</tbody>
+                    </table>
+                </div>
+
+            </div>
+
+            <script>
+            async function cambiarEstado(tid, accion) {{
+                if (!confirm('¿Confirmar ' + accion + '?')) return;
+                const r = await fetch('/admin/lusync/tenant/' + tid + '/' + accion, {{method:'POST'}});
+                const data = await r.json();
+                if (data.ok) location.reload();
+                else alert('Error: ' + (data.error || 'desconocido'));
+            }}
+            async function cambiarPlan(tid) {{
+                const plan = prompt('Nuevo plan (trial / starter / pro / enterprise):');
+                if (!plan) return;
+                const r = await fetch('/admin/lusync/tenant/' + tid + '/cambiar_plan', {{
+                    method:'POST',
+                    headers:{{'Content-Type':'application/json'}},
+                    body:JSON.stringify({{plan_codigo: plan.trim().toLowerCase()}})
+                }});
+                const data = await r.json();
+                if (data.ok) location.reload();
+                else alert('Error: ' + (data.error || 'desconocido'));
+            }}
+            </script>
+        </body></html>
+        """
+    except Exception as e:
+        import traceback
+        return f"<pre>{e}\n\n{traceback.format_exc()}</pre>", 500
+
+
+@app.route("/admin/lusync/tenant/<int:tenant_id>/suspender", methods=["POST"])
+@requiere_lusync_admin
+def admin_lusync_tenant_suspender(tenant_id):
+    """Suspende un tenant (no podrá hacer login)."""
+    try:
+        from inventario import get_conn, release_conn
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+        cur.execute("UPDATE tenants SET estado = 'suspendido' WHERE id = %s", (tenant_id,))
+        conn.commit()
+        cur.close(); release_conn(conn)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/lusync/tenant/<int:tenant_id>/reactivar", methods=["POST"])
+@requiere_lusync_admin
+def admin_lusync_tenant_reactivar(tenant_id):
+    """Reactiva un tenant suspendido."""
+    try:
+        from inventario import get_conn, release_conn
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+        cur.execute("UPDATE tenants SET estado = 'activo' WHERE id = %s", (tenant_id,))
+        conn.commit()
+        cur.close(); release_conn(conn)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/lusync/tenant/<int:tenant_id>/cambiar_plan", methods=["POST"])
+@requiere_lusync_admin
+def admin_lusync_tenant_cambiar_plan(tenant_id):
+    """Cambia el plan de un tenant."""
+    try:
+        plan_codigo = (request.json or {}).get("plan_codigo", "").strip().lower()
+        if plan_codigo not in ("trial", "starter", "pro", "enterprise"):
+            return jsonify({"error": "Plan inválido. Usar: trial, starter, pro, enterprise"}), 400
+        from inventario import get_conn, release_conn
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+        cur.execute("SELECT id FROM planes WHERE codigo = %s", (plan_codigo,))
+        r = cur.fetchone()
+        if not r:
+            return jsonify({"error": f"Plan '{plan_codigo}' no existe"}), 400
+        plan_id = r[0]
+        cur.execute("UPDATE tenants SET plan_id = %s WHERE id = %s", (plan_id, tenant_id))
+        conn.commit()
+        cur.close(); release_conn(conn)
+        return jsonify({"ok": True, "plan_codigo": plan_codigo})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/admin/lusync/impersonate/<int:tenant_id>", methods=["GET"])
