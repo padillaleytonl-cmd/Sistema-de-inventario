@@ -10743,6 +10743,386 @@ def admin_rls_test_aislamiento():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# PANEL ADMIN LUSYNC (super-admin TÚ) — /admin/lusync/*
+# ════════════════════════════════════════════════════════════════════════════
+
+def requiere_lusync_admin(func):
+    """Decorador: protege rutas del panel super-admin Lusync."""
+    from functools import wraps
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if not session.get("is_lusync_admin"):
+            # Redirigir a login si es GET, devolver 401 si es POST/API
+            if request.method == "GET":
+                return redirect("/admin/lusync/login")
+            return jsonify({"error": "no autorizado"}), 401
+        return func(*args, **kwargs)
+    return wrapper
+
+
+@app.route("/admin/lusync/login", methods=["GET", "POST"])
+def admin_lusync_login():
+    """Login del super-admin Lusync (TÚ)."""
+    if request.method == "GET":
+        # Si ya está logueado, redirigir al panel
+        if session.get("is_lusync_admin"):
+            return redirect("/admin/lusync")
+        error = request.args.get("error", "")
+        return f"""
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+            <meta charset="UTF-8">
+            <title>Lusync · Admin Master</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+        </head>
+        <body style="margin:0;font-family:system-ui,-apple-system,sans-serif;background:#1F1E1B;min-height:100vh;display:flex;align-items:center;justify-content:center;">
+            <div style="background:white;padding:40px;border-radius:14px;width:380px;box-shadow:0 20px 50px rgba(0,0,0,0.4);">
+                <div style="text-align:center;margin-bottom:30px;">
+                    <div style="font-size:24px;font-weight:700;color:#1F1E1B;letter-spacing:-0.02em;">Lusync</div>
+                    <div style="font-size:11px;text-transform:uppercase;color:#888780;letter-spacing:0.1em;margin-top:4px;font-weight:600;">Admin · Master</div>
+                </div>
+
+                {'<div style="background:#fee2e2;color:#991b1b;padding:10px 12px;border-radius:6px;margin-bottom:16px;font-size:13px;">⚠ ' + error + '</div>' if error else ''}
+
+                <form method="POST" action="/admin/lusync/login">
+                    <div style="margin-bottom:14px;">
+                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:5px;color:#374151;">Email</label>
+                        <input type="email" name="email" required autofocus
+                               style="width:100%;padding:11px;border:1px solid #e5e7eb;border-radius:7px;font-size:14px;box-sizing:border-box;">
+                    </div>
+                    <div style="margin-bottom:20px;">
+                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:5px;color:#374151;">Contraseña</label>
+                        <input type="password" name="password" required
+                               style="width:100%;padding:11px;border:1px solid #e5e7eb;border-radius:7px;font-size:14px;box-sizing:border-box;">
+                    </div>
+                    <button type="submit"
+                            style="width:100%;padding:12px;background:#534AB7;color:white;border:0;border-radius:7px;font-size:14px;font-weight:600;cursor:pointer;">
+                        Entrar al Panel Master
+                    </button>
+                </form>
+
+                <div style="margin-top:24px;padding-top:18px;border-top:1px solid #f1efe8;text-align:center;">
+                    <small style="color:#888780;font-size:11px;">Solo super-admin Lusync. Si eres cliente, entra por <a href="/" style="color:#534AB7;text-decoration:none;">aquí</a>.</small>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+
+    # POST: validar credenciales
+    email = (request.form.get("email") or "").strip().lower()
+    password = (request.form.get("password") or "").strip()
+
+    if not email or not password:
+        return redirect("/admin/lusync/login?error=Email y contraseña obligatorios")
+
+    try:
+        from tenancy import autenticar_lusync_admin
+        admin = autenticar_lusync_admin(email, password)
+        if not admin:
+            return redirect("/admin/lusync/login?error=Credenciales incorrectas")
+
+        # Crear sesión super-admin
+        session.clear()  # limpia cualquier sesión cliente previa
+        session["is_lusync_admin"] = True
+        session["lusync_admin_id"] = admin["admin_id"]
+        session["lusync_admin_email"] = admin["email"]
+        session["lusync_admin_nombre"] = admin["nombre"] or admin["email"]
+        session["logged"] = True  # compatibilidad con código viejo
+        session.permanent = True
+
+        return redirect("/admin/lusync")
+    except Exception as e:
+        return redirect(f"/admin/lusync/login?error={str(e)[:100]}")
+
+
+@app.route("/admin/lusync/logout", methods=["GET", "POST"])
+def admin_lusync_logout():
+    """Cierra sesión super-admin."""
+    session.clear()
+    return redirect("/admin/lusync/login")
+
+
+@app.route("/admin/lusync", methods=["GET"])
+@requiere_lusync_admin
+def admin_lusync_dashboard():
+    """Panel master super-admin Lusync."""
+    try:
+        from tenancy import listar_tenants
+        from inventario import get_conn, release_conn
+
+        tenants = listar_tenants()
+
+        # KPIs globales — todos requieren bypass admin
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+
+        # MRR total
+        cur.execute("""
+            SELECT COALESCE(SUM(p.precio_uf), 0)
+            FROM tenants t
+            JOIN planes p ON p.id = t.plan_id
+            WHERE t.estado = 'activo'
+        """)
+        mrr_uf = float(cur.fetchone()[0] or 0)
+
+        # Órdenes último mes (todos los tenants)
+        cur.execute("""
+            SELECT COUNT(*) FROM ordenes_procesadas
+            WHERE fecha >= NOW() - INTERVAL '30 days'
+        """)
+        ordenes_mes = cur.fetchone()[0]
+
+        # Alertas no leídas
+        cur.execute("SELECT COUNT(*) FROM alertas WHERE leida = FALSE")
+        alertas_activas = cur.fetchone()[0]
+
+        # Última actividad por tenant (para mostrar en tabla)
+        cur.execute("""
+            SELECT tenant_id, MAX(fecha) as ultima
+            FROM movimientos
+            GROUP BY tenant_id
+        """)
+        ultimas_actividades = {r[0]: r[1] for r in cur.fetchall()}
+
+        # Órdenes del mes por tenant
+        cur.execute("""
+            SELECT tenant_id, COUNT(*)
+            FROM ordenes_procesadas
+            WHERE fecha >= NOW() - INTERVAL '30 days'
+            GROUP BY tenant_id
+        """)
+        ordenes_por_tenant = {r[0]: r[1] for r in cur.fetchall()}
+
+        # Marketplaces conectados por tenant
+        cur.execute("""
+            SELECT tenant_id, canal
+            FROM credenciales_marketplace
+            WHERE activo = TRUE
+        """)
+        mkts_por_tenant = {}
+        for r in cur.fetchall():
+            mkts_por_tenant.setdefault(r[0], []).append(r[1])
+
+        cur.close(); release_conn(conn)
+
+        # Build HTML tenants rows
+        filas_tenants = ""
+        from datetime import datetime
+        ahora = datetime.now()
+        for t in tenants:
+            tid = t["id"]
+            actividad = ultimas_actividades.get(tid)
+            if actividad:
+                try:
+                    delta = ahora - actividad.replace(tzinfo=None)
+                    secs = delta.total_seconds()
+                    if secs < 60: act_str = "hace seg"
+                    elif secs < 3600: act_str = f"hace {int(secs//60)} min"
+                    elif secs < 86400: act_str = f"hace {int(secs//3600)} h"
+                    else: act_str = f"hace {int(secs//86400)} días"
+                except:
+                    act_str = "—"
+            else:
+                act_str = "sin actividad"
+
+            ordenes_t = ordenes_por_tenant.get(tid, 0)
+            mkts_list = mkts_por_tenant.get(tid, [])
+            mkts_badges = " ".join([
+                f'<span style="font-size:9px;background:#f1efe8;padding:2px 6px;border-radius:3px;margin-right:2px;color:#534AB7;font-weight:600;">{m[:3].upper()}</span>'
+                for m in mkts_list[:5]
+            ]) or '<span style="color:#aaa;font-size:11px;">sin conectar</span>'
+
+            plan_badge_color = {
+                "trial": "#f1efe8", "starter": "#ede9fe",
+                "pro": "#dbeafe", "enterprise": "#fce7f3"
+            }.get(t.get("plan_codigo"), "#f1efe8")
+            plan_text_color = {
+                "trial": "#6b7280", "starter": "#5b21b6",
+                "pro": "#1e40af", "enterprise": "#9f1239"
+            }.get(t.get("plan_codigo"), "#6b7280")
+
+            estado_color = "#dcfce7" if t["estado"] == "activo" else "#fee2e2"
+            estado_text = "#166534" if t["estado"] == "activo" else "#991b1b"
+
+            mrr_t = float(t.get("precio_uf") or 0)
+
+            filas_tenants += f"""
+            <tr style="border-bottom:1px solid #f1efe8;">
+                <td style="padding:11px 12px;">
+                    <div style="font-weight:500;">{t['nombre']}</div>
+                    <div style="font-size:10px;color:#888780;">{t.get('email_contacto') or '—'}</div>
+                </td>
+                <td style="padding:11px 12px;font-family:monospace;font-size:11px;color:#6b6a66;">{t.get('rut') or '—'}</td>
+                <td style="padding:11px 12px;">
+                    <span style="font-size:9px;padding:3px 8px;border-radius:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;background:{plan_badge_color};color:{plan_text_color};">
+                        {(t.get('plan_codigo') or '—').upper()}
+                    </span>
+                </td>
+                <td style="padding:11px 12px;">
+                    <span style="font-size:9px;padding:3px 8px;border-radius:10px;font-weight:600;text-transform:uppercase;background:{estado_color};color:{estado_text};">
+                        {t['estado']}
+                    </span>
+                </td>
+                <td style="padding:11px 12px;font-weight:500;">{ordenes_t}</td>
+                <td style="padding:11px 12px;">{mkts_badges}</td>
+                <td style="padding:11px 12px;color:#534AB7;font-weight:500;">{mrr_t:.1f} UF</td>
+                <td style="padding:11px 12px;font-size:11px;color:#888780;">{act_str}</td>
+                <td style="padding:11px 12px;text-align:right;">
+                    <a href="/admin/lusync/impersonate/{tid}" style="font-size:11px;color:#534AB7;text-decoration:none;font-weight:500;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;">Ver como</a>
+                </td>
+            </tr>
+            """
+
+        mrr_clp = int(mrr_uf * 39500)  # aproximado, idealmente UF dinámico
+
+        return f"""
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+            <meta charset="UTF-8">
+            <title>Lusync · Admin Master</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+        </head>
+        <body style="margin:0;font-family:system-ui,-apple-system,sans-serif;background:#fafaf9;min-height:100vh;">
+            <div style="display:grid;grid-template-columns:230px 1fr;min-height:100vh;">
+
+                <!-- SIDEBAR -->
+                <div style="background:#1F1E1B;color:white;padding:18px 14px;">
+                    <div style="font-size:18px;font-weight:600;letter-spacing:-0.02em;">Lusync</div>
+                    <div style="font-size:10px;color:#888780;margin-bottom:24px;letter-spacing:0.08em;text-transform:uppercase;font-weight:600;">Admin · Master</div>
+
+                    <div style="font-size:9px;text-transform:uppercase;color:#888780;letter-spacing:0.1em;padding:4px 8px;font-weight:600;margin-top:14px;">Gestión</div>
+                    <div style="padding:8px 10px;border-radius:6px;font-size:13px;background:#534AB7;color:white;cursor:pointer;">👥 Clientes</div>
+                    <div style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;cursor:not-allowed;opacity:0.5;">💳 Facturación <small>(próx.)</small></div>
+                    <div style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;cursor:not-allowed;opacity:0.5;">📊 Uso por cliente <small>(próx.)</small></div>
+
+                    <div style="font-size:9px;text-transform:uppercase;color:#888780;letter-spacing:0.1em;padding:4px 8px;font-weight:600;margin-top:14px;">Configuración</div>
+                    <div style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;cursor:not-allowed;opacity:0.5;">📦 Planes <small>(próx.)</small></div>
+                    <div style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;cursor:not-allowed;opacity:0.5;">🛍️ Marketplaces <small>(próx.)</small></div>
+
+                    <div style="font-size:9px;text-transform:uppercase;color:#888780;letter-spacing:0.1em;padding:4px 8px;font-weight:600;margin-top:14px;">Sistema</div>
+                    <a href="/admin/rls/health_check?token=lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw" target="_blank" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">🩺 Health check</a>
+                    <a href="/admin/tenancy/diagnostico?token=lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw" target="_blank" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">🔍 Diagnóstico</a>
+
+                    <div style="position:absolute;bottom:18px;left:14px;width:202px;border-top:1px solid #2a2926;padding-top:14px;">
+                        <div style="font-size:11px;color:white;font-weight:500;">{session.get('lusync_admin_nombre')}</div>
+                        <div style="font-size:10px;color:#888780;">{session.get('lusync_admin_email')}</div>
+                        <a href="/admin/lusync/logout" style="font-size:11px;color:#888780;text-decoration:none;display:inline-block;margin-top:6px;">Cerrar sesión →</a>
+                    </div>
+                </div>
+
+                <!-- MAIN -->
+                <div style="padding:24px 28px;">
+
+                    <!-- Header -->
+                    <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:20px;">
+                        <div>
+                            <h1 style="margin:0;font-size:22px;color:#1f1e1b;font-weight:600;">Clientes</h1>
+                            <div style="font-size:12px;color:#888780;margin-top:3px;">Gestión de tenants · {len(tenants)} totales · MRR {mrr_uf:.1f} UF (~${mrr_clp:,} CLP)</div>
+                        </div>
+                        <div>
+                            <button onclick="alert('Próxima sesión: form de nuevo cliente')" style="background:#534AB7;color:white;padding:9px 16px;border-radius:7px;font-size:13px;font-weight:500;border:0;cursor:pointer;">+ Nuevo cliente</button>
+                        </div>
+                    </div>
+
+                    <!-- KPIs -->
+                    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px;">
+                        <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;padding:14px 16px;">
+                            <div style="font-size:10px;text-transform:uppercase;color:#888780;letter-spacing:0.05em;font-weight:600;">Clientes activos</div>
+                            <div style="font-size:24px;font-weight:600;margin-top:5px;line-height:1;">{sum(1 for t in tenants if t['estado']=='activo')}</div>
+                            <div style="font-size:10px;color:#888780;margin-top:3px;">de {len(tenants)} totales</div>
+                        </div>
+                        <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;padding:14px 16px;">
+                            <div style="font-size:10px;text-transform:uppercase;color:#888780;letter-spacing:0.05em;font-weight:600;">MRR</div>
+                            <div style="font-size:24px;font-weight:600;color:#534AB7;margin-top:5px;line-height:1;">{mrr_uf:.1f} UF</div>
+                            <div style="font-size:10px;color:#888780;margin-top:3px;">~${mrr_clp:,} CLP/mes</div>
+                        </div>
+                        <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;padding:14px 16px;">
+                            <div style="font-size:10px;text-transform:uppercase;color:#888780;letter-spacing:0.05em;font-weight:600;">Órdenes mes</div>
+                            <div style="font-size:24px;font-weight:600;margin-top:5px;line-height:1;">{ordenes_mes}</div>
+                            <div style="font-size:10px;color:#888780;margin-top:3px;">total todos los tenants</div>
+                        </div>
+                        <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;padding:14px 16px;">
+                            <div style="font-size:10px;text-transform:uppercase;color:#888780;letter-spacing:0.05em;font-weight:600;">Alertas activas</div>
+                            <div style="font-size:24px;font-weight:600;margin-top:5px;line-height:1;{'color:#92400e;' if alertas_activas > 0 else ''}">{alertas_activas}</div>
+                            <div style="font-size:10px;color:#888780;margin-top:3px;">no leídas</div>
+                        </div>
+                    </div>
+
+                    <!-- Tabla de tenants -->
+                    <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;overflow:hidden;">
+                        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                            <thead style="background:#fafaf9;">
+                                <tr>
+                                    <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:0.04em;font-weight:600;border-bottom:1px solid #e8e6e0;">Cliente</th>
+                                    <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:0.04em;font-weight:600;border-bottom:1px solid #e8e6e0;">RUT</th>
+                                    <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:0.04em;font-weight:600;border-bottom:1px solid #e8e6e0;">Plan</th>
+                                    <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:0.04em;font-weight:600;border-bottom:1px solid #e8e6e0;">Estado</th>
+                                    <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:0.04em;font-weight:600;border-bottom:1px solid #e8e6e0;">Órd. mes</th>
+                                    <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:0.04em;font-weight:600;border-bottom:1px solid #e8e6e0;">MKTs</th>
+                                    <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:0.04em;font-weight:600;border-bottom:1px solid #e8e6e0;">MRR</th>
+                                    <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:0.04em;font-weight:600;border-bottom:1px solid #e8e6e0;">Última act.</th>
+                                    <th style="padding:9px 12px;border-bottom:1px solid #e8e6e0;"></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {filas_tenants}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div style="margin-top:14px;padding:10px 12px;background:#fef3c7;border:1px solid #fcd34d;border-radius:7px;font-size:11px;color:#92400e;">
+                        💡 <b>Modo impersonate:</b> Click "Ver como" para entrar al panel del cliente como si fueras ellos. Útil para soporte. Cuando estés en modo impersonate, regresa con <a href="/admin/lusync/desimpersonate" style="color:#92400e;font-weight:600;">/admin/lusync/desimpersonate</a>.
+                    </div>
+
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+    except Exception as e:
+        import traceback
+        return f"<pre>Error: {e}\n\n{traceback.format_exc()}</pre>", 500
+
+
+@app.route("/admin/lusync/impersonate/<int:tenant_id>", methods=["GET"])
+@requiere_lusync_admin
+def admin_lusync_impersonate(tenant_id):
+    """Modo impersonate: entra al panel del cliente como si fueras ellos.
+    Mantiene credenciales super-admin pero session.tenant_id apunta al cliente.
+    """
+    try:
+        from tenancy import listar_tenants
+        tenants = listar_tenants()
+        tenant = next((t for t in tenants if t["id"] == tenant_id), None)
+        if not tenant:
+            return f"<h1>Tenant {tenant_id} no encontrado</h1>", 404
+
+        # Setear tenant_id de cliente, mantener flag de admin para poder volver
+        session["tenant_id"] = tenant_id
+        session["impersonating"] = True
+        session["impersonate_tenant_nombre"] = tenant["nombre"]
+        session["logged"] = True
+        # Mantenemos is_lusync_admin para poder volver
+
+        return redirect("/")  # va al panel del cliente
+    except Exception as e:
+        return f"<pre>{e}</pre>", 500
+
+
+@app.route("/admin/lusync/desimpersonate", methods=["GET"])
+def admin_lusync_desimpersonate():
+    """Salir del modo impersonate y volver al panel master."""
+    if not session.get("is_lusync_admin"):
+        return redirect("/admin/lusync/login")
+    session.pop("tenant_id", None)
+    session.pop("impersonating", None)
+    session.pop("impersonate_tenant_nombre", None)
+    return redirect("/admin/lusync")
+
+
 @app.route("/admin/tenancy/form_crear_super_admin", methods=["GET"])
 def admin_tenancy_form_crear_super_admin():
     """Formulario HTML simple para crear el primer super-admin Lusync sin curl."""
