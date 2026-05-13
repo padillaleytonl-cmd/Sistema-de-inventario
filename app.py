@@ -59,6 +59,13 @@ except Exception as e:
     import traceback
     print(f"[init_multitenancy] ERROR: {e}")
     traceback.print_exc()
+try:
+    from tenant_rls import init_rls_policies
+    init_rls_policies()
+except Exception as e:
+    import traceback
+    print(f"[init_rls_policies] ERROR: {e}")
+    traceback.print_exc()
 init_audit()
 init_sku_mapeo()
 init_alertas()
@@ -10572,6 +10579,81 @@ def admin_tenancy_crear_super_admin():
 
         aid = crear_lusync_admin(email, password, nombre)
         return jsonify({"ok": True, "admin_id": aid, "email": email})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/admin/rls/estado", methods=["GET"])
+def admin_rls_estado():
+    """Reporta qué tablas tienen RLS habilitado, cuántas políticas, etc."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from tenant_rls import estado_rls, test_aislamiento_dry_run
+        return jsonify({
+            "estado": estado_rls(),
+            "filas_por_tenant": test_aislamiento_dry_run()
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/admin/rls/habilitar/<tabla>", methods=["POST", "GET"])
+def admin_rls_habilitar(tabla):
+    """ACTIVA RLS en una tabla. Cuidado: las queries sin contexto verán vacío."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from tenant_rls import habilitar_rls
+        return jsonify(habilitar_rls(tabla))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/rls/deshabilitar/<tabla>", methods=["POST", "GET"])
+def admin_rls_deshabilitar(tabla):
+    """DESACTIVA RLS en una tabla. ROLLBACK rápido."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from tenant_rls import deshabilitar_rls
+        return jsonify(deshabilitar_rls(tabla))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/rls/deshabilitar_todas", methods=["POST"])
+def admin_rls_deshabilitar_todas():
+    """ROLLBACK DE EMERGENCIA: desactiva RLS en TODAS las tablas.
+    Las políticas quedan creadas pero dormidas (comportamiento idéntico a hoy)."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if (request.json or {}).get("token") != bypass_token:
+        return jsonify({"error": "Token admin requerido"}), 401
+    try:
+        from tenant_rls import deshabilitar_rls_todas
+        return jsonify(deshabilitar_rls_todas())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/rls/test_aislamiento", methods=["GET"])
+def admin_rls_test_aislamiento():
+    """Test seguro: simula qué pasaría con cada tenant SIN tocar nada."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from tenant_rls import test_aislamiento_dry_run, estado_rls
+        return jsonify({
+            "filas_por_tenant_en_cada_tabla": test_aislamiento_dry_run(),
+            "estado_rls": estado_rls(),
+            "nota": "Si todas las tablas dicen tenant_id=1 y RLS deshabilitado, todo OK"
+        })
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
