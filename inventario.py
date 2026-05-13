@@ -626,16 +626,16 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
     cur.execute("""
         INSERT INTO movimientos (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha,
                                   orden_id, fecha_importacion, numero_orden, documento_ref,
-                                  fecha_compra_marketplace, origen_registro)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                  fecha_compra_marketplace, origen_registro, stock_antes, stock_despues)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
     """, (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id, ahora,
-          numero_orden, documento_ref, fecha_compra_mp_norm, origen_registro))
+          numero_orden, documento_ref, fecha_compra_mp_norm, origen_registro,
+          _calcular_stock_antes(sku, tipo, cantidad), _calcular_stock_despues(sku)))
     mov_id = cur.fetchone()[0]
     conn.commit()
     cur.close()
     release_conn(conn)
-    return mov_id
 
     # ── SYNC UNIVERSAL: cualquier movimiento de stock sincroniza a todos los canales ──
     # Se ejecuta en background para no bloquear la respuesta
@@ -643,9 +643,6 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
         import threading
         def _sync_bg():
             try:
-                # Calcular stock disponible para canales no-fulfillment
-                # = SUM de bodegas tipo 'propia' (CENTRAL, etc.)
-                # NO se cuenta MELI_FULL, PARIS_CD ni ninguna fulfillment/transito
                 conn2 = get_conn()
                 cur2 = conn2.cursor()
                 cur2.execute("""
@@ -658,8 +655,6 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
                 stock_disponible = int(row[0]) if row and row[0] is not None else 0
                 cur2.close()
                 conn2.close()
-
-                # Importar y llamar sync con stock disponible
                 from app import sincronizar_stock_marketplaces
                 resultado = sincronizar_stock_marketplaces(sku, stock_disponible, contexto=f"{tipo}_{canal}_{motivo[:20] if motivo else 'manual'}")
                 print(f"[SyncUniversal] {sku} stock_propio={stock_disponible} -> {resultado}")
@@ -671,6 +666,46 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
         threading.Thread(target=_sync_bg, daemon=True).start()
     except Exception:
         pass
+
+    return mov_id
+
+
+def _calcular_stock_despues(sku):
+    """Calcula stock total ACTUAL del SKU (snapshot post-movimiento).
+    Suma todas las bodegas para tener un snapshot global.
+    """
+    try:
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("SELECT COALESCE(SUM(cantidad), 0) FROM stock_bodega WHERE sku = %s", (sku,))
+        r = cur.fetchone()
+        total = int(r[0]) if r and r[0] is not None else 0
+        cur.close(); release_conn(conn)
+        return total
+    except Exception:
+        return None
+
+
+def _calcular_stock_antes(sku, tipo, cantidad):
+    """Calcula stock total ANTES del movimiento.
+    Como el snapshot se toma DESPUÉS del INSERT (cuando ya el stock se actualizó),
+    aplicamos el reverso según el tipo:
+      - entrada: stock_antes = stock_actual - cantidad
+      - salida:  stock_antes = stock_actual + cantidad
+      - ajuste:  stock_antes = stock_actual (no podemos saber el delta acá)
+    """
+    actual = _calcular_stock_despues(sku)
+    if actual is None:
+        return None
+    try:
+        cantidad = int(cantidad or 0)
+    except Exception:
+        cantidad = 0
+    if tipo == 'entrada':
+        return max(0, actual - cantidad)
+    elif tipo == 'salida':
+        return actual + cantidad
+    else:
+        return actual
 
 def cargar_movimientos(limite=20):
     conn = get_conn()
