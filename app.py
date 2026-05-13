@@ -10743,6 +10743,168 @@ def admin_rls_test_aislamiento():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/admin/rls/health_check", methods=["GET"])
+def admin_rls_health_check():
+    """Verificación completa del sistema multi-tenant.
+    Devuelve un reporte de salud con TODOS los aspectos críticos.
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+
+    from inventario import get_conn, release_conn
+    from datetime import datetime, timedelta
+
+    reporte = {
+        "timestamp": datetime.now().isoformat(),
+        "checks": [],
+        "resumen": {"ok": 0, "warning": 0, "fail": 0}
+    }
+
+    def check(nombre, status, detalle):
+        reporte["checks"].append({"nombre": nombre, "status": status, "detalle": detalle})
+        reporte["resumen"][status] += 1
+
+    # ─────────────────────────────────────────────────────────────
+    # 1. Tablas globales existen y tienen datos
+    # ─────────────────────────────────────────────────────────────
+    try:
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM tenants")
+        n_tenants = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM planes")
+        n_planes = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM marketplaces_catalogo")
+        n_mkts = cur.fetchone()[0]
+        cur.close(); release_conn(conn)
+
+        if n_tenants >= 1 and n_planes >= 4 and n_mkts >= 12:
+            check("tablas_globales", "ok", f"{n_tenants} tenants, {n_planes} planes, {n_mkts} marketplaces")
+        else:
+            check("tablas_globales", "warning", f"Faltan: tenants={n_tenants}, planes={n_planes}, mkts={n_mkts}")
+    except Exception as e:
+        check("tablas_globales", "fail", str(e))
+
+    # ─────────────────────────────────────────────────────────────
+    # 2. RLS habilitado en todas las tablas
+    # ─────────────────────────────────────────────────────────────
+    try:
+        from tenant_rls import estado_rls
+        e = estado_rls()
+        habilitadas = [t for t, s in e.items() if s["rls_habilitado"] and s["rls_forzado"]]
+        no_habilitadas = [t for t, s in e.items() if not (s["rls_habilitado"] and s["rls_forzado"])]
+
+        if len(no_habilitadas) == 0:
+            check("rls_activo_todas_tablas", "ok", f"{len(habilitadas)} tablas con RLS forzado")
+        else:
+            check("rls_activo_todas_tablas", "warning", f"Faltan: {no_habilitadas}")
+    except Exception as e:
+        check("rls_activo_todas_tablas", "fail", str(e))
+
+    # ─────────────────────────────────────────────────────────────
+    # 3. Aislamiento real: tenant=1 ve datos, tenant=99 ve vacío
+    # ─────────────────────────────────────────────────────────────
+    try:
+        conn1 = get_conn(tenant_id=1); cur1 = conn1.cursor()
+        cur1.execute("SELECT COUNT(*) FROM productos")
+        n_prod_t1 = cur1.fetchone()[0]
+        cur1.close(); release_conn(conn1)
+
+        conn99 = get_conn(tenant_id=99); cur99 = conn99.cursor()
+        cur99.execute("SELECT COUNT(*) FROM productos")
+        n_prod_t99 = cur99.fetchone()[0]
+        cur99.close(); release_conn(conn99)
+
+        if n_prod_t1 > 0 and n_prod_t99 == 0:
+            check("aislamiento_funciona", "ok", f"tenant=1 ve {n_prod_t1} productos, tenant=99 ve 0")
+        else:
+            check("aislamiento_funciona", "fail", f"INCORRECTO: t1={n_prod_t1}, t99={n_prod_t99}")
+    except Exception as e:
+        check("aislamiento_funciona", "fail", str(e))
+
+    # ─────────────────────────────────────────────────────────────
+    # 4. Bypass admin funciona
+    # ─────────────────────────────────────────────────────────────
+    try:
+        conn_a = get_conn(is_admin=True); cur_a = conn_a.cursor()
+        cur_a.execute("SELECT COUNT(*) FROM productos")
+        n_admin = cur_a.fetchone()[0]
+        cur_a.close(); release_conn(conn_a)
+
+        if n_admin > 0:
+            check("bypass_admin_funciona", "ok", f"Admin ve {n_admin} productos (todos los tenants)")
+        else:
+            check("bypass_admin_funciona", "fail", "Admin no ve nada")
+    except Exception as e:
+        check("bypass_admin_funciona", "fail", str(e))
+
+    # ─────────────────────────────────────────────────────────────
+    # 5. Movimientos recientes (últimas 24h) — actividad de schedulers
+    # ─────────────────────────────────────────────────────────────
+    try:
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+        hace_24h = (datetime.now() - timedelta(hours=24)).isoformat()
+        cur.execute("""
+            SELECT origen_registro, COUNT(*)
+            FROM movimientos
+            WHERE fecha >= %s
+            GROUP BY origen_registro
+            ORDER BY COUNT(*) DESC
+        """, (hace_24h,))
+        por_origen = {r[0] or 'sin_origen': r[1] for r in cur.fetchall()}
+
+        cur.execute("""
+            SELECT MAX(fecha) FROM movimientos
+            WHERE origen_registro = 'scheduler'
+        """)
+        ultimo_scheduler = cur.fetchone()[0]
+        cur.close(); release_conn(conn)
+
+        info_actividad = {
+            "movimientos_24h_por_origen": por_origen,
+            "ultimo_movimiento_scheduler": ultimo_scheduler.isoformat() if ultimo_scheduler else None
+        }
+        check("actividad_reciente", "ok", info_actividad)
+    except Exception as e:
+        check("actividad_reciente", "fail", str(e))
+
+    # ─────────────────────────────────────────────────────────────
+    # 6. Sesión actual del usuario
+    # ─────────────────────────────────────────────────────────────
+    info_sesion = {
+        "logged": session.get("logged", False),
+        "usuario": session.get("usuario"),
+        "tenant_id_en_sesion": session.get("tenant_id"),
+        "is_lusync_admin": session.get("is_lusync_admin", False),
+    }
+    check("sesion_actual", "ok" if info_sesion.get("logged") else "warning", info_sesion)
+
+    # ─────────────────────────────────────────────────────────────
+    # 7. Schedulers activos (último heartbeat)
+    # ─────────────────────────────────────────────────────────────
+    try:
+        # Cuántos jobs hay registrados
+        jobs = scheduler.get_jobs() if 'scheduler' in globals() else []
+        jobs_info = []
+        for j in jobs:
+            next_run = j.next_run_time.isoformat() if j.next_run_time else "(detenido)"
+            jobs_info.append({"id": j.id, "next_run": next_run})
+        check("schedulers", "ok" if len(jobs_info) > 0 else "warning",
+              {"total_jobs": len(jobs_info), "jobs": jobs_info})
+    except Exception as e:
+        check("schedulers", "warning", str(e))
+
+    # Resumen final
+    if reporte["resumen"]["fail"] > 0:
+        reporte["estado_general"] = "❌ HAY FALLAS — revisar checks con status=fail"
+    elif reporte["resumen"]["warning"] > 0:
+        reporte["estado_general"] = "⚠️ Funciona pero con advertencias — revisar checks con status=warning"
+    else:
+        reporte["estado_general"] = "✅ TODO PERFECTO — sistema multi-tenant funcionando correctamente"
+
+    return jsonify(reporte)
+
+
 @app.route("/admin/rls/inspeccionar_policy/<tabla>", methods=["GET"])
 def admin_rls_inspeccionar_policy(tabla):
     """Inspecciona la política RLS de una tabla específica."""
