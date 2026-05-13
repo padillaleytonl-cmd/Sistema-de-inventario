@@ -10772,8 +10772,9 @@ def admin_rls_test_marcar_orden():
             conn2 = get_conn(); cur2 = conn2.cursor()
             cur2.execute("SELECT current_setting('app.tenant_id', true)")
             despues = cur2.fetchone()[0]
-            cur2.execute("SELECT id, orden_id, order_id_texto, tenant_id FROM ordenes_procesadas WHERE order_id_texto = %s", (test_id,))
+            cur2.execute("SELECT * FROM ordenes_procesadas WHERE order_id_texto = %s LIMIT 1", (test_id,))
             fila = cur2.fetchone()
+            cols = [d[0] for d in cur2.description] if cur2.description else []
             cur2.close(); release_conn(conn2)
 
             return jsonify({
@@ -10781,9 +10782,7 @@ def admin_rls_test_marcar_orden():
                 "setting_app_tenant_antes": antes,
                 "setting_app_tenant_despues": despues,
                 "resultado_funcion": resultado,
-                "fila_creada": {
-                    "id": fila[0], "orden_id": fila[1], "order_id_texto": fila[2], "tenant_id": fila[3]
-                } if fila else None,
+                "fila_creada": dict(zip(cols, fila)) if fila else None,
                 "exito": resultado is True and fila is not None
             })
         finally:
