@@ -52,6 +52,13 @@ try:
     init_feriados()
 except Exception as e:
     print(f"[init_feriados] {e}")
+try:
+    from tenancy import init_multitenancy
+    init_multitenancy()
+except Exception as e:
+    import traceback
+    print(f"[init_multitenancy] ERROR: {e}")
+    traceback.print_exc()
 init_audit()
 init_sku_mapeo()
 init_alertas()
@@ -10479,6 +10486,92 @@ def ruta_stats_ingresos_periodo():
             "por_canal": por_canal,
             "rango": {"desde": desde, "hasta": hasta}
         })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# ENDPOINTS MULTI-TENANCY — solo accesibles con token admin
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/tenancy/diagnostico", methods=["GET"])
+def admin_tenancy_diagnostico():
+    """Verifica el estado de la migración multi-tenant."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from tenancy import diagnostico_tenancy
+        return jsonify(diagnostico_tenancy())
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/admin/tenancy/init", methods=["POST", "GET"])
+def admin_tenancy_init():
+    """Fuerza re-inicialización de tenancy (idempotente). Útil si falló al arranque."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from tenancy import init_multitenancy
+        init_multitenancy()
+        from tenancy import diagnostico_tenancy
+        return jsonify({"ok": True, "diagnostico": diagnostico_tenancy()})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/admin/tenancy/tenants", methods=["GET"])
+def admin_tenancy_tenants():
+    """Lista todos los tenants."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from tenancy import listar_tenants
+        return jsonify({"tenants": listar_tenants()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/tenancy/crear_super_admin", methods=["POST"])
+def admin_tenancy_crear_super_admin():
+    """Bootstrap: crea el primer Lusync super-admin.
+    Solo funcional cuando lusync_admins está vacío (auto-bloqueado después).
+    Body JSON: {email, password, nombre, token}
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if (request.json or {}).get("token") != bypass_token:
+        return jsonify({"error": "Token admin requerido"}), 401
+
+    data = request.json or {}
+    email = (data.get("email") or "").strip().lower()
+    password = (data.get("password") or "").strip()
+    nombre = (data.get("nombre") or "").strip() or None
+
+    if not email or not password:
+        return jsonify({"error": "email y password obligatorios"}), 400
+    if len(password) < 8:
+        return jsonify({"error": "password mínimo 8 caracteres"}), 400
+
+    try:
+        from tenancy import crear_lusync_admin, get_conn
+        # Verificar si ya hay admins
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM lusync_admins")
+        existentes = cur.fetchone()[0]
+        cur.close(); conn.close()
+
+        # Si ya hay admins, requerir password fuerte adicional (admin existente)
+        if existentes > 0:
+            return jsonify({"error": "Ya existen super-admins. Crear nuevo admin desde panel /admin/lusync"}), 403
+
+        aid = crear_lusync_admin(email, password, nombre)
+        return jsonify({"ok": True, "admin_id": aid, "email": email})
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
