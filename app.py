@@ -3620,6 +3620,10 @@ def audit_test():
 
 @app.route("/")
 def home():
+    # Si es super-admin Lusync sin modo impersonate, va al panel master
+    if session.get("is_lusync_admin") and not session.get("impersonating"):
+        return redirect("/admin/lusync")
+    # Si está logueado como cliente (incluso siendo super-admin en modo impersonate), al panel
     if session.get("logged"):
         return redirect("/panel")
     return render_template("login.html")
@@ -10830,7 +10834,8 @@ def admin_lusync_login():
         session["lusync_admin_id"] = admin["admin_id"]
         session["lusync_admin_email"] = admin["email"]
         session["lusync_admin_nombre"] = admin["nombre"] or admin["email"]
-        session["logged"] = True  # compatibilidad con código viejo
+        # NO seteamos session["logged"] = True para evitar que entre al panel cliente.
+        # session["logged"] solo se activa al hacer impersonate.
         session.permanent = True
 
         return redirect("/admin/lusync")
@@ -11100,12 +11105,13 @@ def admin_lusync_impersonate(tenant_id):
         if not tenant:
             return f"<h1>Tenant {tenant_id} no encontrado</h1>", 404
 
-        # Setear tenant_id de cliente, mantener flag de admin para poder volver
+        # Setear tenant_id de cliente + flag logged para que el panel viejo lo reconozca
+        # Mantiene is_lusync_admin para poder volver con desimpersonate
         session["tenant_id"] = tenant_id
         session["impersonating"] = True
         session["impersonate_tenant_nombre"] = tenant["nombre"]
         session["logged"] = True
-        # Mantenemos is_lusync_admin para poder volver
+        session["usuario"] = f"[admin] viendo {tenant['nombre']}"
 
         return redirect("/")  # va al panel del cliente
     except Exception as e:
@@ -11120,6 +11126,8 @@ def admin_lusync_desimpersonate():
     session.pop("tenant_id", None)
     session.pop("impersonating", None)
     session.pop("impersonate_tenant_nombre", None)
+    session.pop("logged", None)
+    session.pop("usuario", None)
     return redirect("/admin/lusync")
 
 
