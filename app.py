@@ -10659,6 +10659,81 @@ def admin_rls_test_aislamiento():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/admin/rls/diagnostico_owner", methods=["GET"])
+def admin_rls_diagnostico_owner():
+    """Diagnostica si el usuario BD es OWNER de las tablas (eso bypasea RLS).
+    También verifica que la política realmente esté aplicándose.
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import get_conn, release_conn
+        conn = get_conn(tenant_id=99)  # forzamos tenant=99
+        cur = conn.cursor()
+
+        # Quién soy yo en la BD
+        cur.execute("SELECT current_user, session_user")
+        cur_user, sess_user = cur.fetchone()
+
+        # Setting actual
+        cur.execute("SELECT current_setting('app.tenant_id', true), current_setting('app.is_admin', true)")
+        tid, adm = cur.fetchone()
+
+        # Owner de la tabla alertas
+        cur.execute("""
+            SELECT tableowner FROM pg_tables WHERE tablename = 'alertas'
+        """)
+        owner = cur.fetchone()[0] if cur.rowcount else "??"
+
+        # Soy BYPASSRLS?
+        cur.execute("""
+            SELECT rolname, rolbypassrls FROM pg_roles WHERE rolname = current_user
+        """)
+        rolname, bypassrls = cur.fetchone()
+
+        # Test directo: ¿cuántas alertas veo con tenant=99?
+        cur.execute("SELECT COUNT(*) FROM alertas WHERE leida=FALSE")
+        cnt_99 = cur.fetchone()[0]
+
+        # Cambiar a tenant=1 en la misma conexión
+        cur.execute("SELECT set_config('app.tenant_id', '1', false)")
+        cur.execute("SELECT COUNT(*) FROM alertas WHERE leida=FALSE")
+        cnt_1 = cur.fetchone()[0]
+
+        # Estado RLS de alertas
+        cur.execute("""
+            SELECT relrowsecurity, relforcerowsecurity
+            FROM pg_class WHERE relname = 'alertas'
+        """)
+        rls_enabled, rls_forced = cur.fetchone()
+
+        cur.close()
+        release_conn(conn)
+
+        return jsonify({
+            "usuario_bd": cur_user,
+            "session_user": sess_user,
+            "es_owner_tabla_alertas": cur_user == owner,
+            "tabla_owner": owner,
+            "rol_bypassrls": bypassrls,
+            "rls_habilitado_alertas": rls_enabled,
+            "rls_forzado_alertas": rls_forced,
+            "tenant_setting_actual": tid,
+            "is_admin_setting_actual": adm,
+            "count_con_tenant_99": cnt_99,
+            "count_con_tenant_1": cnt_1,
+            "diagnostico": {
+                "rls_efectivo": cnt_99 == 0 and cnt_1 > 0,
+                "problema_owner_bypass": cur_user == owner and not rls_forced,
+                "explicacion": "Si el usuario BD es OWNER y RLS no está FORZADO, los OWNER bypasean RLS automáticamente"
+            }
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 @app.route("/admin/rls/recrear_policies", methods=["POST", "GET"])
 def admin_rls_recrear_policies():
     """DROP + CREATE de todas las políticas. Útil cuando cambia la definición."""
