@@ -10743,6 +10743,68 @@ def admin_rls_test_aislamiento():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/admin/rls/test_scheduler_manual", methods=["GET"])
+def admin_rls_test_scheduler_manual():
+    """Ejecuta UNA llamada manual de un scheduler y captura toda la salida.
+    Útil para diagnosticar por qué no aparecen logs de schedulers automáticos.
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+
+    canal = request.args.get("canal", "meli")
+    import io
+    import sys
+    from contextlib import redirect_stdout, redirect_stderr
+
+    buffer_out = io.StringIO()
+    buffer_err = io.StringIO()
+
+    try:
+        # Mapeo canal -> función
+        funcs = {
+            "meli": _sync_meli_automatico,
+            "walmart": _sync_walmart_automatico,
+            "falabella": _sync_falabella_automatico,
+            "paris": _sync_paris_automatico,
+        }
+        f = funcs.get(canal)
+        if not f:
+            return jsonify({"error": f"canal desconocido: {canal}. Usar: meli, walmart, falabella, paris"}), 400
+
+        # Verificar que tiene el decorador
+        tiene_decorador = hasattr(f, '__wrapped__')
+
+        # Liberar cualquier lock que esté trabado
+        if canal in _sync_locks:
+            _sync_locks[canal]["running"] = False
+
+        with redirect_stdout(buffer_out), redirect_stderr(buffer_err):
+            f()
+
+        output = buffer_out.getvalue()
+        errors = buffer_err.getvalue()
+
+        return jsonify({
+            "canal": canal,
+            "tiene_decorador_con_tenant_default": tiene_decorador,
+            "stdout": output,
+            "stderr": errors,
+            "diagnostico": {
+                "ejecuto_con_tenant": "Ejecutando para tenant_id=" in output,
+                "vio_productos": "0 productos" not in output.lower(),
+            }
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "error": str(e),
+            "trace": traceback.format_exc(),
+            "stdout_capturado": buffer_out.getvalue(),
+            "stderr_capturado": buffer_err.getvalue(),
+        }), 500
+
+
 @app.route("/admin/rls/health_check", methods=["GET"])
 def admin_rls_health_check():
     """Verificación completa del sistema multi-tenant.
