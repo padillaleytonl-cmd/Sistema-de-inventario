@@ -10743,6 +10743,41 @@ def admin_rls_test_aislamiento():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/admin/rls/inspeccionar_policy/<tabla>", methods=["GET"])
+def admin_rls_inspeccionar_policy(tabla):
+    """Inspecciona la política RLS de una tabla específica."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import get_conn, release_conn
+        conn = get_conn(is_admin=True)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT policyname, permissive, roles, cmd,
+                   qual::text AS using_clause,
+                   with_check::text AS with_check_clause
+            FROM pg_policies
+            WHERE schemaname = 'public' AND tablename = %s
+        """, (tabla,))
+        rows = cur.fetchall()
+        cur.close()
+        release_conn(conn)
+        return jsonify({
+            "tabla": tabla,
+            "policies": [{
+                "name": r[0],
+                "permissive": r[1],
+                "roles": r[2],
+                "cmd": r[3],
+                "using": r[4],
+                "with_check": r[5]
+            } for r in rows]
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/admin/rls/diagnostico_owner", methods=["GET"])
 def admin_rls_diagnostico_owner():
     """Diagnostica si el usuario BD es OWNER de las tablas (eso bypasea RLS).
