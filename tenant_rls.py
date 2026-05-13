@@ -172,6 +172,14 @@ def recrear_policies():
     return resultado
 
 
+def habilitar_rls_todas():
+    """Activa RLS + FORCE en TODAS las tablas con tenant_id."""
+    resultados = {}
+    for t in TABLAS_TENANT:
+        resultados[t] = habilitar_rls(t)
+    return resultados
+
+
 def habilitar_rls(tabla):
     """Activa RLS en una tabla específica.
     También activa FORCE para que el OWNER de la tabla también respete RLS

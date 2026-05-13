@@ -10627,12 +10627,29 @@ def admin_rls_deshabilitar(tabla):
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/admin/rls/deshabilitar_todas", methods=["POST"])
+@app.route("/admin/rls/habilitar_todas", methods=["POST", "GET"])
+def admin_rls_habilitar_todas():
+    """ACTIVA RLS en TODAS las tablas. ATENCIÓN: si una función olvida setear tenant context,
+    sus queries devolverán vacío. Rollback rápido con /admin/rls/deshabilitar_todas."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from tenant_rls import habilitar_rls_todas
+        return jsonify(habilitar_rls_todas())
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/admin/rls/deshabilitar_todas", methods=["POST", "GET"])
 def admin_rls_deshabilitar_todas():
     """ROLLBACK DE EMERGENCIA: desactiva RLS en TODAS las tablas.
     Las políticas quedan creadas pero dormidas (comportamiento idéntico a hoy)."""
     bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
-    if (request.json or {}).get("token") != bypass_token:
+    # Permitir POST con body O GET con token param
+    auth_ok = (request.json or {}).get("token") == bypass_token if request.method == "POST" else request.args.get("token") == bypass_token
+    if not auth_ok:
         return jsonify({"error": "Token admin requerido"}), 401
     try:
         from tenant_rls import deshabilitar_rls_todas
