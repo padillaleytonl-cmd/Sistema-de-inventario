@@ -1200,7 +1200,7 @@ def marcar_orden_procesada(orden_id):
 
 
 def limpiar_movimientos_duplicados():
-    conn = get_conn(); cur = conn.cursor()
+    conn = get_conn(is_admin=True); cur = conn.cursor()
     cur.execute("""DELETE FROM movimientos WHERE id IN (
         SELECT id FROM (SELECT id, ROW_NUMBER() OVER (
             PARTITION BY orden_id,sku,canal,tipo ORDER BY fecha ASC,id ASC
@@ -1208,7 +1208,7 @@ def limpiar_movimientos_duplicados():
     n = cur.rowcount; conn.commit(); cur.close(); conn.close(); return n
 
 def borrar_movimientos_marketplace(desde_fecha=None):
-    conn = get_conn(); cur = conn.cursor()
+    conn = get_conn(is_admin=True); cur = conn.cursor()
     cur.execute("DELETE FROM movimientos WHERE canal IN ('Walmart','WooCommerce','Paris')")
     m = cur.rowcount
     cur.execute("DELETE FROM ordenes_procesadas")
@@ -1219,7 +1219,7 @@ CANAL_DISPLAY = {"web":"Web Propia","walmart":"Walmart","paris":"París",
     "falabella":"Falabella","ripley":"Ripley","mercadolibre":"Mercado Libre","hites":"Hites"}
 
 def init_sku_mapeo():
-    conn = get_conn(); cur = conn.cursor()
+    conn = get_conn(is_admin=True); cur = conn.cursor()
     cur.execute("""CREATE TABLE IF NOT EXISTS sku_mapeo (
         id SERIAL PRIMARY KEY, sku_lusync TEXT UNIQUE NOT NULL,
         sku_web TEXT, sku_walmart TEXT, sku_paris TEXT,
@@ -1246,7 +1246,7 @@ def init_sku_mapeo_canal():
     Si quieres poblarla, usa el endpoint /admin/auto_mapeo_v2 que trae
     todas las publicaciones de cada marketplace y las inserta aquí.
     """
-    conn = get_conn(); cur = conn.cursor()
+    conn = get_conn(is_admin=True); cur = conn.cursor()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS sku_mapeo_canal (
             id              SERIAL PRIMARY KEY,
@@ -1300,7 +1300,7 @@ def obtener_publicaciones_canal(sku_lusync, canal):
     """
     init_sku_mapeo_canal()
     canal = (canal or "").lower().strip()
-    conn = get_conn(); cur = conn.cursor()
+    conn = get_conn(is_admin=True); cur = conn.cursor()
     cur.execute("""
         SELECT id, sku_canal, item_id_canal, es_catalogo, activo
         FROM sku_mapeo_canal
@@ -1338,7 +1338,7 @@ def obtener_sku_lusync_por_canal(canal, sku_canal=None, item_id_canal=None):
         return None
     init_sku_mapeo_canal()
     canal = (canal or "").lower().strip()
-    conn = get_conn(); cur = conn.cursor()
+    conn = get_conn(is_admin=True); cur = conn.cursor()
 
     # Prioridad 1: match EXACTO por item_id + sku_canal (resuelve variantes correctamente)
     if item_id_canal and sku_canal:
@@ -1653,7 +1653,7 @@ def init_alertas():
 
 def crear_alerta(tipo, titulo, mensaje="", canal=None, orden_id=None, sku=None, enviar_email=True):
     """Registra una alerta en BD y opcionalmente envía email a destinatarios configurados."""
-    conn = get_conn(); cur = conn.cursor()
+    conn = get_conn(is_admin=True); cur = conn.cursor()
     try:
         cur.execute("""INSERT INTO alertas (tipo, canal, titulo, mensaje, orden_id, sku)
                        VALUES (%s, %s, %s, %s, %s, %s)""",
@@ -2035,8 +2035,12 @@ BODEGAS_DEFAULT = [
 
 
 def init_bodegas():
-    """Crea tablas bodegas + stock_bodega y migra el stock actual a Bodega Central."""
-    conn = get_conn(); cur = conn.cursor()
+    """Crea tablas bodegas + stock_bodega y migra el stock actual a Bodega Central.
+
+    Esta función corre al arranque del sistema (sin sesión), por lo que necesita
+    bypass RLS para poder crear bodegas y migrar stock de cualquier tenant.
+    """
+    conn = get_conn(is_admin=True); cur = conn.cursor()
     try:
         # Tabla maestra de bodegas
         cur.execute("""CREATE TABLE IF NOT EXISTS bodegas (
@@ -2110,7 +2114,7 @@ def init_bodegas():
 
 def listar_bodegas(solo_activas=True):
     """Devuelve todas las bodegas configuradas."""
-    conn = get_conn(); cur = conn.cursor()
+    conn = get_conn(is_admin=True); cur = conn.cursor()
     try:
         if solo_activas:
             cur.execute("SELECT codigo, nombre, tipo, canal, activa FROM bodegas WHERE activa=TRUE ORDER BY orden, id")

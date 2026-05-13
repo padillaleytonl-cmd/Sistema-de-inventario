@@ -65,7 +65,7 @@ def init_multitenancy():
     4. ALTER TABLE para agregar tenant_id INT NOT NULL DEFAULT 1 a cada tabla existente
     5. Crear índices compuestos (tenant_id + columnas clave)
     """
-    conn = get_conn()
+    conn = get_conn(is_admin=True)
     cur = conn.cursor()
     try:
         # ───────────────────────────────────────────────────────────

@@ -48,7 +48,7 @@ def init_rls_policies():
     Las políticas quedan creadas pero RLS NO se habilita aún.
     Idempotente: se puede correr múltiples veces.
     """
-    conn = get_conn(); cur = conn.cursor()
+    conn = get_conn(is_admin=True); cur = conn.cursor()
     creadas, ya_existian, errores = [], [], []
 
     for tabla in TABLAS_TENANT:
@@ -125,7 +125,7 @@ def recrear_policies():
     """DROP + CREATE de todas las políticas RLS.
     Útil cuando cambias la definición de la política y necesitas que tome efecto.
     """
-    conn = get_conn(); cur = conn.cursor()
+    conn = get_conn(is_admin=True); cur = conn.cursor()
     resultado = {"dropeadas": [], "recreadas": [], "errores": []}
 
     for tabla in TABLAS_TENANT:
@@ -188,7 +188,7 @@ def habilitar_rls(tabla):
     if tabla not in TABLAS_TENANT:
         return {"error": f"{tabla} no está en la lista de tablas tenant"}
 
-    conn = get_conn(); cur = conn.cursor()
+    conn = get_conn(is_admin=True); cur = conn.cursor()
     try:
         cur.execute(f"ALTER TABLE {tabla} ENABLE ROW LEVEL SECURITY")
         cur.execute(f"ALTER TABLE {tabla} FORCE ROW LEVEL SECURITY")
@@ -209,7 +209,7 @@ def deshabilitar_rls(tabla):
     if tabla not in TABLAS_TENANT:
         return {"error": f"{tabla} no está en la lista de tablas tenant"}
 
-    conn = get_conn(); cur = conn.cursor()
+    conn = get_conn(is_admin=True); cur = conn.cursor()
     try:
         cur.execute(f"ALTER TABLE {tabla} NO FORCE ROW LEVEL SECURITY")
         cur.execute(f"ALTER TABLE {tabla} DISABLE ROW LEVEL SECURITY")
@@ -235,7 +235,7 @@ def deshabilitar_rls_todas():
 
 def estado_rls():
     """Reporta qué tablas tienen RLS habilitado actualmente."""
-    conn = get_conn(); cur = conn.cursor()
+    conn = get_conn(is_admin=True); cur = conn.cursor()
     try:
         cur.execute("""
             SELECT c.relname AS tabla,
@@ -314,7 +314,7 @@ def test_aislamiento_dry_run():
     """Prueba SIN habilitar RLS: simula qué pasaría.
     Cuenta filas por tenant en cada tabla.
     """
-    conn = get_conn(); cur = conn.cursor()
+    conn = get_conn(is_admin=True); cur = conn.cursor()
     resultado = {}
     try:
         for tabla in TABLAS_TENANT:
