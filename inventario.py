@@ -179,13 +179,72 @@ def _get_pool():
         )
     return _pool
 
-def get_conn():
-    """Obtiene una conexión del pool. Usar con try/finally para devolverla."""
+def get_conn(tenant_id=None, is_admin=False):
+    """Obtiene una conexión del pool. Usar con try/finally para devolverla.
+
+    Multi-tenancy:
+        - Si se pasa tenant_id explícito, setea app.tenant_id en la conexión.
+        - Si no se pasa y hay sesión Flask con tenant_id, lo usa.
+        - Si no hay nada, NO setea (comportamiento legacy para schedulers).
+        - is_admin=True bypassa RLS (para super-admin Lusync y mantenimiento).
+
+    Esta función es 100% retrocompatible: get_conn() sin args funciona igual que antes.
+    """
     try:
-        return _get_pool().getconn()
+        conn = _get_pool().getconn()
     except Exception:
         # Fallback a conexión directa si el pool falla
-        return psycopg2.connect(os.environ.get("DATABASE_URL"))
+        conn = psycopg2.connect(os.environ.get("DATABASE_URL"))
+
+    # Setear context tenant si aplica
+    try:
+        # Si se pasó explícito, usarlo
+        if tenant_id is not None:
+            _set_rls_context(conn, int(tenant_id), is_admin)
+        else:
+            # Intentar leer de sesión Flask (si estamos en request context)
+            try:
+                from flask import session, has_request_context
+                if has_request_context():
+                    sess_tid = session.get("tenant_id")
+                    sess_admin = bool(session.get("is_lusync_admin"))
+                    if sess_tid:
+                        _set_rls_context(conn, int(sess_tid), sess_admin)
+                    elif sess_admin:
+                        # Super admin sin tenant específico — ve todo
+                        _set_rls_context(conn, 0, True)
+            except Exception:
+                # Sin Flask context (scheduler, webhook sin auth) → no setear nada
+                # Las queries verán todo si RLS está deshabilitado (= comportamiento actual)
+                pass
+    except Exception as e:
+        # Setear context NUNCA debe romper get_conn
+        print(f"[get_conn] Warning: no se pudo setear tenant context: {e}")
+
+    return conn
+
+
+def _set_rls_context(conn, tenant_id, is_admin=False):
+    """Setea app.tenant_id y app.is_admin en la conexión.
+    Las queries siguientes que toquen tablas con RLS habilitado filtrarán por este tenant.
+    """
+    if not conn or conn.closed:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT set_config('app.tenant_id', %s, false)", (str(int(tenant_id)),))
+        cur.execute("SELECT set_config('app.is_admin', %s, false)", ('true' if is_admin else 'false',))
+        cur.close()
+    except Exception as e:
+        # Si hay transacción rota, intentar rollback y reintentar
+        try:
+            conn.rollback()
+            cur = conn.cursor()
+            cur.execute("SELECT set_config('app.tenant_id', %s, false)", (str(int(tenant_id)),))
+            cur.execute("SELECT set_config('app.is_admin', %s, false)", ('true' if is_admin else 'false',))
+            cur.close()
+        except Exception:
+            print(f"[_set_rls_context] Error: {e}")
 
 def release_conn(conn):
     """Devuelve la conexión al pool."""

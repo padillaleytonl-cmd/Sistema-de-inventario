@@ -10659,6 +10659,109 @@ def admin_rls_test_aislamiento():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/admin/rls/verificar_context", methods=["GET"])
+def admin_rls_verificar_context():
+    """Verifica que get_conn() esté aplicando el tenant context correctamente.
+    Lee las variables app.tenant_id y app.is_admin de la conexión actual.
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import get_conn, release_conn
+
+        # Caso 1: get_conn() sin args → debería leer sesión Flask
+        conn1 = get_conn()
+        cur1 = conn1.cursor()
+        cur1.execute("SELECT current_setting('app.tenant_id', true), current_setting('app.is_admin', true)")
+        tid1, adm1 = cur1.fetchone()
+        cur1.close()
+        release_conn(conn1)
+
+        # Caso 2: get_conn(tenant_id=99) → debería setear explícitamente
+        conn2 = get_conn(tenant_id=99)
+        cur2 = conn2.cursor()
+        cur2.execute("SELECT current_setting('app.tenant_id', true), current_setting('app.is_admin', true)")
+        tid2, adm2 = cur2.fetchone()
+        cur2.close()
+        release_conn(conn2)
+
+        # Caso 3: get_conn(is_admin=True) → bypass mode
+        conn3 = get_conn(tenant_id=1, is_admin=True)
+        cur3 = conn3.cursor()
+        cur3.execute("SELECT current_setting('app.tenant_id', true), current_setting('app.is_admin', true)")
+        tid3, adm3 = cur3.fetchone()
+        cur3.close()
+        release_conn(conn3)
+
+        # Info de la sesión actual
+        info_sesion = {
+            "logged": session.get("logged", False),
+            "usuario": session.get("usuario"),
+            "tenant_id_en_sesion": session.get("tenant_id"),
+            "is_lusync_admin": session.get("is_lusync_admin", False),
+        }
+
+        return jsonify({
+            "info_sesion_actual": info_sesion,
+            "casos_prueba": {
+                "1_sin_args": {
+                    "esperado": "tenant de sesión Flask, o vacío si no hay sesión",
+                    "obtenido_tenant_id": tid1 or "(vacío)",
+                    "obtenido_is_admin": adm1 or "(vacío)",
+                },
+                "2_explicito_99": {
+                    "esperado": "tenant_id=99, is_admin=false",
+                    "obtenido_tenant_id": tid2,
+                    "obtenido_is_admin": adm2,
+                    "correcto": tid2 == "99" and adm2 == "false",
+                },
+                "3_admin_bypass": {
+                    "esperado": "tenant_id=1, is_admin=true",
+                    "obtenido_tenant_id": tid3,
+                    "obtenido_is_admin": adm3,
+                    "correcto": tid3 == "1" and adm3 == "true",
+                }
+            },
+            "diagnostico": {
+                "context_funciona": tid2 == "99" and adm3 == "true",
+                "nota": "Si los 3 casos están correctos, get_conn() está aplicando tenant context bien"
+            }
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/admin/rls/forzar_tenant_sesion", methods=["GET"])
+def admin_rls_forzar_tenant_sesion():
+    """SOLO PARA TESTING: fuerza un tenant_id en tu sesión actual.
+    Útil para simular ser otro tenant y validar aislamiento.
+    Usage: /admin/rls/forzar_tenant_sesion?tenant=2&token=...
+    Para limpiar: /admin/rls/forzar_tenant_sesion?tenant=1&token=...
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+
+    tenant_id = request.args.get("tenant")
+    if not tenant_id:
+        return jsonify({"error": "Falta parámetro tenant"}), 400
+
+    try:
+        tid = int(tenant_id)
+    except ValueError:
+        return jsonify({"error": "tenant debe ser número"}), 400
+
+    session["tenant_id"] = tid
+    session["logged"] = True
+    return jsonify({
+        "ok": True,
+        "tenant_id_seteado": tid,
+        "nota": "Ahora cualquier query usará este tenant. Llama /admin/rls/verificar_context para confirmar."
+    })
+
+
 @app.route("/admin/diagnostico_dashboard", methods=["GET"])
 def admin_diagnostico_dashboard():
     """Compara qué cuenta cada función de stats para entender inconsistencias.
