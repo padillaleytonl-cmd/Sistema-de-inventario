@@ -11123,6 +11123,140 @@ def admin_lusync_desimpersonate():
     return redirect("/admin/lusync")
 
 
+@app.route("/admin/tenancy/form_crear_usuario_babymine", methods=["GET", "POST"])
+def admin_tenancy_form_crear_usuario_babymine():
+    """Form para crear el primer usuario de Babymine (contacto@babymine.cl)
+    y actualizar el email de contacto del tenant.
+    Solo accesible con token admin."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if request.args.get("token") != bypass_token and request.form.get("token") != bypass_token:
+        return "<h1>No autorizado</h1>", 401
+
+    if request.method == "GET":
+        return """
+        <!DOCTYPE html>
+        <html><head><title>Crear Usuario Babymine</title></head>
+        <body style="font-family:system-ui,sans-serif;max-width:500px;margin:60px auto;padding:30px;background:#fafaf9;border-radius:12px;">
+            <h2 style="margin:0 0 8px;">👤 Crear Usuario Babymine</h2>
+            <p style="color:#666;font-size:13px;margin-bottom:24px;">Crea el usuario admin de Babymine con email <code>contacto@babymine.cl</code> y actualiza email contacto del tenant.</p>
+
+            <form method="POST" action="/admin/tenancy/form_crear_usuario_babymine">
+                <input type="hidden" name="token" value="lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw">
+
+                <div style="margin-bottom:14px;">
+                    <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Email (no editar)</label>
+                    <input type="email" name="email" value="contacto@babymine.cl" readonly
+                           style="width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;background:#f3f4f6;box-sizing:border-box;">
+                </div>
+
+                <div style="margin-bottom:14px;">
+                    <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Nombre del usuario</label>
+                    <input type="text" name="nombre" value="Luis Padilla" required
+                           style="width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;">
+                </div>
+
+                <div style="margin-bottom:14px;">
+                    <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Rol</label>
+                    <select name="rol" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;">
+                        <option value="admin" selected>Admin (acceso completo)</option>
+                        <option value="operador">Operador</option>
+                        <option value="viewer">Viewer (solo lectura)</option>
+                    </select>
+                </div>
+
+                <div style="margin-bottom:14px;">
+                    <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Contraseña</label>
+                    <input type="password" name="password" required minlength="8"
+                           placeholder="Mín 8 caracteres"
+                           style="width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;">
+                </div>
+
+                <div style="margin-bottom:24px;">
+                    <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Confirmar contraseña</label>
+                    <input type="password" name="password2" required minlength="8"
+                           style="width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;">
+                </div>
+
+                <div style="margin-bottom:18px;padding:10px 12px;background:#dbeafe;border-radius:6px;font-size:11px;color:#1e40af;">
+                    ℹ️ <b>Importante:</b> Esto NO afecta tu login actual de Babymine. Sigues entrando como siempre. Este usuario se usará cuando construyamos <code>/portal/login</code> en otra sesión.
+                </div>
+
+                <button type="submit" style="width:100%;padding:12px;background:#534AB7;color:white;border:0;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;">
+                    Crear usuario Babymine
+                </button>
+            </form>
+        </body></html>
+        """
+
+    # POST: procesar
+    email = (request.form.get("email") or "contacto@babymine.cl").strip().lower()
+    password = (request.form.get("password") or "").strip()
+    password2 = (request.form.get("password2") or "").strip()
+    nombre = (request.form.get("nombre") or "Luis Padilla").strip()
+    rol = (request.form.get("rol") or "admin").strip()
+
+    if password != password2:
+        return "<h2>❌ Las contraseñas no coinciden</h2><a href='/admin/tenancy/form_crear_usuario_babymine?token=" + bypass_token + "'>Volver</a>", 400
+    if len(password) < 8:
+        return "<h2>❌ Contraseña muy corta (mín 8)</h2><a href='/admin/tenancy/form_crear_usuario_babymine?token=" + bypass_token + "'>Volver</a>", 400
+
+    try:
+        from tenancy import crear_usuario
+        from inventario import get_conn, release_conn
+
+        # Verificar si ya existe usuario con ese email
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+        cur.execute("SELECT id FROM usuarios WHERE email = %s AND tenant_id = 1", (email,))
+        existente = cur.fetchone()
+
+        if existente:
+            # Actualizar contraseña en vez de crear
+            from tenancy import hash_password
+            ph = hash_password(password)
+            cur.execute("""
+                UPDATE usuarios SET password_hash = %s, nombre = %s, rol = %s, activo = TRUE
+                WHERE id = %s
+            """, (ph, nombre, rol, existente[0]))
+            user_id = existente[0]
+            accion = "actualizado"
+        else:
+            # Crear nuevo
+            user_id = crear_usuario(tenant_id=1, email=email, password=password, nombre=nombre, rol=rol)
+            accion = "creado"
+
+        # Actualizar email contacto del tenant Babymine
+        cur.execute("""
+            UPDATE tenants SET email_contacto = %s WHERE id = 1
+        """, (email,))
+        conn.commit()
+        cur.close(); release_conn(conn)
+
+        return f"""
+        <!DOCTYPE html>
+        <html><body style="font-family:system-ui;max-width:500px;margin:60px auto;padding:30px;">
+            <div style="background:#dcfce7;color:#166534;padding:20px;border-radius:10px;">
+                <h2 style="margin:0 0 8px;">✅ Usuario {accion}</h2>
+                <p style="margin:0;font-size:13px;">
+                    Usuario ID: <b>{user_id}</b><br>
+                    Email: <b>{email}</b><br>
+                    Tenant: Babymine (id=1)<br>
+                    Rol: <b>{rol}</b><br>
+                </p>
+            </div>
+            <div style="background:#dbeafe;color:#1e40af;padding:15px;border-radius:8px;margin-top:14px;font-size:12px;">
+                ℹ️ Email de contacto de Babymine actualizado a <code>{email}</code> en la tabla tenants.<br><br>
+                Tu login actual de Babymine (<code>/login_check</code>) sigue funcionando como siempre.
+            </div>
+            <div style="margin-top:20px;text-align:center;">
+                <a href="/admin/lusync" style="color:#534AB7;text-decoration:none;font-weight:500;">← Ir al Panel Master Lusync</a>
+            </div>
+        </body></html>
+        """
+    except Exception as e:
+        import traceback
+        return f"<pre style='color:red;'>{e}\n\n{traceback.format_exc()}</pre>", 500
+
+
 @app.route("/admin/tenancy/form_crear_super_admin", methods=["GET"])
 def admin_tenancy_form_crear_super_admin():
     """Formulario HTML simple para crear el primer super-admin Lusync sin curl."""
