@@ -1151,18 +1151,39 @@ def intentar_marcar_orden_atomic(order_id_texto):
 
     El UNIQUE constraint en order_id_texto hace que PostgreSQL rechace el segundo
     INSERT antes de que llegue al código Python. Race condition eliminada.
+
+    NOTA multi-tenant: lee tenant_id de la sesión Flask o threading.local automáticamente
+    desde get_conn(). El INSERT incluye tenant_id explícito para satisfacer la política RLS.
     """
     import random
+    # Leer tenant actual (de sesión o thread)
+    tid = None
+    try:
+        from flask import session, has_request_context
+        if has_request_context():
+            tid = session.get("tenant_id")
+    except Exception:
+        pass
+    if not tid:
+        try:
+            from app import get_thread_tenant
+            tid = get_thread_tenant()
+        except Exception:
+            pass
+    if not tid:
+        tid = 1  # Fallback Babymine
+
     conn = get_conn()
     cur  = conn.cursor()
     try:
-        cur.execute("ALTER TABLE ordenes_procesadas ADD COLUMN IF NOT EXISTS order_id_texto TEXT")
-        conn.commit()
+        # NOTA: NO hacemos ALTER TABLE aquí. La columna order_id_texto ya existe
+        # (creada hace meses). El ALTER TABLE + COMMIT puede resetear settings de sesión
+        # como app.tenant_id, lo que rompe RLS en el INSERT siguiente.
         cur.execute("""
-            INSERT INTO ordenes_procesadas (orden_id, order_id_texto)
-            VALUES (%s, %s)
+            INSERT INTO ordenes_procesadas (orden_id, order_id_texto, tenant_id)
+            VALUES (%s, %s, %s)
             ON CONFLICT (order_id_texto) DO NOTHING
-        """, (random.randint(1, 9007199254740991), str(order_id_texto)))
+        """, (random.randint(1, 9007199254740991), str(order_id_texto), int(tid)))
         insertado = cur.rowcount  # 1 = nuevo, 0 = ya existía
         conn.commit()
         return insertado == 1

@@ -10743,6 +10743,56 @@ def admin_rls_test_aislamiento():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/admin/rls/test_marcar_orden", methods=["GET"])
+def admin_rls_test_marcar_orden():
+    """Prueba directa de intentar_marcar_orden_atomic para diagnosticar bloqueo RLS."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import get_conn, release_conn, intentar_marcar_orden_atomic
+
+        # Setear thread tenant para simular scheduler
+        set_thread_tenant(1)
+
+        try:
+            # Probar con un ID dummy que no existe
+            test_id = f"TEST_RLS_{int(__import__('time').time())}"
+
+            # ANTES del INSERT: verificar setting
+            conn1 = get_conn(); cur1 = conn1.cursor()
+            cur1.execute("SELECT current_setting('app.tenant_id', true)")
+            antes = cur1.fetchone()[0]
+            cur1.close(); release_conn(conn1)
+
+            # Ejecutar la función
+            resultado = intentar_marcar_orden_atomic(test_id)
+
+            # DESPUÉS: ver si quedó la fila
+            conn2 = get_conn(); cur2 = conn2.cursor()
+            cur2.execute("SELECT current_setting('app.tenant_id', true)")
+            despues = cur2.fetchone()[0]
+            cur2.execute("SELECT id, orden_id, order_id_texto, tenant_id FROM ordenes_procesadas WHERE order_id_texto = %s", (test_id,))
+            fila = cur2.fetchone()
+            cur2.close(); release_conn(conn2)
+
+            return jsonify({
+                "test_id": test_id,
+                "setting_app_tenant_antes": antes,
+                "setting_app_tenant_despues": despues,
+                "resultado_funcion": resultado,
+                "fila_creada": {
+                    "id": fila[0], "orden_id": fila[1], "order_id_texto": fila[2], "tenant_id": fila[3]
+                } if fila else None,
+                "exito": resultado is True and fila is not None
+            })
+        finally:
+            clear_thread_tenant()
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 @app.route("/admin/rls/listar_todas_policies", methods=["GET"])
 def admin_rls_listar_todas_policies():
     """Lista TODAS las políticas RLS de TODAS las tablas, sin filtrar por nombre."""
