@@ -85,8 +85,11 @@ def init_rls_policies():
                 continue
 
             # Crear política con bypass para admin
-            # USING: aplica a SELECT/UPDATE/DELETE
-            # WITH CHECK: aplica a INSERT/UPDATE para validar que el tenant_id insertado es el correcto
+            # USING: aplica a SELECT/UPDATE/DELETE — restringe LECTURA por tenant
+            # WITH CHECK: aplica a INSERT/UPDATE — permisivo (true) durante transición
+            #   esto permite que schedulers sin sesión Flask sigan creando registros.
+            # Cuando todas las funciones llamadas por schedulers seteen tenant context,
+            # se puede endurecer WITH CHECK para validar tenant_id explícitamente.
             cur.execute(f"""
                 CREATE POLICY {POLICY_NAME} ON {tabla}
                 AS PERMISSIVE
@@ -95,10 +98,7 @@ def init_rls_policies():
                     tenant_id = COALESCE(NULLIF(current_setting('app.tenant_id', true), ''), '0')::int
                     OR COALESCE(NULLIF(current_setting('app.is_admin', true), ''), 'false') = 'true'
                 )
-                WITH CHECK (
-                    tenant_id = COALESCE(NULLIF(current_setting('app.tenant_id', true), ''), '0')::int
-                    OR COALESCE(NULLIF(current_setting('app.is_admin', true), ''), 'false') = 'true'
-                )
+                WITH CHECK (true)
             """)
             conn.commit()
             creadas.append(tabla)
@@ -120,6 +120,57 @@ def init_rls_policies():
 # ════════════════════════════════════════════════════════════════════════════
 # HABILITAR / DESHABILITAR RLS por tabla
 # ════════════════════════════════════════════════════════════════════════════
+
+def recrear_policies():
+    """DROP + CREATE de todas las políticas RLS.
+    Útil cuando cambias la definición de la política y necesitas que tome efecto.
+    """
+    conn = get_conn(); cur = conn.cursor()
+    resultado = {"dropeadas": [], "recreadas": [], "errores": []}
+
+    for tabla in TABLAS_TENANT:
+        try:
+            cur.execute("""
+                SELECT EXISTS(SELECT FROM information_schema.tables WHERE table_name = %s)
+            """, (tabla,))
+            if not cur.fetchone()[0]:
+                continue
+
+            # Drop policy si existe
+            try:
+                cur.execute(f"DROP POLICY IF EXISTS {POLICY_NAME} ON {tabla}")
+                conn.commit()
+                resultado["dropeadas"].append(tabla)
+            except Exception as e:
+                resultado["errores"].append(f"{tabla} (drop): {e}")
+                conn.rollback()
+
+            # Recrear con la definición actual (USING estricto + WITH CHECK permisivo)
+            try:
+                cur.execute(f"""
+                    CREATE POLICY {POLICY_NAME} ON {tabla}
+                    AS PERMISSIVE
+                    FOR ALL
+                    USING (
+                        tenant_id = COALESCE(NULLIF(current_setting('app.tenant_id', true), ''), '0')::int
+                        OR COALESCE(NULLIF(current_setting('app.is_admin', true), ''), 'false') = 'true'
+                    )
+                    WITH CHECK (true)
+                """)
+                conn.commit()
+                resultado["recreadas"].append(tabla)
+            except Exception as e:
+                resultado["errores"].append(f"{tabla} (create): {e}")
+                conn.rollback()
+
+        except Exception as e:
+            resultado["errores"].append(f"{tabla}: {e}")
+            conn.rollback()
+
+    cur.close()
+    release_conn(conn)
+    return resultado
+
 
 def habilitar_rls(tabla):
     """Activa RLS en una tabla específica.

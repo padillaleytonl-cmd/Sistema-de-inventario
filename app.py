@@ -10659,6 +10659,20 @@ def admin_rls_test_aislamiento():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/admin/rls/recrear_policies", methods=["POST", "GET"])
+def admin_rls_recrear_policies():
+    """DROP + CREATE de todas las políticas. Útil cuando cambia la definición."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from tenant_rls import recrear_policies
+        return jsonify(recrear_policies())
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 @app.route("/admin/rls/verificar_context", methods=["GET"])
 def admin_rls_verificar_context():
     """Verifica que get_conn() esté aplicando el tenant context correctamente.
