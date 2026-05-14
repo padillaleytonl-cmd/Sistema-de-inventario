@@ -1104,6 +1104,7 @@ def _sync_paris_automatico():
         _sync_locks["paris"]["running"] = False
 
 
+@con_tenant_default
 def _sync_ripley_automatico():
     """Sync órdenes + cancelaciones Ripley cada 10 min."""
     if _sync_locks["ripley"]["running"]:
@@ -1273,6 +1274,7 @@ def _sync_ripley_automatico():
         _sync_locks["ripley"]["running"] = False
 
 
+@con_tenant_default
 def _sync_woo_automatico():
     """Sync órdenes + cancelaciones WooCommerce cada 10 min.
     
