@@ -20619,15 +20619,22 @@ def facturacion_dashboard():
     cafs_activos = [c for c in cafs if not c["agotado"]]
     tipos_dte_disponibles = sorted(set(c["tipo_dte"] for c in cafs_activos))
 
-    config_completa = bool(config and config.get("rut_emisor") and config.get("razon_social"))
+    # config_completa: tiene rut+razón social Y no son placeholders
+    _rut = (config or {}).get("rut_emisor", "") or ""
+    _rs = (config or {}).get("razon_social", "") or ""
+    config_completa = bool(
+        _rut and _rs
+        and not _rut.startswith("00000000")
+        and "Por configurar" not in _rs
+    )
     listo_para_emitir = bool(config_completa and cert_activo and len(cafs_activos) > 0)
 
     dtes_activos = [d for d in mrr["desglose"] if d["activo"]]
 
     return jsonify({
-        "config": {"rut_emisor": config.get("rut_emisor") if config else None,
-                   "razon_social": config.get("razon_social") if config else None,
-                   "ambiente": config.get("ambiente") if config else None},
+        "config": {"rut_emisor": (config or {}).get("rut_emisor"),
+                   "razon_social": (config or {}).get("razon_social"),
+                   "ambiente": (config or {}).get("ambiente")},
         "config_completa": config_completa,
         "certificado_activo": cert_activo,
         "cantidad_certificados": len(certs),

@@ -296,31 +296,26 @@ def obtener_config_facturacion(get_conn_func, release_conn_func, tenant_id):
 def calcular_mrr_tributario(get_conn_func, release_conn_func, tenant_id, uf_clp=None):
     """Calcula el costo mensual en UF por los DTEs activados del tenant.
 
-    Args:
-        uf_clp: valor UF en CLP. Si None, lo obtiene dinámicamente del cache/API.
-
-    Returns:
-        dict con:
-            total_uf: suma de precios UF de DTEs activos
-            total_clp_neto: equivalente en pesos (sin IVA)
-            total_clp_iva: con IVA 19%
-            uf_valor: valor UF usado en el cálculo
-            uf_fecha: fecha del valor UF
-            desglose: lista de {tipo_dte, nombre, precio_uf, activo}
+    Si el tenant no tiene config, devuelve un cálculo con defaults
+    (boleta y NC activadas como gratis).
     """
     from .utils import TIPOS_DTE, CAMPO_BD_A_TIPO_DTE
     from .uf import obtener_uf_actual
 
-    config = obtener_config_facturacion(get_conn_func, release_conn_func, tenant_id)
-    if not config:
-        return {"total_uf": 0.0, "total_clp": 0, "total_clp_neto": 0,
-                "total_clp_iva": 0, "iva_porcentaje": 19, "desglose": []}
+    config = obtener_config_facturacion(get_conn_func, release_conn_func, tenant_id) or {
+        "emite_boleta": True,
+        "emite_nota_credito": True,
+    }
 
     # Obtener UF dinámica si no se pasó
     uf_info = None
     if uf_clp is None:
-        uf_info = obtener_uf_actual(get_conn_func, release_conn_func)
-        uf_clp = uf_info["valor"]
+        try:
+            uf_info = obtener_uf_actual(get_conn_func, release_conn_func)
+            uf_clp = uf_info["valor"]
+        except Exception as e:
+            print(f"[MRR] Error obteniendo UF, usando fallback: {e}")
+            uf_clp = 37000.0
 
     desglose = []
     total_uf = 0.0
@@ -328,7 +323,11 @@ def calcular_mrr_tributario(get_conn_func, release_conn_func, tenant_id, uf_clp=
     for campo_bd, tipo_dte in CAMPO_BD_A_TIPO_DTE.items():
         info = TIPOS_DTE.get(tipo_dte, {})
         precio = float(info.get("precio_uf", 0))
-        activo = bool(config.get(campo_bd, False))
+        # Default para Boleta y NC: TRUE; resto: lo que diga la config (FALSE si no existe)
+        if tipo_dte in (39, 61):
+            activo = bool(config.get(campo_bd, True))
+        else:
+            activo = bool(config.get(campo_bd, False))
         desglose.append({
             "tipo_dte": tipo_dte,
             "nombre": info.get("nombre", f"Tipo {tipo_dte}"),
@@ -498,7 +497,17 @@ def guardar_config_facturacion(get_conn_func, release_conn_func, tenant_id, data
                 )
         else:
             # INSERT con valores por defecto
+            # Si faltan rut_emisor/razon_social (NOT NULL), usar placeholders
+            # para que el cliente pueda activar DTEs antes de que Lusync configure
             cols, placeholders, valores = ["tenant_id"], ["%s"], [tenant_id]
+            if "rut_emisor" not in data:
+                cols.append("rut_emisor")
+                placeholders.append("%s")
+                valores.append("00000000-0")  # placeholder, Lusync lo configura después
+            if "razon_social" not in data:
+                cols.append("razon_social")
+                placeholders.append("%s")
+                valores.append("Por configurar")  # placeholder
             for c in campos_actualizables:
                 if c in data:
                     cols.append(c)
