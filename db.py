@@ -170,6 +170,29 @@ def init_facturacion_tables(get_conn_func, release_conn_func=None, enable_rls_fu
             ON facturacion_dtes(tenant_id, orden_id)
         """)
 
+        # ─────────────────────────────────────────────────────────────────
+        # 5. ACTIVACIONES de DTE: registro de cuándo se activó/desactivó cada tipo
+        # Cobro: mes completo desde la activación, hasta fin del mes en que se desactiva
+        # ─────────────────────────────────────────────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS facturacion_dte_activaciones (
+                id SERIAL PRIMARY KEY,
+                tenant_id INTEGER NOT NULL,
+                tipo_dte INTEGER NOT NULL,
+                fecha_activacion TIMESTAMP NOT NULL DEFAULT NOW(),
+                fecha_desactivacion TIMESTAMP,
+                precio_uf_al_activar NUMERIC(4, 2) NOT NULL,
+                aceptado_por TEXT,
+                ip_aceptacion TEXT,
+                terminos_version TEXT DEFAULT 'v1',
+                activo BOOLEAN DEFAULT TRUE
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_dte_activaciones_tenant
+            ON facturacion_dte_activaciones(tenant_id, tipo_dte, activo)
+        """)
+
         conn.commit()
         print("[Facturación] Tablas creadas/verificadas correctamente")
 
@@ -294,11 +317,115 @@ def calcular_mrr_tributario(get_conn_func, release_conn_func, tenant_id, uf_clp=
 
     # Redondeo correcto (los floats acumulan ruido)
     total_uf = round(total_uf, 2)
+    total_clp_neto = int(round(total_uf * uf_clp))
+    total_clp_iva = int(round(total_clp_neto * 1.19))
     return {
         "total_uf": total_uf,
-        "total_clp": int(round(total_uf * uf_clp)),
+        "total_clp": total_clp_neto,      # neto, sin IVA (backward compat)
+        "total_clp_neto": total_clp_neto,
+        "total_clp_iva": total_clp_iva,    # con IVA 19%
+        "iva_porcentaje": 19,
         "desglose": desglose,
     }
+
+
+def registrar_activacion_dte(get_conn_func, release_conn_func, tenant_id,
+                              tipo_dte, precio_uf, aceptado_por, ip_aceptacion,
+                              terminos_version="v1"):
+    """Registra que un cliente aceptó los términos y activó un tipo de DTE.
+
+    Reglas comerciales:
+        - Si ya existe activación activa para este tenant+tipo, no duplica (es no-op)
+        - Si hay desactivación previa, crea nueva fila (historia)
+        - Se cobra mes completo independiente de cuándo se activó/desactivó
+    """
+    conn = get_conn_func(); cur = conn.cursor()
+    try:
+        # ¿Ya tiene una activa? (no duplicar)
+        cur.execute("""
+            SELECT id FROM facturacion_dte_activaciones
+            WHERE tenant_id = %s AND tipo_dte = %s AND activo = TRUE
+        """, (tenant_id, tipo_dte))
+        if cur.fetchone():
+            return {"ok": True, "ya_activo": True}
+
+        cur.execute("""
+            INSERT INTO facturacion_dte_activaciones
+              (tenant_id, tipo_dte, precio_uf_al_activar, aceptado_por,
+               ip_aceptacion, terminos_version, activo)
+            VALUES (%s, %s, %s, %s, %s, %s, TRUE)
+            RETURNING id, fecha_activacion
+        """, (tenant_id, tipo_dte, precio_uf, aceptado_por, ip_aceptacion, terminos_version))
+        r = cur.fetchone()
+        conn.commit()
+        return {
+            "ok": True,
+            "activacion_id": r[0],
+            "fecha_activacion": r[1].isoformat() if r[1] else None,
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"ok": False, "error": str(e)[:200]}
+    finally:
+        cur.close()
+        release_conn_func(conn)
+
+
+def registrar_desactivacion_dte(get_conn_func, release_conn_func, tenant_id, tipo_dte):
+    """Marca la activación como desactivada. NO elimina, mantiene historia.
+
+    IMPORTANTE: el cobro sigue hasta fin de mes. Esto solo registra la fecha
+    para que el ciclo de cobro mensual sepa que no debe renovar el cargo.
+    """
+    conn = get_conn_func(); cur = conn.cursor()
+    try:
+        cur.execute("""
+            UPDATE facturacion_dte_activaciones
+            SET activo = FALSE, fecha_desactivacion = NOW()
+            WHERE tenant_id = %s AND tipo_dte = %s AND activo = TRUE
+        """, (tenant_id, tipo_dte))
+        afectadas = cur.rowcount
+        conn.commit()
+        return {"ok": True, "desactivadas": afectadas}
+    except Exception as e:
+        conn.rollback()
+        return {"ok": False, "error": str(e)[:200]}
+    finally:
+        cur.close()
+        release_conn_func(conn)
+
+
+def obtener_historial_activaciones(get_conn_func, release_conn_func, tenant_id):
+    """Devuelve histórico de activaciones del tenant (para auditoría / mostrar al cliente)."""
+    from .utils import TIPOS_DTE
+    conn = get_conn_func(); cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT id, tipo_dte, fecha_activacion, fecha_desactivacion,
+                   precio_uf_al_activar, aceptado_por, activo, terminos_version
+            FROM facturacion_dte_activaciones
+            WHERE tenant_id = %s
+            ORDER BY fecha_activacion DESC
+        """, (tenant_id,))
+        rows = cur.fetchall()
+        result = []
+        for r in rows:
+            info = TIPOS_DTE.get(r[1], {})
+            result.append({
+                "id": r[0],
+                "tipo_dte": r[1],
+                "nombre": info.get("nombre", f"Tipo {r[1]}"),
+                "fecha_activacion": r[2].isoformat() if r[2] else None,
+                "fecha_desactivacion": r[3].isoformat() if r[3] else None,
+                "precio_uf_al_activar": float(r[4]) if r[4] else 0.0,
+                "aceptado_por": r[5],
+                "activo": r[6],
+                "terminos_version": r[7],
+            })
+        return result
+    finally:
+        cur.close()
+        release_conn_func(conn)
 
 
 def guardar_config_facturacion(get_conn_func, release_conn_func, tenant_id, data):

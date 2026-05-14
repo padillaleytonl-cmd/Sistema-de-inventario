@@ -3333,12 +3333,13 @@ tbody td {
       <div style="display:flex;justify-content:space-between;align-items:start;gap:16px;flex-wrap:wrap;margin-bottom:14px;">
         <div>
           <div style="font-size:14px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:6px;">📑 Tu suscripción tributaria</div>
-          <div style="font-size:11px;color:var(--muted);margin-top:4px;">Add-on mensual sobre tu plan base · Solo cobramos por los tipos de DTE que necesitas</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:4px;">Add-on mensual sobre tu plan base · Solo cobramos por los tipos de DTE que necesitas · Precios sin IVA</div>
         </div>
-        <div style="text-align:right;background:#EEEDFE;padding:10px 16px;border-radius:10px;min-width:120px;">
+        <div style="text-align:right;background:#EEEDFE;padding:10px 16px;border-radius:10px;min-width:140px;">
           <div style="font-size:10px;color:#5f5e5a;">Add-on mensual</div>
           <div style="font-size:18px;font-weight:600;color:#534AB7;margin-top:2px;"><span id="cliMrrUf">0,0</span> UF</div>
-          <div style="font-size:10px;color:#5f5e5a;margin-top:2px;">≈ $<span id="cliMrrClp">0</span></div>
+          <div style="font-size:10px;color:#5f5e5a;margin-top:2px;">$<span id="cliMrrClp">0</span> neto</div>
+          <div style="font-size:10px;color:#5f5e5a;">+ IVA · $<span id="cliMrrClpIva">0</span> total</div>
         </div>
       </div>
       <div id="cliDtesActivos" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:6px;font-size:12px;">
@@ -10042,15 +10043,19 @@ async function cargarFacturacionDashboard(){
 
   // Card de suscripción tributaria
   try {
+    const IVA = 1.19;
     const r = await fetch('/facturacion/dashboard');
     const d = await r.json();
     const mrr = d.mrr_tributario || {total_uf: 0, total_clp: 0, desglose: []};
     const ufFmt = (mrr.total_uf || 0).toFixed(1).replace('.', ',');
-    const clpFmt = (mrr.total_clp || 0).toLocaleString('es-CL');
+    const neto = mrr.total_clp || 0;
+    const conIva = Math.round(neto * IVA);
     const ufEl = document.getElementById('cliMrrUf');
     const clpEl = document.getElementById('cliMrrClp');
+    const ivaEl = document.getElementById('cliMrrClpIva');
     if (ufEl) ufEl.textContent = ufFmt;
-    if (clpEl) clpEl.textContent = clpFmt;
+    if (clpEl) clpEl.textContent = neto.toLocaleString('es-CL');
+    if (ivaEl) ivaEl.textContent = conIva.toLocaleString('es-CL');
 
     const cont = document.getElementById('cliDtesActivos');
     if (cont) {

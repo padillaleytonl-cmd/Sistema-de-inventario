@@ -20481,6 +20481,18 @@ def facturacion_caf_listar():
     return jsonify({"cafs": cafs})
 
 
+@app.route("/facturacion/historial_activaciones", methods=["GET"])
+def facturacion_historial_activaciones():
+    """Cliente: ve cuándo se activaron/desactivaron sus DTEs (para auditoría)."""
+    if not session.get("logged"):
+        return jsonify({"error": "no autenticado"}), 401
+    tenant_id = session.get("tenant_id") or 1
+    from facturacion import obtener_historial_activaciones
+    from inventario import get_conn, release_conn
+    historial = obtener_historial_activaciones(get_conn, release_conn, tenant_id)
+    return jsonify({"historial": historial})
+
+
 @app.route("/facturacion/dashboard", methods=["GET"])
 def facturacion_dashboard():
     """Cliente: resumen del estado de su facturación."""
@@ -20640,27 +20652,28 @@ h1{{margin:0 0 4px;font-size:22px;}}
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
                         <div>
                             <div style="font-size:13px;font-weight:500;">Tipos de DTE habilitados</div>
-                            <div style="font-size:11px;color:#6b7280;margin-top:2px;">Add-on tributario sobre el plan base. Boletas y Notas de Crédito son gratis.</div>
+                            <div style="font-size:11px;color:#6b7280;margin-top:2px;">Add-on tributario sobre el plan base. Boletas y Notas de Crédito son gratis. <b>Precios sin IVA.</b></div>
                         </div>
                         <div style="text-align:right;background:#EEEDFE;padding:8px 14px;border-radius:8px;">
                             <div style="font-size:10px;color:#6b7280;">💰 Add-on tributario</div>
                             <div style="font-size:16px;font-weight:600;color:#534AB7;"><span id="mrr_dte_uf">0,0</span> UF/mes</div>
-                            <div style="font-size:10px;color:#6b7280;">≈ $<span id="mrr_dte_clp">0</span></div>
+                            <div style="font-size:10px;color:#6b7280;">≈ $<span id="mrr_dte_clp">0</span> neto</div>
+                            <div style="font-size:10px;color:#6b7280;">+ IVA · $<span id="mrr_dte_clp_iva">0</span> total</div>
                         </div>
                     </div>
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;">
-                        <label class="dte-row" data-price="0.0"><input type="checkbox" id="em_boleta" onchange="recalcDte()" checked> Boleta (39) <span class="dte-price">Gratis</span></label>
-                        <label class="dte-row" data-price="0.1"><input type="checkbox" id="em_boleta_exenta" onchange="recalcDte()"> Boleta Exenta (41) <span class="dte-price">+0,1 UF</span></label>
-                        <label class="dte-row" data-price="0.0"><input type="checkbox" id="em_nc" onchange="recalcDte()" checked> Nota Crédito (61) <span class="dte-price">Gratis</span></label>
-                        <label class="dte-row" data-price="0.1"><input type="checkbox" id="em_nd" onchange="recalcDte()"> Nota Débito (56) <span class="dte-price">+0,1 UF</span></label>
-                        <label class="dte-row" data-price="0.2"><input type="checkbox" id="em_factura" onchange="recalcDte()" checked> Factura (33) <span class="dte-price">+0,2 UF</span></label>
-                        <label class="dte-row" data-price="0.2"><input type="checkbox" id="em_factura_exenta" onchange="recalcDte()"> Factura Exenta (34) <span class="dte-price">+0,2 UF</span></label>
-                        <label class="dte-row" data-price="0.1"><input type="checkbox" id="em_fc" onchange="recalcDte()"> Factura de Compra (46) <span class="dte-price">+0,1 UF</span></label>
-                        <label class="dte-row" data-price="0.1"><input type="checkbox" id="em_liq" onchange="recalcDte()"> Liquidación Factura (43) <span class="dte-price">+0,1 UF</span></label>
-                        <label class="dte-row" data-price="0.1"><input type="checkbox" id="em_gd" onchange="recalcDte()"> Guía Despacho (52) <span class="dte-price">+0,1 UF</span></label>
-                        <label class="dte-row" data-price="0.4"><input type="checkbox" id="em_fexp" onchange="recalcDte()"> Factura Exportación (110) <span class="dte-price">+0,4 UF</span></label>
-                        <label class="dte-row" data-price="0.2"><input type="checkbox" id="em_ncexp" onchange="recalcDte()"> NC Exportación (112) <span class="dte-price">+0,2 UF</span></label>
-                        <label class="dte-row" data-price="0.2"><input type="checkbox" id="em_ndexp" onchange="recalcDte()"> ND Exportación (111) <span class="dte-price">+0,2 UF</span></label>
+                        <label class="dte-row" data-price="0.0" data-nombre="Boleta Electrónica"><input type="checkbox" id="em_boleta" onclick="onClickDte(event, this)" checked> Boleta (39) <span class="dte-price">Gratis</span></label>
+                        <label class="dte-row" data-price="0.1" data-nombre="Boleta Exenta"><input type="checkbox" id="em_boleta_exenta" onclick="onClickDte(event, this)"> Boleta Exenta (41) <span class="dte-price">+0,1 UF</span></label>
+                        <label class="dte-row" data-price="0.0" data-nombre="Nota de Crédito"><input type="checkbox" id="em_nc" onclick="onClickDte(event, this)" checked> Nota Crédito (61) <span class="dte-price">Gratis</span></label>
+                        <label class="dte-row" data-price="0.1" data-nombre="Nota de Débito"><input type="checkbox" id="em_nd" onclick="onClickDte(event, this)"> Nota Débito (56) <span class="dte-price">+0,1 UF</span></label>
+                        <label class="dte-row" data-price="0.2" data-nombre="Factura Electrónica"><input type="checkbox" id="em_factura" onclick="onClickDte(event, this)" checked> Factura (33) <span class="dte-price">+0,2 UF</span></label>
+                        <label class="dte-row" data-price="0.2" data-nombre="Factura Exenta"><input type="checkbox" id="em_factura_exenta" onclick="onClickDte(event, this)"> Factura Exenta (34) <span class="dte-price">+0,2 UF</span></label>
+                        <label class="dte-row" data-price="0.1" data-nombre="Factura de Compra"><input type="checkbox" id="em_fc" onclick="onClickDte(event, this)"> Factura de Compra (46) <span class="dte-price">+0,1 UF</span></label>
+                        <label class="dte-row" data-price="0.1" data-nombre="Liquidación de Factura"><input type="checkbox" id="em_liq" onclick="onClickDte(event, this)"> Liquidación Factura (43) <span class="dte-price">+0,1 UF</span></label>
+                        <label class="dte-row" data-price="0.1" data-nombre="Guía de Despacho"><input type="checkbox" id="em_gd" onclick="onClickDte(event, this)"> Guía Despacho (52) <span class="dte-price">+0,1 UF</span></label>
+                        <label class="dte-row" data-price="0.4" data-nombre="Factura de Exportación"><input type="checkbox" id="em_fexp" onclick="onClickDte(event, this)"> Factura Exportación (110) <span class="dte-price">+0,4 UF</span></label>
+                        <label class="dte-row" data-price="0.2" data-nombre="NC de Exportación"><input type="checkbox" id="em_ncexp" onclick="onClickDte(event, this)"> NC Exportación (112) <span class="dte-price">+0,2 UF</span></label>
+                        <label class="dte-row" data-price="0.2" data-nombre="ND de Exportación"><input type="checkbox" id="em_ndexp" onclick="onClickDte(event, this)"> ND Exportación (111) <span class="dte-price">+0,2 UF</span></label>
                     </div>
                     <style>
                       .dte-row{{display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border:0.5px solid #e5e7eb;border-radius:6px;cursor:pointer;background:white;}}
@@ -20805,6 +20818,7 @@ async function cargarConfig(){{
 
 function recalcDte(){{
     const UF_CLP = 37000;
+    const IVA = 1.19;
     let total = 0;
     document.querySelectorAll('.dte-row').forEach(row => {{
         const cb = row.querySelector('input[type=checkbox]');
@@ -20812,8 +20826,100 @@ function recalcDte(){{
         if (cb && cb.checked) total += price;
     }});
     total = Math.round(total * 10) / 10;
+    const neto = Math.round(total * UF_CLP);
+    const conIva = Math.round(total * UF_CLP * IVA);
     document.getElementById('mrr_dte_uf').textContent = total.toFixed(1).replace('.', ',');
-    document.getElementById('mrr_dte_clp').textContent = Math.round(total * UF_CLP).toLocaleString('es-CL');
+    document.getElementById('mrr_dte_clp').textContent = neto.toLocaleString('es-CL');
+    const ivaEl = document.getElementById('mrr_dte_clp_iva');
+    if (ivaEl) ivaEl.textContent = conIva.toLocaleString('es-CL');
+}}
+
+// Modal de confirmación al activar un DTE con costo > 0
+let _modalCbActual = null;
+function onClickDte(ev, checkbox){{
+    const row = checkbox.closest('.dte-row');
+    const price = parseFloat(row.dataset.price || 0);
+    const nombre = row.dataset.nombre || 'este DTE';
+
+    // Si se está DESACTIVANDO -> mostrar aviso de cobro hasta fin de mes
+    if (!checkbox.checked) {{
+        if (price > 0) {{
+            // checkbox ya cambió a unchecked (es el comportamiento por defecto del click)
+            ev.preventDefault();
+            checkbox.checked = true;  // re-marcamos mientras decide
+            mostrarModalDesactivar(nombre, price, checkbox);
+            return false;
+        }}
+        recalcDte();
+        return true;
+    }}
+
+    // Activación: si es gratis (precio 0), no necesita confirmación
+    if (price === 0) {{
+        recalcDte();
+        return true;
+    }}
+
+    // Activación de DTE con costo: mostrar modal
+    ev.preventDefault();
+    checkbox.checked = false;  // lo dejamos desmarcado mientras decide
+    mostrarModalActivar(nombre, price, checkbox);
+    return false;
+}}
+
+function mostrarModalActivar(nombre, precio, checkbox){{
+    _modalCbActual = checkbox;
+    const UF_CLP = 37000;
+    const IVA = 1.19;
+    const precioFmt = precio.toFixed(1).replace('.', ',');
+    const neto = Math.round(precio * UF_CLP);
+    const conIva = Math.round(precio * UF_CLP * IVA);
+    document.getElementById('modalTitulo').textContent = `Activar ${{nombre}}`;
+    document.getElementById('modalPrecio').innerHTML = `+${{precioFmt}} UF/mes <span style="font-size:12px;font-weight:400;">(≈ $${{neto.toLocaleString('es-CL')}} neto · <b>$${{conIva.toLocaleString('es-CL')}} con IVA</b>)</span>`;
+    document.getElementById('modalNombreDTE').textContent = nombre;
+    document.getElementById('modalAcepta').checked = false;
+    document.getElementById('modalBtnAceptar').disabled = true;
+    document.getElementById('modalDte').style.display = 'flex';
+    document.getElementById('modalDte').dataset.modo = 'activar';
+}}
+
+function mostrarModalDesactivar(nombre, precio, checkbox){{
+    _modalCbActual = checkbox;
+    const hoy = new Date();
+    const finMes = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0);
+    const finMesStr = finMes.toLocaleDateString('es-CL', {{day:'2-digit', month:'long', year:'numeric'}});
+    document.getElementById('modalTitulo').textContent = `Desactivar ${{nombre}}`;
+    document.getElementById('modalPrecio').innerHTML = `Se seguirá cobrando hasta <b>${{finMesStr}}</b><br><span style="font-size:11px;font-weight:400;">Después de esa fecha ya no se aplicará el cargo.</span>`;
+    document.getElementById('modalNombreDTE').textContent = nombre;
+    document.getElementById('modalAcepta').checked = false;
+    document.getElementById('modalBtnAceptar').disabled = true;
+    document.getElementById('modalDte').style.display = 'flex';
+    document.getElementById('modalDte').dataset.modo = 'desactivar';
+}}
+
+function modalCheckChange(){{
+    document.getElementById('modalBtnAceptar').disabled = !document.getElementById('modalAcepta').checked;
+}}
+
+function modalConfirmar(){{
+    if (!_modalCbActual) return;
+    const modo = document.getElementById('modalDte').dataset.modo;
+    if (modo === 'activar') {{
+        _modalCbActual.checked = true;
+    }} else {{
+        _modalCbActual.checked = false;
+    }}
+    cerrarModal();
+    recalcDte();
+}}
+
+function modalCancelar(){{
+    cerrarModal();
+}}
+
+function cerrarModal(){{
+    document.getElementById('modalDte').style.display = 'none';
+    _modalCbActual = null;
 }}
 
 async function guardarConfig(ev){{
@@ -20918,6 +21024,41 @@ async function listarCAFs(){{
 cargarDashboard();
 cargarConfig();
 </script>
+
+<div id="modalDte" style="display:none;position:fixed;inset:0;background:rgba(15,17,21,0.55);z-index:9999;align-items:center;justify-content:center;padding:20px;">
+  <div style="background:white;border-radius:12px;max-width:480px;width:100%;padding:24px;box-shadow:0 20px 50px rgba(0,0,0,0.18);">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+      <div style="width:34px;height:34px;border-radius:50%;background:#EEEDFE;color:#534AB7;display:flex;align-items:center;justify-content:center;font-size:18px;">📄</div>
+      <div style="font-size:16px;font-weight:600;color:#1f1e1b;" id="modalTitulo">—</div>
+    </div>
+    <div style="background:#fef3c7;border:1px solid #fbbf24;padding:12px 14px;border-radius:8px;margin-bottom:14px;">
+      <div style="font-size:11px;color:#92400e;font-weight:600;margin-bottom:4px;">💰 Costo del módulo</div>
+      <div style="font-size:14px;color:#92400e;font-weight:500;" id="modalPrecio">—</div>
+      <div style="font-size:10px;color:#92400e;margin-top:4px;opacity:0.85;">Valores no incluyen IVA. Se factura mensualmente con IVA agregado.</div>
+    </div>
+    <div style="font-size:13px;line-height:1.6;color:#1f1e1b;margin-bottom:14px;">
+      Al activar <b id="modalNombreDTE">este DTE</b> en tu cuenta Lusync, aceptas las siguientes condiciones:
+    </div>
+    <ul style="font-size:12px;color:#5f5e5a;line-height:1.7;padding-left:18px;margin:0 0 14px;">
+      <li><b style="color:#1f1e1b;">Precio + IVA:</b> los valores mostrados no incluyen IVA. Se factura mensualmente con IVA agregado (19%).</li>
+      <li><b style="color:#1f1e1b;">Cobro por mes completo:</b> el módulo se cobra mensualmente, completo, independiente del día del mes en que se active o desactive.</li>
+      <li><b style="color:#1f1e1b;">Sin reembolsos parciales:</b> si se desactiva, se seguirá cobrando hasta fin del mes en curso. El próximo mes ya no se cobrará.</li>
+      <li><b style="color:#1f1e1b;">Cobro automático:</b> se agrega al MRR mensual del cliente, junto con su plan base.</li>
+      <li><b style="color:#1f1e1b;">Sin restricciones de volumen:</b> emisión ilimitada del tipo activado, sujeto a folios CAF disponibles.</li>
+    </ul>
+    <label style="display:flex;align-items:flex-start;gap:8px;padding:10px;background:#f9f8f5;border-radius:6px;margin-bottom:16px;cursor:pointer;font-size:12px;color:#1f1e1b;">
+      <input type="checkbox" id="modalAcepta" onchange="modalCheckChange()" style="margin-top:2px;">
+      <span>Acepto las condiciones de cobro y los <a href="/terminos-sii" target="_blank" style="color:#534AB7;">términos del servicio SII</a> de Lusync.</span>
+    </label>
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button type="button" onclick="modalCancelar()" style="padding:8px 16px;font-size:12px;background:#f3f4f6;color:#1f1e1b;border:1px solid #e5e7eb;border-radius:6px;cursor:pointer;">Cancelar</button>
+      <button type="button" id="modalBtnAceptar" onclick="modalConfirmar()" disabled style="padding:8px 16px;font-size:12px;background:#534AB7;color:white;border:none;border-radius:6px;cursor:pointer;opacity:0.5;">Confirmar</button>
+    </div>
+  </div>
+</div>
+
+<style>#modalBtnAceptar:not(:disabled){{opacity:1 !important;}}</style>
+
 </body></html>"""
     except Exception as e:
         import traceback
@@ -20927,9 +21068,15 @@ cargarConfig();
 @app.route("/admin/lusync/sii/tenant/<int:tenant_id>/config", methods=["POST"])
 @requiere_lusync_admin
 def admin_lusync_sii_tenant_config(tenant_id):
-    """Guarda config de facturación de un tenant específico."""
+    """Guarda config de facturación de un tenant específico.
+
+    Registra activaciones/desactiaciones de DTEs para tracking de cobros
+    (mes completo por activación).
+    """
     from facturacion import (guardar_config_facturacion, validar_rut, formatear_rut,
-                             normalizar_ambiente)
+                             normalizar_ambiente, obtener_config_facturacion,
+                             registrar_activacion_dte, registrar_desactivacion_dte)
+    from facturacion.utils import CAMPO_BD_A_TIPO_DTE, TIPOS_DTE
     from inventario import get_conn, release_conn
 
     data = request.get_json() or {}
@@ -20940,7 +21087,51 @@ def admin_lusync_sii_tenant_config(tenant_id):
     if "ambiente" in data:
         data["ambiente"] = normalizar_ambiente(data["ambiente"])
 
+    # Capturar estado previo para detectar cambios en flags emite_*
+    config_previa = obtener_config_facturacion(get_conn, release_conn, tenant_id) or {}
+
+    # Si el admin envía aceptado_por explícito, usarlo; si no, el email del admin Lusync
+    aceptado_por = data.pop("aceptado_por", session.get("lusync_admin_email", "Lusync admin"))
+    ip = request.remote_addr or "0.0.0.0"
+
     resultado = guardar_config_facturacion(get_conn, release_conn, tenant_id, data)
+
+    if not resultado.get("ok"):
+        return jsonify(resultado), 400
+
+    # Detectar cambios en cada flag emite_X y registrar activación o desactivación
+    cambios = []
+    for campo_bd, tipo_dte in CAMPO_BD_A_TIPO_DTE.items():
+        if campo_bd not in data:
+            continue
+        nuevo = bool(data[campo_bd])
+        previo = bool(config_previa.get(campo_bd, False))
+        if nuevo == previo:
+            continue
+        info = TIPOS_DTE.get(tipo_dte, {})
+        precio = float(info.get("precio_uf", 0))
+        if nuevo:
+            # Se activó
+            registrar_activacion_dte(get_conn, release_conn, tenant_id, tipo_dte,
+                                     precio, aceptado_por, ip)
+            cambios.append({"tipo_dte": tipo_dte, "accion": "activado", "precio_uf": precio})
+        else:
+            # Se desactivó
+            registrar_desactivacion_dte(get_conn, release_conn, tenant_id, tipo_dte)
+            cambios.append({"tipo_dte": tipo_dte, "accion": "desactivado"})
+
+    # Auditoría
+    try:
+        if cambios:
+            registrar_audit(
+                aceptado_por, ip, "cambio_dtes_activos",
+                entidad="facturacion_config_tenant",
+                detalle=f"Tenant {tenant_id}: {len(cambios)} cambios — " +
+                        ", ".join(f"{c['accion']} DTE {c['tipo_dte']}" for c in cambios)
+            )
+    except Exception: pass
+
+    resultado["cambios_dte"] = cambios
     return jsonify(resultado)
 
 
