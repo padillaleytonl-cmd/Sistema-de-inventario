@@ -11393,6 +11393,35 @@ def admin_rls_normalizar_canales_historicos():
         return jsonify({"error": str(e), "trace": traceback.format_exc()[:500]}), 500
 
 
+@app.route("/admin/rls/listar_canales", methods=["GET"])
+def admin_rls_listar_canales():
+    """Lista todos los canales distintos en movimientos para detectar mal capitalizados."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import get_conn, release_conn
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+        cur.execute("""
+            SELECT canal, COUNT(*) as cnt, MAX(fecha) as ultima
+            FROM movimientos
+            GROUP BY canal
+            ORDER BY ultima DESC
+        """)
+        canales = []
+        for r in cur.fetchall():
+            canales.append({
+                "canal": r[0],
+                "cantidad": r[1],
+                "ultima_fecha": r[2].isoformat() if r[2] else None
+            })
+        cur.close(); release_conn(conn)
+        return jsonify({"canales": canales, "total": len(canales)})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()[:500]}), 500
+
+
 @app.route("/admin/rls/forzar_sync_woo", methods=["GET"])
 def admin_rls_forzar_sync_woo():
     """Fuerza un sync inmediato de Woo y muestra resultados paso a paso.
@@ -20134,15 +20163,81 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
             import traceback
             print(f"[Reporte ventas] Falabella error general: {e}\n{traceback.format_exc()}")
 
-    # ── RIPLEY — desde movimientos (API Mirakl no expone buyer en listing) ──
-    # ── WEB / TIENDA — desde movimientos (ecommerce genérico) ──────────────
-    canales_locales = {"ripley", "web", "woocommerce", "tienda", "shopify",
+    # ── WEB / WOOCOMMERCE — consulta API directa para precios reales ──────
+    if not canales_req or "web" in canales_req or "woocommerce" in canales_req:
+        try:
+            from datetime import timezone as _tz_woo
+            # Convertir fecha_desde a ISO con timezone
+            df_woo = f"{fecha_desde}T00:00:00" if fecha_desde else ""
+            dt_woo = f"{fecha_hasta}T23:59:59" if fecha_hasta else ""
+
+            params_woo = {
+                "consumer_key": WC_KEY, "consumer_secret": WC_SECRET,
+                "status": "processing,completed",  # solo ventas reales
+                "per_page": 100
+            }
+            if df_woo: params_woo["after"] = df_woo
+            if dt_woo: params_woo["before"] = dt_woo
+
+            r_woo = requests.get(
+                "https://www.babymine.cl/wp-json/wc/v3/orders",
+                params=params_woo, timeout=15
+            )
+            if r_woo.status_code == 200:
+                ordenes_woo = r_woo.json() or []
+                for o in ordenes_woo:
+                    order_id = str(o.get("id", ""))
+                    created  = (o.get("date_created") or "")[:10]
+
+                    # Datos cliente
+                    billing = o.get("billing") or {}
+                    shipping = o.get("shipping") or {}
+                    nombre   = billing.get("first_name") or shipping.get("first_name") or ""
+                    apellido = billing.get("last_name") or shipping.get("last_name") or ""
+                    email    = billing.get("email") or ""
+                    telefono = billing.get("phone") or ""
+                    direccion= (shipping.get("address_1") or billing.get("address_1") or "")
+                    comuna   = (shipping.get("city") or billing.get("city") or "")
+                    # Buscar RUT en meta_data si existe
+                    rut = ""
+                    for m in (o.get("meta_data") or []):
+                        if str(m.get("key", "")).lower() in ("_billing_rut", "billing_rut", "rut"):
+                            rut = str(m.get("value", "")); break
+
+                    m_pago = o.get("payment_method_title") or o.get("payment_method") or ""
+                    envio_c = float(o.get("shipping_total") or 0)
+
+                    # Shipping método
+                    m_envio = ""
+                    for sl in (o.get("shipping_lines") or []):
+                        m_envio = sl.get("method_title") or sl.get("method_id") or ""; break
+
+                    for line in (o.get("line_items") or []):
+                        sku_s = (line.get("sku") or "").strip()
+                        prod  = line.get("name") or ""
+                        qty   = int(line.get("quantity") or 1)
+                        # Precio = total / quantity (precio realmente pagado, no precio_normal)
+                        line_total = float(line.get("total") or 0)
+                        line_tax   = float(line.get("total_tax") or 0)
+                        precio_unit = (line_total + line_tax) / qty if qty > 0 else 0
+                        for _ in range(qty):
+                            filas.append(fila("Web", order_id, created,
+                                nombre, apellido, rut, telefono, email,
+                                prod, sku_s, precio_unit, envio_c / max(qty, 1),
+                                direccion, comuna, m_pago, m_envio, ""))
+            else:
+                print(f"[Reporte ventas] Web HTTP {r_woo.status_code}")
+        except Exception as e:
+            print(f"[Reporte ventas] Web error: {e}")
+
+    # ── RIPLEY / OTROS CANALES LOCALES — desde movimientos ────────────────
+    canales_locales = {"ripley", "tienda", "shopify",
                        "vtex", "jumpseller", "prestashop", "magento"}
     if not canales_req or canales_locales.intersection(canales_req):
         try:
-            from inventario import get_conn as _gc2
+            from inventario import get_conn as _gc2, release_conn as _rc2
             _c = _gc2(); _cur = _c.cursor()
-            excluir = "('MercadoLibre','Paris','Walmart','Falabella','Manual','Ajuste','Sistema')"
+            excluir = "('MercadoLibre','Paris','Walmart','Falabella','Manual','Ajuste','Sistema','Web','WooCommerce')"
             where_parts = [f"tipo = 'salida'", f"canal NOT IN {excluir}"]
             params_mv = []
             if fecha_desde:
@@ -20150,7 +20245,6 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
             if fecha_hasta:
                 where_parts.append("DATE(fecha) <= %s"); params_mv.append(fecha_hasta)
             if canales_req:
-                # Solo filtrar por canales específicos si se pidió uno
                 local_solicitados = canales_locales.intersection(canales_req)
                 if local_solicitados:
                     ph = ",".join(["%s"] * len(local_solicitados))
@@ -20166,16 +20260,14 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
             """, params_mv)
             for r in _cur.fetchall():
                 qty = int(r[2] or 1)
-                # Normalizar nombre del canal para mostrar
-                canal_raw = r[3] or "Web"
-                canal_display = "Web" if canal_raw.lower() in ("woocommerce","web","tienda") else canal_raw
+                canal_raw = r[3] or "Ripley"
                 for _ in range(qty):
-                    filas.append(fila(canal_display, r[4] or "", r[5] or "",
+                    filas.append(fila(canal_raw, r[4] or "", r[5] or "",
                         "", "", "", "", "",
                         r[1] or "", r[0] or "",
                         float(r[6] or 0) if r[6] else 0, 0,
                         "", "", "", "", ""))
-            _cur.close(); _c.close()
+            _cur.close(); _rc2(_c)
         except Exception as e:
             print(f"[Reporte ventas] locales error: {e}")
 
