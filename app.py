@@ -11391,6 +11391,125 @@ def admin_rls_normalizar_canales_historicos():
         return jsonify({"error": str(e), "trace": traceback.format_exc()[:500]}), 500
 
 
+@app.route("/admin/rls/debug_meli_orden", methods=["GET"])
+def admin_rls_debug_meli_orden():
+    """Debug profundo: detalle completo de una orden MELI específica.
+    Muestra TODOS los campos relacionados con precio/envío/descuentos.
+    Uso: ?order_id=2000016417889134
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+
+    order_id = request.args.get("order_id", "")
+    if not order_id:
+        return jsonify({"error": "falta order_id"}), 400
+
+    try:
+        from mercadolibre import meli_headers, MELI_API_URL
+        import requests as _r
+        hdrs = meli_headers()
+        result = {"order_id": order_id}
+
+        # 1) Detalle de la orden
+        ro = _r.get(f"{MELI_API_URL}/orders/{order_id}", headers=hdrs, timeout=15)
+        result["orden_status"] = ro.status_code
+        orden = ro.json() if ro.status_code == 200 else {}
+        result["orden_keys"] = list(orden.keys()) if orden else []
+
+        # Capturar campos clave de la orden
+        result["orden_resumen"] = {
+            "status": orden.get("status"),
+            "total_amount": orden.get("total_amount"),
+            "paid_amount": orden.get("paid_amount"),
+            "total_amount_with_shipping": orden.get("total_amount_with_shipping"),
+            "currency_id": orden.get("currency_id"),
+            "coupon": orden.get("coupon"),
+            "taxes": orden.get("taxes"),
+            "shipping_id": (orden.get("shipping") or {}).get("id"),
+        }
+
+        # Items con sus precios
+        result["items"] = []
+        for it in (orden.get("order_items") or []):
+            result["items"].append({
+                "title": (it.get("item") or {}).get("title"),
+                "sku": (it.get("item") or {}).get("seller_custom_field"),
+                "quantity": it.get("quantity"),
+                "unit_price": it.get("unit_price"),
+                "full_unit_price": it.get("full_unit_price"),
+                "sale_fee": it.get("sale_fee"),
+                "manufacturing_days": it.get("manufacturing_days"),
+                "differential_pricing_id": it.get("differential_pricing_id"),
+            })
+
+        # Pagos (incluye shipping_cost, taxes_amount, etc)
+        result["payments"] = []
+        for p in (orden.get("payments") or []):
+            result["payments"].append({
+                "id": p.get("id"),
+                "transaction_amount": p.get("transaction_amount"),
+                "shipping_cost": p.get("shipping_cost"),
+                "marketplace_fee": p.get("marketplace_fee"),
+                "coupon_amount": p.get("coupon_amount"),
+                "taxes_amount": p.get("taxes_amount"),
+                "overpaid_amount": p.get("overpaid_amount"),
+                "total_paid_amount": p.get("total_paid_amount"),
+                "status": p.get("status"),
+                "payment_method_id": p.get("payment_method_id"),
+                "payment_type": p.get("payment_type"),
+            })
+
+        # 2) Detalle del shipment
+        ship_id = (orden.get("shipping") or {}).get("id")
+        if ship_id:
+            rs = _r.get(f"{MELI_API_URL}/shipments/{ship_id}", headers=hdrs, timeout=15)
+            result["shipment_status"] = rs.status_code
+            if rs.status_code == 200:
+                ship = rs.json()
+                result["shipment_keys"] = list(ship.keys())
+
+                # Campos críticos del shipment
+                result["shipment_resumen"] = {
+                    "id": ship.get("id"),
+                    "status": ship.get("status"),
+                    "mode": ship.get("mode"),
+                    "logistic_type": ship.get("logistic_type"),
+                    "shipping_mode": ship.get("shipping_mode"),
+                    "shipping_option_id": (ship.get("shipping_option") or {}).get("id") if isinstance(ship.get("shipping_option"), dict) else None,
+                    "shipping_option_name": (ship.get("shipping_option") or {}).get("name") if isinstance(ship.get("shipping_option"), dict) else None,
+                    "tracking_number": ship.get("tracking_number"),
+                    "carrier_info": ship.get("carrier_info"),
+                    "service_id": ship.get("service_id"),
+                }
+
+                # COSTOS DEL ENVÍO (este es el dato clave)
+                shipping_option = ship.get("shipping_option") or {}
+                if isinstance(shipping_option, dict):
+                    result["shipping_option_completo"] = shipping_option
+                    result["costos_envio"] = {
+                        "cost": shipping_option.get("cost"),  # lo que paga el seller (descuento)
+                        "list_cost": shipping_option.get("list_cost"),  # costo normal
+                        "shipping_cost": ship.get("shipping_cost"),
+                        "buyer_cost": shipping_option.get("buyer_cost"),  # lo que paga el comprador
+                    }
+
+                # 3) Costos detallados (endpoint específico)
+                try:
+                    rc = _r.get(f"{MELI_API_URL}/shipments/{ship_id}/costs", headers=hdrs, timeout=10)
+                    if rc.status_code == 200:
+                        result["shipment_costs"] = rc.json()
+                    else:
+                        result["shipment_costs_status"] = rc.status_code
+                except Exception as e:
+                    result["shipment_costs_error"] = str(e)[:200]
+
+        return jsonify(result)
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()[:600]}), 500
+
+
 @app.route("/admin/rls/debug_paris_falabella_detalle", methods=["GET"])
 def admin_rls_debug_paris_falabella_detalle():
     """Debug profundo: Paris detalle de orden + Falabella items con precio."""
@@ -11459,7 +11578,7 @@ def admin_rls_debug_paris_falabella_detalle():
         import traceback
         resultado["paris"] = {"error": str(e), "trace": traceback.format_exc()[:400]}
 
-    # ─── FALABELLA — verificar items de la orden ─────────────────────────
+    # ─── FALABELLA — verificar items de la orden + desglose ─────────────
     try:
         from falabella import obtener_ordenes_falabella, obtener_items_orden_falabella
         ordenes_fa = obtener_ordenes_falabella(dias=2) or []
@@ -11471,14 +11590,30 @@ def admin_rls_debug_paris_falabella_detalle():
         if primera_orden:
             order_id = primera_orden.get("OrderId")
             items = obtener_items_orden_falabella(order_id) or []
+            # Capturar TODOS los campos con monto/precio/envío
+            campos_montos = {}
+            for k, v in primera_orden.items():
+                kl = k.lower()
+                if any(x in kl for x in ['price', 'total', 'amount', 'paid', 'cost',
+                                          'shipping', 'fee', 'tax', 'voucher', 'discount',
+                                          'subtotal', 'value']):
+                    campos_montos[k] = v
+            # Lo mismo para el item
+            campos_montos_item = {}
+            if items:
+                for k, v in items[0].items():
+                    kl = k.lower()
+                    if any(x in kl for x in ['price', 'total', 'amount', 'paid', 'cost',
+                                              'shipping', 'fee', 'tax', 'voucher', 'discount',
+                                              'subtotal', 'value']):
+                        campos_montos_item[k] = v
             resultado["falabella"] = {
                 "order_id": order_id,
-                "price_en_orden": primera_orden.get("Price"),
-                "grand_total": primera_orden.get("GrandTotal"),
-                "product_total": primera_orden.get("ProductTotal"),
+                "campos_montos_de_la_orden": campos_montos,
                 "items_count": len(items),
+                "campos_montos_del_item": campos_montos_item,
+                "items_keys_completos": list(items[0].keys()) if items else [],
                 "primer_item_completo": items[0] if items else None,
-                "items_keys": list(items[0].keys()) if items else [],
             }
         else:
             resultado["falabella"] = {"error": "no se encontró orden Falabella del 13/05"}
@@ -19235,15 +19370,43 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
 
     # ── Helper para fila base ──────────────────────────────────────────────
     def fila(canal, orden, fecha, nombre, apellido, rut, telefono, email,
-             producto, sku_seller, precio, envio, direccion, comuna,
-             metodo_pago, metodo_envio, tracking):
+             producto, sku_seller, precio_producto, envio_total,
+             direccion, comuna, metodo_pago, metodo_envio, tracking,
+             es_flota_propia=False):
+        """Construye una fila del reporte.
+        Args:
+            precio_producto: $ del SKU (sin envío)
+            envio_total: $ del envío (total cobrado al cliente)
+            es_flota_propia: True si la entrega la hace empresa propia subcontratada
+                (Falaflex, Mercado Flex, Ripley Flota Propia)
+
+        Devuelve 4 campos de precio:
+            - precio_producto: lo que vendes (tu ingreso por SKU)
+            - envio_flota_propia: $ envío que TÚ recaudas (es ingreso tuyo)
+            - envio_marketplace: $ envío que cobra el MKT (NO es ingreso tuyo)
+            - gran_total: suma de los 3 = lo cobrado al cliente = monto boleta SII
+        """
+        precio_p = float(precio_producto or 0)
+        envio_t = float(envio_total or 0)
+        envio_propio = envio_t if es_flota_propia else 0.0
+        envio_mkt = envio_t if not es_flota_propia else 0.0
+        gran_total = precio_p + envio_t
         return {
             "canal": canal, "orden": str(orden or ""), "fecha": (fecha or "")[:10],
             "nombre": nombre or "", "apellido": apellido or "",
             "rut": rut or "", "telefono": telefono or "", "email": email or "",
             "producto": producto or "", "sku_seller": sku_seller or "",
             "cantidad": 1,
-            "precio_pagado": float(precio or 0), "valor_envio": float(envio or 0),
+            # ── Nuevos campos desglosados ──
+            "precio_producto": precio_p,
+            "envio_flota_propia": envio_propio,
+            "envio_marketplace": envio_mkt,
+            "gran_total": gran_total,
+            "es_flota_propia": bool(es_flota_propia),
+            # ── Compat con código viejo ──
+            "precio_pagado": precio_p,
+            "valor_envio": envio_t,
+            # ── Resto ──
             "direccion": direccion or "", "comuna": comuna or "",
             "metodo_pago": metodo_pago or "", "metodo_envio": metodo_envio or "",
             "tracking": tracking or "",
@@ -19324,11 +19487,16 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                     qty   = int(item.get("quantity") or 1)
                     price = float(item.get("unit_price") or 0)
                     fecha = (o.get("date_created") or "")[:10]
+                    # FLOTA PROPIA: Mercado Flex se detecta por logistic_type='self_service'
+                    # cuando además el shipping_mode es 'me2' (Mercado Envíos 2)
+                    metodo_envio_norm = (metodo_envio or "").lower()
+                    es_flota_propia_meli = (metodo_envio_norm == "self_service")
                     for _ in range(qty):
                         filas.append(fila("MercadoLibre", order_id, fecha,
                             nombre, apellido, rut, telefono, email,
                             prod, sku_s, price, envio_cost,
-                            direccion, comuna, pago, metodo_envio, tracking))
+                            direccion, comuna, pago, metodo_envio, tracking,
+                            es_flota_propia=es_flota_propia_meli))
         except Exception as e:
             print(f"[Reporte ventas] MELI error: {e}")
 
@@ -19410,22 +19578,32 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                     filas.append(fila("Paris", order_id, created,
                         nombre, apellido, rut, telefono, email,
                         "", "", 0, envio_c,
-                        direccion, comuna, m_pago, m_envio, tracking))
+                        direccion, comuna, m_pago, m_envio, tracking,
+                        es_flota_propia=False))
                     continue
 
                 for item in items_paris:
                     sku_s = (item.get("sellerSku") or item.get("seller_sku") or
-                             item.get("sku") or item.get("jda_sku") or "")
+                             item.get("sku") or item.get("jda_sku") or item.get("jdaSku") or "")
                     prod  = item.get("name") or item.get("productName") or item.get("title") or ""
                     qty   = int(item.get("quantity") or 1)
-                    # Paris pone el precio en base_price (string) según la doc
-                    price = float(item.get("base_price") or item.get("unitPrice") or
-                                  item.get("price") or item.get("amount") or 0)
+                    # FIX Paris: campos en camelCase. priceAfterDiscounts = precio final pagado.
+                    # base_price (snake) NO existe; es basePrice (camel).
+                    # Orden de preferencia: priceAfterDiscounts > grossPrice > basePrice
+                    price = float(item.get("priceAfterDiscounts") or
+                                  item.get("price_after_discounts") or
+                                  item.get("grossPrice") or
+                                  item.get("gross_price") or
+                                  item.get("basePrice") or
+                                  item.get("base_price") or
+                                  item.get("unitPrice") or
+                                  item.get("price") or 0)
                     for _ in range(qty):
                         filas.append(fila("Paris", order_id, created,
                             nombre, apellido, rut, telefono, email,
                             prod, sku_s, price, envio_c,
-                            direccion, comuna, m_pago, m_envio, tracking))
+                            direccion, comuna, m_pago, m_envio, tracking,
+                            es_flota_propia=False))
         except Exception as e:
             print(f"[Reporte ventas] Paris error: {e}")
 
@@ -19472,30 +19650,38 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                         prod  = item.get("productName") or ""
                         sku_s = item.get("sku") or line.get("sellerOrderId") or ""
                         qty   = int((line.get("orderLineQuantity") or {}).get("amount") or 1)
-                        # FIX: buscar charge con chargeType=PRODUCT (no siempre es el primero)
-                        # Y SUMAR el IVA (tax.taxAmount.amount) al precio del producto
+
+                        # Walmart separa cargos en: PRODUCT, COMMISSION, SHIPPING
+                        # PRODUCT: precio del SKU (sin IVA) + tax IVA producto
+                        # SHIPPING: costo envío al cliente (sin IVA) + tax IVA envío
+                        # COMMISSION: lo que cobra Walmart al seller (NO afecta al cliente)
                         charges = (line.get("charges") or {}).get("charge") or []
                         if not isinstance(charges, list): charges = [charges]
-                        price = 0.0
+
+                        precio_producto = 0.0
+                        envio_total = 0.0
                         for ch in charges:
-                            if ch.get("chargeType") == "PRODUCT":
+                            ctype = ch.get("chargeType")
+                            if ctype == "PRODUCT":
                                 base = float((ch.get("chargeAmount") or {}).get("amount") or 0)
                                 iva = float(((ch.get("tax") or {}).get("taxAmount") or {}).get("amount") or 0)
-                                price = base + iva  # IVA incluido = lo que paga el cliente
-                                break
-                        # Fallback: si no hay PRODUCT, usar el primer charge (también con IVA)
-                        if price == 0.0 and charges:
-                            base = float((charges[0].get("chargeAmount") or {}).get("amount") or 0)
-                            iva = float(((charges[0].get("tax") or {}).get("taxAmount") or {}).get("amount") or 0)
-                            price = base + iva
+                                precio_producto = base + iva
+                            elif ctype == "SHIPPING":
+                                base = float((ch.get("chargeAmount") or {}).get("amount") or 0)
+                                iva = float(((ch.get("tax") or {}).get("taxAmount") or {}).get("amount") or 0)
+                                envio_total = base + iva
+
                         tracking = ""
                         for pkg in ((line.get("fulfillment") or {}).get("trackingInfo") or []):
                             tracking = pkg.get("trackingNumber") or ""; break
+
+                        # Walmart no tiene flota propia para sellers chilenos
                         for _ in range(qty):
                             filas.append(fila("Walmart", order_id, created,
                                 nombre, apellido, "", "", email_wm,
-                                prod, sku_s, price, 0,
-                                direccion, comuna, metodo_pago, metodo_envio, tracking))
+                                prod, sku_s, precio_producto, envio_total,
+                                direccion, comuna, metodo_pago, metodo_envio, tracking,
+                                es_flota_propia=False))
         except Exception as e:
             print(f"[Reporte ventas] Walmart error: {e}")
 
@@ -19512,68 +19698,113 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                     dias_fa = max(1, min((d1 - d0).days + 2, 365))
                 except Exception:
                     pass
-            ordenes_fa = obtener_ordenes_falabella(dias=dias_fa)
+            ordenes_fa = obtener_ordenes_falabella(dias=dias_fa) or []
+            print(f"[Reporte ventas] Falabella: {len(ordenes_fa)} órdenes brutas, filtrando por {fecha_desde}–{fecha_hasta}")
             for o in ordenes_fa:
-                created  = (o.get("CreatedAt") or o.get("created_at") or "")[:10]
-                if fecha_desde and created < fecha_desde: continue
-                if fecha_hasta and created > fecha_hasta: continue
-                order_id = str(o.get("OrderId") or o.get("order_id") or "")
-                # Datos de cliente en la orden de Falabella
-                nombre   = o.get("CustomerFirstName") or o.get("BillingName") or ""
-                apellido = o.get("CustomerLastName") or ""
-                if not nombre:
-                    full = o.get("CustomerName") or o.get("AddressName") or ""
-                    if " " in full: nombre, apellido = full.split(" ", 1)
-                    else: nombre = full
-                email    = o.get("CustomerEmail") or ""
-                telefono = o.get("CustomerPhone") or o.get("BillingPhone") or ""
-                rut      = o.get("NationalRegistrationNumber") or o.get("CustomerRut") or ""
-                # Dirección de envío
-                direccion = o.get("AddressLine1") or o.get("ShippingAddress") or ""
-                comuna    = o.get("City") or o.get("Ward") or o.get("ShippingCity") or ""
-                m_pago    = o.get("PaymentMethod") or ""
-                m_envio   = o.get("ShippingType") or o.get("DeliveryType") or ""
-                tracking  = o.get("TrackingCode") or ""
-                # Items de la orden
                 try:
-                    items_fa = obtener_items_orden_falabella(order_id) or []
-                except Exception:
-                    items_fa = []
+                    created  = (o.get("CreatedAt") or o.get("created_at") or "")[:10]
+                    if fecha_desde and created < fecha_desde: continue
+                    if fecha_hasta and created > fecha_hasta: continue
+                    order_id = str(o.get("OrderId") or o.get("order_id") or "")
+                    # Datos de cliente en la orden de Falabella
+                    nombre   = o.get("CustomerFirstName") or o.get("BillingName") or ""
+                    apellido = o.get("CustomerLastName") or ""
+                    if not nombre:
+                        full = o.get("CustomerName") or o.get("AddressName") or ""
+                        if " " in full: nombre, apellido = full.split(" ", 1)
+                        else: nombre = full
+                    email    = o.get("CustomerEmail") or ""
+                    telefono = o.get("CustomerPhone") or o.get("BillingPhone") or ""
+                    rut      = o.get("NationalRegistrationNumber") or o.get("CustomerRut") or ""
+                    # Dirección de envío
+                    direccion = o.get("AddressLine1") or o.get("ShippingAddress") or ""
+                    comuna    = o.get("City") or o.get("Ward") or o.get("ShippingCity") or ""
+                    m_pago    = o.get("PaymentMethod") or ""
+                    m_envio   = o.get("ShippingType") or o.get("DeliveryType") or ""
+                    tracking  = o.get("TrackingCode") or ""
 
-                # FIX: el precio total está en la orden, no en los items.
-                # Repartir entre cantidad de items.
-                precio_total_orden = float(o.get("Price") or o.get("GrandTotal") or o.get("ProductTotal") or 0)
-                shipping_total_orden = float(o.get("ShippingFeeTotal") or o.get("ShippingFee") or 0)
-                total_units = sum(int(it.get("Quantity") or 1) for it in items_fa) if items_fa else 1
-                if total_units < 1: total_units = 1
-                precio_unitario_default = precio_total_orden / total_units if precio_total_orden > 0 else 0
+                    # Items de la orden
+                    try:
+                        items_fa = obtener_items_orden_falabella(order_id) or []
+                    except Exception as e_items:
+                        print(f"[Reporte ventas] Falabella items error orden {order_id}: {e_items}")
+                        items_fa = []
 
-                if not items_fa:
-                    # Sin items: fila con datos de la orden pero sin producto
-                    filas.append(fila("Falabella", order_id, created,
-                        nombre, apellido, rut, telefono, email,
-                        "", "", 0, 0, direccion, comuna, m_pago, m_envio, tracking))
-                    continue
-                for item in items_fa:
-                    sku_s = item.get("SellerSku") or item.get("Sku") or ""
-                    prod  = item.get("Name") or item.get("ProductName") or ""
-                    qty   = int(item.get("Quantity") or 1)
-                    # Probar primero campos individuales, sino fallback al promedio
-                    price = float(item.get("PaidPrice") or item.get("ItemPrice") or
-                                  item.get("Price") or 0)
-                    if price <= 0:
-                        price = precio_unitario_default
-                    envio_c = float(item.get("ShippingFee") or item.get("ShippingAmount") or 0)
-                    if envio_c <= 0:
-                        envio_c = shipping_total_orden / total_units if shipping_total_orden > 0 else 0
-                    track_i = item.get("TrackingCode") or tracking
-                    for _ in range(qty):
+                    # FIX: el precio del producto está en ProductTotal (sin envío)
+                    # El envío está en ShippingFeeTotal
+                    # El Gran Total = Price o GrandTotal (suma de ambos)
+                    # Falabella devuelve strings ("42,780.00" o "42780.00"). Castear seguro.
+                    def _to_float(v):
+                        if v is None: return 0.0
+                        if isinstance(v, (int, float)): return float(v)
+                        s = str(v).replace(",", "")
+                        try: return float(s)
+                        except: return 0.0
+
+                    precio_producto_total = _to_float(o.get("ProductTotal"))
+                    envio_total = _to_float(o.get("ShippingFeeTotal"))
+                    # Si no vienen separados, usar Price y restar para inferir envío
+                    if precio_producto_total == 0:
+                        gran_total_orden = _to_float(o.get("Price") or o.get("GrandTotal"))
+                        if envio_total > 0:
+                            precio_producto_total = gran_total_orden - envio_total
+                        else:
+                            precio_producto_total = gran_total_orden
+
+                    total_units = sum(int(it.get("Quantity") or 1) for it in items_fa) if items_fa else 1
+                    if total_units < 1: total_units = 1
+                    precio_unitario_default = precio_producto_total / total_units if precio_producto_total > 0 else 0
+                    envio_unitario = envio_total / total_units if envio_total > 0 else 0
+
+                    # DETECCIÓN FLOTA PROPIA FALAFLEX:
+                    # OperatorCode == "falaflex" (visto en orden 3235683091)
+                    # ShippingProvider/ShippingType pueden contener "falaflex" también
+                    operator_code = (o.get("OperatorCode") or "").lower()
+                    shipping_provider = (o.get("ShippingProvider") or "").lower()
+                    shipping_type_fa = (o.get("ShippingType") or "").lower()
+                    es_falaflex = ("falaflex" in operator_code or
+                                   "falaflex" in shipping_provider or
+                                   "falaflex" in shipping_type_fa or
+                                   "flota propia" in shipping_type_fa)
+
+                    print(f"[Reporte ventas] Falabella orden {order_id}: producto={precio_producto_total}, envío={envio_total}, falaflex={es_falaflex} (operator={operator_code})")
+
+                    if not items_fa:
+                        # Sin items: agregar fila básica
                         filas.append(fila("Falabella", order_id, created,
                             nombre, apellido, rut, telefono, email,
-                            prod, sku_s, price, envio_c,
-                            direccion, comuna, m_pago, m_envio, track_i))
+                            "", "", precio_producto_total, envio_total,
+                            direccion, comuna, m_pago, m_envio, tracking,
+                            es_flota_propia=es_falaflex))
+                        continue
+
+                    for item in items_fa:
+                        sku_s = item.get("SellerSku") or item.get("Sku") or ""
+                        prod  = item.get("Name") or item.get("ProductName") or ""
+                        qty   = int(item.get("Quantity") or 1)
+                        # Probar primero campos individuales, sino fallback al promedio
+                        price = (_to_float(item.get("PaidPrice")) or
+                                 _to_float(item.get("ItemPrice")) or
+                                 _to_float(item.get("Price")))
+                        if price <= 0:
+                            price = precio_unitario_default
+                        envio_c = (_to_float(item.get("ShippingFee")) or
+                                   _to_float(item.get("ShippingAmount")))
+                        if envio_c <= 0:
+                            envio_c = envio_unitario
+                        track_i = item.get("TrackingCode") or tracking
+                        for _ in range(qty):
+                            filas.append(fila("Falabella", order_id, created,
+                                nombre, apellido, rut, telefono, email,
+                                prod, sku_s, price, envio_c,
+                                direccion, comuna, m_pago, m_envio, track_i,
+                                es_flota_propia=es_falaflex))
+                except Exception as e_orden:
+                    print(f"[Reporte ventas] Falabella error procesando orden: {e_orden}")
+                    continue
         except Exception as e:
-            print(f"[Reporte ventas] Falabella error: {e}")
+            import traceback
+            print(f"[Reporte ventas] Falabella error general: {e}\n{traceback.format_exc()}")
 
     # ── RIPLEY — desde movimientos (API Mirakl no expone buyer en listing) ──
     # ── WEB / TIENDA — desde movimientos (ecommerce genérico) ──────────────

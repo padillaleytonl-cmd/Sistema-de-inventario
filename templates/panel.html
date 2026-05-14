@@ -9305,57 +9305,89 @@ async function cargarModalVentas(body) {
       fetch(`/ventas/reporte?fecha_desde=${r.desde}&fecha_hasta=${r.hasta}`).then(x=>x.json()).catch(()=>({filas:[]}))
     ]);
 
-    // Calcular monto total desde el reporte (que trae precios de APIs MKT)
-    let montoTotal = 0, montoPorCanal = {}, montoPorProducto = {};
+    // Calcular montos desglosados desde el reporte
+    let totalProducto = 0, totalEnvioFlotaPropia = 0, totalEnvioMkt = 0, totalGran = 0;
+    const porCanal = {}; // canal -> {producto, envioPropio, envioMkt, gran, unidades}
+    const porProducto = {}; // sku -> {producto, envioPropio, envioMkt, gran, unidades, nombre}
     const filas = resReporte.filas || [];
     filas.forEach(f => {
-      const precio = parseFloat(f.precio_pagado || 0);
-      montoTotal += precio;
+      const pp = parseFloat(f.precio_producto || f.precio_pagado || 0);
+      const efp = parseFloat(f.envio_flota_propia || 0);
+      const em = parseFloat(f.envio_marketplace || 0);
+      const gt = parseFloat(f.gran_total || (pp + efp + em));
+
+      totalProducto += pp;
+      totalEnvioFlotaPropia += efp;
+      totalEnvioMkt += em;
+      totalGran += gt;
+
       const c = f.canal || 'Otro';
-      montoPorCanal[c] = (montoPorCanal[c] || 0) + precio;
-      const sku = f.sku_seller || f.sku || '';
+      if (!porCanal[c]) porCanal[c] = {producto:0, envioPropio:0, envioMkt:0, gran:0, unidades:0};
+      porCanal[c].producto += pp;
+      porCanal[c].envioPropio += efp;
+      porCanal[c].envioMkt += em;
+      porCanal[c].gran += gt;
+      porCanal[c].unidades += 1;
+
+      const sku = f.sku_seller || '';
       if (sku) {
-        if (!montoPorProducto[sku]) montoPorProducto[sku] = {monto: 0, unidades: 0, nombre: f.producto || ''};
-        montoPorProducto[sku].monto += precio;
-        montoPorProducto[sku].unidades += parseFloat(f.cantidad || 1);
+        if (!porProducto[sku]) porProducto[sku] = {producto:0, gran:0, unidades:0, nombre: f.producto || ''};
+        porProducto[sku].producto += pp;
+        porProducto[sku].gran += gt;
+        porProducto[sku].unidades += parseFloat(f.cantidad || 1);
       }
     });
 
     const fmtCLP = (v) => '$' + Math.round(v).toLocaleString('es-CL');
 
-    let html = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px;">
+    let html = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
       <div style="background:var(--bg2);border-radius:10px;padding:12px;"><div style="font-size:10px;color:var(--muted);">Período</div><div style="font-size:13px;font-weight:600;">${_formatearFecha(r.desde)} – ${_formatearFecha(r.hasta)}</div></div>
       <div style="background:#ecfdf5;color:#065f46;border-radius:10px;padding:12px;"><div style="font-size:10px;opacity:.8;">Unidades vendidas</div><div style="font-size:20px;font-weight:700;">${(resKpis.ventas_periodo||0).toLocaleString('es-CL')}</div></div>
       <div style="background:#dbeafe;color:#1e3a8a;border-radius:10px;padding:12px;"><div style="font-size:10px;opacity:.8;">Órdenes</div><div style="font-size:20px;font-weight:700;">${resKpis.ordenes_periodo||0}</div></div>
-      <div style="background:#fef3c7;color:#92400e;border-radius:10px;padding:12px;"><div style="font-size:10px;opacity:.8;">💰 Total facturado</div><div style="font-size:20px;font-weight:700;">${montoTotal > 0 ? fmtCLP(montoTotal) : '—'}</div></div>
+      <div style="background:#fef3c7;color:#92400e;border-radius:10px;padding:12px;"><div style="font-size:10px;opacity:.8;">💰 Total productos</div><div style="font-size:20px;font-weight:700;">${totalProducto > 0 ? fmtCLP(totalProducto) : '—'}</div></div>
     </div>`;
 
-    // Resumen por canal con monto
-    const porCanal = {};
-    resCanal.forEach(d => { porCanal[d.canal] = (porCanal[d.canal] || 0) + d.total; });
-    if (Object.keys(porCanal).length) {
-      html += '<div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px;">Ventas por canal</div>';
-      html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;">';
-      Object.entries(porCanal).sort((a,b)=>b[1]-a[1]).forEach(([canal, total]) => {
+    // Segunda fila: envíos desglosados + gran total
+    if (totalEnvioFlotaPropia > 0 || totalEnvioMkt > 0 || totalGran > 0) {
+      html += `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px;">
+        <div style="background:#dcfce7;color:#166534;border-radius:10px;padding:12px;border:1.5px dashed #16a34a;"><div style="font-size:10px;opacity:.85;">🚚 Envío Flota Propia <span style="font-size:9px;opacity:.7;">(tu ingreso)</span></div><div style="font-size:18px;font-weight:700;">${fmtCLP(totalEnvioFlotaPropia)}</div><div style="font-size:9px;opacity:.7;margin-top:2px;">Falaflex / Mercado Flex / Ripley FP</div></div>
+        <div style="background:#f3f4f6;color:#374151;border-radius:10px;padding:12px;"><div style="font-size:10px;opacity:.8;">📦 Envío Marketplace <span style="font-size:9px;opacity:.7;">(no tuyo)</span></div><div style="font-size:18px;font-weight:700;">${fmtCLP(totalEnvioMkt)}</div><div style="font-size:9px;opacity:.7;margin-top:2px;">Chilexpress / Starken / etc.</div></div>
+        <div style="background:#1f1e1b;color:white;border-radius:10px;padding:12px;"><div style="font-size:10px;opacity:.8;">🧾 Total boleta SII</div><div style="font-size:18px;font-weight:700;">${fmtCLP(totalGran)}</div><div style="font-size:9px;opacity:.7;margin-top:2px;">= Productos + envíos</div></div>
+      </div>`;
+    }
+
+    // Resumen por canal con desglose
+    const canalesEnDatos = Object.keys(porCanal).length ? Object.keys(porCanal) : [];
+    if (canalesEnDatos.length) {
+      html += '<div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px;">Ventas por canal (desglose)</div>';
+      html += '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:18px;">';
+      html += '<thead><tr style="background:var(--bg2);"><th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:600;">Canal</th><th style="padding:8px 10px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;">Unidades</th><th style="padding:8px 10px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;">Productos</th><th style="padding:8px 10px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;">Env. Propia</th><th style="padding:8px 10px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;">Env. MKT</th><th style="padding:8px 10px;text-align:right;font-size:10px;color:var(--muted);font-weight:600;">Gran Total</th></tr></thead><tbody>';
+      Object.entries(porCanal).sort((a,b)=>b[1].gran-a[1].gran).forEach(([canal, d]) => {
         const color = COLORES_CANAL[canal] || '#94a3b8';
-        const monto = montoPorCanal[canal] || 0;
-        const montoStr = monto > 0 ? ` · <b>${fmtCLP(monto)}</b>` : '';
-        html += `<div style="background:${color}20;border:0.5px solid ${color}50;border-radius:8px;padding:6px 12px;"><span style="font-size:11px;color:${color};font-weight:600;">${canal}</span> <span style="font-size:11px;color:var(--text);">${total} u.${montoStr}</span></div>`;
+        html += `<tr style="border-bottom:0.5px solid var(--border);">
+          <td style="padding:8px 10px;"><span style="background:${color}20;color:${color};padding:2px 8px;border-radius:8px;font-size:11px;font-weight:600;">${canal}</span></td>
+          <td style="padding:8px 10px;text-align:right;">${d.unidades}</td>
+          <td style="padding:8px 10px;text-align:right;color:#065f46;font-weight:600;">${fmtCLP(d.producto)}</td>
+          <td style="padding:8px 10px;text-align:right;color:${d.envioPropio > 0 ? '#16a34a' : 'var(--muted)'};">${d.envioPropio > 0 ? fmtCLP(d.envioPropio) : '—'}</td>
+          <td style="padding:8px 10px;text-align:right;color:var(--muted);">${d.envioMkt > 0 ? fmtCLP(d.envioMkt) : '—'}</td>
+          <td style="padding:8px 10px;text-align:right;font-weight:700;">${fmtCLP(d.gran)}</td>
+        </tr>`;
       });
-      html += '</div>';
+      html += '</tbody></table>';
     }
 
     // Top productos con monto
     if (resTop.length) {
       html += '<div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px;">Top productos vendidos</div>';
-      html += '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="background:var(--bg2);"><th style="padding:8px 10px;text-align:left;font-weight:500;font-size:11px;color:var(--muted);">SKU</th><th style="padding:8px 10px;text-align:left;font-weight:500;font-size:11px;color:var(--muted);">Producto</th><th style="padding:8px 10px;text-align:right;font-weight:500;font-size:11px;color:var(--muted);">Unidades</th><th style="padding:8px 10px;text-align:right;font-weight:500;font-size:11px;color:var(--muted);">Total CLP</th></tr></thead><tbody>';
+      html += '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="background:var(--bg2);"><th style="padding:8px 10px;text-align:left;font-weight:500;font-size:11px;color:var(--muted);">SKU</th><th style="padding:8px 10px;text-align:left;font-weight:500;font-size:11px;color:var(--muted);">Producto</th><th style="padding:8px 10px;text-align:right;font-weight:500;font-size:11px;color:var(--muted);">Unidades</th><th style="padding:8px 10px;text-align:right;font-weight:500;font-size:11px;color:var(--muted);">Total Productos</th></tr></thead><tbody>';
       resTop.forEach(p => {
-        const montoP = (montoPorProducto[p.sku] || {}).monto || 0;
+        const datos = porProducto[p.sku] || {producto: 0};
+        const montoP = datos.producto;
         html += `<tr style="border-bottom:0.5px solid var(--border);"><td style="padding:8px 10px;font-family:ui-monospace,monospace;font-size:11px;">${p.sku}</td><td style="padding:8px 10px;">${p.nombre || ''}</td><td style="padding:8px 10px;text-align:right;font-weight:600;">${p.total}</td><td style="padding:8px 10px;text-align:right;color:#065f46;font-weight:600;">${montoP > 0 ? fmtCLP(montoP) : '—'}</td></tr>`;
       });
       html += '</tbody></table>';
 
-      if (montoTotal === 0 && filas.length === 0) {
+      if (totalProducto === 0 && filas.length === 0) {
         html += '<div style="margin-top:14px;padding:10px 12px;background:#fef3c7;color:#92400e;border-radius:8px;font-size:11px;">💡 Los montos en CLP se obtienen de las APIs de los marketplaces en tiempo real. Si están en cero, verifica que las credenciales de los MKTs estén activas.</div>';
       }
     } else {
