@@ -3888,7 +3888,7 @@ function doLogout(){
 
 // ── NAVEGACIÓN
 function showSection(sec, btn){
-  ['dashboard','inventario','movimientos','devoluciones','audit','configuracion','skumapeo','canales','bodegas','pos'].forEach(s => {
+  ['dashboard','inventario','movimientos','devoluciones','audit','configuracion','skumapeo','canales','bodegas','pos','facturacion'].forEach(s => {
     const el = document.getElementById('sec-' + s);
     if(el) el.style.display = s === sec ? '' : 'none';
   });
