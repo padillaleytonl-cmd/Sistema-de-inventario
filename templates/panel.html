@@ -4521,18 +4521,35 @@ function cargar(){
 
 function renderMovimientoItem(m){
   const isEntrada = m.tipo === 'entrada';
-  const isVenta = CANALES_VENTA.includes(m.canal) || (m.motivo && m.motivo.includes('Venta'));
-  const iconClass = isVenta ? 'icon-venta' : isEntrada ? 'icon-entrada' : 'icon-salida';
-  const iconLetter = isVenta ? 'V' : isEntrada ? 'E' : 'S';
+  // Misma lógica de 3 categorías que la vista completa
+  const canalLower = (m.canal || '').toLowerCase();
+  const motivoLower = (m.motivo || '').toLowerCase();
+  const canalesVenta = ['mercadolibre','meli','paris','walmart','falabella','ripley',
+                        'hites','woocommerce','woo','web','tienda','shopify','pos'];
+  const esCanalVenta = canalesVenta.includes(canalLower);
+  const esCancelacion = motivoLower.includes('cancel') || motivoLower.includes('devol') ||
+                        motivoLower.includes('reintegr') || motivoLower.includes('anulac');
+
+  let categoria;
+  if (isEntrada && (esCancelacion || esCanalVenta)) categoria = 'devolucion';
+  else if (!isEntrada && esCanalVenta)               categoria = 'venta';
+  else                                                categoria = 'especial';
+
+  const paleta = {
+    venta:      { borde: '#1D9E75', dotBg: '#eaf3ee', dotColor: '#0F6E56', qtyColor: '#1D9E75', icono: '↓' },
+    devolucion: { borde: '#E24B4A', dotBg: '#fef2f2', dotColor: '#A32D2D', qtyColor: '#E24B4A', icono: '↩' },
+    especial:   { borde: '#7F77DD', dotBg: '#EEEDFE', dotColor: '#534AB7', qtyColor: '#534AB7',
+                  icono: canalLower === 'manual' ? '✎' : '📦' }
+  };
+  const cat = paleta[categoria];
   const signo = isEntrada ? '+' : '-';
-  const color = isEntrada ? 'var(--success)' : 'var(--danger)';
   const canalAbrev = {'WooCommerce':'WC','Walmart':'WM','MercadoLibre':'ML','Falabella':'FA','Ripley':'RP','Paris':'PA','Manual':'MN','Sistema':'SIS'};
   const abrev = canalAbrev[m.canal] || m.canal || '—';
   const ordenTag = m.orden_id ? `<span style="font-family:'DM Mono',monospace;background:var(--bg);padding:1px 6px;border-radius:4px;font-size:9px;color:var(--muted);">OC: ${m.orden_id}</span>` : '';
 
-  return `<div class="hist-item">
+  return `<div class="hist-item" style="border-left:3px solid ${cat.borde};padding-left:8px;">
     <div style="display:flex;align-items:center;gap:8px;">
-      <div class="activity-icon ${iconClass}" style="width:24px;height:24px;font-size:10px;flex-shrink:0;">${iconLetter}</div>
+      <div style="width:22px;height:22px;border-radius:50%;background:${cat.dotBg};color:${cat.dotColor};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;flex-shrink:0;">${cat.icono}</div>
       <div style="flex:1;min-width:0;">
         <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${m.nombre}</div>
         <div style="font-size:10px;color:var(--muted);margin-top:2px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
@@ -4542,7 +4559,7 @@ function renderMovimientoItem(m){
           ${ordenTag}
         </div>
       </div>
-      <div style="font-size:12px;font-weight:600;color:${color};flex-shrink:0;">${signo}${m.cantidad}</div>
+      <div style="font-size:12px;font-weight:600;color:${cat.qtyColor};flex-shrink:0;">${signo}${m.cantidad}</div>
     </div>
   </div>`;
 }
@@ -4645,17 +4662,54 @@ function cargarMovimientosFull(){
 
     el.innerHTML = movs.map((m, i) => {
       const isEntrada = m.tipo === 'entrada';
-      const dotBg   = isEntrada ? '#EAF3DE' : '#FCEBEB';
-      const dotColor = isEntrada ? '#27500A' : '#A32D2D';
-      const dotLetter = isEntrada ? 'E' : 'S';
+
+      // ─── CATEGORIZACIÓN DEL MOVIMIENTO ───
+      // 3 categorías visuales:
+      //   - venta:        salida con canal de venta → VERDE (lo bueno)
+      //   - devolucion:   entrada con canal de venta o motivo de cancelación → ROJO (pérdida)
+      //   - especial:     ajustes manuales, factura proveedor, sistema → MORADO (eventos administrativos)
+      const canalLower = (m.canal || '').toLowerCase();
+      const motivoLower = (m.motivo || '').toLowerCase();
+      const canalesVenta = ['mercadolibre','meli','paris','walmart','falabella','ripley',
+                            'hites','woocommerce','woo','web','tienda','shopify','pos'];
+      const esCanalVenta = canalesVenta.includes(canalLower);
+      const esCancelacion = motivoLower.includes('cancel') || motivoLower.includes('devol') ||
+                            motivoLower.includes('reintegr') || motivoLower.includes('anulac');
+
+      let categoria;
+      if (isEntrada && (esCancelacion || esCanalVenta)) {
+        categoria = 'devolucion';   // ROJO — entrada por cancelación/devolución
+      } else if (!isEntrada && esCanalVenta) {
+        categoria = 'venta';         // VERDE — salida por venta
+      } else {
+        categoria = 'especial';      // MORADO — ajuste manual, factura, sistema
+      }
+
+      // Paleta por categoría
+      const paleta = {
+        venta:      { borde: '#1D9E75', dotBg: '#eaf3ee', dotColor: '#0F6E56', qtyColor: '#1D9E75', icono: '↓', badge: null },
+        devolucion: { borde: '#E24B4A', dotBg: '#fef2f2', dotColor: '#A32D2D', qtyColor: '#E24B4A', icono: '↩',
+                      badge: esCancelacion ? 'Cancelación' : 'Devolución' },
+        especial:   { borde: '#7F77DD', dotBg: '#EEEDFE', dotColor: '#534AB7', qtyColor: '#534AB7',
+                      icono: canalLower === 'manual' ? '✎' : '📦',
+                      badge: canalLower === 'manual' ? 'Ajuste manual' :
+                             canalLower === 'sistema' ? 'Sistema' : 'Factura' }
+      };
+      const cat = paleta[categoria];
+
       const qty = isEntrada
-        ? `<span style="font-size:12px;font-weight:500;color:#27500A;">+${m.cantidad}</span>`
-        : `<span style="font-size:12px;font-weight:500;color:#A32D2D;">−${m.cantidad}</span>`;
+        ? `<span style="font-size:12px;font-weight:500;color:${cat.qtyColor};">+${m.cantidad}</span>`
+        : `<span style="font-size:12px;font-weight:500;color:${cat.qtyColor};">−${m.cantidad}</span>`;
       const ocNum = m.numero_orden || m.orden_id;
       const ocTag = ocNum
         ? `<span style="font-size:11px;font-family:'DM Mono',monospace;color:#1E40AF;background:#DBEAFE;padding:2px 7px;border-radius:5px;border:0.5px solid #93C5FD;white-space:nowrap;font-weight:500;letter-spacing:0.02em;">OC-${ocNum}</span>`
         : `<span style="font-size:10px;font-family:monospace;color:var(--muted);background:var(--bg2);padding:1px 5px;border-radius:4px;border:0.5px solid var(--border);">—</span>`;
-      const divider = i < movs.length - 1 ? '<div style="height:0.5px;background:var(--border);flex-shrink:0;"></div>' : '';
+      const divider = i < movs.length - 1 ? '<div style="height:0.5px;background:var(--border);flex-shrink:0;margin-left:14px;"></div>' : '';
+
+      // Badge pequeño de tipo (solo para devoluciones/cancelaciones y especiales)
+      const tipoBadge = cat.badge
+        ? `<span style="display:inline-block;font-size:9px;padding:1px 7px;border-radius:999px;background:${cat.dotBg};color:${cat.dotColor};font-weight:500;letter-spacing:0.02em;margin-left:6px;">${cat.badge}</span>`
+        : '';
 
       // Fecha de compra real (del marketplace) — si está vacía, muestra "—"
       const fechaCompra = m.fecha_compra
@@ -4667,10 +4721,10 @@ function cargarMovimientosFull(){
         ? `<div style="font-size:11px;color:var(--text);font-family:'DM Mono',monospace;white-space:nowrap;">${m.importado}</div>`
         : `<div style="font-size:11px;color:var(--text);white-space:nowrap;">${m.fecha} ${m.hora}</div>`;
 
-      return `<div style="display:grid;grid-template-columns:20px minmax(0,1fr) 110px 110px 100px 90px 110px 44px;align-items:center;gap:8px;padding:5px 14px;">
-        <div style="width:16px;height:16px;border-radius:50%;background:${dotBg};display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:500;color:${dotColor};flex-shrink:0;">${dotLetter}</div>
+      return `<div style="display:grid;grid-template-columns:20px minmax(0,1fr) 110px 110px 100px 90px 110px 44px;align-items:center;gap:8px;padding:5px 14px 5px 11px;border-left:3px solid ${cat.borde};">
+        <div style="width:18px;height:18px;border-radius:50%;background:${cat.dotBg};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:500;color:${cat.dotColor};flex-shrink:0;">${cat.icono}</div>
         <div style="min-width:0;">
-          <div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${m.nombre}</div>
+          <div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${m.nombre}${tipoBadge}</div>
           <div style="display:flex;align-items:center;gap:6px;margin-top:3px;">${ocTag}<span style="font-size:10px;color:var(--hint);font-family:'DM Mono',monospace;">${m.sku}</span></div>
         </div>
         <div>${fechaCompra}</div>
