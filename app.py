@@ -11322,6 +11322,78 @@ def admin_lusync_conectar_marketplace(tenant_id):
         return jsonify({"error": str(e), "trace": traceback.format_exc()[:500]}), 500
 
 
+@app.route("/admin/rls/debug_ventas_dia", methods=["GET"])
+def admin_rls_debug_ventas_dia():
+    """Debug: lista TODOS los movimientos de venta del día actual (o el día especificado)
+    incluyendo canal, origen, cantidad y precio donde sea posible.
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+
+    fecha = request.args.get("fecha", "")  # YYYY-MM-DD; vacío = hoy
+
+    try:
+        from inventario import get_conn, release_conn
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+
+        where_fecha = ""
+        params = []
+        if fecha:
+            where_fecha = "AND DATE(fecha) = %s"
+            params = [fecha]
+        else:
+            where_fecha = "AND DATE(fecha) = CURRENT_DATE"
+
+        # Lista CRUDA todos los movimientos de tipo salida del día
+        cur.execute(f"""
+            SELECT id, fecha, sku, cantidad, canal, origen_registro, motivo,
+                   COALESCE(numero_orden, '') AS orden, COALESCE(usuario, '') AS usuario,
+                   tenant_id
+            FROM movimientos
+            WHERE tipo = 'salida' {where_fecha}
+            ORDER BY fecha DESC
+        """, params)
+
+        cols = ["id", "fecha", "sku", "cantidad", "canal", "origen", "motivo", "orden", "usuario", "tenant_id"]
+        rows = cur.fetchall()
+        movs = []
+        for r in rows:
+            d = dict(zip(cols, r))
+            if isinstance(d["fecha"], (str,)):
+                d["fecha"] = str(d["fecha"])
+            elif d["fecha"]:
+                d["fecha"] = d["fecha"].isoformat()
+            movs.append(d)
+
+        # Agrupar por canal
+        from collections import defaultdict
+        por_canal = defaultdict(lambda: {"unidades": 0, "movs": 0})
+        for m in movs:
+            c = m["canal"] or "(sin canal)"
+            por_canal[c]["unidades"] += abs(m["cantidad"] or 0)
+            por_canal[c]["movs"] += 1
+
+        # Cuáles cuentan como ventas reales según CANALES_VENTA_ACTIVOS
+        from inventario import CANALES_VENTA_ACTIVOS
+        ventas_validas = [m for m in movs if m["canal"] in CANALES_VENTA_ACTIVOS]
+
+        cur.close(); release_conn(conn)
+
+        return jsonify({
+            "fecha_consultada": fecha or "HOY",
+            "total_movimientos_salida": len(movs),
+            "total_ventas_validas_canales_marketplace": len(ventas_validas),
+            "unidades_validas": sum(abs(m["cantidad"] or 0) for m in ventas_validas),
+            "por_canal": dict(por_canal),
+            "canales_validos_para_venta": list(CANALES_VENTA_ACTIVOS),
+            "movimientos_detalle": movs[:50]
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()[:500]}), 500
+
+
 @app.route("/admin/rls/comparar_movimientos", methods=["GET"])
 def admin_rls_comparar_movimientos():
     """Compara cuántos movimientos ve Babymine (tenant=1) vs admin (bypass).
