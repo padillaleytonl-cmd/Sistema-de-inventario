@@ -1891,7 +1891,8 @@ def borrar_meli_auth():
 
 def stats_ventas_por_canal_dia(fecha_desde, fecha_hasta):
     """Ventas (salidas) agrupadas por día y canal. Para gráfico línea apilada.
-    Solo cuenta canales reales de marketplace, excluye 'Manual', 'Sistema', NULL."""
+    Solo cuenta canales reales de marketplace, excluye 'Manual', 'Sistema', NULL.
+    Excluye movimientos con cantidad <= 0."""
     conn = get_conn(); cur = conn.cursor()
     try:
         canales_sql = _sql_in_canales()
@@ -1901,6 +1902,7 @@ def stats_ventas_por_canal_dia(fecha_desde, fecha_hasta):
                    COALESCE(SUM(cantidad), 0) AS total
             FROM movimientos
             WHERE tipo = 'salida'
+              AND cantidad > 0
               AND DATE(fecha) BETWEEN %s AND %s
               AND canal IN ({canales_sql})
             GROUP BY dia, canal_norm
@@ -1909,30 +1911,36 @@ def stats_ventas_por_canal_dia(fecha_desde, fecha_hasta):
         rows = cur.fetchall()
     except Exception as e:
         print(f"[Stats] ventas_por_canal_dia: {e}"); rows = []
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return [{"dia": r[0], "canal": r[1], "total": int(r[2])} for r in rows]
 
 
 def stats_top_productos_vendidos(fecha_desde, fecha_hasta, limite=10):
     """Top N productos más vendidos en un rango. Para gráfico barras.
-    Solo cuenta canales reales de marketplace, excluye Manual/Sistema."""
+    Solo cuenta canales reales de marketplace, excluye Manual/Sistema.
+    Excluye movimientos con cantidad <= 0 (fantasmas/ajustes nulos)."""
     conn = get_conn(); cur = conn.cursor()
     try:
         canales_sql = _sql_in_canales()
         cur.execute(f"""
-            SELECT sku, nombre, COALESCE(SUM(cantidad), 0) AS total
-            FROM movimientos
-            WHERE tipo = 'salida'
-              AND DATE(fecha) BETWEEN %s AND %s
-              AND canal IN ({canales_sql})
-            GROUP BY sku, nombre
+            SELECT m.sku,
+                   COALESCE(MAX(p.nombre), MAX(m.nombre)) AS nombre,
+                   COALESCE(SUM(m.cantidad), 0) AS total
+            FROM movimientos m
+            LEFT JOIN productos p ON p.sku = m.sku
+            WHERE m.tipo = 'salida'
+              AND m.cantidad > 0
+              AND DATE(m.fecha) BETWEEN %s AND %s
+              AND m.canal IN ({canales_sql})
+            GROUP BY m.sku
+            HAVING SUM(m.cantidad) > 0
             ORDER BY total DESC
             LIMIT %s
         """, (fecha_desde, fecha_hasta, limite))
         rows = cur.fetchall()
     except Exception as e:
         print(f"[Stats] top_productos: {e}"); rows = []
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return [{"sku": r[0], "nombre": r[1], "total": int(r[2])} for r in rows]
 
 
