@@ -11391,6 +11391,175 @@ def admin_rls_normalizar_canales_historicos():
         return jsonify({"error": str(e), "trace": traceback.format_exc()[:500]}), 500
 
 
+@app.route("/admin/rls/debug_reporte_mkts", methods=["GET"])
+def admin_rls_debug_reporte_mkts():
+    """Diagnostica cada MKT individualmente: status, cant órdenes, keys del primer JSON.
+    Permite identificar por qué un MKT no trae datos o trae precio en 0.
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+
+    fd = request.args.get("fecha_desde", "")
+    fh = request.args.get("fecha_hasta", "")
+
+    resultado = {"fecha_desde": fd, "fecha_hasta": fh, "canales": {}}
+
+    # ─── WALMART ──────────────────────────────────────────────────────────
+    try:
+        from walmart import walmart_headers, WALMART_BASE_URL
+        import requests as _r
+        params_wm = {"limit": 200}
+        if fd: params_wm["createdStartDate"] = f"{fd}T00:00:00"
+        if fh: params_wm["createdEndDate"]   = f"{fh}T23:59:59"
+        rr = _r.get(f"{WALMART_BASE_URL}/v3/orders", headers=walmart_headers(),
+                    params=params_wm, timeout=20)
+        body = rr.json() if rr.status_code == 200 else {}
+        raw = (body.get("list", {}) or {}).get("elements", {}).get("order", []) or []
+        ordenes = raw if isinstance(raw, list) else [raw]
+        primera = ordenes[0] if ordenes else None
+        keys_primera = list(primera.keys()) if primera else []
+        primera_line_charges = None
+        if primera:
+            try:
+                primera_line_charges = ((primera.get("orderLines") or {}).get("orderLine") or [{}])[0].get("charges")
+            except: pass
+        resultado["canales"]["walmart"] = {
+            "status_code": rr.status_code,
+            "params_enviados": params_wm,
+            "cantidad_ordenes": len(ordenes),
+            "primera_orden_keys": keys_primera,
+            "primera_order_date": primera.get("orderDate") if primera else None,
+            "primera_customer_order_id": primera.get("customerOrderId") if primera else None,
+            "primera_line_charges_estructura": str(primera_line_charges)[:500] if primera_line_charges else None,
+            "raw_response_keys": list(body.keys()) if body else [],
+            "raw_meta": body.get("meta") if body else None,
+        }
+    except Exception as e:
+        import traceback
+        resultado["canales"]["walmart"] = {"error": str(e), "trace": traceback.format_exc()[:300]}
+
+    # ─── FALABELLA ────────────────────────────────────────────────────────
+    try:
+        from falabella import obtener_ordenes_falabella, obtener_items_orden_falabella
+        # Trae las últimas órdenes; vamos a ver qué campos tiene cada una
+        ordenes_fa = []
+        for estado in ("delivered", "shipped", "ready_to_ship"):
+            try:
+                lote = obtener_ordenes_falabella(estado=estado, dias=7, limit=20, offset=0)
+                if isinstance(lote, list):
+                    ordenes_fa.extend(lote)
+            except: pass
+        # Filtrar por fecha si aplica
+        ordenes_filtradas = []
+        if fd:
+            for o in ordenes_fa:
+                fc = (o.get("CreatedAt") or o.get("createdAt") or o.get("creation_date") or "")[:10]
+                if fc and fd <= fc <= (fh or fd):
+                    ordenes_filtradas.append(o)
+        else:
+            ordenes_filtradas = ordenes_fa
+
+        primera = ordenes_filtradas[0] if ordenes_filtradas else (ordenes_fa[0] if ordenes_fa else None)
+        keys = list(primera.keys()) if primera else []
+
+        items_keys = None
+        items_primer_precio = None
+        if primera:
+            try:
+                order_id = primera.get("OrderId") or primera.get("OrderNumber") or primera.get("OrderItemId")
+                if order_id:
+                    items = obtener_items_orden_falabella(order_id) or []
+                    if items:
+                        items_keys = list(items[0].keys())
+                        # Buscar campos que parezcan precio
+                        for k in items_keys:
+                            if 'price' in k.lower() or 'precio' in k.lower() or 'paid' in k.lower() or 'amount' in k.lower():
+                                items_primer_precio = items_primer_precio or {}
+                                items_primer_precio[k] = items[0].get(k)
+            except Exception as e:
+                items_keys = f"error: {str(e)[:100]}"
+
+        resultado["canales"]["falabella"] = {
+            "cantidad_ordenes_brutas": len(ordenes_fa),
+            "cantidad_filtradas_por_fecha": len(ordenes_filtradas),
+            "primera_orden_keys": keys,
+            "primera_orden_resumen": {
+                "OrderId": primera.get("OrderId") if primera else None,
+                "OrderNumber": primera.get("OrderNumber") if primera else None,
+                "Price": primera.get("Price") if primera else None,
+                "PaidPrice": primera.get("PaidPrice") if primera else None,
+                "Subtotal": primera.get("Subtotal") if primera else None,
+                "CreatedAt": primera.get("CreatedAt") if primera else None,
+            } if primera else None,
+            "items_keys": items_keys,
+            "items_campos_precio": items_primer_precio,
+        }
+    except Exception as e:
+        import traceback
+        resultado["canales"]["falabella"] = {"error": str(e), "trace": traceback.format_exc()[:300]}
+
+    # ─── PARIS ────────────────────────────────────────────────────────────
+    try:
+        from paris import obtener_ordenes_paris_todas
+        ordenes_pa = obtener_ordenes_paris_todas(dias=7, max_paginas=5) or []
+        # Filtrar por fecha
+        ordenes_filtradas_pa = []
+        if fd:
+            for o in ordenes_pa:
+                # Paris devuelve órdenes con campos varios
+                fc = (o.get("createdAt") or o.get("CreatedAt") or o.get("originOrderDate") or "")[:10]
+                if fc and fd <= fc <= (fh or fd):
+                    ordenes_filtradas_pa.append(o)
+        else:
+            ordenes_filtradas_pa = ordenes_pa
+
+        primera = ordenes_filtradas_pa[0] if ordenes_filtradas_pa else (ordenes_pa[0] if ordenes_pa else None)
+        keys = list(primera.keys()) if primera else []
+
+        # Buscar precio en estructura Paris
+        primera_resumen = {}
+        if primera:
+            for k in ('subOrderNumber', 'orderNumber', 'createdAt', 'originOrderDate',
+                      'totalAmount', 'amount', 'price', 'items', 'subOrders'):
+                if k in primera:
+                    val = primera[k]
+                    if isinstance(val, (list, dict)):
+                        val = f"<{type(val).__name__} len={len(val) if hasattr(val,'__len__') else '?'}>"
+                    primera_resumen[k] = val
+
+        # Si hay subOrders, ver primer item
+        primer_item_keys = None
+        primer_item_precio = None
+        if primera:
+            try:
+                sub_orders = primera.get("subOrders") or [primera]
+                if sub_orders:
+                    items = sub_orders[0].get("items") if isinstance(sub_orders[0], dict) else []
+                    if items:
+                        primer_item_keys = list(items[0].keys())
+                        for k in primer_item_keys:
+                            if 'price' in k.lower() or 'amount' in k.lower() or 'total' in k.lower():
+                                primer_item_precio = primer_item_precio or {}
+                                primer_item_precio[k] = items[0].get(k)
+            except Exception as e:
+                primer_item_keys = f"error: {str(e)[:100]}"
+
+        resultado["canales"]["paris"] = {
+            "cantidad_ordenes_brutas": len(ordenes_pa),
+            "cantidad_filtradas_por_fecha": len(ordenes_filtradas_pa),
+            "primera_orden_keys": keys,
+            "primera_orden_resumen": primera_resumen,
+            "primer_item_keys": primer_item_keys,
+            "primer_item_campos_precio": primer_item_precio,
+        }
+    except Exception as e:
+        import traceback
+        resultado["canales"]["paris"] = {"error": str(e), "trace": traceback.format_exc()[:300]}
+
+    return jsonify(resultado)
+
+
 @app.route("/admin/rls/debug_ventas_dia", methods=["GET"])
 def admin_rls_debug_ventas_dia():
     """Debug: lista TODOS los movimientos de venta del día actual (o el día especificado)
