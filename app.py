@@ -11448,13 +11448,13 @@ def admin_rls_debug_woo_canceladas():
                     "tipo": r[2], "cantidad": r[3], "sku": r[4], "motivo": r[5]
                 })
 
-            # Verificar el "registro de procesadas"
+            # Verificar el "registro de procesadas" (usa order_id_texto)
             cur.execute("""
-                SELECT id, fecha FROM ordenes_procesadas WHERE orden_key = %s
+                SELECT orden_id, fecha FROM ordenes_procesadas WHERE order_id_texto = %s
             """, (woo_key,))
             r_proc = cur.fetchone()
             cur.execute("""
-                SELECT id, fecha FROM ordenes_procesadas WHERE orden_key = %s
+                SELECT orden_id, fecha FROM ordenes_procesadas WHERE order_id_texto = %s
             """, (cancel_key,))
             r_cancel = cur.fetchone()
 

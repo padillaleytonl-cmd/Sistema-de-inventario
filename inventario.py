@@ -1111,35 +1111,35 @@ def get_devolucion(dev_id=None, codigo=None):
     return d
 
 def orden_ya_procesada_texto(order_id_texto):
+    """Verifica si una orden con order_id_texto ya fue procesada.
+    NOTA: NO hacemos ALTER TABLE aquí — la columna ya existe hace meses
+    y ALTER+COMMIT rompe app.tenant_id de sesión PG (RLS bypass)."""
     conn = get_conn()
     cur = conn.cursor()
-    try:
-        cur.execute("ALTER TABLE ordenes_procesadas ADD COLUMN IF NOT EXISTS order_id_texto TEXT")
-        conn.commit()
-    except:
-        conn.rollback()
     cur.execute("SELECT 1 FROM ordenes_procesadas WHERE order_id_texto = %s", (str(order_id_texto),))
     existe = cur.fetchone() is not None
     cur.close()
-    conn.close()
+    release_conn(conn)
     return existe
 
 def marcar_orden_procesada_texto(order_id_texto):
+    """Marca una orden como procesada por order_id_texto.
+    NOTA: NO hacemos ALTER TABLE aquí — rompería RLS."""
     conn = get_conn()
     cur = conn.cursor()
     try:
-        cur.execute("ALTER TABLE ordenes_procesadas ADD COLUMN IF NOT EXISTS order_id_texto TEXT")
-        conn.commit()
-    except Exception: conn.rollback()
-    try:
-        cur.execute("SELECT 1 FROM ordenes_procesadas WHERE order_id_texto=%s LIMIT 1",(str(order_id_texto),))
-        if cur.fetchone(): cur.close(); conn.close(); return
+        cur.execute("SELECT 1 FROM ordenes_procesadas WHERE order_id_texto=%s LIMIT 1", (str(order_id_texto),))
+        if cur.fetchone():
+            cur.close(); release_conn(conn); return
         import random
         cur.execute("INSERT INTO ordenes_procesadas (orden_id,order_id_texto) VALUES (%s,%s)",
                     (random.randint(1,9007199254740991), str(order_id_texto)))
         conn.commit()
     except Exception as e:
         print(f"[Marcado] Error: {e}"); conn.rollback()
+    finally:
+        cur.close()
+        release_conn(conn)
 
 
 def intentar_marcar_orden_atomic(order_id_texto):
