@@ -9297,19 +9297,40 @@ async function cargarModalProductos(body) {
 async function cargarModalVentas(body) {
   const r = dashRangoActual();
   try {
-    const [resKpis, resTop, resCanal] = await Promise.all([
+    // Llamadas en paralelo: stats locales + reporte con precios desde APIs MKT
+    const [resKpis, resTop, resCanal, resReporte] = await Promise.all([
       fetch(`/stats/kpis?desde=${r.desde}&hasta=${r.hasta}`).then(x=>x.json()),
       fetch(`/stats/top_productos?desde=${r.desde}&hasta=${r.hasta}&limite=20`).then(x=>x.json()),
-      fetch(`/stats/ventas_por_canal?desde=${r.desde}&hasta=${r.hasta}`).then(x=>x.json())
+      fetch(`/stats/ventas_por_canal?desde=${r.desde}&hasta=${r.hasta}`).then(x=>x.json()),
+      fetch(`/ventas/reporte?fecha_desde=${r.desde}&fecha_hasta=${r.hasta}`).then(x=>x.json()).catch(()=>({filas:[]}))
     ]);
 
-    let html = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px;">
+    // Calcular monto total desde el reporte (que trae precios de APIs MKT)
+    let montoTotal = 0, montoPorCanal = {}, montoPorProducto = {};
+    const filas = resReporte.filas || [];
+    filas.forEach(f => {
+      const precio = parseFloat(f.precio_pagado || 0);
+      montoTotal += precio;
+      const c = f.canal || 'Otro';
+      montoPorCanal[c] = (montoPorCanal[c] || 0) + precio;
+      const sku = f.sku_seller || f.sku || '';
+      if (sku) {
+        if (!montoPorProducto[sku]) montoPorProducto[sku] = {monto: 0, unidades: 0, nombre: f.producto || ''};
+        montoPorProducto[sku].monto += precio;
+        montoPorProducto[sku].unidades += parseFloat(f.cantidad || 1);
+      }
+    });
+
+    const fmtCLP = (v) => '$' + Math.round(v).toLocaleString('es-CL');
+
+    let html = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px;">
       <div style="background:var(--bg2);border-radius:10px;padding:12px;"><div style="font-size:10px;color:var(--muted);">Período</div><div style="font-size:13px;font-weight:600;">${_formatearFecha(r.desde)} – ${_formatearFecha(r.hasta)}</div></div>
       <div style="background:#ecfdf5;color:#065f46;border-radius:10px;padding:12px;"><div style="font-size:10px;opacity:.8;">Unidades vendidas</div><div style="font-size:20px;font-weight:700;">${(resKpis.ventas_periodo||0).toLocaleString('es-CL')}</div></div>
       <div style="background:#dbeafe;color:#1e3a8a;border-radius:10px;padding:12px;"><div style="font-size:10px;opacity:.8;">Órdenes</div><div style="font-size:20px;font-weight:700;">${resKpis.ordenes_periodo||0}</div></div>
+      <div style="background:#fef3c7;color:#92400e;border-radius:10px;padding:12px;"><div style="font-size:10px;opacity:.8;">💰 Total facturado</div><div style="font-size:20px;font-weight:700;">${montoTotal > 0 ? fmtCLP(montoTotal) : '—'}</div></div>
     </div>`;
 
-    // Resumen por canal
+    // Resumen por canal con monto
     const porCanal = {};
     resCanal.forEach(d => { porCanal[d.canal] = (porCanal[d.canal] || 0) + d.total; });
     if (Object.keys(porCanal).length) {
@@ -9317,19 +9338,26 @@ async function cargarModalVentas(body) {
       html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;">';
       Object.entries(porCanal).sort((a,b)=>b[1]-a[1]).forEach(([canal, total]) => {
         const color = COLORES_CANAL[canal] || '#94a3b8';
-        html += `<div style="background:${color}20;border:0.5px solid ${color}50;border-radius:8px;padding:6px 12px;"><span style="font-size:11px;color:${color};font-weight:600;">${canal}</span> <span style="font-size:11px;color:var(--text);">${total} u.</span></div>`;
+        const monto = montoPorCanal[canal] || 0;
+        const montoStr = monto > 0 ? ` · <b>${fmtCLP(monto)}</b>` : '';
+        html += `<div style="background:${color}20;border:0.5px solid ${color}50;border-radius:8px;padding:6px 12px;"><span style="font-size:11px;color:${color};font-weight:600;">${canal}</span> <span style="font-size:11px;color:var(--text);">${total} u.${montoStr}</span></div>`;
       });
       html += '</div>';
     }
 
-    // Top productos
+    // Top productos con monto
     if (resTop.length) {
       html += '<div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px;">Top productos vendidos</div>';
-      html += '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="background:var(--bg2);"><th style="padding:8px 10px;text-align:left;font-weight:500;font-size:11px;color:var(--muted);">SKU</th><th style="padding:8px 10px;text-align:left;font-weight:500;font-size:11px;color:var(--muted);">Producto</th><th style="padding:8px 10px;text-align:right;font-weight:500;font-size:11px;color:var(--muted);">Unidades</th></tr></thead><tbody>';
+      html += '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="background:var(--bg2);"><th style="padding:8px 10px;text-align:left;font-weight:500;font-size:11px;color:var(--muted);">SKU</th><th style="padding:8px 10px;text-align:left;font-weight:500;font-size:11px;color:var(--muted);">Producto</th><th style="padding:8px 10px;text-align:right;font-weight:500;font-size:11px;color:var(--muted);">Unidades</th><th style="padding:8px 10px;text-align:right;font-weight:500;font-size:11px;color:var(--muted);">Total CLP</th></tr></thead><tbody>';
       resTop.forEach(p => {
-        html += `<tr style="border-bottom:0.5px solid var(--border);"><td style="padding:8px 10px;font-family:ui-monospace,monospace;font-size:11px;">${p.sku}</td><td style="padding:8px 10px;">${p.nombre || ''}</td><td style="padding:8px 10px;text-align:right;font-weight:600;">${p.total}</td></tr>`;
+        const montoP = (montoPorProducto[p.sku] || {}).monto || 0;
+        html += `<tr style="border-bottom:0.5px solid var(--border);"><td style="padding:8px 10px;font-family:ui-monospace,monospace;font-size:11px;">${p.sku}</td><td style="padding:8px 10px;">${p.nombre || ''}</td><td style="padding:8px 10px;text-align:right;font-weight:600;">${p.total}</td><td style="padding:8px 10px;text-align:right;color:#065f46;font-weight:600;">${montoP > 0 ? fmtCLP(montoP) : '—'}</td></tr>`;
       });
       html += '</tbody></table>';
+
+      if (montoTotal === 0 && filas.length === 0) {
+        html += '<div style="margin-top:14px;padding:10px 12px;background:#fef3c7;color:#92400e;border-radius:8px;font-size:11px;">💡 Los montos en CLP se obtienen de las APIs de los marketplaces en tiempo real. Si están en cero, verifica que las credenciales de los MKTs estén activas.</div>';
+      }
     } else {
       html += '<div style="text-align:center;color:var(--muted);font-size:13px;padding:30px;">Sin ventas en este período</div>';
     }
