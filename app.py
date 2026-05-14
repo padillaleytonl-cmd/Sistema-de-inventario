@@ -11393,6 +11393,100 @@ def admin_rls_normalizar_canales_historicos():
         return jsonify({"error": str(e), "trace": traceback.format_exc()[:500]}), 500
 
 
+@app.route("/admin/rls/debug_woo_completadas", methods=["GET"])
+def admin_rls_debug_woo_completadas():
+    """Lista órdenes Woo en estado processing/completed de los últimos N días
+    y verifica si tienen movimiento de venta en BD.
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+
+    try:
+        dias = int(request.args.get("dias", "14"))
+        from datetime import timezone as _tz
+        fecha_corte = (datetime.now(_tz.utc) - timedelta(days=dias)).isoformat()
+
+        res = requests.get(
+            "https://www.babymine.cl/wp-json/wc/v3/orders",
+            params={
+                "consumer_key": WC_KEY, "consumer_secret": WC_SECRET,
+                "status": "processing,completed",
+                "per_page": 100,
+                "after": fecha_corte
+            },
+            timeout=20
+        )
+        if res.status_code != 200:
+            return jsonify({"error": f"HTTP {res.status_code}", "body": res.text[:500]})
+
+        ordenes = res.json() or []
+
+        from inventario import get_conn, release_conn
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+
+        diagnostico = []
+        sin_movimientos = 0
+        con_movimientos = 0
+        for o in ordenes:
+            order_id = str(o.get("id", ""))
+            woo_key = f"WOO-{order_id}"
+
+            cur.execute("""
+                SELECT id, fecha, tipo, cantidad, sku FROM movimientos
+                WHERE (orden_id = %s OR numero_orden = %s)
+                  AND canal = 'Web'
+                ORDER BY fecha DESC
+            """, (order_id, order_id))
+            movs = []
+            for r in cur.fetchall():
+                movs.append({
+                    "id": r[0], "fecha": r[1].isoformat() if r[1] else None,
+                    "tipo": r[2], "cantidad": r[3], "sku": r[4]
+                })
+
+            cur.execute("SELECT orden_id FROM ordenes_procesadas WHERE order_id_texto = %s", (woo_key,))
+            r_proc = cur.fetchone()
+
+            if not movs and not r_proc:
+                sin_movimientos += 1
+            else:
+                con_movimientos += 1
+
+            diagnostico.append({
+                "order_id": order_id,
+                "status": o.get("status"),
+                "date_created": o.get("date_created"),
+                "total": o.get("total"),
+                "items_sku": [it.get("sku") for it in (o.get("line_items") or [])],
+                "items_quantity": [it.get("quantity") for it in (o.get("line_items") or [])],
+                "movimientos_count": len(movs),
+                "ya_procesada": bool(r_proc),
+                "estado_lusync": (
+                    "✅ OK procesada" if r_proc and movs else
+                    "⚠ Marcada como procesada pero sin movimientos (RLS bloqueó INSERT?)" if r_proc and not movs else
+                    "❌ NUNCA procesada — venta perdida" if not r_proc else
+                    "?"
+                )
+            })
+
+        cur.close(); release_conn(conn)
+
+        return jsonify({
+            "fecha_corte": fecha_corte,
+            "dias_consultados": dias,
+            "total_ordenes": len(ordenes),
+            "resumen": {
+                "ordenes_OK": con_movimientos,
+                "ordenes_PERDIDAS": sin_movimientos
+            },
+            "ordenes": diagnostico
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()[:600]}), 500
+
+
 @app.route("/admin/rls/debug_woo_canceladas", methods=["GET"])
 def admin_rls_debug_woo_canceladas():
     """Debug: lista las órdenes canceladas recientes en Woo y diagnostica
