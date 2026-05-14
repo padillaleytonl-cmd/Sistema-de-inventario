@@ -11393,6 +11393,205 @@ def admin_rls_normalizar_canales_historicos():
         return jsonify({"error": str(e), "trace": traceback.format_exc()[:500]}), 500
 
 
+@app.route("/admin/rls/forzar_sync_woo", methods=["GET"])
+def admin_rls_forzar_sync_woo():
+    """Fuerza un sync inmediato de Woo y muestra resultados paso a paso.
+    Útil para probar si una orden se procesa correctamente sin esperar el scheduler.
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+
+    try:
+        from datetime import timezone as _tz
+        from inventario import get_conn, release_conn, cargar_productos, guardar_producto, registrar_movimiento
+        from inventario import _tenant_local
+
+        # Setear tenant_id en threading.local para que get_conn y RLS funcionen
+        _tenant_local.tenant_id = 1
+        _tenant_local.is_admin = False
+
+        dias = int(request.args.get("dias", "3"))
+        fecha_corte = (datetime.now(_tz.utc) - timedelta(days=dias)).isoformat()
+
+        log = []
+        nuevas_procesadas = 0
+        canceladas_procesadas = 0
+        ya_procesadas = 0
+        sin_sku = 0
+        errores = []
+
+        # ─── 1. ÓRDENES NUEVAS (processing/completed) ───
+        log.append(f"=== Consultando órdenes processing,completed desde {fecha_corte}...")
+        try:
+            res = requests.get(
+                "https://www.babymine.cl/wp-json/wc/v3/orders",
+                params={
+                    "consumer_key": WC_KEY, "consumer_secret": WC_SECRET,
+                    "status": "processing,completed", "per_page": 50,
+                    "after": fecha_corte
+                },
+                timeout=15
+            )
+            if res.status_code != 200:
+                return jsonify({"error": f"HTTP {res.status_code}", "body": res.text[:500]})
+            ordenes_nuevas = res.json() or []
+            log.append(f"   Encontradas: {len(ordenes_nuevas)} órdenes nuevas")
+        except Exception as e:
+            return jsonify({"error": f"Error consultando Woo: {e}"})
+
+        for o in ordenes_nuevas:
+            try:
+                order_id = str(o.get("id", ""))
+                woo_key = f"WOO-{order_id}"
+                status = o.get("status", "")
+
+                # Verificar si ya está marcada
+                conn = get_conn(); cur = conn.cursor()
+                cur.execute("SELECT 1 FROM ordenes_procesadas WHERE order_id_texto = %s LIMIT 1", (woo_key,))
+                ya_existe = cur.fetchone() is not None
+                cur.close(); release_conn(conn)
+
+                if ya_existe:
+                    log.append(f"   ↺ {woo_key} ({status}): YA procesada, saltando")
+                    ya_procesadas += 1
+                    continue
+
+                # Marcar atómicamente
+                from inventario import intentar_marcar_orden_atomic
+                if not intentar_marcar_orden_atomic(woo_key):
+                    log.append(f"   ↺ {woo_key}: no se pudo marcar atómicamente")
+                    continue
+
+                # Parsear fecha real
+                fecha_woo = o.get("date_created") or ""
+                items_descontados = []
+
+                for line in o.get("line_items", []):
+                    sku = (line.get("sku") or "").strip()
+                    cantidad = int(line.get("quantity") or 1)
+                    if not sku:
+                        sin_sku += 1
+                        log.append(f"   ⚠ {woo_key}: line sin SKU")
+                        continue
+
+                    productos = cargar_productos()
+                    producto_encontrado = False
+                    for p in productos:
+                        if p["sku"] == sku:
+                            producto_encontrado = True
+                            stock_antes = p["stock"]
+                            p["stock"] = max(0, stock_antes - cantidad)
+                            guardar_producto(p)
+                            registrar_movimiento(
+                                "salida", p["sku"], p["nombre"], cantidad,
+                                f"Venta Web orden {order_id}",
+                                usuario="Sistema", canal="Web", orden_id=order_id,
+                                numero_orden=order_id,
+                                fecha_compra_marketplace=fecha_woo,
+                                origen_registro="webhook"
+                            )
+                            items_descontados.append(f"{sku} ({stock_antes}→{p['stock']})")
+                            log.append(f"   ✓ {woo_key} ({status}): {sku} x{cantidad} descontado ({stock_antes}→{p['stock']})")
+                            break
+                    if not producto_encontrado:
+                        log.append(f"   ⚠ {woo_key}: SKU '{sku}' NO existe en productos")
+
+                if items_descontados:
+                    nuevas_procesadas += 1
+            except Exception as e:
+                errores.append(f"Order {order_id}: {e}")
+                log.append(f"   ✗ {woo_key}: ERROR {e}")
+
+        # ─── 2. ÓRDENES CANCELADAS ───
+        log.append(f"=== Consultando órdenes cancelled,refunded...")
+        try:
+            res_c = requests.get(
+                "https://www.babymine.cl/wp-json/wc/v3/orders",
+                params={
+                    "consumer_key": WC_KEY, "consumer_secret": WC_SECRET,
+                    "status": "cancelled,refunded", "per_page": 30,
+                    "after": fecha_corte
+                },
+                timeout=15
+            )
+            ordenes_canc = res_c.json() or [] if res_c.status_code == 200 else []
+            log.append(f"   Encontradas: {len(ordenes_canc)} canceladas")
+        except Exception as e:
+            log.append(f"   ✗ Error: {e}")
+            ordenes_canc = []
+
+        for o in ordenes_canc:
+            try:
+                order_id = str(o.get("id", ""))
+                woo_key = f"WOO-{order_id}"
+                cancel_key = f"WOO-CANCEL-{order_id}"
+
+                conn = get_conn(); cur = conn.cursor()
+                cur.execute("SELECT 1 FROM ordenes_procesadas WHERE order_id_texto = %s LIMIT 1", (cancel_key,))
+                cancel_ya = cur.fetchone() is not None
+                cur.execute("SELECT 1 FROM ordenes_procesadas WHERE order_id_texto = %s LIMIT 1", (woo_key,))
+                venta_existia = cur.fetchone() is not None
+                cur.close(); release_conn(conn)
+
+                if cancel_ya:
+                    log.append(f"   ↺ {cancel_key}: cancelación YA procesada")
+                    continue
+
+                if not venta_existia:
+                    log.append(f"   ⏭ {woo_key}: NUNCA fue venta (era pending) → ignorar")
+                    # Marcar para no procesar de nuevo
+                    from inventario import marcar_orden_procesada_texto
+                    marcar_orden_procesada_texto(cancel_key)
+                    continue
+
+                # SÍ era venta, reintegrar stock
+                items_reintegrados = []
+                for line in o.get("line_items", []):
+                    sku = (line.get("sku") or "").strip()
+                    cantidad = int(line.get("quantity") or 1)
+                    if not sku: continue
+                    productos = cargar_productos()
+                    for p in productos:
+                        if p["sku"] == sku:
+                            stock_antes = p["stock"]
+                            p["stock"] = stock_antes + cantidad
+                            guardar_producto(p)
+                            registrar_movimiento(
+                                "entrada", p["sku"], p["nombre"], cantidad,
+                                f"Cancelación Web orden {order_id}",
+                                usuario="Sistema", canal="Web", orden_id=order_id,
+                                origen_registro="webhook"
+                            )
+                            items_reintegrados.append(f"{sku} ({stock_antes}→{p['stock']})")
+                            log.append(f"   ✓ {cancel_key}: {sku} x{cantidad} REINTEGRADO ({stock_antes}→{p['stock']})")
+                            break
+
+                if items_reintegrados:
+                    from inventario import marcar_orden_procesada_texto
+                    marcar_orden_procesada_texto(cancel_key)
+                    canceladas_procesadas += 1
+            except Exception as e:
+                errores.append(f"Cancel {order_id}: {e}")
+                log.append(f"   ✗ {cancel_key}: ERROR {e}")
+
+        return jsonify({
+            "ok": True,
+            "resumen": {
+                "ordenes_nuevas_procesadas": nuevas_procesadas,
+                "ordenes_ya_procesadas_antes": ya_procesadas,
+                "cancelaciones_procesadas": canceladas_procesadas,
+                "items_sin_sku": sin_sku,
+                "errores": len(errores)
+            },
+            "errores": errores,
+            "log_detallado": log
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()[:600]}), 500
+
+
 @app.route("/admin/rls/debug_woo_completadas", methods=["GET"])
 def admin_rls_debug_woo_completadas():
     """Lista órdenes Woo en estado processing/completed de los últimos N días
