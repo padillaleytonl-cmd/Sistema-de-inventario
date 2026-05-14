@@ -2376,23 +2376,21 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
             print(f"[Bodegas] No se pudo normalizar fecha_compra_marketplace: {e}")
             fecha_compra_clean = None
 
+    # Normalizar canal SIEMPRE antes de insertar (evita 'mercadolibre' vs 'MercadoLibre')
+    canal_normalizado = normalizar_canal(canal) if canal else "Sistema"
+
     # Registrar movimiento con la bodega y trazabilidad completa
     try:
         conn = get_conn(); cur = conn.cursor()
-        # Asegurar columnas (idempotente)
-        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_importacion TIMESTAMP")
-        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_compra_marketplace TIMESTAMP")
-        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS origen_registro TEXT DEFAULT 'sistema'")
-        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS stock_antes INTEGER")
-        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS stock_despues INTEGER")
-        conn.commit()
+        # NOTA: NO hacer ALTER TABLE aquí. Las columnas ya existen hace meses
+        # y ALTER+COMMIT resetea app.tenant_id de sesión PG (rompe RLS para INSERT).
 
         # Buscar nombre del producto
         cur.execute("SELECT nombre FROM productos WHERE sku=%s LIMIT 1", (sku,))
         r = cur.fetchone()
         nombre = r[0] if r else sku
 
-        motivo_final = motivo or f"Venta {canal}{' (Fulfillment)' if fulfillment else ''}"
+        motivo_final = motivo or f"Venta {canal_normalizado}{' (Fulfillment)' if fulfillment else ''}"
 
         ahora_chile = now_chile().replace(tzinfo=None)
 
@@ -2401,11 +2399,11 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
              bodega_codigo, fecha_importacion, fecha_compra_marketplace,
              origen_registro, stock_antes, stock_despues)
             VALUES ('salida', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (sku, nombre, descontar, motivo_final, usuario, canal,
+            (sku, nombre, descontar, motivo_final, usuario, canal_normalizado,
              ahora_chile, orden_id, bodega, ahora_chile,
              fecha_compra_clean, origen_registro, stock_antes, stock_despues))
         conn.commit()
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
     except Exception as e:
         print(f"[Bodegas] Error registrando movimiento: {e}")
 
@@ -2426,6 +2424,9 @@ def reintegrar_stock_bodega(sku, cantidad, bodega_codigo, motivo, canal=None, or
     """Reintegra stock a una bodega específica (para cancelaciones/devoluciones)."""
     ajustar_stock_bodega(sku, bodega_codigo, cantidad)
 
+    # Normalizar canal antes de insertar
+    canal_normalizado = normalizar_canal(canal) if canal else "Sistema"
+
     try:
         conn = get_conn(); cur = conn.cursor()
         cur.execute("SELECT nombre FROM productos WHERE sku=%s LIMIT 1", (sku,))
@@ -2435,9 +2436,9 @@ def reintegrar_stock_bodega(sku, cantidad, bodega_codigo, motivo, canal=None, or
         cur.execute("""INSERT INTO movimientos
             (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id, bodega_codigo)
             VALUES ('entrada', %s, %s, %s, %s, %s, %s, NOW(), %s, %s)""",
-            (sku, nombre, cantidad, motivo, usuario, canal, orden_id, bodega_codigo))
+            (sku, nombre, cantidad, motivo, usuario, canal_normalizado, orden_id, bodega_codigo))
         conn.commit()
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
     except Exception as e:
         print(f"[Bodegas] Error registrando entrada: {e}")
 
