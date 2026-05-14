@@ -660,22 +660,21 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
         documento_ref: N° de documento físico (factura/invoice/guía/OC)
         fecha_compra_marketplace: fecha REAL en que el cliente compró en el marketplace
         origen_registro: 'webhook' | 'scheduler' | 'manual' | 'pos' | 'sistema'
+
+    NOTA multi-tenant:
+        - Normaliza el canal antes de guardar (capitalización oficial).
+        - NO hace ALTER TABLE aquí (las columnas ya existen, ALTER+COMMIT rompe RLS).
     """
+    # Normalizar canal SIEMPRE — evita que entren 'mercadolibre' vs 'MercadoLibre' mezclados
+    canal_normalizado = normalizar_canal(canal) if canal else "Sistema"
+
     conn = get_conn()
     cur = conn.cursor()
     try:
-        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS usuario TEXT DEFAULT 'Sistema'")
-        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS canal TEXT DEFAULT 'Sistema'")
-        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS orden_id TEXT DEFAULT NULL")
-        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_importacion TIMESTAMP")
-        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS numero_orden TEXT DEFAULT NULL")
-        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS documento_ref TEXT DEFAULT NULL")
-        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_compra_marketplace TIMESTAMP")
-        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS origen_registro TEXT")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_mov_documento_ref ON movimientos(documento_ref)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_mov_numero_orden ON movimientos(numero_orden)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_mov_fecha_compra_mp ON movimientos(fecha_compra_marketplace)")
-        conn.commit()
+        # NOTA: NO hacemos ALTER TABLE acá — las columnas ya existen hace meses.
+        # El ALTER+COMMIT resetea app.tenant_id de la sesión PG, lo que rompe RLS
+        # para el INSERT siguiente. Mismo bug que tuvimos con intentar_marcar_orden_atomic.
+        pass
     except:
         conn.rollback()
     ahora = now_chile().replace(tzinfo=None)
@@ -704,7 +703,7 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
                                   fecha_compra_marketplace, origen_registro, stock_antes, stock_despues)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
-    """, (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id, ahora,
+    """, (tipo, sku, nombre, cantidad, motivo, usuario, canal_normalizado, fecha, orden_id, ahora,
           numero_orden, documento_ref, fecha_compra_mp_norm, origen_registro,
           _calcular_stock_antes(sku, tipo, cantidad), _calcular_stock_despues(sku)))
     mov_id = cur.fetchone()[0]
