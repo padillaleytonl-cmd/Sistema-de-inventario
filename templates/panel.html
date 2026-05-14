@@ -3278,12 +3278,12 @@ tbody td {
   </div>
   <!-- ═══════════ FIN SECCIÓN BODEGAS ═══════════ -->
 
-  <!-- ═══════════ SECCIÓN FACTURACIÓN SII ═══════════ -->
+  <!-- ═══════════ SECCIÓN FACTURACIÓN SII (CLIENTE) ═══════════ -->
   <div id="sec-facturacion" class="main" style="display:none;">
     <div class="page-header">
       <div>
         <div class="page-title">Facturación electrónica SII</div>
-        <div class="page-date">Boletas, facturas y otros DTEs · Fase 1: Configuración</div>
+        <div class="page-date">El equipo Lusync configura tu facturación. Solo necesitas subir tu certificado digital.</div>
       </div>
       <div id="facturacionAmbiente" style="font-size:11px;padding:6px 12px;border-radius:8px;background:#FAEEDA;color:#854F0B;font-weight:500;">— Cargando —</div>
     </div>
@@ -3293,125 +3293,50 @@ tbody td {
       <div style="text-align:center;color:var(--hint);padding:20px;grid-column:1/-1;">Cargando estado...</div>
     </div>
 
-    <!-- Tabs -->
-    <div style="display:flex;gap:6px;border-bottom:1px solid var(--border);margin-bottom:16px;">
-      <button class="fact-tab active" data-tab="config" onclick="showFactTab('config', this)" style="padding:8px 14px;border:none;background:transparent;font-size:12px;color:var(--text);cursor:pointer;border-bottom:2px solid var(--primary);font-weight:500;">⚙ Configuración</button>
-      <button class="fact-tab" data-tab="certificado" onclick="showFactTab('certificado', this)" style="padding:8px 14px;border:none;background:transparent;font-size:12px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;">🔐 Certificado digital</button>
-      <button class="fact-tab" data-tab="cafs" onclick="showFactTab('cafs', this)" style="padding:8px 14px;border:none;background:transparent;font-size:12px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;">📄 CAFs (Folios)</button>
+    <!-- Tarjeta principal: subir certificado -->
+    <div style="background:var(--bg);border:0.5px solid var(--border);border-radius:12px;padding:24px;margin-bottom:18px;max-width:700px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+        <div style="width:32px;height:32px;border-radius:8px;background:#EEEDFE;color:#534AB7;display:flex;align-items:center;justify-content:center;font-size:16px;">🔐</div>
+        <div>
+          <div style="font-size:15px;font-weight:600;color:var(--text);">Certificado digital</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px;">Tu firma legal personal. Solo tú puedes subirla.</div>
+        </div>
+      </div>
+
+      <div style="background:#dbeafe;border-radius:8px;padding:12px 14px;margin-bottom:16px;font-size:11px;color:#1e40af;line-height:1.5;">
+        🔒 <b>Privacidad garantizada:</b> Tu certificado .pfx se encripta inmediatamente al subirlo (algoritmo Fernet/AES-256).
+        Ni siquiera el equipo de Lusync puede verlo o usarlo sin tu autorización. Solo se desencripta en memoria
+        cuando se firma un DTE.
+      </div>
+
+      <form id="formSubirCert" onsubmit="subirCertificado(event)" enctype="multipart/form-data">
+        <div style="margin-bottom:12px;">
+          <label style="font-size:11px;color:var(--muted);">Archivo .pfx o .p12</label>
+          <input id="cert_archivo" name="pfx" type="file" accept=".pfx,.p12" required style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
+        </div>
+        <div style="margin-bottom:14px;">
+          <label style="font-size:11px;color:var(--muted);">Contraseña del .pfx</label>
+          <input id="cert_password" name="password" type="password" required style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
+        </div>
+        <button type="submit" style="padding:9px 18px;font-size:12px;background:var(--primary);color:white;border:none;border-radius:6px;cursor:pointer;font-weight:500;">Subir certificado</button>
+      </form>
     </div>
 
-    <!-- TAB: Configuración -->
-    <div id="fact-tab-config" class="fact-tab-content">
-      <div style="background:var(--bg);border:0.5px solid var(--border);border-radius:12px;padding:20px;max-width:700px;">
-        <div style="font-size:14px;font-weight:500;color:var(--text);margin-bottom:14px;">Datos del emisor</div>
-        <form id="formFactConfig" onsubmit="guardarConfigFact(event)" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-          <div>
-            <label style="font-size:11px;color:var(--muted);">RUT empresa *</label>
-            <input id="fact_rut_emisor" type="text" placeholder="76.123.456-7" style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
-          </div>
-          <div>
-            <label style="font-size:11px;color:var(--muted);">Razón social *</label>
-            <input id="fact_razon_social" type="text" placeholder="BABYMINE SPA" style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
-          </div>
-          <div>
-            <label style="font-size:11px;color:var(--muted);">Giro</label>
-            <input id="fact_giro" type="text" placeholder="Venta al por menor de artículos para bebés" style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
-          </div>
-          <div>
-            <label style="font-size:11px;color:var(--muted);">Comuna</label>
-            <input id="fact_comuna" type="text" placeholder="Las Condes" style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
-          </div>
-          <div style="grid-column:span 2;">
-            <label style="font-size:11px;color:var(--muted);">Dirección</label>
-            <input id="fact_direccion" type="text" placeholder="Av. Apoquindo 1234, Of. 567" style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
-          </div>
-          <div>
-            <label style="font-size:11px;color:var(--muted);">Email</label>
-            <input id="fact_email" type="email" placeholder="contacto@babymine.cl" style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
-          </div>
-          <div>
-            <label style="font-size:11px;color:var(--muted);">Teléfono</label>
-            <input id="fact_telefono" type="text" placeholder="+56 9 1234 5678" style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
-          </div>
-          <div>
-            <label style="font-size:11px;color:var(--muted);">Resolución SII (número)</label>
-            <input id="fact_res_num" type="number" placeholder="80" style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
-          </div>
-          <div>
-            <label style="font-size:11px;color:var(--muted);">Resolución SII (fecha)</label>
-            <input id="fact_res_fecha" type="date" style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
-          </div>
-          <div style="grid-column:span 2;border-top:1px solid var(--border);padding-top:12px;margin-top:4px;">
-            <label style="font-size:11px;color:var(--muted);">Ambiente SII *</label>
-            <select id="fact_ambiente" style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
-              <option value="certificacion">🧪 Certificación (pruebas — NO genera DTEs reales)</option>
-              <option value="produccion">⚠️ Producción (DTEs válidos ante SII)</option>
-            </select>
-          </div>
-          <div style="grid-column:span 2;border-top:1px solid var(--border);padding-top:12px;margin-top:4px;">
-            <div style="font-size:12px;font-weight:500;color:var(--text);margin-bottom:8px;">Tipos de DTE a emitir</div>
-            <div style="display:flex;flex-wrap:wrap;gap:14px;font-size:12px;">
-              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="fact_emite_boleta" checked> Boleta (39)</label>
-              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="fact_emite_factura" checked> Factura (33)</label>
-              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="fact_emite_nota_credito" checked> Nota Crédito (61)</label>
-              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="fact_emite_nota_debito"> Nota Débito (56)</label>
-              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="fact_emite_guia_despacho"> Guía Despacho (52)</label>
-            </div>
-          </div>
-          <div style="grid-column:span 2;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--border);padding-top:14px;margin-top:8px;">
-            <button type="button" onclick="cargarFactConfig()" style="padding:8px 16px;font-size:12px;background:var(--bg2);color:var(--text);border:0.5px solid var(--border);border-radius:6px;cursor:pointer;">Cancelar</button>
-            <button type="submit" style="padding:8px 16px;font-size:12px;background:var(--primary);color:white;border:none;border-radius:6px;cursor:pointer;font-weight:500;">Guardar configuración</button>
-          </div>
-        </form>
-      </div>
+    <!-- Lista de certificados cargados -->
+    <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:8px;">Tus certificados</div>
+    <div id="listaCertificados" style="margin-bottom:24px;">
+      <div style="text-align:center;color:var(--hint);font-size:12px;padding:20px;">Cargando...</div>
     </div>
 
-    <!-- TAB: Certificado -->
-    <div id="fact-tab-certificado" class="fact-tab-content" style="display:none;">
-      <div style="background:var(--bg);border:0.5px solid var(--border);border-radius:12px;padding:20px;max-width:700px;margin-bottom:16px;">
-        <div style="font-size:14px;font-weight:500;color:var(--text);margin-bottom:6px;">Subir certificado digital</div>
-        <div style="font-size:11px;color:var(--muted);margin-bottom:14px;">Archivo .pfx o .p12 con su contraseña. Se guarda encriptado con Fernet.</div>
-        <form id="formSubirCert" onsubmit="subirCertificado(event)" enctype="multipart/form-data">
-          <div style="margin-bottom:12px;">
-            <label style="font-size:11px;color:var(--muted);">Archivo .pfx</label>
-            <input id="cert_archivo" name="pfx" type="file" accept=".pfx,.p12" required style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
-          </div>
-          <div style="margin-bottom:14px;">
-            <label style="font-size:11px;color:var(--muted);">Contraseña del .pfx</label>
-            <input id="cert_password" name="password" type="password" required style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
-          </div>
-          <button type="submit" style="padding:8px 16px;font-size:12px;background:var(--primary);color:white;border:none;border-radius:6px;cursor:pointer;font-weight:500;">Subir certificado</button>
-        </form>
-      </div>
-
-      <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:8px;">Certificados cargados</div>
-      <div id="listaCertificados">
-        <div style="text-align:center;color:var(--hint);font-size:12px;padding:20px;">Cargando...</div>
-      </div>
-    </div>
-
-    <!-- TAB: CAFs -->
-    <div id="fact-tab-cafs" class="fact-tab-content" style="display:none;">
-      <div style="background:var(--bg);border:0.5px solid var(--border);border-radius:12px;padding:20px;max-width:700px;margin-bottom:16px;">
-        <div style="font-size:14px;font-weight:500;color:var(--text);margin-bottom:6px;">Subir CAF (XML del SII)</div>
-        <div style="font-size:11px;color:var(--muted);margin-bottom:14px;">Solicita los CAFs en <a href="https://palena.sii.cl/cvc/dte/ee_solicita_caf_inicio.html" target="_blank" style="color:var(--primary);">palena.sii.cl → Folios</a> y sube aquí el archivo XML.</div>
-        <form id="formSubirCAF" onsubmit="subirCAF(event)" enctype="multipart/form-data">
-          <div style="margin-bottom:12px;">
-            <label style="font-size:11px;color:var(--muted);">Archivo XML del CAF</label>
-            <input id="caf_archivo" name="caf" type="file" accept=".xml" required style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
-          </div>
-          <button type="submit" style="padding:8px 16px;font-size:12px;background:var(--primary);color:white;border:none;border-radius:6px;cursor:pointer;font-weight:500;">Subir CAF</button>
-        </form>
-      </div>
-
-      <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:8px;">CAFs cargados</div>
-      <div id="listaCAFs">
-        <div style="text-align:center;color:var(--hint);font-size:12px;padding:20px;">Cargando...</div>
-      </div>
+    <!-- Info: configuración y folios (read-only) -->
+    <div style="background:var(--bg2);border-radius:10px;padding:16px;font-size:12px;color:var(--muted);">
+      <b style="color:var(--text);">¿Necesitas cambiar la configuración?</b><br>
+      Los datos de tu empresa (RUT, razón social, ambiente SII) y los folios autorizados (CAFs) los administra Lusync.
+      Si necesitas un cambio, escríbenos a <a href="mailto:soporte@lusync.cl" style="color:var(--primary);">soporte@lusync.cl</a>.
     </div>
 
   </div>
-  <!-- ═══════════ FIN SECCIÓN FACTURACIÓN ═══════════ -->
+  <!-- ═══════════ FIN SECCIÓN FACTURACIÓN CLIENTE ═══════════ -->
 
   <div id="sec-configuracion" class="main" style="display:none;">
     <div class="page-header">
@@ -10042,27 +9967,8 @@ let _bodegasCambios = {};  // { "sku|bodega_codigo": cantidad_nueva }
 
 
 // ════════════════════════════════════════════════════════════════════════════
-// SECCIÓN FACTURACIÓN SII
+// SECCIÓN FACTURACIÓN SII (CLIENTE — solo certificado)
 // ════════════════════════════════════════════════════════════════════════════
-
-function showFactTab(tab, btn){
-  ['config','certificado','cafs'].forEach(t => {
-    const el = document.getElementById('fact-tab-' + t);
-    if(el) el.style.display = t === tab ? '' : 'none';
-  });
-  document.querySelectorAll('.fact-tab').forEach(b => {
-    b.style.borderBottom = '2px solid transparent';
-    b.style.color = 'var(--muted)';
-    b.style.fontWeight = '400';
-  });
-  if(btn){
-    btn.style.borderBottom = '2px solid var(--primary)';
-    btn.style.color = 'var(--text)';
-    btn.style.fontWeight = '500';
-  }
-  if(tab === 'certificado') cargarListaCertificados();
-  if(tab === 'cafs') cargarListaCAFs();
-}
 
 async function cargarFacturacionDashboard(){
   try {
@@ -10093,95 +9999,27 @@ async function cargarFacturacionDashboard(){
     cont.innerHTML = `
       <div style="background:${bgOK(d.config_completa)};padding:14px;border-radius:10px;border:0.5px solid ${colorOK(d.config_completa)}33;">
         <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">${check(d.config_completa)} Configuración</div>
-        <div style="font-size:14px;font-weight:600;color:${colorOK(d.config_completa)};">${d.config_completa ? 'Completa' : 'Incompleta'}</div>
-        <div style="font-size:10px;color:var(--muted);margin-top:2px;">${d.config.rut_emisor || '— Sin RUT —'}</div>
+        <div style="font-size:14px;font-weight:600;color:${colorOK(d.config_completa)};">${d.config_completa ? 'Completa' : 'Pendiente'}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:2px;">${(d.config && d.config.rut_emisor) || 'Configurado por Lusync'}</div>
       </div>
       <div style="background:${bgOK(!!d.certificado_activo)};padding:14px;border-radius:10px;border:0.5px solid ${colorOK(!!d.certificado_activo)}33;">
-        <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">${check(!!d.certificado_activo)} Certificado digital</div>
-        <div style="font-size:14px;font-weight:600;color:${colorOK(!!d.certificado_activo)};">${d.certificado_activo ? 'Activo' : 'No cargado'}</div>
-        <div style="font-size:10px;color:var(--muted);margin-top:2px;">${d.certificado_activo ? ('Vence ' + (d.certificado_activo.fecha_expiracion || '—')) : 'Sube tu .pfx'}</div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">${check(!!d.certificado_activo)} Tu certificado</div>
+        <div style="font-size:14px;font-weight:600;color:${colorOK(!!d.certificado_activo)};">${d.certificado_activo ? 'Cargado' : 'No cargado'}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:2px;">${d.certificado_activo ? ('Vence ' + (d.certificado_activo.fecha_expiracion || '—')) : 'Sube tu .pfx abajo'}</div>
       </div>
       <div style="background:${bgOK(d.cafs_activos_count > 0)};padding:14px;border-radius:10px;border:0.5px solid ${colorOK(d.cafs_activos_count > 0)}33;">
-        <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">${check(d.cafs_activos_count > 0)} CAFs activos</div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">${check(d.cafs_activos_count > 0)} Folios disponibles</div>
         <div style="font-size:14px;font-weight:600;color:${colorOK(d.cafs_activos_count > 0)};">${d.cafs_activos_count}</div>
-        <div style="font-size:10px;color:var(--muted);margin-top:2px;">${d.tipos_dte_disponibles.length ? 'Tipos: ' + d.tipos_dte_disponibles.join(', ') : 'Sin folios'}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:2px;">${d.tipos_dte_disponibles.length ? 'Tipos: ' + d.tipos_dte_disponibles.join(', ') : 'Gestionados por Lusync'}</div>
       </div>
       <div style="background:${bgOK(d.listo_para_emitir)};padding:14px;border-radius:10px;border:0.5px solid ${colorOK(d.listo_para_emitir)}33;">
-        <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">${check(d.listo_para_emitir)} Estado</div>
-        <div style="font-size:14px;font-weight:600;color:${colorOK(d.listo_para_emitir)};">${d.listo_para_emitir ? 'Listo' : 'Falta config'}</div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">${check(d.listo_para_emitir)} Estado general</div>
+        <div style="font-size:14px;font-weight:600;color:${colorOK(d.listo_para_emitir)};">${d.listo_para_emitir ? 'Listo' : 'En preparación'}</div>
         <div style="font-size:10px;color:var(--muted);margin-top:2px;">${d.fase_actual}</div>
       </div>
     `;
   } catch(e){
     console.error('[Facturación] Error dashboard:', e);
-  }
-}
-
-async function cargarFactConfig(){
-  try {
-    const r = await fetch('/facturacion/config');
-    const d = await r.json();
-    const c = d.config || {};
-    const set = (id, val) => { const e = document.getElementById(id); if(e) e.value = val || ''; };
-    const setChk = (id, val) => { const e = document.getElementById(id); if(e) e.checked = !!val; };
-    set('fact_rut_emisor', c.rut_emisor);
-    set('fact_razon_social', c.razon_social);
-    set('fact_giro', c.giro);
-    set('fact_direccion', c.direccion);
-    set('fact_comuna', c.comuna);
-    set('fact_email', c.email);
-    set('fact_telefono', c.telefono);
-    set('fact_res_num', c.resolucion_sii_numero);
-    set('fact_res_fecha', c.resolucion_sii_fecha);
-    set('fact_ambiente', c.ambiente || 'certificacion');
-    setChk('fact_emite_boleta', c.emite_boleta !== false);
-    setChk('fact_emite_factura', c.emite_factura !== false);
-    setChk('fact_emite_nota_credito', c.emite_nota_credito !== false);
-    setChk('fact_emite_nota_debito', c.emite_nota_debito);
-    setChk('fact_emite_guia_despacho', c.emite_guia_despacho);
-  } catch(e){
-    console.error('[Facturación] Error cargando config:', e);
-  }
-}
-
-async function guardarConfigFact(ev){
-  ev.preventDefault();
-  const data = {
-    rut_emisor: document.getElementById('fact_rut_emisor').value.trim(),
-    razon_social: document.getElementById('fact_razon_social').value.trim(),
-    giro: document.getElementById('fact_giro').value.trim(),
-    direccion: document.getElementById('fact_direccion').value.trim(),
-    comuna: document.getElementById('fact_comuna').value.trim(),
-    email: document.getElementById('fact_email').value.trim(),
-    telefono: document.getElementById('fact_telefono').value.trim(),
-    resolucion_sii_numero: parseInt(document.getElementById('fact_res_num').value) || null,
-    resolucion_sii_fecha: document.getElementById('fact_res_fecha').value || null,
-    ambiente: document.getElementById('fact_ambiente').value,
-    emite_boleta: document.getElementById('fact_emite_boleta').checked,
-    emite_factura: document.getElementById('fact_emite_factura').checked,
-    emite_nota_credito: document.getElementById('fact_emite_nota_credito').checked,
-    emite_nota_debito: document.getElementById('fact_emite_nota_debito').checked,
-    emite_guia_despacho: document.getElementById('fact_emite_guia_despacho').checked,
-  };
-  if(!data.rut_emisor || !data.razon_social){
-    toast('RUT y Razón Social son obligatorios');
-    return;
-  }
-  try {
-    const r = await fetch('/facturacion/config', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(data)
-    });
-    const result = await r.json();
-    if(result.ok){
-      toast('✅ Configuración guardada');
-      cargarFacturacionDashboard();
-    } else {
-      toast('Error: ' + (result.error || 'desconocido'));
-    }
-  } catch(e){
-    toast('Error de red: ' + e.message);
   }
 }
 
@@ -10225,7 +10063,7 @@ async function cargarListaCertificados(){
     const d = await r.json();
     const certs = d.certificados || [];
     if(!certs.length){
-      cont.innerHTML = '<div style="text-align:center;color:var(--hint);font-size:12px;padding:20px;">No hay certificados cargados</div>';
+      cont.innerHTML = '<div style="text-align:center;color:var(--hint);font-size:12px;padding:20px;">Aún no has subido tu certificado digital</div>';
       return;
     }
     cont.innerHTML = certs.map(c => {
@@ -10248,7 +10086,7 @@ async function cargarListaCertificados(){
 }
 
 async function eliminarCertificado(certId){
-  if(!confirm('¿Eliminar este certificado? No podrás recuperarlo.')) return;
+  if(!confirm('¿Eliminar este certificado? No podrás recuperarlo. Tendrás que subirlo de nuevo si quieres facturar.')) return;
   try {
     const r = await fetch(`/facturacion/certificado/${certId}/eliminar`, {method:'POST'});
     const d = await r.json();
@@ -10261,67 +10099,6 @@ async function eliminarCertificado(certId){
     }
   } catch(e){
     toast('Error: ' + e.message);
-  }
-}
-
-async function subirCAF(ev){
-  ev.preventDefault();
-  const archivo = document.getElementById('caf_archivo').files[0];
-  if(!archivo){
-    toast('Selecciona el archivo XML del CAF');
-    return;
-  }
-  const fd = new FormData();
-  fd.append('caf', archivo);
-
-  toast('Procesando CAF...');
-  try {
-    const r = await fetch('/facturacion/caf/subir', {method:'POST', body: fd});
-    const result = await r.json();
-    if(result.ok){
-      const info = result.info || {};
-      toast(`✅ CAF cargado. Tipo ${info.tipo_dte}, folios ${info.folio_desde}-${info.folio_hasta} (${info.total_folios} folios)`);
-      document.getElementById('caf_archivo').value = '';
-      cargarListaCAFs();
-      cargarFacturacionDashboard();
-    } else {
-      toast('Error: ' + (result.error || 'desconocido'));
-    }
-  } catch(e){
-    toast('Error: ' + e.message);
-  }
-}
-
-async function cargarListaCAFs(){
-  const cont = document.getElementById('listaCAFs');
-  if(!cont) return;
-  try {
-    const r = await fetch('/facturacion/caf/listar');
-    const d = await r.json();
-    const cafs = d.cafs || [];
-    if(!cafs.length){
-      cont.innerHTML = '<div style="text-align:center;color:var(--hint);font-size:12px;padding:20px;">No hay CAFs cargados</div>';
-      return;
-    }
-    cont.innerHTML = cafs.map(c => {
-      const pctColor = c.pct_usado > 90 ? '#E24B4A' : (c.pct_usado > 70 ? '#854F0B' : '#1D9E75');
-      const estado = c.agotado ? '<span style="background:#fef2f2;color:#A32D2D;padding:2px 8px;border-radius:8px;font-size:10px;">Agotado</span>' : '<span style="background:#eaf3ee;color:#1D9E75;padding:2px 8px;border-radius:8px;font-size:10px;">Activo</span>';
-      const ambBadge = c.ambiente === 'produccion' ? '<span style="background:#fef2f2;color:#A32D2D;padding:2px 6px;border-radius:6px;font-size:9px;margin-left:4px;">PROD</span>' : '<span style="background:#FAEEDA;color:#854F0B;padding:2px 6px;border-radius:6px;font-size:9px;margin-left:4px;">CERT</span>';
-      return `<div style="background:var(--bg);border:0.5px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;">
-        <div style="display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:8px;">
-          <div>
-            <div style="font-size:13px;color:var(--text);font-weight:500;">${c.tipo_dte_nombre} (${c.tipo_dte}) ${estado}${ambBadge}</div>
-            <div style="font-size:11px;color:var(--muted);margin-top:2px;">Folios ${c.folio_desde} – ${c.folio_hasta} · Próximo: ${c.folio_actual}</div>
-          </div>
-          <div style="text-align:right;font-size:11px;color:${pctColor};font-weight:500;">${c.folios_usados}/${c.folios_total} usados (${c.pct_usado}%)</div>
-        </div>
-        <div style="background:var(--bg2);height:5px;border-radius:3px;overflow:hidden;">
-          <div style="height:100%;width:${c.pct_usado}%;background:${pctColor};"></div>
-        </div>
-      </div>`;
-    }).join('');
-  } catch(e){
-    cont.innerHTML = '<div style="color:#E24B4A;padding:20px;">Error: ' + e.message + '</div>';
   }
 }
 

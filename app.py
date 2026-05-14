@@ -13623,6 +13623,7 @@ def admin_lusync_tenant_detalle(tenant_id):
                 <div style="display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap;">
                     <a href="/admin/lusync/impersonate/{tenant_id}" style="background:#534AB7;color:white;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:500;text-decoration:none;">👁 Ver como cliente</a>
                     <a href="/admin/lusync/tenant/{tenant_id}/conectar_marketplace" style="background:#10b981;color:white;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:500;text-decoration:none;">+ Conectar marketplace</a>
+                    <a href="/admin/lusync/sii/tenant/{tenant_id}" style="background:#f59e0b;color:white;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:500;text-decoration:none;">📄 Configurar SII</a>
                     <button onclick="cambiarEstado({tenant_id}, '{accion_estado}')" style="background:white;color:#1f1e1b;border:1px solid #e5e7eb;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">{boton_estado}</button>
                     <button onclick="cambiarPlan({tenant_id})" style="background:white;color:#1f1e1b;border:1px solid #e5e7eb;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">Cambiar plan</button>
                 </div>
@@ -20345,41 +20346,32 @@ def ventas_export_csv():
 
 @app.route("/facturacion/config", methods=["GET", "POST"])
 def facturacion_config():
-    """GET: obtener config actual del tenant logueado.
-    POST: actualizar config (RUT, razón social, ambiente, etc).
+    """GET: el tenant ve su config (solo lectura).
+    POST: rechazado — la configuración SII solo la maneja Lusync admin.
     """
     if not session.get("logged"):
         return jsonify({"error": "no autenticado"}), 401
 
-    tenant_id = session.get("tenant_id") or 1  # fallback Babymine
-    from facturacion import (obtener_config_facturacion, guardar_config_facturacion,
-                             validar_rut, formatear_rut, normalizar_ambiente)
+    if request.method == "POST":
+        return jsonify({
+            "ok": False,
+            "error": "La configuración SII (RUT, razón social, ambiente) la administra Lusync. Contáctanos si necesitas un cambio."
+        }), 403
+
+    tenant_id = session.get("tenant_id") or 1
+    from facturacion import obtener_config_facturacion
     from inventario import get_conn, release_conn
 
-    if request.method == "GET":
-        config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
-        return jsonify({"config": config or {}})
-
-    # POST: actualizar
-    data = request.get_json() or {}
-
-    # Validar RUT si viene
-    if data.get("rut_emisor"):
-        if not validar_rut(data["rut_emisor"]):
-            return jsonify({"ok": False, "error": "RUT inválido"}), 400
-        data["rut_emisor"] = formatear_rut(data["rut_emisor"])
-
-    # Normalizar ambiente
-    if "ambiente" in data:
-        data["ambiente"] = normalizar_ambiente(data["ambiente"])
-
-    resultado = guardar_config_facturacion(get_conn, release_conn, tenant_id, data)
-    return jsonify(resultado)
+    config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+    return jsonify({"config": config or {}})
 
 
 @app.route("/facturacion/certificado/subir", methods=["POST"])
 def facturacion_certificado_subir():
-    """Sube un certificado .pfx para el tenant logueado."""
+    """Cliente sube su certificado .pfx — su firma legal personal.
+    Lusync NUNCA ve el cert ni el password en claro: se encripta con Fernet
+    inmediatamente al recibirlo. Ni siquiera el super-admin puede leerlo.
+    """
     if not session.get("logged"):
         return jsonify({"error": "no autenticado"}), 401
 
@@ -20394,24 +20386,30 @@ def facturacion_certificado_subir():
     if not pfx_file.filename:
         return jsonify({"ok": False, "error": "Archivo vacío"}), 400
     if not password:
-        return jsonify({"ok": False, "error": "Password requerido"}), 400
+        return jsonify({"ok": False, "error": "Contraseña del .pfx requerida"}), 400
 
-    pfx_bytes = pfx_file.read()
-    nombre_archivo = pfx_file.filename
-
-    from facturacion import subir_certificado
+    # Verificar que el tenant tenga la config base completa (RUT al menos)
+    # Si no, no tiene sentido subir cert: no podríamos validar que coincida con SII
+    from facturacion import obtener_config_facturacion, subir_certificado
     from inventario import get_conn, release_conn
+
+    config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+    if not config or not config.get("rut_emisor"):
+        return jsonify({
+            "ok": False,
+            "error": "Antes de subir tu certificado, el equipo Lusync debe configurar tu RUT. Contáctanos."
+        }), 400
 
     resultado = subir_certificado(
         get_conn, release_conn, tenant_id,
-        pfx_bytes, password, nombre_archivo, activar=activar
+        pfx_file.read(), password, pfx_file.filename, activar=activar
     )
 
-    # Auditar
+    # Auditar (sin guardar password en log obviamente)
     try:
         if resultado.get("ok"):
             registrar_audit(
-                session.get("usuario", "Sistema"), request.remote_addr,
+                session.get("usuario", "Cliente"), request.remote_addr,
                 "subir_certificado_sii",
                 entidad="facturacion_certificados",
                 detalle=f"Cert ID {resultado['certificado_id']}, RUT {resultado['metadata'].get('rut')}"
@@ -20423,7 +20421,7 @@ def facturacion_certificado_subir():
 
 @app.route("/facturacion/certificado/listar", methods=["GET"])
 def facturacion_certificado_listar():
-    """Lista certificados del tenant (sin exponer binarios)."""
+    """Cliente: ver estado de su certificado (sin info sensible binaria)."""
     if not session.get("logged"):
         return jsonify({"error": "no autenticado"}), 401
 
@@ -20437,7 +20435,7 @@ def facturacion_certificado_listar():
 
 @app.route("/facturacion/certificado/<int:cert_id>/eliminar", methods=["DELETE", "POST"])
 def facturacion_certificado_eliminar(cert_id):
-    """Elimina un certificado del tenant."""
+    """Cliente puede eliminar su propio certificado (ej. si subió uno por error)."""
     if not session.get("logged"):
         return jsonify({"error": "no autenticado"}), 401
 
@@ -20450,7 +20448,7 @@ def facturacion_certificado_eliminar(cert_id):
     try:
         if resultado.get("ok"):
             registrar_audit(
-                session.get("usuario", "Sistema"), request.remote_addr,
+                session.get("usuario", "Cliente"), request.remote_addr,
                 "eliminar_certificado_sii",
                 entidad="facturacion_certificados",
                 detalle=f"Cert ID {cert_id}"
@@ -20462,50 +20460,16 @@ def facturacion_certificado_eliminar(cert_id):
 
 @app.route("/facturacion/caf/subir", methods=["POST"])
 def facturacion_caf_subir():
-    """Sube un archivo CAF (XML) para el tenant logueado."""
-    if not session.get("logged"):
-        return jsonify({"error": "no autenticado"}), 401
-
-    tenant_id = session.get("tenant_id") or 1
-    if "caf" not in request.files:
-        return jsonify({"ok": False, "error": "Falta archivo XML del CAF"}), 400
-
-    caf_file = request.files["caf"]
-    if not caf_file.filename:
-        return jsonify({"ok": False, "error": "Archivo vacío"}), 400
-
-    xml_caf = caf_file.read()
-
-    # Obtener RUT del tenant para validar
-    from facturacion import subir_caf, obtener_config_facturacion
-    from inventario import get_conn, release_conn
-
-    config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
-    rut_esperado = config.get("rut_emisor") if config else None
-    ambiente = config.get("ambiente") if config else "certificacion"
-
-    resultado = subir_caf(
-        get_conn, release_conn, tenant_id, xml_caf,
-        rut_emisor_esperado=rut_esperado, ambiente=ambiente
-    )
-
-    try:
-        if resultado.get("ok"):
-            info = resultado.get("info", {})
-            registrar_audit(
-                session.get("usuario", "Sistema"), request.remote_addr,
-                "subir_caf_sii",
-                entidad="facturacion_cafs",
-                detalle=f"CAF ID {resultado['caf_id']}, tipo {info.get('tipo_dte')}, folios {info.get('folio_desde')}-{info.get('folio_hasta')}"
-            )
-    except Exception: pass
-
-    return jsonify(resultado)
+    """Endpoint deshabilitado — los folios los gestiona Lusync."""
+    return jsonify({
+        "ok": False,
+        "error": "La gestión de folios (CAFs) la realiza Lusync por ti. Si necesitas más folios, contáctanos."
+    }), 403
 
 
 @app.route("/facturacion/caf/listar", methods=["GET"])
 def facturacion_caf_listar():
-    """Lista CAFs del tenant con info de folios consumidos."""
+    """Cliente: ver folios disponibles (read-only, sin XML completo)."""
     if not session.get("logged"):
         return jsonify({"error": "no autenticado"}), 401
 
@@ -20519,7 +20483,7 @@ def facturacion_caf_listar():
 
 @app.route("/facturacion/dashboard", methods=["GET"])
 def facturacion_dashboard():
-    """Resumen del estado de facturación del tenant: cert + CAFs + config."""
+    """Cliente: resumen del estado de su facturación."""
     if not session.get("logged"):
         return jsonify({"error": "no autenticado"}), 401
 
@@ -20532,17 +20496,17 @@ def facturacion_dashboard():
     certs = listar_certificados_tenant(get_conn, release_conn, tenant_id)
     cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id)
 
-    # Resumen ejecutivo
     cert_activo = next((c for c in certs if c["activo"]), None)
     cafs_activos = [c for c in cafs if not c["agotado"]]
     tipos_dte_disponibles = sorted(set(c["tipo_dte"] for c in cafs_activos))
 
-    # ¿Está listo para emitir?
     config_completa = bool(config and config.get("rut_emisor") and config.get("razon_social"))
     listo_para_emitir = bool(config_completa and cert_activo and len(cafs_activos) > 0)
 
     return jsonify({
-        "config": config or {},
+        "config": {"rut_emisor": config.get("rut_emisor") if config else None,
+                   "razon_social": config.get("razon_social") if config else None,
+                   "ambiente": config.get("ambiente") if config else None},
         "config_completa": config_completa,
         "certificado_activo": cert_activo,
         "cantidad_certificados": len(certs),
@@ -20560,7 +20524,9 @@ def facturacion_dashboard():
 @app.route("/admin/lusync/facturacion/tenant/<int:tenant_id>", methods=["GET"])
 @requiere_lusync_admin
 def admin_lusync_facturacion_tenant(tenant_id):
-    """Super-admin: ver estado facturación de un tenant específico (sin secretos)."""
+    """JSON: estado completo facturación de un tenant para super-admin.
+    Usado por la vista /admin/lusync/sii/tenant/<id> vía AJAX.
+    """
     from facturacion import (obtener_config_facturacion, listar_certificados_tenant,
                              listar_cafs_tenant)
     from inventario import get_conn, release_conn
@@ -20575,6 +20541,384 @@ def admin_lusync_facturacion_tenant(tenant_id):
         "certificados": certs,
         "cafs": cafs,
     })
+
+
+@app.route("/admin/lusync/sii/tenant/<int:tenant_id>", methods=["GET"])
+@requiere_lusync_admin
+def admin_lusync_sii_tenant(tenant_id):
+    """Vista de gestión completa de facturación SII de un tenant.
+    Solo accesible por super-admin Lusync. El cliente NO ve esto.
+    """
+    try:
+        from tenancy import listar_tenants
+        tenants = listar_tenants()
+        tenant = next((t for t in tenants if t["id"] == tenant_id), None)
+        if not tenant:
+            return f"<h1>Tenant {tenant_id} no encontrado</h1>", 404
+
+        return f"""<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<title>SII · {tenant['nombre']} · Lusync</title>
+<style>
+body{{font-family:-apple-system,BlinkMacSystemFont,'Inter',sans-serif;background:#f9f8f5;margin:0;padding:0;color:#1f1e1b;}}
+.container{{max-width:1200px;margin:0 auto;padding:24px;}}
+.header{{display:flex;justify-content:space-between;align-items:start;margin-bottom:8px;}}
+.back-link{{color:#534AB7;text-decoration:none;font-size:12px;margin-bottom:12px;display:inline-block;}}
+h1{{margin:0 0 4px;font-size:22px;}}
+.subtitle{{color:#6b7280;font-size:13px;margin-bottom:24px;}}
+.cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:24px;}}
+.card{{background:white;border:1px solid #e5e7eb;border-radius:10px;padding:14px;}}
+.card-label{{font-size:10px;color:#6b7280;margin-bottom:4px;}}
+.card-value{{font-size:14px;font-weight:600;}}
+.card-sub{{font-size:10px;color:#6b7280;margin-top:2px;}}
+.tabs{{display:flex;gap:4px;border-bottom:1px solid #e5e7eb;margin-bottom:16px;}}
+.tab{{padding:10px 18px;border:none;background:transparent;font-size:13px;cursor:pointer;color:#6b7280;border-bottom:2px solid transparent;}}
+.tab.active{{color:#1f1e1b;border-bottom-color:#534AB7;font-weight:500;}}
+.section{{background:white;border:1px solid #e5e7eb;border-radius:10px;padding:20px;margin-bottom:14px;}}
+.form-grid{{display:grid;grid-template-columns:1fr 1fr;gap:12px;}}
+.form-grid label{{font-size:11px;color:#6b7280;display:block;}}
+.form-grid input,.form-grid select{{width:100%;padding:8px;font-size:12px;border:1px solid #e5e7eb;border-radius:6px;margin-top:4px;box-sizing:border-box;}}
+.btn{{padding:8px 16px;font-size:12px;border-radius:6px;cursor:pointer;font-weight:500;border:none;}}
+.btn-primary{{background:#534AB7;color:white;}}
+.btn-secondary{{background:#f3f4f6;color:#1f1e1b;border:1px solid #e5e7eb;}}
+.btn-danger{{background:#fef2f2;color:#A32D2D;border:1px solid #E24B4A33;}}
+.full-span{{grid-column:span 2;}}
+.warn{{background:#fef3c7;color:#92400e;padding:12px 14px;border-radius:8px;font-size:12px;margin-bottom:14px;border:1px solid #fcd34d33;}}
+</style>
+</head><body>
+<div class="container">
+    <a class="back-link" href="/admin/lusync/tenant/{tenant_id}">← Volver a {tenant['nombre']}</a>
+    <div class="header">
+        <div>
+            <h1>📄 Facturación SII · {tenant['nombre']}</h1>
+            <div class="subtitle">Configuración de boletas, facturas y otros DTEs · RUT {tenant.get('rut') or '—'}</div>
+        </div>
+        <div id="ambienteBadge" style="font-size:11px;padding:6px 12px;border-radius:8px;background:#FAEEDA;color:#854F0B;font-weight:500;">Cargando…</div>
+    </div>
+
+    <div class="warn">
+        ⚠ Esta sección es <b>solo para administradores Lusync</b>. El cliente {tenant['nombre']} no ve estos datos —
+        solo ve el historial de DTEs emitidos. Configurar la facturación es responsabilidad de Lusync.
+    </div>
+
+    <div class="cards" id="cards"><div style="grid-column:1/-1;text-align:center;color:#9ca3af;padding:20px;">Cargando estado…</div></div>
+
+    <div class="tabs">
+        <button class="tab active" onclick="showTab('config', this)">⚙ Datos del emisor</button>
+        <button class="tab" onclick="showTab('cafs', this)">📄 CAFs (Folios)</button>
+        <button class="tab" onclick="showTab('cert', this)">🔐 Certificado (solo lectura)</button>
+    </div>
+
+    <div id="tab-config" class="section">
+        <form id="formConfig" onsubmit="guardarConfig(event)">
+            <div class="form-grid">
+                <div><label>RUT empresa *</label><input id="rut_emisor" placeholder="76.123.456-7" required></div>
+                <div><label>Razón social *</label><input id="razon_social" placeholder="EMPRESA SPA" required></div>
+                <div><label>Giro</label><input id="giro" placeholder="Venta al por menor"></div>
+                <div><label>Comuna</label><input id="comuna" placeholder="Las Condes"></div>
+                <div class="full-span"><label>Dirección</label><input id="direccion" placeholder="Av. Apoquindo 1234"></div>
+                <div><label>Email</label><input id="email" type="email"></div>
+                <div><label>Teléfono</label><input id="telefono"></div>
+                <div><label>Resolución SII (número)</label><input id="res_num" type="number" placeholder="80"></div>
+                <div><label>Resolución SII (fecha)</label><input id="res_fecha" type="date"></div>
+                <div class="full-span" style="border-top:1px solid #e5e7eb;padding-top:12px;margin-top:4px;">
+                    <label>Ambiente SII *</label>
+                    <select id="ambiente">
+                        <option value="certificacion">🧪 Certificación (pruebas SII)</option>
+                        <option value="produccion">⚠️ Producción (DTEs reales)</option>
+                    </select>
+                </div>
+                <div class="full-span" style="border-top:1px solid #e5e7eb;padding-top:12px;margin-top:4px;">
+                    <div style="font-size:12px;font-weight:500;margin-bottom:8px;">Tipos de DTE habilitados</div>
+                    <div style="display:flex;flex-wrap:wrap;gap:14px;font-size:12px;">
+                        <label><input type="checkbox" id="em_boleta" checked> Boleta (39)</label>
+                        <label><input type="checkbox" id="em_factura" checked> Factura (33)</label>
+                        <label><input type="checkbox" id="em_nc" checked> Nota Crédito (61)</label>
+                        <label><input type="checkbox" id="em_nd"> Nota Débito (56)</label>
+                        <label><input type="checkbox" id="em_gd"> Guía Despacho (52)</label>
+                    </div>
+                </div>
+                <div class="full-span" style="display:flex;justify-content:flex-end;gap:10px;border-top:1px solid #e5e7eb;padding-top:14px;margin-top:8px;">
+                    <button type="button" class="btn btn-secondary" onclick="cargarConfig()">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Guardar configuración</button>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <div id="tab-cert" class="section" style="display:none;">
+        <div style="margin-bottom:18px;padding:14px;background:#dbeafe;border-radius:8px;font-size:12px;color:#1e40af;">
+            🔒 <b>El certificado .pfx lo sube el cliente directamente</b> desde su panel.
+            Lusync NO tiene acceso al certificado ni a su contraseña — están encriptados con Fernet
+            y solo el cliente puede subirlo/eliminarlo. Esto preserva su firma legal personal.
+        </div>
+
+        <div style="font-size:13px;font-weight:500;margin-bottom:8px;">Estado del certificado del cliente</div>
+        <div id="listaCerts"><div style="color:#9ca3af;font-size:12px;text-align:center;padding:20px;">Cargando…</div></div>
+    </div>
+
+    <div id="tab-cafs" class="section" style="display:none;">
+        <div style="margin-bottom:14px;padding:14px;background:#dbeafe;border-radius:8px;font-size:12px;color:#1e40af;">
+            💡 Los CAFs se solicitan en <a href="https://palena.sii.cl/cvc/dte/ee_solicita_caf_inicio.html" target="_blank" style="color:#1e40af;font-weight:500;">palena.sii.cl → Folios</a>.
+            Descarga el XML que entrega el SII y súbelo aquí.
+        </div>
+        <form onsubmit="subirCAF(event)" enctype="multipart/form-data">
+            <div style="margin-bottom:12px;">
+                <label style="font-size:11px;color:#6b7280;">Archivo XML del CAF</label>
+                <input type="file" name="caf" id="caf_file" accept=".xml" required style="width:100%;padding:8px;font-size:12px;border:1px solid #e5e7eb;border-radius:6px;margin-top:4px;">
+            </div>
+            <button type="submit" class="btn btn-primary">Subir CAF</button>
+        </form>
+
+        <div style="margin-top:24px;font-size:13px;font-weight:500;margin-bottom:8px;">CAFs cargados</div>
+        <div id="listaCAFs"><div style="color:#9ca3af;font-size:12px;text-align:center;padding:20px;">Cargando…</div></div>
+    </div>
+
+</div>
+
+<script>
+const TENANT_ID = {tenant_id};
+
+function showTab(tab, btn){{
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    ['config','cert','cafs'].forEach(t => {{
+        document.getElementById('tab-' + t).style.display = (t === tab ? '' : 'none');
+    }});
+    if (tab === 'cert') listarCerts();
+    if (tab === 'cafs') listarCAFs();
+}}
+
+async function cargarDashboard(){{
+    try {{
+        const r = await fetch(`/admin/lusync/facturacion/tenant/${{TENANT_ID}}`);
+        const d = await r.json();
+        const config = d.config || {{}};
+        const amb = config.ambiente || 'certificacion';
+        const badge = document.getElementById('ambienteBadge');
+        if (amb === 'produccion') {{
+            badge.style.background = '#fef2f2'; badge.style.color = '#A32D2D';
+            badge.textContent = '⚠️ Ambiente: Producción';
+        }} else {{
+            badge.style.background = '#FAEEDA'; badge.style.color = '#854F0B';
+            badge.textContent = '🧪 Ambiente: Certificación';
+        }}
+
+        const certActivo = (d.certificados || []).find(c => c.activo);
+        const cafsActivos = (d.cafs || []).filter(c => !c.agotado);
+        const configCompleta = !!(config.rut_emisor && config.razon_social);
+        const listo = configCompleta && certActivo && cafsActivos.length > 0;
+
+        const check = ok => ok ? '✅' : '⚠️';
+        const colOK = ok => ok ? '#1D9E75' : '#E24B4A';
+        const bgOK = ok => ok ? '#eaf3ee' : '#fef2f2';
+
+        document.getElementById('cards').innerHTML = `
+            <div class="card" style="background:${{bgOK(configCompleta)}};">
+                <div class="card-label">${{check(configCompleta)}} Configuración</div>
+                <div class="card-value" style="color:${{colOK(configCompleta)}};">${{configCompleta?'Completa':'Incompleta'}}</div>
+                <div class="card-sub">${{config.rut_emisor || '—'}}</div>
+            </div>
+            <div class="card" style="background:${{bgOK(!!certActivo)}};">
+                <div class="card-label">${{check(!!certActivo)}} Certificado</div>
+                <div class="card-value" style="color:${{colOK(!!certActivo)}};">${{certActivo?'Activo':'No cargado'}}</div>
+                <div class="card-sub">${{certActivo?('Vence '+(certActivo.fecha_expiracion||'—')):'Sube el .pfx del cliente'}}</div>
+            </div>
+            <div class="card" style="background:${{bgOK(cafsActivos.length>0)}};">
+                <div class="card-label">${{check(cafsActivos.length>0)}} CAFs activos</div>
+                <div class="card-value" style="color:${{colOK(cafsActivos.length>0)}};">${{cafsActivos.length}}</div>
+                <div class="card-sub">${{cafsActivos.length?'Tipos: '+[...new Set(cafsActivos.map(c=>c.tipo_dte))].join(', '):'Sin folios'}}</div>
+            </div>
+            <div class="card" style="background:${{bgOK(listo)}};">
+                <div class="card-label">${{check(listo)}} Estado</div>
+                <div class="card-value" style="color:${{colOK(listo)}};">${{listo?'Listo':'Falta config'}}</div>
+                <div class="card-sub">Fase 1 — Configuración</div>
+            </div>
+        `;
+    }} catch(e){{ console.error(e); }}
+}}
+
+async function cargarConfig(){{
+    try {{
+        const r = await fetch(`/admin/lusync/facturacion/tenant/${{TENANT_ID}}`);
+        const d = await r.json();
+        const c = d.config || {{}};
+        const set = (id,v) => {{ const e=document.getElementById(id); if(e) e.value=v||''; }};
+        const setChk = (id,v) => {{ const e=document.getElementById(id); if(e) e.checked=!!v; }};
+        set('rut_emisor', c.rut_emisor);
+        set('razon_social', c.razon_social);
+        set('giro', c.giro);
+        set('direccion', c.direccion);
+        set('comuna', c.comuna);
+        set('email', c.email);
+        set('telefono', c.telefono);
+        set('res_num', c.resolucion_sii_numero);
+        set('res_fecha', c.resolucion_sii_fecha);
+        set('ambiente', c.ambiente || 'certificacion');
+        setChk('em_boleta', c.emite_boleta !== false);
+        setChk('em_factura', c.emite_factura !== false);
+        setChk('em_nc', c.emite_nota_credito !== false);
+        setChk('em_nd', c.emite_nota_debito);
+        setChk('em_gd', c.emite_guia_despacho);
+    }} catch(e){{ console.error(e); }}
+}}
+
+async function guardarConfig(ev){{
+    ev.preventDefault();
+    const data = {{
+        rut_emisor: document.getElementById('rut_emisor').value.trim(),
+        razon_social: document.getElementById('razon_social').value.trim(),
+        giro: document.getElementById('giro').value.trim(),
+        direccion: document.getElementById('direccion').value.trim(),
+        comuna: document.getElementById('comuna').value.trim(),
+        email: document.getElementById('email').value.trim(),
+        telefono: document.getElementById('telefono').value.trim(),
+        resolucion_sii_numero: parseInt(document.getElementById('res_num').value) || null,
+        resolucion_sii_fecha: document.getElementById('res_fecha').value || null,
+        ambiente: document.getElementById('ambiente').value,
+        emite_boleta: document.getElementById('em_boleta').checked,
+        emite_factura: document.getElementById('em_factura').checked,
+        emite_nota_credito: document.getElementById('em_nc').checked,
+        emite_nota_debito: document.getElementById('em_nd').checked,
+        emite_guia_despacho: document.getElementById('em_gd').checked,
+    }};
+    const r = await fetch(`/admin/lusync/sii/tenant/${{TENANT_ID}}/config`, {{
+        method:'POST', headers:{{'Content-Type':'application/json'}},
+        body: JSON.stringify(data)
+    }});
+    const result = await r.json();
+    if(result.ok){{ alert('✅ Configuración guardada'); cargarDashboard(); }}
+    else alert('Error: ' + (result.error || 'desconocido'));
+}}
+
+async function listarCerts(){{
+    const cont = document.getElementById('listaCerts');
+    try {{
+        const r = await fetch(`/admin/lusync/facturacion/tenant/${{TENANT_ID}}`);
+        const d = await r.json();
+        const certs = d.certificados || [];
+        if(!certs.length){{ cont.innerHTML = '<div style="color:#9ca3af;font-size:12px;text-align:center;padding:20px;">El cliente aún no ha subido su certificado .pfx</div>'; return; }}
+        cont.innerHTML = certs.map(c => {{
+            const venceCol = c.dias_para_expirar < 30 ? '#E24B4A' : (c.dias_para_expirar < 90 ? '#854F0B' : '#1D9E75');
+            const estado = c.activo ? '<span style="background:#eaf3ee;color:#1D9E75;padding:2px 8px;border-radius:8px;font-size:10px;">Activo</span>' : '<span style="background:#f3f4f6;color:#6b7280;padding:2px 8px;border-radius:8px;font-size:10px;">Inactivo</span>';
+            return `<div style="background:#fafaf9;border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin-bottom:8px;">
+                <div style="font-size:13px;font-weight:500;margin-bottom:4px;">${{c.nombre_archivo}} ${{estado}}</div>
+                <div style="font-size:11px;color:#6b7280;">RUT: ${{c.rut||'—'}} · Titular: ${{c.titular||'—'}}</div>
+                <div style="font-size:11px;color:${{venceCol}};margin-top:2px;">Vence: ${{c.fecha_expiracion||'—'}} (${{c.dias_para_expirar}} días)</div>
+                <div style="font-size:10px;color:#9ca3af;margin-top:6px;">Subido por el cliente · ${{c.fecha_subida ? c.fecha_subida.substring(0,10) : '—'}}</div>
+            </div>`;
+        }}).join('');
+    }} catch(e){{ cont.innerHTML = '<div style="color:#E24B4A;padding:20px;">Error: ' + e.message + '</div>'; }}
+}}
+
+async function subirCAF(ev){{
+    ev.preventDefault();
+    const archivo = document.getElementById('caf_file').files[0];
+    if(!archivo){{ alert('Selecciona archivo'); return; }}
+    const fd = new FormData();
+    fd.append('caf', archivo);
+    const r = await fetch(`/admin/lusync/sii/tenant/${{TENANT_ID}}/caf/subir`, {{method:'POST', body:fd}});
+    const result = await r.json();
+    if(result.ok){{
+        const i = result.info || {{}};
+        alert(`✅ CAF cargado. Tipo ${{i.tipo_dte}}, folios ${{i.folio_desde}}-${{i.folio_hasta}}`);
+        document.getElementById('caf_file').value = '';
+        listarCAFs(); cargarDashboard();
+    }} else alert('Error: ' + (result.error || 'desconocido'));
+}}
+
+async function listarCAFs(){{
+    const cont = document.getElementById('listaCAFs');
+    try {{
+        const r = await fetch(`/admin/lusync/facturacion/tenant/${{TENANT_ID}}`);
+        const d = await r.json();
+        const cafs = d.cafs || [];
+        if(!cafs.length){{ cont.innerHTML = '<div style="color:#9ca3af;font-size:12px;text-align:center;padding:20px;">No hay CAFs cargados</div>'; return; }}
+        cont.innerHTML = cafs.map(c => {{
+            const pctCol = c.pct_usado > 90 ? '#E24B4A' : (c.pct_usado > 70 ? '#854F0B' : '#1D9E75');
+            const estado = c.agotado ? '<span style="background:#fef2f2;color:#A32D2D;padding:2px 8px;border-radius:8px;font-size:10px;">Agotado</span>' : '<span style="background:#eaf3ee;color:#1D9E75;padding:2px 8px;border-radius:8px;font-size:10px;">Activo</span>';
+            const ambBadge = c.ambiente === 'produccion' ? '<span style="background:#fef2f2;color:#A32D2D;padding:2px 6px;border-radius:6px;font-size:9px;margin-left:4px;">PROD</span>' : '<span style="background:#FAEEDA;color:#854F0B;padding:2px 6px;border-radius:6px;font-size:9px;margin-left:4px;">CERT</span>';
+            return `<div style="background:#fafaf9;border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin-bottom:8px;">
+                <div style="display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:8px;">
+                    <div>
+                        <div style="font-size:13px;font-weight:500;">${{c.tipo_dte_nombre}} (${{c.tipo_dte}}) ${{estado}}${{ambBadge}}</div>
+                        <div style="font-size:11px;color:#6b7280;margin-top:2px;">Folios ${{c.folio_desde}} – ${{c.folio_hasta}} · Próximo: ${{c.folio_actual}}</div>
+                    </div>
+                    <div style="text-align:right;font-size:11px;color:${{pctCol}};font-weight:500;">${{c.folios_usados}}/${{c.folios_total}} usados (${{c.pct_usado}}%)</div>
+                </div>
+                <div style="background:#e5e7eb;height:5px;border-radius:3px;overflow:hidden;">
+                    <div style="height:100%;width:${{c.pct_usado}}%;background:${{pctCol}};"></div>
+                </div>
+            </div>`;
+        }}).join('');
+    }} catch(e){{ cont.innerHTML = '<div style="color:#E24B4A;padding:20px;">Error: ' + e.message + '</div>'; }}
+}}
+
+// Al cargar la página
+cargarDashboard();
+cargarConfig();
+</script>
+</body></html>"""
+    except Exception as e:
+        import traceback
+        return f"<pre>{e}\n\n{traceback.format_exc()}</pre>", 500
+
+
+@app.route("/admin/lusync/sii/tenant/<int:tenant_id>/config", methods=["POST"])
+@requiere_lusync_admin
+def admin_lusync_sii_tenant_config(tenant_id):
+    """Guarda config de facturación de un tenant específico."""
+    from facturacion import (guardar_config_facturacion, validar_rut, formatear_rut,
+                             normalizar_ambiente)
+    from inventario import get_conn, release_conn
+
+    data = request.get_json() or {}
+    if data.get("rut_emisor"):
+        if not validar_rut(data["rut_emisor"]):
+            return jsonify({"ok": False, "error": "RUT inválido"}), 400
+        data["rut_emisor"] = formatear_rut(data["rut_emisor"])
+    if "ambiente" in data:
+        data["ambiente"] = normalizar_ambiente(data["ambiente"])
+
+    resultado = guardar_config_facturacion(get_conn, release_conn, tenant_id, data)
+    return jsonify(resultado)
+
+
+@app.route("/admin/lusync/sii/tenant/<int:tenant_id>/caf/subir", methods=["POST"])
+@requiere_lusync_admin
+def admin_lusync_sii_tenant_caf_subir(tenant_id):
+    """Sube CAF para un tenant (admin)."""
+    if "caf" not in request.files:
+        return jsonify({"ok": False, "error": "Falta XML del CAF"}), 400
+    caf_file = request.files["caf"]
+    if not caf_file.filename:
+        return jsonify({"ok": False, "error": "Archivo vacío"}), 400
+
+    from facturacion import subir_caf, obtener_config_facturacion
+    from inventario import get_conn, release_conn
+
+    config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+    rut_esperado = config.get("rut_emisor") if config else None
+    ambiente = config.get("ambiente") if config else "certificacion"
+
+    resultado = subir_caf(
+        get_conn, release_conn, tenant_id, caf_file.read(),
+        rut_emisor_esperado=rut_esperado, ambiente=ambiente
+    )
+
+    try:
+        if resultado.get("ok"):
+            info = resultado.get("info", {})
+            registrar_audit(
+                session.get("lusync_admin_email", "Lusync"), request.remote_addr,
+                "admin_subir_caf_sii",
+                entidad="facturacion_cafs",
+                detalle=f"Tenant {tenant_id}, CAF ID {resultado['caf_id']}, tipo {info.get('tipo_dte')}, folios {info.get('folio_desde')}-{info.get('folio_hasta')}"
+            )
+    except Exception: pass
+
+    return jsonify(resultado)
 
 
 
