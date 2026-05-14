@@ -11391,6 +11391,104 @@ def admin_rls_normalizar_canales_historicos():
         return jsonify({"error": str(e), "trace": traceback.format_exc()[:500]}), 500
 
 
+@app.route("/admin/rls/debug_paris_falabella_detalle", methods=["GET"])
+def admin_rls_debug_paris_falabella_detalle():
+    """Debug profundo: Paris detalle de orden + Falabella items con precio."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+
+    resultado = {}
+
+    # ─── PARIS — detalle de una orden específica ─────────────────────────
+    try:
+        from paris import obtener_orden_paris, obtener_ordenes_paris_todas
+        # Tomar la primera orden con fecha 2026-05-13
+        ordenes = obtener_ordenes_paris_todas(dias=7) or []
+        primera_05_13 = None
+        for o in ordenes:
+            if (o.get("createdAt") or "").startswith("2026-05-13"):
+                primera_05_13 = o
+                break
+        if primera_05_13:
+            sub_order = primera_05_13.get("subOrderNumber")
+            detalle = obtener_orden_paris(sub_order)
+            # Buscar todos los campos que parezcan precio en la estructura
+            def buscar_precios(obj, path=""):
+                hallazgos = {}
+                if isinstance(obj, dict):
+                    for k, v in obj.items():
+                        new_path = f"{path}.{k}" if path else k
+                        if isinstance(v, (int, float, str)):
+                            sk = k.lower()
+                            if any(x in sk for x in ['price', 'amount', 'total', 'paid', 'cost', 'value']):
+                                hallazgos[new_path] = v
+                        elif isinstance(v, (dict, list)):
+                            sub = buscar_precios(v, new_path)
+                            hallazgos.update(sub)
+                elif isinstance(obj, list) and obj:
+                    for i, item in enumerate(obj[:2]):  # Solo primeros 2 items
+                        sub = buscar_precios(item, f"{path}[{i}]")
+                        hallazgos.update(sub)
+                return hallazgos
+
+            campos_precio_listado = buscar_precios(primera_05_13)
+            campos_precio_detalle = buscar_precios(detalle) if detalle else {}
+
+            # Estructura completa del primer item si existe
+            items_estructura = None
+            if detalle:
+                for ship in (detalle.get("shipments") or []):
+                    for item in (ship.get("items") or [])[:1]:
+                        items_estructura = item
+                        break
+                    if items_estructura: break
+
+            resultado["paris"] = {
+                "sub_order_consultada": sub_order,
+                "detalle_obtenido": detalle is not None,
+                "detalle_keys": list(detalle.keys()) if detalle else [],
+                "campos_precio_en_listado": campos_precio_listado,
+                "campos_precio_en_detalle": campos_precio_detalle,
+                "primer_item_completo": items_estructura,
+                "shipments_count": len(detalle.get("shipments") or []) if detalle else 0,
+            }
+        else:
+            resultado["paris"] = {"error": "no se encontró orden Paris del 13/05"}
+    except Exception as e:
+        import traceback
+        resultado["paris"] = {"error": str(e), "trace": traceback.format_exc()[:400]}
+
+    # ─── FALABELLA — verificar items de la orden ─────────────────────────
+    try:
+        from falabella import obtener_ordenes_falabella, obtener_items_orden_falabella
+        ordenes_fa = obtener_ordenes_falabella(dias=2) or []
+        primera_orden = None
+        for o in ordenes_fa:
+            if (o.get("CreatedAt") or "").startswith("2026-05-13"):
+                primera_orden = o
+                break
+        if primera_orden:
+            order_id = primera_orden.get("OrderId")
+            items = obtener_items_orden_falabella(order_id) or []
+            resultado["falabella"] = {
+                "order_id": order_id,
+                "price_en_orden": primera_orden.get("Price"),
+                "grand_total": primera_orden.get("GrandTotal"),
+                "product_total": primera_orden.get("ProductTotal"),
+                "items_count": len(items),
+                "primer_item_completo": items[0] if items else None,
+                "items_keys": list(items[0].keys()) if items else [],
+            }
+        else:
+            resultado["falabella"] = {"error": "no se encontró orden Falabella del 13/05"}
+    except Exception as e:
+        import traceback
+        resultado["falabella"] = {"error": str(e), "trace": traceback.format_exc()[:400]}
+
+    return jsonify(resultado)
+
+
 @app.route("/admin/rls/debug_reporte_mkts", methods=["GET"])
 def admin_rls_debug_reporte_mkts():
     """Diagnostica cada MKT individualmente: status, cant órdenes, keys del primer JSON.
