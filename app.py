@@ -20605,47 +20605,93 @@ def facturacion_dashboard():
     if not session.get("logged"):
         return jsonify({"error": "no autenticado"}), 401
 
-    tenant_id = session.get("tenant_id") or 1
-    from facturacion import (obtener_config_facturacion, listar_certificados_tenant,
-                             listar_cafs_tenant, calcular_mrr_tributario)
-    from inventario import get_conn, release_conn
+    try:
+        tenant_id = session.get("tenant_id") or 1
+        from facturacion import (obtener_config_facturacion, listar_certificados_tenant,
+                                 listar_cafs_tenant, calcular_mrr_tributario)
+        from inventario import get_conn, release_conn
 
-    config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
-    certs = listar_certificados_tenant(get_conn, release_conn, tenant_id)
-    cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id)
-    mrr = calcular_mrr_tributario(get_conn, release_conn, tenant_id)
+        try:
+            config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+        except Exception as e:
+            print(f"[Facturación] Error obtener_config_facturacion: {e}")
+            config = None
 
-    cert_activo = next((c for c in certs if c["activo"]), None)
-    cafs_activos = [c for c in cafs if not c["agotado"]]
-    tipos_dte_disponibles = sorted(set(c["tipo_dte"] for c in cafs_activos))
+        try:
+            certs = listar_certificados_tenant(get_conn, release_conn, tenant_id)
+        except Exception as e:
+            print(f"[Facturación] Error listar_certificados_tenant: {e}")
+            certs = []
 
-    # config_completa: tiene rut+razón social Y no son placeholders
-    _rut = (config or {}).get("rut_emisor", "") or ""
-    _rs = (config or {}).get("razon_social", "") or ""
-    config_completa = bool(
-        _rut and _rs
-        and not _rut.startswith("00000000")
-        and "Por configurar" not in _rs
-    )
-    listo_para_emitir = bool(config_completa and cert_activo and len(cafs_activos) > 0)
+        try:
+            cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id)
+        except Exception as e:
+            print(f"[Facturación] Error listar_cafs_tenant: {e}")
+            cafs = []
 
-    dtes_activos = [d for d in mrr["desglose"] if d["activo"]]
+        try:
+            mrr = calcular_mrr_tributario(get_conn, release_conn, tenant_id)
+        except Exception as e:
+            import traceback
+            print(f"[Facturación] Error calcular_mrr_tributario: {e}")
+            traceback.print_exc()
+            # MRR fallback: desglose con todos los DTEs en estado base
+            from facturacion.utils import TIPOS_DTE, CAMPO_BD_A_TIPO_DTE
+            desglose = []
+            for campo_bd, tipo_dte in CAMPO_BD_A_TIPO_DTE.items():
+                info = TIPOS_DTE.get(tipo_dte, {})
+                desglose.append({
+                    "tipo_dte": tipo_dte,
+                    "nombre": info.get("nombre", f"Tipo {tipo_dte}"),
+                    "precio_uf": float(info.get("precio_uf", 0)),
+                    "activo": tipo_dte in (39, 61),
+                    "campo_bd": campo_bd,
+                })
+            mrr = {
+                "total_uf": 0.0, "total_clp": 0, "total_clp_neto": 0,
+                "total_clp_iva": 0, "iva_porcentaje": 19,
+                "uf_valor": 37000.0, "desglose": desglose,
+            }
 
-    return jsonify({
-        "config": {"rut_emisor": (config or {}).get("rut_emisor"),
-                   "razon_social": (config or {}).get("razon_social"),
-                   "ambiente": (config or {}).get("ambiente")},
-        "config_completa": config_completa,
-        "certificado_activo": cert_activo,
-        "cantidad_certificados": len(certs),
-        "cafs_activos_count": len(cafs_activos),
-        "cafs_total": len(cafs),
-        "tipos_dte_disponibles": tipos_dte_disponibles,
-        "listo_para_emitir": listo_para_emitir,
-        "fase_actual": "Fase 1 — Configuración",
-        "mrr_tributario": mrr,
-        "dtes_activos": dtes_activos,
-    })
+        cert_activo = next((c for c in certs if c.get("activo")), None)
+        cafs_activos = [c for c in cafs if not c.get("agotado")]
+        tipos_dte_disponibles = sorted(set(c["tipo_dte"] for c in cafs_activos))
+
+        # config_completa: tiene rut+razón social Y no son placeholders
+        _rut = (config or {}).get("rut_emisor", "") or ""
+        _rs = (config or {}).get("razon_social", "") or ""
+        config_completa = bool(
+            _rut and _rs
+            and not _rut.startswith("00000000")
+            and "Por configurar" not in _rs
+        )
+        listo_para_emitir = bool(config_completa and cert_activo and len(cafs_activos) > 0)
+
+        dtes_activos = [d for d in mrr["desglose"] if d.get("activo")]
+
+        return jsonify({
+            "config": {"rut_emisor": (config or {}).get("rut_emisor"),
+                       "razon_social": (config or {}).get("razon_social"),
+                       "ambiente": (config or {}).get("ambiente")},
+            "config_completa": config_completa,
+            "certificado_activo": cert_activo,
+            "cantidad_certificados": len(certs),
+            "cafs_activos_count": len(cafs_activos),
+            "cafs_total": len(cafs),
+            "tipos_dte_disponibles": tipos_dte_disponibles,
+            "listo_para_emitir": listo_para_emitir,
+            "fase_actual": "Fase 1 — Configuración",
+            "mrr_tributario": mrr,
+            "dtes_activos": dtes_activos,
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "error": "Error interno en dashboard",
+            "detalle": str(e)[:300]
+        }), 500
 
 
 # ── Vistas para el super-admin Lusync ──────────────────────────────────────

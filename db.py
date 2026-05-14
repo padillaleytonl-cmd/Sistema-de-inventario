@@ -238,55 +238,84 @@ def init_facturacion_tables(get_conn_func, release_conn_func=None, enable_rls_fu
 # CONFIG por tenant
 # ─────────────────────────────────────────────────────────────────────────────
 def obtener_config_facturacion(get_conn_func, release_conn_func, tenant_id):
-    """Obtiene la config de facturación de un tenant. Devuelve dict o None."""
+    """Obtiene la config de facturación de un tenant. Devuelve dict o None.
+    Usa información_schema para detectar qué columnas existen en BD y devolver
+    solo las que están — esto hace la función robusta a migraciones incompletas.
+    """
     conn = get_conn_func(); cur = conn.cursor()
     try:
+        # Detectar qué columnas existen en la tabla (robustez)
         cur.execute("""
-            SELECT rut_emisor, razon_social, giro, direccion, comuna, ciudad,
-                   telefono, email, resolucion_sii_fecha, resolucion_sii_numero,
-                   ambiente, emite_boleta, emite_factura, emite_nota_credito,
-                   emite_nota_debito, emite_guia_despacho, activo,
-                   fecha_creacion, fecha_actualizacion,
-                   COALESCE(emite_boleta_exenta, FALSE),
-                   COALESCE(emite_factura_exenta, FALSE),
-                   COALESCE(emite_factura_compra, FALSE),
-                   COALESCE(emite_liquidacion, FALSE),
-                   COALESCE(emite_fact_exportacion, FALSE),
-                   COALESCE(emite_nc_exportacion, FALSE),
-                   COALESCE(emite_nd_exportacion, FALSE)
-            FROM facturacion_config_tenant
-            WHERE tenant_id = %s
-        """, (tenant_id,))
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'facturacion_config_tenant'
+        """)
+        cols_existentes = {r[0] for r in cur.fetchall()}
+
+        if not cols_existentes:
+            # La tabla no existe — devolver None
+            return None
+
+        # Columnas que nos interesan, en orden
+        columnas_deseadas = [
+            "rut_emisor", "razon_social", "giro", "direccion", "comuna", "ciudad",
+            "telefono", "email", "resolucion_sii_fecha", "resolucion_sii_numero",
+            "ambiente", "emite_boleta", "emite_factura", "emite_nota_credito",
+            "emite_nota_debito", "emite_guia_despacho", "activo",
+            "fecha_creacion", "fecha_actualizacion",
+            "emite_boleta_exenta", "emite_factura_exenta", "emite_factura_compra",
+            "emite_liquidacion", "emite_fact_exportacion",
+            "emite_nc_exportacion", "emite_nd_exportacion",
+        ]
+
+        # Construir SELECT solo con las columnas que existen, las que faltan = NULL
+        select_parts = []
+        for c in columnas_deseadas:
+            if c in cols_existentes:
+                select_parts.append(c)
+            else:
+                select_parts.append(f"NULL AS {c}")
+
+        query = f"SELECT {', '.join(select_parts)} FROM facturacion_config_tenant WHERE tenant_id = %s"
+        cur.execute(query, (tenant_id,))
         r = cur.fetchone()
         if not r:
             return None
+
+        # Construir dict resultante con índices alineados con columnas_deseadas
+        idx = {c: i for i, c in enumerate(columnas_deseadas)}
+        def _val(c, default=None):
+            i = idx.get(c)
+            if i is None or r[i] is None:
+                return default
+            return r[i]
+
         return {
-            "rut_emisor": r[0],
-            "razon_social": r[1],
-            "giro": r[2],
-            "direccion": r[3],
-            "comuna": r[4],
-            "ciudad": r[5],
-            "telefono": r[6],
-            "email": r[7],
-            "resolucion_sii_fecha": r[8].isoformat() if r[8] else None,
-            "resolucion_sii_numero": r[9],
-            "ambiente": r[10],
-            "emite_boleta": r[11],
-            "emite_factura": r[12],
-            "emite_nota_credito": r[13],
-            "emite_nota_debito": r[14],
-            "emite_guia_despacho": r[15],
-            "activo": r[16],
-            "fecha_creacion": r[17].isoformat() if r[17] else None,
-            "fecha_actualizacion": r[18].isoformat() if r[18] else None,
-            "emite_boleta_exenta": r[19],
-            "emite_factura_exenta": r[20],
-            "emite_factura_compra": r[21],
-            "emite_liquidacion": r[22],
-            "emite_fact_exportacion": r[23],
-            "emite_nc_exportacion": r[24],
-            "emite_nd_exportacion": r[25],
+            "rut_emisor": _val("rut_emisor"),
+            "razon_social": _val("razon_social"),
+            "giro": _val("giro"),
+            "direccion": _val("direccion"),
+            "comuna": _val("comuna"),
+            "ciudad": _val("ciudad"),
+            "telefono": _val("telefono"),
+            "email": _val("email"),
+            "resolucion_sii_fecha": (lambda v: v.isoformat() if v else None)(_val("resolucion_sii_fecha")),
+            "resolucion_sii_numero": _val("resolucion_sii_numero"),
+            "ambiente": _val("ambiente", "certificacion"),
+            "emite_boleta": bool(_val("emite_boleta", False)),
+            "emite_factura": bool(_val("emite_factura", False)),
+            "emite_nota_credito": bool(_val("emite_nota_credito", False)),
+            "emite_nota_debito": bool(_val("emite_nota_debito", False)),
+            "emite_guia_despacho": bool(_val("emite_guia_despacho", False)),
+            "activo": bool(_val("activo", False)),
+            "fecha_creacion": (lambda v: v.isoformat() if v else None)(_val("fecha_creacion")),
+            "fecha_actualizacion": (lambda v: v.isoformat() if v else None)(_val("fecha_actualizacion")),
+            "emite_boleta_exenta": bool(_val("emite_boleta_exenta", False)),
+            "emite_factura_exenta": bool(_val("emite_factura_exenta", False)),
+            "emite_factura_compra": bool(_val("emite_factura_compra", False)),
+            "emite_liquidacion": bool(_val("emite_liquidacion", False)),
+            "emite_fact_exportacion": bool(_val("emite_fact_exportacion", False)),
+            "emite_nc_exportacion": bool(_val("emite_nc_exportacion", False)),
+            "emite_nd_exportacion": bool(_val("emite_nd_exportacion", False)),
         }
     finally:
         cur.close()
