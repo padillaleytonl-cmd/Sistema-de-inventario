@@ -24,6 +24,9 @@ from .db import (
     obtener_config_facturacion,
     guardar_config_facturacion,
     calcular_mrr_tributario,
+    registrar_activacion_dte,
+    registrar_desactivacion_dte,
+    obtener_historial_activaciones,
 )
 from .certificados import (
     subir_certificado,
@@ -38,9 +41,15 @@ from .cafs import (
     obtener_folio_disponible,
     marcar_folio_usado,
 )
+from .uf import (
+    init_uf_table,
+    obtener_uf_actual,
+    obtener_uf_fecha,
+)
 from .utils import (
     validar_rut,
     formatear_rut,
+    normalizar_ambiente,
     AMBIENTE_CERTIFICACION,
     AMBIENTE_PRODUCCION,
     TIPOS_DTE,
@@ -51,6 +60,9 @@ __all__ = [
     "obtener_config_facturacion",
     "guardar_config_facturacion",
     "calcular_mrr_tributario",
+    "registrar_activacion_dte",
+    "registrar_desactivacion_dte",
+    "obtener_historial_activaciones",
     "subir_certificado",
     "obtener_certificado",
     "listar_certificados_tenant",
@@ -60,6 +72,9 @@ __all__ = [
     "listar_cafs_tenant",
     "obtener_folio_disponible",
     "marcar_folio_usado",
+    "init_uf_table",
+    "obtener_uf_actual",
+    "obtener_uf_fecha",
     "validar_rut",
     "formatear_rut",
     "AMBIENTE_CERTIFICACION",

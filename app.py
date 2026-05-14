@@ -74,9 +74,10 @@ init_bodegas()
 
 # ── Facturación electrónica SII (multi-tenant) ──
 try:
-    from facturacion import init_facturacion_tables
+    from facturacion import init_facturacion_tables, init_uf_table
     from inventario import get_conn as _gc_fact, release_conn as _rc_fact
     init_facturacion_tables(_gc_fact, _rc_fact)
+    init_uf_table(_gc_fact, _rc_fact)
 except Exception as e:
     import traceback
     print(f"[init_facturacion] ERROR: {e}")
@@ -20344,19 +20345,11 @@ def ventas_export_csv():
 # Esto previene que tenant A vea config de tenant B.
 
 
-@app.route("/facturacion/config", methods=["GET", "POST"])
-def facturacion_config():
-    """GET: el tenant ve su config (solo lectura).
-    POST: rechazado — la configuración SII solo la maneja Lusync admin.
-    """
+@app.route("/facturacion/config", methods=["GET"])
+def facturacion_config_get():
+    """GET: el tenant ve su config (solo lectura)."""
     if not session.get("logged"):
         return jsonify({"error": "no autenticado"}), 401
-
-    if request.method == "POST":
-        return jsonify({
-            "ok": False,
-            "error": "La configuración SII (RUT, razón social, ambiente) la administra Lusync. Contáctanos si necesitas un cambio."
-        }), 403
 
     tenant_id = session.get("tenant_id") or 1
     from facturacion import obtener_config_facturacion
@@ -20364,6 +20357,103 @@ def facturacion_config():
 
     config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
     return jsonify({"config": config or {}})
+
+
+@app.route("/facturacion/dte/toggle", methods=["POST"])
+def facturacion_dte_toggle():
+    """Cliente activa/desactiva un tipo de DTE.
+
+    Requiere aceptación explícita de términos (`acepta_terminos: true`).
+    Registra la activación con IP y usuario para auditoría.
+
+    Body:
+        {
+          "campo_bd": "emite_factura",
+          "activar": true,
+          "acepta_terminos": true
+        }
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autenticado"}), 401
+
+    data = request.get_json() or {}
+    campo_bd = data.get("campo_bd", "").strip()
+    activar = bool(data.get("activar"))
+    acepta = bool(data.get("acepta_terminos"))
+
+    from facturacion.utils import CAMPO_BD_A_TIPO_DTE, TIPOS_DTE
+    from facturacion import (guardar_config_facturacion, obtener_config_facturacion,
+                             registrar_activacion_dte, registrar_desactivacion_dte)
+    from inventario import get_conn, release_conn
+
+    if campo_bd not in CAMPO_BD_A_TIPO_DTE:
+        return jsonify({"ok": False, "error": "Tipo de DTE inválido"}), 400
+
+    tipo_dte = CAMPO_BD_A_TIPO_DTE[campo_bd]
+    info = TIPOS_DTE.get(tipo_dte, {})
+    precio = float(info.get("precio_uf", 0))
+
+    # DTEs obligatorios (gratis, no se pueden desactivar):
+    # - Boleta Electrónica (39): es la base del comercio retail
+    # - Nota de Crédito (61): necesaria para devoluciones
+    DTES_OBLIGATORIOS = {39, 61}
+    if tipo_dte in DTES_OBLIGATORIOS and not activar:
+        return jsonify({
+            "ok": False,
+            "error": f"{info.get('nombre')} no se puede desactivar (es gratis y necesaria para tu operación)."
+        }), 400
+
+    # Si tiene costo > 0, exigir aceptación de términos
+    if precio > 0 and not acepta:
+        return jsonify({
+            "ok": False,
+            "error": "Debes aceptar los términos del cobro mensual para activar/desactivar este DTE",
+            "requiere_aceptacion": True,
+        }), 400
+
+    tenant_id = session.get("tenant_id") or 1
+
+    # Verificar estado actual
+    config_previa = obtener_config_facturacion(get_conn, release_conn, tenant_id) or {}
+    estado_previo = bool(config_previa.get(campo_bd, False))
+
+    if estado_previo == activar:
+        return jsonify({"ok": True, "sin_cambios": True, "estado": activar})
+
+    # Actualizar el flag
+    resultado = guardar_config_facturacion(get_conn, release_conn, tenant_id, {campo_bd: activar})
+    if not resultado.get("ok"):
+        return jsonify(resultado), 400
+
+    # Registrar activación/desactivación
+    aceptado_por = session.get("usuario") or session.get("email") or "Cliente"
+    ip = request.remote_addr or "0.0.0.0"
+
+    if activar:
+        registrar_activacion_dte(get_conn, release_conn, tenant_id, tipo_dte,
+                                 precio, aceptado_por, ip)
+        accion = "activado"
+    else:
+        registrar_desactivacion_dte(get_conn, release_conn, tenant_id, tipo_dte)
+        accion = "desactivado"
+
+    # Auditoría
+    try:
+        registrar_audit(
+            aceptado_por, ip, f"cliente_dte_{accion}",
+            entidad="facturacion_config_tenant",
+            detalle=f"Tenant {tenant_id}, DTE {tipo_dte} ({info.get('nombre')}), precio {precio} UF"
+        )
+    except Exception: pass
+
+    return jsonify({
+        "ok": True,
+        "tipo_dte": tipo_dte,
+        "nombre": info.get("nombre"),
+        "precio_uf": precio,
+        "accion": accion,
+        "estado": activar,
+    })
 
 
 @app.route("/facturacion/certificado/subir", methods=["POST"])
@@ -20479,6 +20569,22 @@ def facturacion_caf_listar():
 
     cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id)
     return jsonify({"cafs": cafs})
+
+
+@app.route("/uf/actual", methods=["GET"])
+def uf_actual():
+    """Consulta el valor UF de hoy. Cache de 24h via tabla uf_diaria.
+    Cualquier usuario logueado puede consultar (no es secreto).
+    """
+    if not session.get("logged") and not session.get("lusync_admin"):
+        return jsonify({"error": "no autenticado"}), 401
+
+    from facturacion import obtener_uf_actual
+    from inventario import get_conn, release_conn
+
+    forzar = request.args.get("refresh", "").lower() in ("1", "true", "yes")
+    resultado = obtener_uf_actual(get_conn, release_conn, forzar_refresh=forzar)
+    return jsonify(resultado)
 
 
 @app.route("/facturacion/historial_activaciones", methods=["GET"])
@@ -20651,8 +20757,8 @@ h1{{margin:0 0 4px;font-size:22px;}}
                 <div class="full-span" style="border-top:1px solid #e5e7eb;padding-top:14px;margin-top:4px;">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
                         <div>
-                            <div style="font-size:13px;font-weight:500;">Tipos de DTE habilitados</div>
-                            <div style="font-size:11px;color:#6b7280;margin-top:2px;">Add-on tributario sobre el plan base. Boletas y Notas de Crédito son gratis. <b>Precios sin IVA.</b></div>
+                            <div style="font-size:13px;font-weight:500;">Tipos de DTE activos (solo lectura)</div>
+                            <div style="font-size:11px;color:#6b7280;margin-top:2px;">⚠ Los DTEs los activa/desactiva el cliente desde su panel. Aquí solo visualizas. <b>Precios sin IVA.</b></div>
                         </div>
                         <div style="text-align:right;background:#EEEDFE;padding:8px 14px;border-radius:8px;">
                             <div style="font-size:10px;color:#6b7280;">💰 Add-on tributario</div>
@@ -20662,23 +20768,23 @@ h1{{margin:0 0 4px;font-size:22px;}}
                         </div>
                     </div>
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;">
-                        <label class="dte-row" data-price="0.0" data-nombre="Boleta Electrónica"><input type="checkbox" id="em_boleta" onclick="onClickDte(event, this)" checked> Boleta (39) <span class="dte-price">Gratis</span></label>
-                        <label class="dte-row" data-price="0.1" data-nombre="Boleta Exenta"><input type="checkbox" id="em_boleta_exenta" onclick="onClickDte(event, this)"> Boleta Exenta (41) <span class="dte-price">+0,1 UF</span></label>
-                        <label class="dte-row" data-price="0.0" data-nombre="Nota de Crédito"><input type="checkbox" id="em_nc" onclick="onClickDte(event, this)" checked> Nota Crédito (61) <span class="dte-price">Gratis</span></label>
-                        <label class="dte-row" data-price="0.1" data-nombre="Nota de Débito"><input type="checkbox" id="em_nd" onclick="onClickDte(event, this)"> Nota Débito (56) <span class="dte-price">+0,1 UF</span></label>
-                        <label class="dte-row" data-price="0.2" data-nombre="Factura Electrónica"><input type="checkbox" id="em_factura" onclick="onClickDte(event, this)" checked> Factura (33) <span class="dte-price">+0,2 UF</span></label>
-                        <label class="dte-row" data-price="0.2" data-nombre="Factura Exenta"><input type="checkbox" id="em_factura_exenta" onclick="onClickDte(event, this)"> Factura Exenta (34) <span class="dte-price">+0,2 UF</span></label>
-                        <label class="dte-row" data-price="0.1" data-nombre="Factura de Compra"><input type="checkbox" id="em_fc" onclick="onClickDte(event, this)"> Factura de Compra (46) <span class="dte-price">+0,1 UF</span></label>
-                        <label class="dte-row" data-price="0.1" data-nombre="Liquidación de Factura"><input type="checkbox" id="em_liq" onclick="onClickDte(event, this)"> Liquidación Factura (43) <span class="dte-price">+0,1 UF</span></label>
-                        <label class="dte-row" data-price="0.1" data-nombre="Guía de Despacho"><input type="checkbox" id="em_gd" onclick="onClickDte(event, this)"> Guía Despacho (52) <span class="dte-price">+0,1 UF</span></label>
-                        <label class="dte-row" data-price="0.4" data-nombre="Factura de Exportación"><input type="checkbox" id="em_fexp" onclick="onClickDte(event, this)"> Factura Exportación (110) <span class="dte-price">+0,4 UF</span></label>
-                        <label class="dte-row" data-price="0.2" data-nombre="NC de Exportación"><input type="checkbox" id="em_ncexp" onclick="onClickDte(event, this)"> NC Exportación (112) <span class="dte-price">+0,2 UF</span></label>
-                        <label class="dte-row" data-price="0.2" data-nombre="ND de Exportación"><input type="checkbox" id="em_ndexp" onclick="onClickDte(event, this)"> ND Exportación (111) <span class="dte-price">+0,2 UF</span></label>
+                        <label class="dte-row" data-price="0.0" data-nombre="Boleta Electrónica"><input type="checkbox" id="em_boleta" disabled> Boleta (39) <span class="dte-price">Gratis</span></label>
+                        <label class="dte-row" data-price="0.1" data-nombre="Boleta Exenta"><input type="checkbox" id="em_boleta_exenta" disabled> Boleta Exenta (41) <span class="dte-price">+0,1 UF</span></label>
+                        <label class="dte-row" data-price="0.0" data-nombre="Nota de Crédito"><input type="checkbox" id="em_nc" disabled> Nota Crédito (61) <span class="dte-price">Gratis</span></label>
+                        <label class="dte-row" data-price="0.1" data-nombre="Nota de Débito"><input type="checkbox" id="em_nd" disabled> Nota Débito (56) <span class="dte-price">+0,1 UF</span></label>
+                        <label class="dte-row" data-price="0.2" data-nombre="Factura Electrónica"><input type="checkbox" id="em_factura" disabled> Factura (33) <span class="dte-price">+0,2 UF</span></label>
+                        <label class="dte-row" data-price="0.2" data-nombre="Factura Exenta"><input type="checkbox" id="em_factura_exenta" disabled> Factura Exenta (34) <span class="dte-price">+0,2 UF</span></label>
+                        <label class="dte-row" data-price="0.1" data-nombre="Factura de Compra"><input type="checkbox" id="em_fc" disabled> Factura de Compra (46) <span class="dte-price">+0,1 UF</span></label>
+                        <label class="dte-row" data-price="0.1" data-nombre="Liquidación de Factura"><input type="checkbox" id="em_liq" disabled> Liquidación Factura (43) <span class="dte-price">+0,1 UF</span></label>
+                        <label class="dte-row" data-price="0.1" data-nombre="Guía de Despacho"><input type="checkbox" id="em_gd" disabled> Guía Despacho (52) <span class="dte-price">+0,1 UF</span></label>
+                        <label class="dte-row" data-price="0.4" data-nombre="Factura de Exportación"><input type="checkbox" id="em_fexp" disabled> Factura Exportación (110) <span class="dte-price">+0,4 UF</span></label>
+                        <label class="dte-row" data-price="0.2" data-nombre="NC de Exportación"><input type="checkbox" id="em_ncexp" disabled> NC Exportación (112) <span class="dte-price">+0,2 UF</span></label>
+                        <label class="dte-row" data-price="0.2" data-nombre="ND de Exportación"><input type="checkbox" id="em_ndexp" disabled> ND Exportación (111) <span class="dte-price">+0,2 UF</span></label>
                     </div>
                     <style>
-                      .dte-row{{display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border:0.5px solid #e5e7eb;border-radius:6px;cursor:pointer;background:white;}}
+                      .dte-row{{display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border:0.5px solid #e5e7eb;border-radius:6px;background:white;opacity:0.85;}}
                       .dte-row input{{margin-right:8px;}}
-                      .dte-row:has(input:checked){{background:#EEEDFE;border-color:#534AB7;}}
+                      .dte-row:has(input:checked){{background:#EEEDFE;border-color:#534AB7;opacity:1;}}
                       .dte-price{{font-size:10px;color:#6b7280;font-weight:500;margin-left:auto;}}
                       .dte-row:has(input:checked) .dte-price{{color:#534AB7;}}
                     </style>

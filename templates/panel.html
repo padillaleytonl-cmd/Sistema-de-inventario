@@ -3328,30 +3328,73 @@ tbody td {
       <div style="text-align:center;color:var(--hint);font-size:12px;padding:20px;">Cargando...</div>
     </div>
 
-    <!-- Suscripción tributaria (DTEs activos + costo) -->
+    <!-- Suscripción tributaria — interactiva, el cliente activa/desactiva -->
     <div id="suscripcionTributaria" style="background:var(--bg);border:0.5px solid var(--border);border-radius:12px;padding:18px 20px;margin-bottom:18px;">
-      <div style="display:flex;justify-content:space-between;align-items:start;gap:16px;flex-wrap:wrap;margin-bottom:14px;">
-        <div>
-          <div style="font-size:14px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:6px;">📑 Tu suscripción tributaria</div>
-          <div style="font-size:11px;color:var(--muted);margin-top:4px;">Add-on mensual sobre tu plan base · Solo cobramos por los tipos de DTE que necesitas · Precios sin IVA</div>
+      <div style="display:flex;justify-content:space-between;align-items:start;gap:16px;flex-wrap:wrap;margin-bottom:16px;">
+        <div style="flex:1;min-width:240px;">
+          <div style="font-size:14px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:6px;">📑 Tipos de documento que puedes emitir</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:4px;line-height:1.5;">Activa solo los DTEs que tu negocio necesita. Boletas y Notas de Crédito son gratis. <b>Precios sin IVA.</b><br>Al activar un DTE pagado, deberás aceptar los términos de cobro mensual.</div>
         </div>
-        <div style="text-align:right;background:#EEEDFE;padding:10px 16px;border-radius:10px;min-width:140px;">
+        <div style="text-align:right;background:#EEEDFE;padding:10px 16px;border-radius:10px;min-width:160px;">
           <div style="font-size:10px;color:#5f5e5a;">Add-on mensual</div>
-          <div style="font-size:18px;font-weight:600;color:#534AB7;margin-top:2px;"><span id="cliMrrUf">0,0</span> UF</div>
+          <div style="font-size:20px;font-weight:600;color:#534AB7;margin-top:2px;"><span id="cliMrrUf">0,0</span> UF</div>
           <div style="font-size:10px;color:#5f5e5a;margin-top:2px;">$<span id="cliMrrClp">0</span> neto</div>
-          <div style="font-size:10px;color:#5f5e5a;">+ IVA · $<span id="cliMrrClpIva">0</span> total</div>
+          <div style="font-size:10px;color:#5f5e5a;">+ IVA · $<span id="cliMrrClpIva">0</span></div>
+          <div style="font-size:9px;color:#888;margin-top:4px;border-top:1px solid #d3d1c7;padding-top:4px;">UF: $<span id="cliUfValor">—</span></div>
         </div>
       </div>
-      <div id="cliDtesActivos" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:6px;font-size:12px;">
-        <div style="grid-column:1/-1;color:var(--hint);text-align:center;padding:10px;">Cargando...</div>
+
+      <div id="cliDtesGrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px;font-size:12px;">
+        <div style="grid-column:1/-1;color:var(--hint);text-align:center;padding:20px;">Cargando módulos disponibles...</div>
       </div>
     </div>
+
+    <!-- Modal confirmación cliente -->
+    <div id="cliModalDte" style="display:none;position:fixed;inset:0;background:rgba(15,17,21,0.55);z-index:9999;align-items:center;justify-content:center;padding:20px;">
+      <div style="background:white;border-radius:12px;max-width:480px;width:100%;padding:24px;box-shadow:0 20px 50px rgba(0,0,0,0.18);">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+          <div style="width:34px;height:34px;border-radius:50%;background:#EEEDFE;color:#534AB7;display:flex;align-items:center;justify-content:center;font-size:18px;">📄</div>
+          <div style="font-size:16px;font-weight:600;color:#1f1e1b;" id="cliModalTitulo">—</div>
+        </div>
+        <div style="background:#fef3c7;border:1px solid #fbbf24;padding:12px 14px;border-radius:8px;margin-bottom:14px;">
+          <div style="font-size:11px;color:#92400e;font-weight:600;margin-bottom:4px;">💰 Costo del módulo</div>
+          <div style="font-size:14px;color:#92400e;font-weight:500;" id="cliModalPrecio">—</div>
+          <div style="font-size:10px;color:#92400e;margin-top:4px;opacity:0.85;">Valores no incluyen IVA. Se factura mensualmente con IVA agregado.</div>
+        </div>
+        <div style="font-size:13px;line-height:1.6;color:#1f1e1b;margin-bottom:14px;">
+          Al activar <b id="cliModalNombre">este DTE</b>, aceptas las siguientes condiciones:
+        </div>
+        <ul style="font-size:12px;color:#5f5e5a;line-height:1.7;padding-left:18px;margin:0 0 14px;">
+          <li><b style="color:#1f1e1b;">Precio + IVA:</b> los valores no incluyen IVA. Se factura mensualmente con IVA agregado (19%).</li>
+          <li><b style="color:#1f1e1b;">Cobro por mes completo:</b> el módulo se cobra mensualmente completo, independiente del día en que se active o desactive.</li>
+          <li><b style="color:#1f1e1b;">Sin reembolsos parciales:</b> si lo desactivas, se sigue cobrando hasta fin del mes en curso. El próximo mes ya no se cobrará.</li>
+          <li><b style="color:#1f1e1b;">Cobro automático:</b> se agrega a tu factura mensual junto con el plan base.</li>
+          <li><b style="color:#1f1e1b;">Sin límite de emisión:</b> emisión ilimitada del tipo activado, sujeto a folios CAF disponibles.</li>
+        </ul>
+        <label style="display:flex;align-items:flex-start;gap:8px;padding:10px;background:#f9f8f5;border-radius:6px;margin-bottom:16px;cursor:pointer;font-size:12px;color:#1f1e1b;">
+          <input type="checkbox" id="cliModalAcepta" onchange="cliModalCheckChange()" style="margin-top:2px;">
+          <span>Acepto las condiciones de cobro y los <a href="/terminos-sii" target="_blank" style="color:#534AB7;">términos del servicio SII</a> de Lusync.</span>
+        </label>
+        <div style="display:flex;gap:10px;justify-content:flex-end;">
+          <button type="button" onclick="cliModalCancelar()" style="padding:8px 16px;font-size:12px;background:#f3f4f6;color:#1f1e1b;border:1px solid #e5e7eb;border-radius:6px;cursor:pointer;">Cancelar</button>
+          <button type="button" id="cliModalBtnAceptar" onclick="cliModalConfirmar()" disabled style="padding:8px 16px;font-size:12px;background:#534AB7;color:white;border:none;border-radius:6px;cursor:pointer;opacity:0.5;">Confirmar</button>
+        </div>
+      </div>
+    </div>
+    <style>
+      #cliModalBtnAceptar:not(:disabled){opacity:1 !important;}
+      .cli-dte-row{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border:0.5px solid var(--border);border-radius:8px;cursor:pointer;background:var(--bg);transition:all 0.15s;}
+      .cli-dte-row:hover{border-color:#534AB7;}
+      .cli-dte-row.activo{background:#EEEDFE;border-color:#534AB7;}
+      .cli-dte-row input[type=checkbox]{margin-right:10px;cursor:pointer;}
+    </style>
 
     <!-- Info: configuración y folios (read-only) -->
     <div style="background:var(--bg2);border-radius:10px;padding:16px;font-size:12px;color:var(--muted);">
       <b style="color:var(--text);">¿Necesitas cambiar la configuración?</b><br>
-      Los datos de tu empresa (RUT, razón social, ambiente SII), los folios autorizados (CAFs) y los tipos de DTE activos los administra Lusync.
-      Si necesitas activar más tipos de documento o un cambio, escríbenos a <a href="mailto:soporte@lusync.cl" style="color:var(--primary);">soporte@lusync.cl</a>.
+      Los datos de tu empresa (RUT, razón social, ambiente SII) y los folios autorizados (CAFs) los administra Lusync.
+      Para los <b>tipos de DTE</b>, puedes activar/desactivar tú directamente en la sección de arriba.
+      Si necesitas ayuda escríbenos a <a href="mailto:soporte@lusync.cl" style="color:var(--primary);">soporte@lusync.cl</a>.
     </div>
 
   </div>
@@ -10041,39 +10084,170 @@ async function cargarFacturacionDashboard(){
     console.error('[Facturación] Error dashboard:', e);
   }
 
-  // Card de suscripción tributaria
+  // Card de suscripción tributaria (interactiva)
+  await renderDtesCliente();
+}
+
+// ── Estado y catálogo de DTEs (cliente) ──
+let _cliCatalogoDtes = null;
+let _cliModalContexto = null;
+
+async function renderDtesCliente(){
   try {
-    const IVA = 1.19;
     const r = await fetch('/facturacion/dashboard');
     const d = await r.json();
-    const mrr = d.mrr_tributario || {total_uf: 0, total_clp: 0, desglose: []};
-    const ufFmt = (mrr.total_uf || 0).toFixed(1).replace('.', ',');
-    const neto = mrr.total_clp || 0;
-    const conIva = Math.round(neto * IVA);
-    const ufEl = document.getElementById('cliMrrUf');
-    const clpEl = document.getElementById('cliMrrClp');
-    const ivaEl = document.getElementById('cliMrrClpIva');
-    if (ufEl) ufEl.textContent = ufFmt;
-    if (clpEl) clpEl.textContent = neto.toLocaleString('es-CL');
-    if (ivaEl) ivaEl.textContent = conIva.toLocaleString('es-CL');
+    const mrr = d.mrr_tributario || {total_uf: 0, total_clp_neto: 0, total_clp_iva: 0, desglose: [], uf_valor: 0};
+    _cliCatalogoDtes = mrr.desglose || [];
 
-    const cont = document.getElementById('cliDtesActivos');
-    if (cont) {
-      const activos = (mrr.desglose || []).filter(x => x.activo);
-      if (!activos.length) {
-        cont.innerHTML = '<div style="grid-column:1/-1;color:var(--hint);text-align:center;padding:10px;font-size:12px;">Aún no hay tipos de DTE activados. Contacta a soporte para habilitarlos.</div>';
-      } else {
-        cont.innerHTML = activos.map(d => {
-          const precio = d.precio_uf === 0 ? '<span style="color:#1D9E75;font-weight:500;">Gratis</span>' : `+${d.precio_uf.toFixed(1).replace('.', ',')} UF`;
-          return `<div style="background:var(--bg2);padding:8px 10px;border-radius:6px;display:flex;justify-content:space-between;align-items:center;">
-            <span style="color:var(--text);">${d.nombre} <span style="color:var(--hint);font-size:10px;">(${d.tipo_dte})</span></span>
-            <span style="color:var(--muted);font-size:11px;">${precio}</span>
-          </div>`;
-        }).join('');
-      }
-    }
+    actualizarTotalCliente(mrr);
+    renderGridDtes(_cliCatalogoDtes);
+
   } catch(e) {
     console.error('[Facturación] Error MRR:', e);
+  }
+}
+
+function actualizarTotalCliente(mrr){
+  const ufFmt = (mrr.total_uf || 0).toFixed(1).replace('.', ',');
+  const neto = mrr.total_clp_neto || mrr.total_clp || 0;
+  const conIva = mrr.total_clp_iva || Math.round(neto * 1.19);
+  const setText = (id, v) => { const e = document.getElementById(id); if(e) e.textContent = v; };
+  setText('cliMrrUf', ufFmt);
+  setText('cliMrrClp', neto.toLocaleString('es-CL'));
+  setText('cliMrrClpIva', conIva.toLocaleString('es-CL'));
+  if (mrr.uf_valor) {
+    setText('cliUfValor', Math.round(mrr.uf_valor).toLocaleString('es-CL'));
+  }
+}
+
+function renderGridDtes(desglose){
+  const cont = document.getElementById('cliDtesGrid');
+  if (!cont) return;
+  if (!desglose || !desglose.length) {
+    cont.innerHTML = '<div style="grid-column:1/-1;color:var(--hint);text-align:center;padding:20px;">No hay DTEs configurados</div>';
+    return;
+  }
+  // DTEs gratuitos obligatorios: no se pueden desactivar
+  const OBLIGATORIOS = [39, 61];
+
+  cont.innerHTML = desglose.map(d => {
+    const esObligatorio = OBLIGATORIOS.includes(d.tipo_dte);
+    const activoCls = d.activo ? 'activo' : '';
+    const checked = d.activo ? 'checked' : '';
+    const disabled = esObligatorio ? 'disabled' : '';
+    let precioLabel;
+    if (d.precio_uf === 0) {
+      precioLabel = esObligatorio
+        ? '<span style="color:#1D9E75;font-weight:500;">Incluido</span>'
+        : '<span style="color:#1D9E75;font-weight:500;">Gratis</span>';
+    } else {
+      precioLabel = `<span style="color:#5F5E5A;">+${d.precio_uf.toFixed(1).replace('.', ',')} UF</span>`;
+    }
+    const lockIcon = esObligatorio
+      ? '<span style="font-size:9px;color:#888;margin-left:6px;" title="DTE obligatorio (no se puede desactivar)">🔒</span>'
+      : '';
+    return `<label class="cli-dte-row ${activoCls}" data-campo="${d.campo_bd}" data-precio="${d.precio_uf}" data-nombre="${d.nombre}" data-tipo="${d.tipo_dte}" style="${esObligatorio ? 'cursor:default;' : ''}">
+      <span style="display:flex;align-items:center;flex:1;">
+        <input type="checkbox" ${checked} ${disabled} onclick="onCliClickDte(event, this)">
+        <span style="display:flex;flex-direction:column;">
+          <span style="color:var(--text);font-weight:500;">${d.nombre}${lockIcon}</span>
+          <span style="color:var(--hint);font-size:10px;margin-top:1px;">DTE ${d.tipo_dte}</span>
+        </span>
+      </span>
+      <span style="font-size:11px;text-align:right;white-space:nowrap;margin-left:8px;">${precioLabel}</span>
+    </label>`;
+  }).join('');
+}
+
+function onCliClickDte(ev, checkbox){
+  const row = checkbox.closest('.cli-dte-row');
+  const precio = parseFloat(row.dataset.precio || 0);
+  const nombre = row.dataset.nombre || 'este DTE';
+  const campoBd = row.dataset.campo;
+  const yaActivo = row.classList.contains('activo');
+  const intentoActivar = !yaActivo;
+
+  // Si es gratis (0 UF), no requiere confirmación
+  if (precio === 0) {
+    // Aplicar directo
+    ev.preventDefault();
+    checkbox.checked = yaActivo;  // revertimos visualmente hasta confirmar el server
+    aplicarToggleDte(campoBd, intentoActivar, false);
+    return;
+  }
+
+  // Con costo: mostrar modal
+  ev.preventDefault();
+  checkbox.checked = yaActivo;  // mantener estado actual hasta confirmar
+
+  _cliModalContexto = {
+    campoBd: campoBd,
+    activar: intentoActivar,
+    precio: precio,
+    nombre: nombre,
+  };
+  abrirCliModal(nombre, precio, intentoActivar);
+}
+
+function abrirCliModal(nombre, precio, activar){
+  const UF_CLP_APROX = parseInt(document.getElementById('cliUfValor').textContent.replace(/\./g, '')) || 37000;
+  const IVA = 1.19;
+  const precioFmt = precio.toFixed(1).replace('.', ',');
+  const neto = Math.round(precio * UF_CLP_APROX);
+  const conIva = Math.round(neto * IVA);
+
+  if (activar) {
+    document.getElementById('cliModalTitulo').textContent = `Activar ${nombre}`;
+    document.getElementById('cliModalPrecio').innerHTML = `+${precioFmt} UF/mes <span style="font-size:12px;font-weight:400;">(≈ $${neto.toLocaleString('es-CL')} neto · <b>$${conIva.toLocaleString('es-CL')} con IVA</b>)</span>`;
+  } else {
+    const hoy = new Date();
+    const finMes = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0);
+    const finMesStr = finMes.toLocaleDateString('es-CL', {day:'2-digit', month:'long', year:'numeric'});
+    document.getElementById('cliModalTitulo').textContent = `Desactivar ${nombre}`;
+    document.getElementById('cliModalPrecio').innerHTML = `Se seguirá cobrando hasta <b>${finMesStr}</b><br><span style="font-size:11px;font-weight:400;">Después de esa fecha ya no se aplicará el cargo.</span>`;
+  }
+  document.getElementById('cliModalNombre').textContent = nombre;
+  document.getElementById('cliModalAcepta').checked = false;
+  document.getElementById('cliModalBtnAceptar').disabled = true;
+  document.getElementById('cliModalDte').style.display = 'flex';
+}
+
+function cliModalCheckChange(){
+  document.getElementById('cliModalBtnAceptar').disabled = !document.getElementById('cliModalAcepta').checked;
+}
+
+function cliModalCancelar(){
+  document.getElementById('cliModalDte').style.display = 'none';
+  _cliModalContexto = null;
+}
+
+async function cliModalConfirmar(){
+  if (!_cliModalContexto) return;
+  const ctx = _cliModalContexto;
+  document.getElementById('cliModalDte').style.display = 'none';
+  await aplicarToggleDte(ctx.campoBd, ctx.activar, true);
+  _cliModalContexto = null;
+}
+
+async function aplicarToggleDte(campoBd, activar, acepta){
+  try {
+    const r = await fetch('/facturacion/dte/toggle', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({campo_bd: campoBd, activar: activar, acepta_terminos: acepta})
+    });
+    const result = await r.json();
+    if (result.ok) {
+      const msg = activar ? `✅ ${result.nombre || 'DTE'} activado` : `✅ ${result.nombre || 'DTE'} desactivado (se cobrará hasta fin de mes)`;
+      toast(msg);
+      // Re-render
+      renderDtesCliente();
+      cargarFacturacionDashboard();
+    } else {
+      toast('Error: ' + (result.error || 'desconocido'));
+    }
+  } catch(e) {
+    toast('Error de red: ' + e.message);
   }
 }
 

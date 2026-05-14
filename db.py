@@ -76,6 +76,15 @@ def init_facturacion_tables(get_conn_func, release_conn_func=None, enable_rls_fu
             END $$;
         """)
 
+        # Forzar TRUE en DTEs gratuitos (boleta 39 + NC 61) para tenants existentes
+        # Estos son gratis y deben estar siempre activos por defecto
+        cur.execute("""
+            UPDATE facturacion_config_tenant
+            SET emite_boleta = TRUE, emite_nota_credito = TRUE
+            WHERE emite_boleta IS FALSE OR emite_nota_credito IS FALSE
+                OR emite_boleta IS NULL OR emite_nota_credito IS NULL
+        """)
+
         # ─────────────────────────────────────────────────────────────────
         # 2. CERTIFICADOS .pfx encriptados (uno por tenant, pueden tener varios pero solo 1 activo)
         # ─────────────────────────────────────────────────────────────────
@@ -284,19 +293,34 @@ def obtener_config_facturacion(get_conn_func, release_conn_func, tenant_id):
         release_conn_func(conn)
 
 
-def calcular_mrr_tributario(get_conn_func, release_conn_func, tenant_id, uf_clp=37000):
+def calcular_mrr_tributario(get_conn_func, release_conn_func, tenant_id, uf_clp=None):
     """Calcula el costo mensual en UF por los DTEs activados del tenant.
+
+    Args:
+        uf_clp: valor UF en CLP. Si None, lo obtiene dinámicamente del cache/API.
 
     Returns:
         dict con:
             total_uf: suma de precios UF de DTEs activos
-            total_clp: equivalente en pesos
+            total_clp_neto: equivalente en pesos (sin IVA)
+            total_clp_iva: con IVA 19%
+            uf_valor: valor UF usado en el cálculo
+            uf_fecha: fecha del valor UF
             desglose: lista de {tipo_dte, nombre, precio_uf, activo}
     """
     from .utils import TIPOS_DTE, CAMPO_BD_A_TIPO_DTE
+    from .uf import obtener_uf_actual
+
     config = obtener_config_facturacion(get_conn_func, release_conn_func, tenant_id)
     if not config:
-        return {"total_uf": 0.0, "total_clp": 0, "desglose": []}
+        return {"total_uf": 0.0, "total_clp": 0, "total_clp_neto": 0,
+                "total_clp_iva": 0, "iva_porcentaje": 19, "desglose": []}
+
+    # Obtener UF dinámica si no se pasó
+    uf_info = None
+    if uf_clp is None:
+        uf_info = obtener_uf_actual(get_conn_func, release_conn_func)
+        uf_clp = uf_info["valor"]
 
     desglose = []
     total_uf = 0.0
@@ -319,14 +343,19 @@ def calcular_mrr_tributario(get_conn_func, release_conn_func, tenant_id, uf_clp=
     total_uf = round(total_uf, 2)
     total_clp_neto = int(round(total_uf * uf_clp))
     total_clp_iva = int(round(total_clp_neto * 1.19))
-    return {
+    result = {
         "total_uf": total_uf,
-        "total_clp": total_clp_neto,      # neto, sin IVA (backward compat)
+        "total_clp": total_clp_neto,      # backward compat
         "total_clp_neto": total_clp_neto,
-        "total_clp_iva": total_clp_iva,    # con IVA 19%
+        "total_clp_iva": total_clp_iva,
         "iva_porcentaje": 19,
+        "uf_valor": float(uf_clp),
         "desglose": desglose,
     }
+    if uf_info:
+        result["uf_fecha"] = uf_info.get("fecha")
+        result["uf_fuente"] = uf_info.get("fuente")
+    return result
 
 
 def registrar_activacion_dte(get_conn_func, release_conn_func, tenant_id,
