@@ -11405,11 +11405,9 @@ def admin_rls_forzar_sync_woo():
     try:
         from datetime import timezone as _tz
         from inventario import get_conn, release_conn, cargar_productos, guardar_producto, registrar_movimiento
-        from inventario import _tenant_local
 
         # Setear tenant_id en threading.local para que get_conn y RLS funcionen
-        _tenant_local.tenant_id = 1
-        _tenant_local.is_admin = False
+        set_thread_tenant(1, is_admin=False)
 
         dias = int(request.args.get("dias", "3"))
         fecha_corte = (datetime.now(_tz.utc) - timedelta(days=dias)).isoformat()
@@ -11590,6 +11588,10 @@ def admin_rls_forzar_sync_woo():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()[:600]}), 500
+    finally:
+        try:
+            clear_thread_tenant()
+        except: pass
 
 
 @app.route("/admin/rls/debug_woo_completadas", methods=["GET"])
