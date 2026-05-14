@@ -4527,13 +4527,14 @@ function renderMovimientoItem(m){
   const canalesVenta = ['mercadolibre','meli','paris','walmart','falabella','ripley',
                         'hites','woocommerce','woo','web','tienda','shopify','pos'];
   const esCanalVenta = canalesVenta.includes(canalLower);
+  const esCanalDevolucion = canalLower === 'devolución' || canalLower === 'devolucion';
   const esCancelacion = motivoLower.includes('cancel') || motivoLower.includes('devol') ||
                         motivoLower.includes('reintegr') || motivoLower.includes('anulac');
 
   let categoria;
-  if (isEntrada && (esCancelacion || esCanalVenta)) categoria = 'devolucion';
-  else if (!isEntrada && esCanalVenta)               categoria = 'venta';
-  else                                                categoria = 'especial';
+  if (isEntrada && (esCancelacion || esCanalVenta || esCanalDevolucion)) categoria = 'devolucion';
+  else if (!isEntrada && esCanalVenta)                                    categoria = 'venta';
+  else                                                                    categoria = 'especial';
 
   const paleta = {
     venta:      { borde: '#1D9E75', dotBg: '#eaf3ee', dotColor: '#0F6E56', qtyColor: '#1D9E75', icono: '↓' },
@@ -4673,12 +4674,22 @@ function cargarMovimientosFull(){
       const canalesVenta = ['mercadolibre','meli','paris','walmart','falabella','ripley',
                             'hites','woocommerce','woo','web','tienda','shopify','pos'];
       const esCanalVenta = canalesVenta.includes(canalLower);
+      const esCanalDevolucion = canalLower === 'devolución' || canalLower === 'devolucion';
       const esCancelacion = motivoLower.includes('cancel') || motivoLower.includes('devol') ||
                             motivoLower.includes('reintegr') || motivoLower.includes('anulac');
 
-      let categoria;
-      if (isEntrada && (esCancelacion || esCanalVenta)) {
+      let categoria, etiquetaEspecifica = null;
+      if (isEntrada && (esCancelacion || esCanalVenta || esCanalDevolucion)) {
         categoria = 'devolucion';   // ROJO — entrada por cancelación/devolución
+        if (esCanalDevolucion) {
+          // Extraer DEV-ID del motivo: "Devolución DEV-20260514-001 - reintegrado..."
+          const matchDev = (m.motivo || '').match(/(DEV-[\w-]+)/i);
+          etiquetaEspecifica = matchDev ? matchDev[1] : 'Devolución';
+        } else if (motivoLower.includes('cancel')) {
+          etiquetaEspecifica = 'Cancelación';
+        } else {
+          etiquetaEspecifica = 'Devolución';
+        }
       } else if (!isEntrada && esCanalVenta) {
         categoria = 'venta';         // VERDE — salida por venta
       } else {
@@ -4689,7 +4700,7 @@ function cargarMovimientosFull(){
       const paleta = {
         venta:      { borde: '#1D9E75', dotBg: '#eaf3ee', dotColor: '#0F6E56', qtyColor: '#1D9E75', icono: '↓', badge: null },
         devolucion: { borde: '#E24B4A', dotBg: '#fef2f2', dotColor: '#A32D2D', qtyColor: '#E24B4A', icono: '↩',
-                      badge: esCancelacion ? 'Cancelación' : 'Devolución' },
+                      badge: etiquetaEspecifica || 'Devolución' },
         especial:   { borde: '#7F77DD', dotBg: '#EEEDFE', dotColor: '#534AB7', qtyColor: '#534AB7',
                       icono: canalLower === 'manual' ? '✎' : '📦',
                       badge: canalLower === 'manual' ? 'Ajuste manual' :
