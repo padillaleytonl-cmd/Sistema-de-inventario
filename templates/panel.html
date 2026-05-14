@@ -1729,6 +1729,10 @@ tbody td {
           </div>
           Alertas
         </button>
+        <button class="sidebar-link" data-section="facturacion" onclick="navSidebar('facturacion', this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+          Facturación SII
+        </button>
         <button class="sidebar-link" data-section="configuracion" onclick="navSidebar('configuracion', this)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           Configuración
@@ -3273,6 +3277,141 @@ tbody td {
 
   </div>
   <!-- ═══════════ FIN SECCIÓN BODEGAS ═══════════ -->
+
+  <!-- ═══════════ SECCIÓN FACTURACIÓN SII ═══════════ -->
+  <div id="sec-facturacion" class="main" style="display:none;">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Facturación electrónica SII</div>
+        <div class="page-date">Boletas, facturas y otros DTEs · Fase 1: Configuración</div>
+      </div>
+      <div id="facturacionAmbiente" style="font-size:11px;padding:6px 12px;border-radius:8px;background:#FAEEDA;color:#854F0B;font-weight:500;">— Cargando —</div>
+    </div>
+
+    <!-- Estado actual: 4 cards -->
+    <div id="facturacionEstado" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px;">
+      <div style="text-align:center;color:var(--hint);padding:20px;grid-column:1/-1;">Cargando estado...</div>
+    </div>
+
+    <!-- Tabs -->
+    <div style="display:flex;gap:6px;border-bottom:1px solid var(--border);margin-bottom:16px;">
+      <button class="fact-tab active" data-tab="config" onclick="showFactTab('config', this)" style="padding:8px 14px;border:none;background:transparent;font-size:12px;color:var(--text);cursor:pointer;border-bottom:2px solid var(--primary);font-weight:500;">⚙ Configuración</button>
+      <button class="fact-tab" data-tab="certificado" onclick="showFactTab('certificado', this)" style="padding:8px 14px;border:none;background:transparent;font-size:12px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;">🔐 Certificado digital</button>
+      <button class="fact-tab" data-tab="cafs" onclick="showFactTab('cafs', this)" style="padding:8px 14px;border:none;background:transparent;font-size:12px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;">📄 CAFs (Folios)</button>
+    </div>
+
+    <!-- TAB: Configuración -->
+    <div id="fact-tab-config" class="fact-tab-content">
+      <div style="background:var(--bg);border:0.5px solid var(--border);border-radius:12px;padding:20px;max-width:700px;">
+        <div style="font-size:14px;font-weight:500;color:var(--text);margin-bottom:14px;">Datos del emisor</div>
+        <form id="formFactConfig" onsubmit="guardarConfigFact(event)" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <div>
+            <label style="font-size:11px;color:var(--muted);">RUT empresa *</label>
+            <input id="fact_rut_emisor" type="text" placeholder="76.123.456-7" style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--muted);">Razón social *</label>
+            <input id="fact_razon_social" type="text" placeholder="BABYMINE SPA" style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--muted);">Giro</label>
+            <input id="fact_giro" type="text" placeholder="Venta al por menor de artículos para bebés" style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--muted);">Comuna</label>
+            <input id="fact_comuna" type="text" placeholder="Las Condes" style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
+          </div>
+          <div style="grid-column:span 2;">
+            <label style="font-size:11px;color:var(--muted);">Dirección</label>
+            <input id="fact_direccion" type="text" placeholder="Av. Apoquindo 1234, Of. 567" style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--muted);">Email</label>
+            <input id="fact_email" type="email" placeholder="contacto@babymine.cl" style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--muted);">Teléfono</label>
+            <input id="fact_telefono" type="text" placeholder="+56 9 1234 5678" style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--muted);">Resolución SII (número)</label>
+            <input id="fact_res_num" type="number" placeholder="80" style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--muted);">Resolución SII (fecha)</label>
+            <input id="fact_res_fecha" type="date" style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
+          </div>
+          <div style="grid-column:span 2;border-top:1px solid var(--border);padding-top:12px;margin-top:4px;">
+            <label style="font-size:11px;color:var(--muted);">Ambiente SII *</label>
+            <select id="fact_ambiente" style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
+              <option value="certificacion">🧪 Certificación (pruebas — NO genera DTEs reales)</option>
+              <option value="produccion">⚠️ Producción (DTEs válidos ante SII)</option>
+            </select>
+          </div>
+          <div style="grid-column:span 2;border-top:1px solid var(--border);padding-top:12px;margin-top:4px;">
+            <div style="font-size:12px;font-weight:500;color:var(--text);margin-bottom:8px;">Tipos de DTE a emitir</div>
+            <div style="display:flex;flex-wrap:wrap;gap:14px;font-size:12px;">
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="fact_emite_boleta" checked> Boleta (39)</label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="fact_emite_factura" checked> Factura (33)</label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="fact_emite_nota_credito" checked> Nota Crédito (61)</label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="fact_emite_nota_debito"> Nota Débito (56)</label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="fact_emite_guia_despacho"> Guía Despacho (52)</label>
+            </div>
+          </div>
+          <div style="grid-column:span 2;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--border);padding-top:14px;margin-top:8px;">
+            <button type="button" onclick="cargarFactConfig()" style="padding:8px 16px;font-size:12px;background:var(--bg2);color:var(--text);border:0.5px solid var(--border);border-radius:6px;cursor:pointer;">Cancelar</button>
+            <button type="submit" style="padding:8px 16px;font-size:12px;background:var(--primary);color:white;border:none;border-radius:6px;cursor:pointer;font-weight:500;">Guardar configuración</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- TAB: Certificado -->
+    <div id="fact-tab-certificado" class="fact-tab-content" style="display:none;">
+      <div style="background:var(--bg);border:0.5px solid var(--border);border-radius:12px;padding:20px;max-width:700px;margin-bottom:16px;">
+        <div style="font-size:14px;font-weight:500;color:var(--text);margin-bottom:6px;">Subir certificado digital</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:14px;">Archivo .pfx o .p12 con su contraseña. Se guarda encriptado con Fernet.</div>
+        <form id="formSubirCert" onsubmit="subirCertificado(event)" enctype="multipart/form-data">
+          <div style="margin-bottom:12px;">
+            <label style="font-size:11px;color:var(--muted);">Archivo .pfx</label>
+            <input id="cert_archivo" name="pfx" type="file" accept=".pfx,.p12" required style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
+          </div>
+          <div style="margin-bottom:14px;">
+            <label style="font-size:11px;color:var(--muted);">Contraseña del .pfx</label>
+            <input id="cert_password" name="password" type="password" required style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
+          </div>
+          <button type="submit" style="padding:8px 16px;font-size:12px;background:var(--primary);color:white;border:none;border-radius:6px;cursor:pointer;font-weight:500;">Subir certificado</button>
+        </form>
+      </div>
+
+      <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:8px;">Certificados cargados</div>
+      <div id="listaCertificados">
+        <div style="text-align:center;color:var(--hint);font-size:12px;padding:20px;">Cargando...</div>
+      </div>
+    </div>
+
+    <!-- TAB: CAFs -->
+    <div id="fact-tab-cafs" class="fact-tab-content" style="display:none;">
+      <div style="background:var(--bg);border:0.5px solid var(--border);border-radius:12px;padding:20px;max-width:700px;margin-bottom:16px;">
+        <div style="font-size:14px;font-weight:500;color:var(--text);margin-bottom:6px;">Subir CAF (XML del SII)</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:14px;">Solicita los CAFs en <a href="https://palena.sii.cl/cvc/dte/ee_solicita_caf_inicio.html" target="_blank" style="color:var(--primary);">palena.sii.cl → Folios</a> y sube aquí el archivo XML.</div>
+        <form id="formSubirCAF" onsubmit="subirCAF(event)" enctype="multipart/form-data">
+          <div style="margin-bottom:12px;">
+            <label style="font-size:11px;color:var(--muted);">Archivo XML del CAF</label>
+            <input id="caf_archivo" name="caf" type="file" accept=".xml" required style="width:100%;padding:8px;font-size:12px;border:1px solid var(--border);border-radius:6px;margin-top:4px;">
+          </div>
+          <button type="submit" style="padding:8px 16px;font-size:12px;background:var(--primary);color:white;border:none;border-radius:6px;cursor:pointer;font-weight:500;">Subir CAF</button>
+        </form>
+      </div>
+
+      <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:8px;">CAFs cargados</div>
+      <div id="listaCAFs">
+        <div style="text-align:center;color:var(--hint);font-size:12px;padding:20px;">Cargando...</div>
+      </div>
+    </div>
+
+  </div>
+  <!-- ═══════════ FIN SECCIÓN FACTURACIÓN ═══════════ -->
 
   <div id="sec-configuracion" class="main" style="display:none;">
     <div class="page-header">
@@ -9883,7 +10022,7 @@ function navSidebar(sec, btnElem){
 let _bodegasMatriz = null;
 let _bodegasCambios = {};  // { "sku|bodega_codigo": cantidad_nueva }
 
-// Hook a showSection: cuando se navega a 'bodegas', cargar la matriz
+// ─── Hook a showSection: cuando se navega a 'bodegas', cargar la matriz
 (function(){
   const _origShow = window.showSection;
   if(typeof _origShow === 'function'){
@@ -9893,9 +10032,298 @@ let _bodegasCambios = {};  // { "sku|bodega_codigo": cantidad_nueva }
         cargarBodegasMatriz();
         cargarHistorialImports();
       }
+      if(sec === 'facturacion'){
+        cargarFacturacionDashboard();
+        cargarFactConfig();
+      }
     };
   }
 })();
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// SECCIÓN FACTURACIÓN SII
+// ════════════════════════════════════════════════════════════════════════════
+
+function showFactTab(tab, btn){
+  ['config','certificado','cafs'].forEach(t => {
+    const el = document.getElementById('fact-tab-' + t);
+    if(el) el.style.display = t === tab ? '' : 'none';
+  });
+  document.querySelectorAll('.fact-tab').forEach(b => {
+    b.style.borderBottom = '2px solid transparent';
+    b.style.color = 'var(--muted)';
+    b.style.fontWeight = '400';
+  });
+  if(btn){
+    btn.style.borderBottom = '2px solid var(--primary)';
+    btn.style.color = 'var(--text)';
+    btn.style.fontWeight = '500';
+  }
+  if(tab === 'certificado') cargarListaCertificados();
+  if(tab === 'cafs') cargarListaCAFs();
+}
+
+async function cargarFacturacionDashboard(){
+  try {
+    const r = await fetch('/facturacion/dashboard');
+    const d = await r.json();
+
+    // Badge ambiente
+    const amb = (d.config && d.config.ambiente) || 'certificacion';
+    const ambEl = document.getElementById('facturacionAmbiente');
+    if(ambEl){
+      if(amb === 'produccion'){
+        ambEl.style.background = '#fef2f2';
+        ambEl.style.color = '#A32D2D';
+        ambEl.textContent = '⚠️ Ambiente: Producción';
+      } else {
+        ambEl.style.background = '#FAEEDA';
+        ambEl.style.color = '#854F0B';
+        ambEl.textContent = '🧪 Ambiente: Certificación';
+      }
+    }
+
+    // Cards de estado
+    const cont = document.getElementById('facturacionEstado');
+    if(!cont) return;
+    const check = (ok) => ok ? '✅' : '⚠️';
+    const colorOK = ok => ok ? '#1D9E75' : '#E24B4A';
+    const bgOK = ok => ok ? '#eaf3ee' : '#fef2f2';
+    cont.innerHTML = `
+      <div style="background:${bgOK(d.config_completa)};padding:14px;border-radius:10px;border:0.5px solid ${colorOK(d.config_completa)}33;">
+        <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">${check(d.config_completa)} Configuración</div>
+        <div style="font-size:14px;font-weight:600;color:${colorOK(d.config_completa)};">${d.config_completa ? 'Completa' : 'Incompleta'}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:2px;">${d.config.rut_emisor || '— Sin RUT —'}</div>
+      </div>
+      <div style="background:${bgOK(!!d.certificado_activo)};padding:14px;border-radius:10px;border:0.5px solid ${colorOK(!!d.certificado_activo)}33;">
+        <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">${check(!!d.certificado_activo)} Certificado digital</div>
+        <div style="font-size:14px;font-weight:600;color:${colorOK(!!d.certificado_activo)};">${d.certificado_activo ? 'Activo' : 'No cargado'}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:2px;">${d.certificado_activo ? ('Vence ' + (d.certificado_activo.fecha_expiracion || '—')) : 'Sube tu .pfx'}</div>
+      </div>
+      <div style="background:${bgOK(d.cafs_activos_count > 0)};padding:14px;border-radius:10px;border:0.5px solid ${colorOK(d.cafs_activos_count > 0)}33;">
+        <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">${check(d.cafs_activos_count > 0)} CAFs activos</div>
+        <div style="font-size:14px;font-weight:600;color:${colorOK(d.cafs_activos_count > 0)};">${d.cafs_activos_count}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:2px;">${d.tipos_dte_disponibles.length ? 'Tipos: ' + d.tipos_dte_disponibles.join(', ') : 'Sin folios'}</div>
+      </div>
+      <div style="background:${bgOK(d.listo_para_emitir)};padding:14px;border-radius:10px;border:0.5px solid ${colorOK(d.listo_para_emitir)}33;">
+        <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">${check(d.listo_para_emitir)} Estado</div>
+        <div style="font-size:14px;font-weight:600;color:${colorOK(d.listo_para_emitir)};">${d.listo_para_emitir ? 'Listo' : 'Falta config'}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:2px;">${d.fase_actual}</div>
+      </div>
+    `;
+  } catch(e){
+    console.error('[Facturación] Error dashboard:', e);
+  }
+}
+
+async function cargarFactConfig(){
+  try {
+    const r = await fetch('/facturacion/config');
+    const d = await r.json();
+    const c = d.config || {};
+    const set = (id, val) => { const e = document.getElementById(id); if(e) e.value = val || ''; };
+    const setChk = (id, val) => { const e = document.getElementById(id); if(e) e.checked = !!val; };
+    set('fact_rut_emisor', c.rut_emisor);
+    set('fact_razon_social', c.razon_social);
+    set('fact_giro', c.giro);
+    set('fact_direccion', c.direccion);
+    set('fact_comuna', c.comuna);
+    set('fact_email', c.email);
+    set('fact_telefono', c.telefono);
+    set('fact_res_num', c.resolucion_sii_numero);
+    set('fact_res_fecha', c.resolucion_sii_fecha);
+    set('fact_ambiente', c.ambiente || 'certificacion');
+    setChk('fact_emite_boleta', c.emite_boleta !== false);
+    setChk('fact_emite_factura', c.emite_factura !== false);
+    setChk('fact_emite_nota_credito', c.emite_nota_credito !== false);
+    setChk('fact_emite_nota_debito', c.emite_nota_debito);
+    setChk('fact_emite_guia_despacho', c.emite_guia_despacho);
+  } catch(e){
+    console.error('[Facturación] Error cargando config:', e);
+  }
+}
+
+async function guardarConfigFact(ev){
+  ev.preventDefault();
+  const data = {
+    rut_emisor: document.getElementById('fact_rut_emisor').value.trim(),
+    razon_social: document.getElementById('fact_razon_social').value.trim(),
+    giro: document.getElementById('fact_giro').value.trim(),
+    direccion: document.getElementById('fact_direccion').value.trim(),
+    comuna: document.getElementById('fact_comuna').value.trim(),
+    email: document.getElementById('fact_email').value.trim(),
+    telefono: document.getElementById('fact_telefono').value.trim(),
+    resolucion_sii_numero: parseInt(document.getElementById('fact_res_num').value) || null,
+    resolucion_sii_fecha: document.getElementById('fact_res_fecha').value || null,
+    ambiente: document.getElementById('fact_ambiente').value,
+    emite_boleta: document.getElementById('fact_emite_boleta').checked,
+    emite_factura: document.getElementById('fact_emite_factura').checked,
+    emite_nota_credito: document.getElementById('fact_emite_nota_credito').checked,
+    emite_nota_debito: document.getElementById('fact_emite_nota_debito').checked,
+    emite_guia_despacho: document.getElementById('fact_emite_guia_despacho').checked,
+  };
+  if(!data.rut_emisor || !data.razon_social){
+    toast('RUT y Razón Social son obligatorios');
+    return;
+  }
+  try {
+    const r = await fetch('/facturacion/config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+    const result = await r.json();
+    if(result.ok){
+      toast('✅ Configuración guardada');
+      cargarFacturacionDashboard();
+    } else {
+      toast('Error: ' + (result.error || 'desconocido'));
+    }
+  } catch(e){
+    toast('Error de red: ' + e.message);
+  }
+}
+
+async function subirCertificado(ev){
+  ev.preventDefault();
+  const archivo = document.getElementById('cert_archivo').files[0];
+  const password = document.getElementById('cert_password').value;
+  if(!archivo || !password){
+    toast('Selecciona archivo y password');
+    return;
+  }
+  const fd = new FormData();
+  fd.append('pfx', archivo);
+  fd.append('password', password);
+  fd.append('activar', 'true');
+
+  toast('Procesando certificado...');
+  try {
+    const r = await fetch('/facturacion/certificado/subir', {method:'POST', body: fd});
+    const result = await r.json();
+    if(result.ok){
+      const m = result.metadata || {};
+      toast(`✅ Certificado cargado. RUT: ${m.rut || '?'} · Vence: ${m.fecha_expiracion || '?'}`);
+      document.getElementById('cert_password').value = '';
+      document.getElementById('cert_archivo').value = '';
+      cargarListaCertificados();
+      cargarFacturacionDashboard();
+    } else {
+      toast('Error: ' + (result.error || 'desconocido'));
+    }
+  } catch(e){
+    toast('Error: ' + e.message);
+  }
+}
+
+async function cargarListaCertificados(){
+  const cont = document.getElementById('listaCertificados');
+  if(!cont) return;
+  try {
+    const r = await fetch('/facturacion/certificado/listar');
+    const d = await r.json();
+    const certs = d.certificados || [];
+    if(!certs.length){
+      cont.innerHTML = '<div style="text-align:center;color:var(--hint);font-size:12px;padding:20px;">No hay certificados cargados</div>';
+      return;
+    }
+    cont.innerHTML = certs.map(c => {
+      const venceColor = c.dias_para_expirar < 30 ? '#E24B4A' : (c.dias_para_expirar < 90 ? '#854F0B' : '#1D9E75');
+      const estado = c.activo ? '<span style="background:#eaf3ee;color:#1D9E75;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:500;">Activo</span>' : '<span style="background:#f1efe8;color:#5f5e5a;padding:2px 8px;border-radius:8px;font-size:10px;">Inactivo</span>';
+      return `<div style="background:var(--bg);border:0.5px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;display:grid;grid-template-columns:1fr auto;gap:8px;">
+        <div>
+          <div style="font-size:13px;color:var(--text);font-weight:500;margin-bottom:4px;">${c.nombre_archivo} ${estado}</div>
+          <div style="font-size:11px;color:var(--muted);">RUT: ${c.rut || '—'} · Titular: ${c.titular || '—'}</div>
+          <div style="font-size:11px;color:${venceColor};margin-top:2px;">Vence: ${c.fecha_expiracion || '—'} (${c.dias_para_expirar} días)</div>
+        </div>
+        <div style="display:flex;align-items:center;">
+          <button onclick="eliminarCertificado(${c.id})" style="padding:5px 10px;font-size:11px;background:#fef2f2;color:#A32D2D;border:0.5px solid #E24B4A33;border-radius:6px;cursor:pointer;">Eliminar</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e){
+    cont.innerHTML = '<div style="color:#E24B4A;padding:20px;">Error: ' + e.message + '</div>';
+  }
+}
+
+async function eliminarCertificado(certId){
+  if(!confirm('¿Eliminar este certificado? No podrás recuperarlo.')) return;
+  try {
+    const r = await fetch(`/facturacion/certificado/${certId}/eliminar`, {method:'POST'});
+    const d = await r.json();
+    if(d.ok){
+      toast('✅ Certificado eliminado');
+      cargarListaCertificados();
+      cargarFacturacionDashboard();
+    } else {
+      toast('Error: ' + (d.error || 'desconocido'));
+    }
+  } catch(e){
+    toast('Error: ' + e.message);
+  }
+}
+
+async function subirCAF(ev){
+  ev.preventDefault();
+  const archivo = document.getElementById('caf_archivo').files[0];
+  if(!archivo){
+    toast('Selecciona el archivo XML del CAF');
+    return;
+  }
+  const fd = new FormData();
+  fd.append('caf', archivo);
+
+  toast('Procesando CAF...');
+  try {
+    const r = await fetch('/facturacion/caf/subir', {method:'POST', body: fd});
+    const result = await r.json();
+    if(result.ok){
+      const info = result.info || {};
+      toast(`✅ CAF cargado. Tipo ${info.tipo_dte}, folios ${info.folio_desde}-${info.folio_hasta} (${info.total_folios} folios)`);
+      document.getElementById('caf_archivo').value = '';
+      cargarListaCAFs();
+      cargarFacturacionDashboard();
+    } else {
+      toast('Error: ' + (result.error || 'desconocido'));
+    }
+  } catch(e){
+    toast('Error: ' + e.message);
+  }
+}
+
+async function cargarListaCAFs(){
+  const cont = document.getElementById('listaCAFs');
+  if(!cont) return;
+  try {
+    const r = await fetch('/facturacion/caf/listar');
+    const d = await r.json();
+    const cafs = d.cafs || [];
+    if(!cafs.length){
+      cont.innerHTML = '<div style="text-align:center;color:var(--hint);font-size:12px;padding:20px;">No hay CAFs cargados</div>';
+      return;
+    }
+    cont.innerHTML = cafs.map(c => {
+      const pctColor = c.pct_usado > 90 ? '#E24B4A' : (c.pct_usado > 70 ? '#854F0B' : '#1D9E75');
+      const estado = c.agotado ? '<span style="background:#fef2f2;color:#A32D2D;padding:2px 8px;border-radius:8px;font-size:10px;">Agotado</span>' : '<span style="background:#eaf3ee;color:#1D9E75;padding:2px 8px;border-radius:8px;font-size:10px;">Activo</span>';
+      const ambBadge = c.ambiente === 'produccion' ? '<span style="background:#fef2f2;color:#A32D2D;padding:2px 6px;border-radius:6px;font-size:9px;margin-left:4px;">PROD</span>' : '<span style="background:#FAEEDA;color:#854F0B;padding:2px 6px;border-radius:6px;font-size:9px;margin-left:4px;">CERT</span>';
+      return `<div style="background:var(--bg);border:0.5px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;">
+        <div style="display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:8px;">
+          <div>
+            <div style="font-size:13px;color:var(--text);font-weight:500;">${c.tipo_dte_nombre} (${c.tipo_dte}) ${estado}${ambBadge}</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:2px;">Folios ${c.folio_desde} – ${c.folio_hasta} · Próximo: ${c.folio_actual}</div>
+          </div>
+          <div style="text-align:right;font-size:11px;color:${pctColor};font-weight:500;">${c.folios_usados}/${c.folios_total} usados (${c.pct_usado}%)</div>
+        </div>
+        <div style="background:var(--bg2);height:5px;border-radius:3px;overflow:hidden;">
+          <div style="height:100%;width:${c.pct_usado}%;background:${pctColor};"></div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e){
+    cont.innerHTML = '<div style="color:#E24B4A;padding:20px;">Error: ' + e.message + '</div>';
+  }
+}
 
 async function cargarBodegasMatriz(){
   const tabla = document.getElementById('bodegasTabla');

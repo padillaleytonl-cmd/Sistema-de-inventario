@@ -11,3 +11,14 @@ python-barcode
 pandas
 cryptography>=41.0.0
 bcrypt>=4.0.1
+# ── Encriptación (multi-tenant) ──
+cryptography>=41.0.0     # Fernet (credenciales) + p12 read (certificados SII)
+bcrypt>=4.0.1            # Hash passwords (opcional, hay fallback sha256)
+ 
+# ── Facturación electrónica SII Chile ──
+signxml>=3.2.2           # Firma digital XML (xmldsig) — usado para DTEs y SetDTE
+lxml>=5.0.0              # Parser XML estricto (SII rechaza con encoding mal manejado)
+pyOpenSSL>=23.3.0        # Manejar archivos .pfx (PKCS#12) — leer cert + private key
+ 
+# Nota: cryptography ya incluye pkcs12 (cryptography.hazmat.primitives.serialization.pkcs12)
+# así que pyOpenSSL solo se usa como fallback si hay incompatibilidades.

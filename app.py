@@ -72,6 +72,16 @@ init_alertas()
 init_meli_auth()
 init_bodegas()
 
+# ── Facturación electrónica SII (multi-tenant) ──
+try:
+    from facturacion import init_facturacion_tables
+    from inventario import get_conn as _gc_fact, release_conn as _rc_fact
+    init_facturacion_tables(_gc_fact, _rc_fact)
+except Exception as e:
+    import traceback
+    print(f"[init_facturacion] ERROR: {e}")
+    traceback.print_exc()
+
 # Registrar Blueprints (módulos de marketplaces)
 from walmart import walmart_bp
 from paris import paris_bp
@@ -20320,6 +20330,253 @@ def ventas_export_csv():
         mimetype="text/csv; charset=utf-8",
         headers={"Content-Disposition": f"attachment; filename={nombre_archivo}"}
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ENDPOINTS FACTURACIÓN ELECTRÓNICA SII (Fase 1 — Config)
+# ═══════════════════════════════════════════════════════════════════════════
+# Tres niveles de endpoints:
+#   /facturacion/* → Para el TENANT (cliente Lusync configurando su facturación)
+#   /admin/lusync/facturacion/* → Para super-admin (ver facturación de tenants)
+#
+# IMPORTANTE: estos endpoints leen tenant_id de la sesión, NO de URL params.
+# Esto previene que tenant A vea config de tenant B.
+
+
+@app.route("/facturacion/config", methods=["GET", "POST"])
+def facturacion_config():
+    """GET: obtener config actual del tenant logueado.
+    POST: actualizar config (RUT, razón social, ambiente, etc).
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autenticado"}), 401
+
+    tenant_id = session.get("tenant_id") or 1  # fallback Babymine
+    from facturacion import (obtener_config_facturacion, guardar_config_facturacion,
+                             validar_rut, formatear_rut, normalizar_ambiente)
+    from inventario import get_conn, release_conn
+
+    if request.method == "GET":
+        config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+        return jsonify({"config": config or {}})
+
+    # POST: actualizar
+    data = request.get_json() or {}
+
+    # Validar RUT si viene
+    if data.get("rut_emisor"):
+        if not validar_rut(data["rut_emisor"]):
+            return jsonify({"ok": False, "error": "RUT inválido"}), 400
+        data["rut_emisor"] = formatear_rut(data["rut_emisor"])
+
+    # Normalizar ambiente
+    if "ambiente" in data:
+        data["ambiente"] = normalizar_ambiente(data["ambiente"])
+
+    resultado = guardar_config_facturacion(get_conn, release_conn, tenant_id, data)
+    return jsonify(resultado)
+
+
+@app.route("/facturacion/certificado/subir", methods=["POST"])
+def facturacion_certificado_subir():
+    """Sube un certificado .pfx para el tenant logueado."""
+    if not session.get("logged"):
+        return jsonify({"error": "no autenticado"}), 401
+
+    tenant_id = session.get("tenant_id") or 1
+    if "pfx" not in request.files:
+        return jsonify({"ok": False, "error": "Falta archivo .pfx"}), 400
+
+    pfx_file = request.files["pfx"]
+    password = request.form.get("password", "")
+    activar = request.form.get("activar", "true").lower() == "true"
+
+    if not pfx_file.filename:
+        return jsonify({"ok": False, "error": "Archivo vacío"}), 400
+    if not password:
+        return jsonify({"ok": False, "error": "Password requerido"}), 400
+
+    pfx_bytes = pfx_file.read()
+    nombre_archivo = pfx_file.filename
+
+    from facturacion import subir_certificado
+    from inventario import get_conn, release_conn
+
+    resultado = subir_certificado(
+        get_conn, release_conn, tenant_id,
+        pfx_bytes, password, nombre_archivo, activar=activar
+    )
+
+    # Auditar
+    try:
+        if resultado.get("ok"):
+            registrar_audit(
+                session.get("usuario", "Sistema"), request.remote_addr,
+                "subir_certificado_sii",
+                entidad="facturacion_certificados",
+                detalle=f"Cert ID {resultado['certificado_id']}, RUT {resultado['metadata'].get('rut')}"
+            )
+    except Exception: pass
+
+    return jsonify(resultado)
+
+
+@app.route("/facturacion/certificado/listar", methods=["GET"])
+def facturacion_certificado_listar():
+    """Lista certificados del tenant (sin exponer binarios)."""
+    if not session.get("logged"):
+        return jsonify({"error": "no autenticado"}), 401
+
+    tenant_id = session.get("tenant_id") or 1
+    from facturacion import listar_certificados_tenant
+    from inventario import get_conn, release_conn
+
+    certs = listar_certificados_tenant(get_conn, release_conn, tenant_id)
+    return jsonify({"certificados": certs})
+
+
+@app.route("/facturacion/certificado/<int:cert_id>/eliminar", methods=["DELETE", "POST"])
+def facturacion_certificado_eliminar(cert_id):
+    """Elimina un certificado del tenant."""
+    if not session.get("logged"):
+        return jsonify({"error": "no autenticado"}), 401
+
+    tenant_id = session.get("tenant_id") or 1
+    from facturacion import eliminar_certificado
+    from inventario import get_conn, release_conn
+
+    resultado = eliminar_certificado(get_conn, release_conn, tenant_id, cert_id)
+
+    try:
+        if resultado.get("ok"):
+            registrar_audit(
+                session.get("usuario", "Sistema"), request.remote_addr,
+                "eliminar_certificado_sii",
+                entidad="facturacion_certificados",
+                detalle=f"Cert ID {cert_id}"
+            )
+    except Exception: pass
+
+    return jsonify(resultado)
+
+
+@app.route("/facturacion/caf/subir", methods=["POST"])
+def facturacion_caf_subir():
+    """Sube un archivo CAF (XML) para el tenant logueado."""
+    if not session.get("logged"):
+        return jsonify({"error": "no autenticado"}), 401
+
+    tenant_id = session.get("tenant_id") or 1
+    if "caf" not in request.files:
+        return jsonify({"ok": False, "error": "Falta archivo XML del CAF"}), 400
+
+    caf_file = request.files["caf"]
+    if not caf_file.filename:
+        return jsonify({"ok": False, "error": "Archivo vacío"}), 400
+
+    xml_caf = caf_file.read()
+
+    # Obtener RUT del tenant para validar
+    from facturacion import subir_caf, obtener_config_facturacion
+    from inventario import get_conn, release_conn
+
+    config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+    rut_esperado = config.get("rut_emisor") if config else None
+    ambiente = config.get("ambiente") if config else "certificacion"
+
+    resultado = subir_caf(
+        get_conn, release_conn, tenant_id, xml_caf,
+        rut_emisor_esperado=rut_esperado, ambiente=ambiente
+    )
+
+    try:
+        if resultado.get("ok"):
+            info = resultado.get("info", {})
+            registrar_audit(
+                session.get("usuario", "Sistema"), request.remote_addr,
+                "subir_caf_sii",
+                entidad="facturacion_cafs",
+                detalle=f"CAF ID {resultado['caf_id']}, tipo {info.get('tipo_dte')}, folios {info.get('folio_desde')}-{info.get('folio_hasta')}"
+            )
+    except Exception: pass
+
+    return jsonify(resultado)
+
+
+@app.route("/facturacion/caf/listar", methods=["GET"])
+def facturacion_caf_listar():
+    """Lista CAFs del tenant con info de folios consumidos."""
+    if not session.get("logged"):
+        return jsonify({"error": "no autenticado"}), 401
+
+    tenant_id = session.get("tenant_id") or 1
+    from facturacion import listar_cafs_tenant
+    from inventario import get_conn, release_conn
+
+    cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id)
+    return jsonify({"cafs": cafs})
+
+
+@app.route("/facturacion/dashboard", methods=["GET"])
+def facturacion_dashboard():
+    """Resumen del estado de facturación del tenant: cert + CAFs + config."""
+    if not session.get("logged"):
+        return jsonify({"error": "no autenticado"}), 401
+
+    tenant_id = session.get("tenant_id") or 1
+    from facturacion import (obtener_config_facturacion, listar_certificados_tenant,
+                             listar_cafs_tenant)
+    from inventario import get_conn, release_conn
+
+    config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+    certs = listar_certificados_tenant(get_conn, release_conn, tenant_id)
+    cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id)
+
+    # Resumen ejecutivo
+    cert_activo = next((c for c in certs if c["activo"]), None)
+    cafs_activos = [c for c in cafs if not c["agotado"]]
+    tipos_dte_disponibles = sorted(set(c["tipo_dte"] for c in cafs_activos))
+
+    # ¿Está listo para emitir?
+    config_completa = bool(config and config.get("rut_emisor") and config.get("razon_social"))
+    listo_para_emitir = bool(config_completa and cert_activo and len(cafs_activos) > 0)
+
+    return jsonify({
+        "config": config or {},
+        "config_completa": config_completa,
+        "certificado_activo": cert_activo,
+        "cantidad_certificados": len(certs),
+        "cafs_activos_count": len(cafs_activos),
+        "cafs_total": len(cafs),
+        "tipos_dte_disponibles": tipos_dte_disponibles,
+        "listo_para_emitir": listo_para_emitir,
+        "fase_actual": "Fase 1 — Configuración",
+    })
+
+
+# ── Vistas para el super-admin Lusync ──────────────────────────────────────
+
+
+@app.route("/admin/lusync/facturacion/tenant/<int:tenant_id>", methods=["GET"])
+@requiere_lusync_admin
+def admin_lusync_facturacion_tenant(tenant_id):
+    """Super-admin: ver estado facturación de un tenant específico (sin secretos)."""
+    from facturacion import (obtener_config_facturacion, listar_certificados_tenant,
+                             listar_cafs_tenant)
+    from inventario import get_conn, release_conn
+
+    config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+    certs = listar_certificados_tenant(get_conn, release_conn, tenant_id)
+    cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id)
+
+    return jsonify({
+        "tenant_id": tenant_id,
+        "config": config or {},
+        "certificados": certs,
+        "cafs": cafs,
+    })
+
+
 
 
 if __name__ == "__main__":
