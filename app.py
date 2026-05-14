@@ -11036,12 +11036,12 @@ def admin_lusync_dashboard():
 
                     <div style="font-size:9px;text-transform:uppercase;color:#888780;letter-spacing:0.1em;padding:4px 8px;font-weight:600;margin-top:14px;">Gestión</div>
                     <div style="padding:8px 10px;border-radius:6px;font-size:13px;background:#534AB7;color:white;cursor:pointer;">👥 Clientes</div>
-                    <div style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;cursor:not-allowed;opacity:0.5;">💳 Facturación <small>(próx.)</small></div>
-                    <div style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;cursor:not-allowed;opacity:0.5;">📊 Uso por cliente <small>(próx.)</small></div>
+                    <a href="/admin/lusync/facturacion" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">💳 Facturación</a>
+                    <a href="/admin/lusync/uso" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">📊 Uso por cliente</a>
 
                     <div style="font-size:9px;text-transform:uppercase;color:#888780;letter-spacing:0.1em;padding:4px 8px;font-weight:600;margin-top:14px;">Configuración</div>
-                    <div style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;cursor:not-allowed;opacity:0.5;">📦 Planes <small>(próx.)</small></div>
-                    <div style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;cursor:not-allowed;opacity:0.5;">🛍️ Marketplaces <small>(próx.)</small></div>
+                    <a href="/admin/lusync/planes" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">📦 Planes</a>
+                    <a href="/admin/lusync/marketplaces" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">🛍️ Marketplaces</a>
 
                     <div style="font-size:9px;text-transform:uppercase;color:#888780;letter-spacing:0.1em;padding:4px 8px;font-weight:600;margin-top:14px;">Sistema</div>
                     <a href="/admin/rls/health_check?token=lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw" target="_blank" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">🩺 Health check</a>
@@ -11320,6 +11320,900 @@ def admin_lusync_conectar_marketplace(tenant_id):
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()[:500]}), 500
+
+
+@app.route("/admin/rls/comparar_movimientos", methods=["GET"])
+def admin_rls_comparar_movimientos():
+    """Compara cuántos movimientos ve Babymine (tenant=1) vs admin (bypass).
+    Si los números difieren, hay movimientos sin tenant_id correctamente seteado.
+    """
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import get_conn, release_conn
+        from datetime import datetime, timedelta
+
+        # Vista admin (todo)
+        conn_a = get_conn(is_admin=True); cur_a = conn_a.cursor()
+
+        cur_a.execute("SELECT COUNT(*) FROM movimientos")
+        total_admin = cur_a.fetchone()[0]
+
+        cur_a.execute("SELECT tenant_id, COUNT(*) FROM movimientos GROUP BY tenant_id ORDER BY tenant_id")
+        por_tenant = {r[0]: r[1] for r in cur_a.fetchall()}
+
+        cur_a.execute("""
+            SELECT tipo, COUNT(*) FROM movimientos
+            WHERE fecha >= NOW() - INTERVAL '30 days'
+            GROUP BY tipo
+            ORDER BY COUNT(*) DESC
+        """)
+        por_tipo_30d = {r[0]: r[1] for r in cur_a.fetchall()}
+
+        cur_a.execute("""
+            SELECT origen_registro, COUNT(*) FROM movimientos
+            WHERE fecha >= NOW() - INTERVAL '30 days'
+            GROUP BY origen_registro
+            ORDER BY COUNT(*) DESC
+        """)
+        por_origen_30d = {(r[0] or "sin_origen"): r[1] for r in cur_a.fetchall()}
+
+        cur_a.execute("""
+            SELECT canal, COUNT(*) FROM movimientos
+            WHERE fecha >= NOW() - INTERVAL '30 days' AND tipo = 'venta'
+            GROUP BY canal
+            ORDER BY COUNT(*) DESC
+        """)
+        ventas_por_canal_30d = {(r[0] or "sin_canal"): r[1] for r in cur_a.fetchall()}
+
+        cur_a.execute("SELECT MAX(fecha), MIN(fecha) FROM movimientos WHERE tipo='venta'")
+        max_v, min_v = cur_a.fetchone()
+
+        cur_a.close(); release_conn(conn_a)
+
+        # Vista tenant 1 (Babymine)
+        conn_t = get_conn(tenant_id=1); cur_t = conn_t.cursor()
+        cur_t.execute("SELECT COUNT(*) FROM movimientos")
+        total_t1 = cur_t.fetchone()[0]
+        cur_t.execute("SELECT COUNT(*) FROM movimientos WHERE fecha >= NOW() - INTERVAL '30 days' AND tipo='venta'")
+        ventas_30d_t1 = cur_t.fetchone()[0]
+        cur_t.close(); release_conn(conn_t)
+
+        return jsonify({
+            "vista_admin_bypass": {
+                "total_movimientos": total_admin,
+                "distribucion_por_tenant": por_tenant,
+                "fecha_max_venta": max_v.isoformat() if max_v else None,
+                "fecha_min_venta": min_v.isoformat() if min_v else None,
+                "ultimos_30d_por_tipo": por_tipo_30d,
+                "ultimos_30d_por_origen": por_origen_30d,
+                "ventas_30d_por_canal": ventas_por_canal_30d,
+            },
+            "vista_tenant_1_babymine": {
+                "total_movimientos": total_t1,
+                "ventas_ultimos_30d": ventas_30d_t1,
+            },
+            "diferencia": {
+                "movimientos_invisibles_para_t1": total_admin - total_t1,
+                "diagnostico": "Si hay diferencia, hay movimientos con tenant_id != 1 o NULL"
+            }
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()[:500]}), 500
+
+
+@app.route("/admin/rls/comparar_ordenes", methods=["GET"])
+def admin_rls_comparar_ordenes():
+    """Compara qué órdenes procesadas ve Babymine vs admin."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import get_conn, release_conn
+
+        conn_a = get_conn(is_admin=True); cur_a = conn_a.cursor()
+        cur_a.execute("SELECT COUNT(*) FROM ordenes_procesadas")
+        total_admin = cur_a.fetchone()[0]
+        cur_a.execute("SELECT tenant_id, COUNT(*) FROM ordenes_procesadas GROUP BY tenant_id")
+        por_tenant = {r[0]: r[1] for r in cur_a.fetchall()}
+        cur_a.execute("""
+            SELECT COUNT(*) FROM ordenes_procesadas
+            WHERE fecha >= NOW() - INTERVAL '30 days'
+        """)
+        ult_30d_admin = cur_a.fetchone()[0]
+        cur_a.close(); release_conn(conn_a)
+
+        conn_t = get_conn(tenant_id=1); cur_t = conn_t.cursor()
+        cur_t.execute("SELECT COUNT(*) FROM ordenes_procesadas")
+        total_t1 = cur_t.fetchone()[0]
+        cur_t.execute("""
+            SELECT COUNT(*) FROM ordenes_procesadas
+            WHERE fecha >= NOW() - INTERVAL '30 days'
+        """)
+        ult_30d_t1 = cur_t.fetchone()[0]
+        cur_t.close(); release_conn(conn_t)
+
+        return jsonify({
+            "vista_admin": {
+                "total": total_admin,
+                "por_tenant": por_tenant,
+                "ultimos_30d": ult_30d_admin
+            },
+            "vista_tenant_1": {
+                "total": total_t1,
+                "ultimos_30d": ult_30d_t1
+            },
+            "invisibles_para_t1": total_admin - total_t1
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/rls/comparar_movimientos", methods=["POST"])
+def admin_rls_comparar_movimientos_post():
+    return admin_rls_comparar_movimientos()
+
+
+@app.route("/admin/lusync/facturacion", methods=["GET"])
+@requiere_lusync_admin
+def admin_lusync_facturacion():
+    """Vista de facturación: facturas existentes + botón generar período actual."""
+    try:
+        from inventario import get_conn, release_conn
+        from datetime import datetime
+
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+
+        # Facturas existentes
+        cur.execute("""
+            SELECT f.id, f.tenant_id, t.nombre AS tenant_nombre, f.periodo, f.plan_codigo,
+                   f.monto_uf, f.monto_clp, f.valor_uf_dia, f.ordenes_facturadas,
+                   f.ordenes_extras_uf, f.estado, f.fecha_emision, f.fecha_pago, f.folio_factura
+            FROM facturacion_lusync f
+            JOIN tenants t ON t.id = f.tenant_id
+            ORDER BY f.fecha_emision DESC, f.id DESC
+            LIMIT 50
+        """)
+        facturas = []
+        for r in cur.fetchall():
+            facturas.append({
+                "id": r[0], "tenant_id": r[1], "tenant_nombre": r[2],
+                "periodo": r[3], "plan": r[4],
+                "monto_uf": float(r[5] or 0), "monto_clp": r[6] or 0,
+                "valor_uf": float(r[7] or 0), "ordenes": r[8],
+                "ordenes_extras_uf": float(r[9] or 0), "estado": r[10],
+                "fecha_emision": r[11].isoformat() if r[11] else None,
+                "fecha_pago": r[12].isoformat() if r[12] else None,
+                "folio": r[13]
+            })
+
+        # Resumen
+        cur.execute("""
+            SELECT
+                COALESCE(SUM(CASE WHEN estado='pendiente' THEN monto_uf ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN estado='pagado' THEN monto_uf ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN estado='vencido' THEN monto_uf ELSE 0 END), 0),
+                COUNT(CASE WHEN estado='pendiente' THEN 1 END),
+                COUNT(CASE WHEN estado='vencido' THEN 1 END)
+            FROM facturacion_lusync
+        """)
+        rr = cur.fetchone()
+        pendiente_uf, pagado_uf, vencido_uf, n_pendientes, n_vencidos = rr
+
+        cur.close(); release_conn(conn)
+
+        # Periodo actual
+        ahora = datetime.now()
+        periodo_actual = ahora.strftime("%Y-%m")
+
+        filas = ""
+        if facturas:
+            for f in facturas:
+                estado_color = {
+                    "pendiente": ("#fef3c7", "#92400e"),
+                    "pagado": ("#dcfce7", "#166534"),
+                    "vencido": ("#fee2e2", "#991b1b"),
+                    "anulado": ("#f3f4f6", "#6b7280")
+                }.get(f["estado"], ("#f3f4f6", "#6b7280"))
+
+                accion_btn = ""
+                if f["estado"] == "pendiente":
+                    accion_btn = f'<button onclick="marcarPagada({f["id"]})" style="font-size:10px;color:#166534;background:#dcfce7;border:0;border-radius:4px;padding:4px 8px;cursor:pointer;">Marcar pagada</button>'
+
+                filas += f"""
+                <tr style="border-bottom:1px solid #f1efe8;">
+                    <td style="padding:10px 12px;font-size:12px;">
+                        <a href="/admin/lusync/tenant/{f['tenant_id']}" style="color:#1f1e1b;text-decoration:none;font-weight:500;">{f['tenant_nombre']}</a>
+                    </td>
+                    <td style="padding:10px 12px;font-size:12px;font-family:monospace;">{f['periodo']}</td>
+                    <td style="padding:10px 12px;font-size:11px;text-transform:uppercase;letter-spacing:0.04em;color:#888780;">{f['plan']}</td>
+                    <td style="padding:10px 12px;font-size:12px;font-weight:500;color:#534AB7;">{f['monto_uf']:.2f} UF</td>
+                    <td style="padding:10px 12px;font-size:12px;">${f['monto_clp']:,} CLP</td>
+                    <td style="padding:10px 12px;font-size:11px;color:#888780;">{f['ordenes']}</td>
+                    <td style="padding:10px 12px;">
+                        <span style="font-size:9px;padding:3px 8px;border-radius:10px;font-weight:600;text-transform:uppercase;background:{estado_color[0]};color:{estado_color[1]};">{f['estado']}</span>
+                    </td>
+                    <td style="padding:10px 12px;font-size:11px;color:#888780;">{(f['fecha_emision'] or '—')[:10]}</td>
+                    <td style="padding:10px 12px;text-align:right;">{accion_btn}</td>
+                </tr>
+                """
+        else:
+            filas = '<tr><td colspan="9" style="padding:30px;text-align:center;color:#888780;font-size:13px;">No hay facturas todavía. Click "Generar período actual" para emitir las primeras.</td></tr>'
+
+        pendiente_clp = int(pendiente_uf * 39500)
+        pagado_clp = int(pagado_uf * 39500)
+        vencido_clp = int(vencido_uf * 39500)
+
+        return f"""
+        <!DOCTYPE html>
+        <html><head><title>Facturación · Lusync</title></head>
+        <body style="margin:0;font-family:system-ui;background:#fafaf9;min-height:100vh;padding:24px;">
+            <div style="max-width:1200px;margin:0 auto;">
+                <a href="/admin/lusync" style="color:#534AB7;text-decoration:none;font-size:12px;">← Volver al panel master</a>
+                <div style="display:flex;justify-content:space-between;align-items:start;margin:14px 0 20px;">
+                    <div>
+                        <h1 style="margin:0 0 4px;font-size:22px;color:#1f1e1b;">💳 Facturación</h1>
+                        <p style="font-size:13px;color:#888780;">Período actual: <b>{periodo_actual}</b> · Facturas mostradas: {len(facturas)} (últimas 50)</p>
+                    </div>
+                    <div>
+                        <button onclick="generarPeriodo()" style="background:#534AB7;color:white;padding:9px 16px;border-radius:7px;font-size:13px;font-weight:500;border:0;cursor:pointer;">Generar período {periodo_actual}</button>
+                    </div>
+                </div>
+
+                <!-- Resumen -->
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px;">
+                    <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;padding:14px;">
+                        <div style="font-size:10px;text-transform:uppercase;color:#888780;font-weight:600;">Por cobrar (pendiente)</div>
+                        <div style="font-size:22px;font-weight:600;color:#92400e;margin-top:5px;">{pendiente_uf:.2f} UF</div>
+                        <div style="font-size:11px;color:#888780;margin-top:3px;">{n_pendientes} factura(s) · ~${pendiente_clp:,} CLP</div>
+                    </div>
+                    <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;padding:14px;">
+                        <div style="font-size:10px;text-transform:uppercase;color:#888780;font-weight:600;">Pagado (acumulado)</div>
+                        <div style="font-size:22px;font-weight:600;color:#166534;margin-top:5px;">{pagado_uf:.2f} UF</div>
+                        <div style="font-size:11px;color:#888780;margin-top:3px;">~${pagado_clp:,} CLP histórico</div>
+                    </div>
+                    <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;padding:14px;">
+                        <div style="font-size:10px;text-transform:uppercase;color:#888780;font-weight:600;">Vencido</div>
+                        <div style="font-size:22px;font-weight:600;color:#991b1b;margin-top:5px;">{vencido_uf:.2f} UF</div>
+                        <div style="font-size:11px;color:#888780;margin-top:3px;">{n_vencidos} factura(s) · ~${vencido_clp:,} CLP</div>
+                    </div>
+                </div>
+
+                <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;overflow:hidden;">
+                    <table style="width:100%;border-collapse:collapse;">
+                        <thead style="background:#fafaf9;">
+                            <tr>
+                                <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">Cliente</th>
+                                <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">Período</th>
+                                <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">Plan</th>
+                                <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">Monto UF</th>
+                                <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">Monto CLP</th>
+                                <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">Órdenes</th>
+                                <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">Estado</th>
+                                <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">Emitida</th>
+                                <th style="padding:9px 12px;border-bottom:1px solid #e8e6e0;"></th>
+                            </tr>
+                        </thead>
+                        <tbody>{filas}</tbody>
+                    </table>
+                </div>
+
+                <div style="margin-top:14px;padding:10px 12px;background:#dbeafe;color:#1e40af;border-radius:6px;font-size:11px;">
+                    💡 <b>Cómo funciona:</b> Click "Generar período" crea facturas para todos los clientes activos del mes actual. Valor UF aproximado $39.500. Cuando un cliente paga, marca la factura para llevar registro.
+                </div>
+            </div>
+
+            <script>
+            async function generarPeriodo() {{
+                if (!confirm('¿Generar facturas para todos los clientes activos del período actual?')) return;
+                const r = await fetch('/admin/lusync/facturacion/generar', {{method:'POST'}});
+                const data = await r.json();
+                if (data.ok) {{
+                    alert('✅ Generadas: ' + data.generadas + ' facturas\\nYa existían: ' + data.ya_existian);
+                    location.reload();
+                }} else {{
+                    alert('Error: ' + (data.error || ''));
+                }}
+            }}
+            async function marcarPagada(id) {{
+                const folio = prompt('Folio de factura SII (opcional):');
+                const r = await fetch('/admin/lusync/facturacion/' + id + '/marcar_pagada', {{
+                    method:'POST',
+                    headers:{{'Content-Type':'application/json'}},
+                    body: JSON.stringify({{folio: folio || ''}})
+                }});
+                const data = await r.json();
+                if (data.ok) location.reload();
+                else alert('Error: ' + (data.error || ''));
+            }}
+            </script>
+        </body></html>
+        """
+    except Exception as e:
+        import traceback
+        return f"<pre>{e}\n\n{traceback.format_exc()}</pre>", 500
+
+
+@app.route("/admin/lusync/facturacion/generar", methods=["POST"])
+@requiere_lusync_admin
+def admin_lusync_facturacion_generar():
+    """Genera facturas del período actual para todos los tenants activos.
+    Idempotente: si ya existe factura para ese tenant + período, no la duplica.
+    """
+    try:
+        from inventario import get_conn, release_conn
+        from datetime import datetime, timedelta
+
+        ahora = datetime.now()
+        periodo = ahora.strftime("%Y-%m")
+        valor_uf = 39500  # aproximado, ideal sería traerlo de SII
+
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+
+        # Listar tenants activos con su plan
+        cur.execute("""
+            SELECT t.id, t.nombre, p.codigo, p.precio_uf, p.max_ordenes_mes
+            FROM tenants t
+            JOIN planes p ON p.id = t.plan_id
+            WHERE t.estado = 'activo'
+        """)
+        tenants_activos = cur.fetchall()
+
+        generadas = 0
+        ya_existian = 0
+
+        for tid, tnombre, plan_codigo, precio_uf, max_ordenes in tenants_activos:
+            # Ver si ya existe factura del período
+            cur.execute("""
+                SELECT id FROM facturacion_lusync WHERE tenant_id = %s AND periodo = %s
+            """, (tid, periodo))
+            if cur.fetchone():
+                ya_existian += 1
+                continue
+
+            # Contar órdenes del mes
+            cur.execute("""
+                SELECT COUNT(*) FROM ordenes_procesadas
+                WHERE tenant_id = %s
+                  AND fecha >= date_trunc('month', NOW())
+            """, (tid,))
+            ordenes = cur.fetchone()[0]
+
+            # Calcular extras
+            extras_uf = 0
+            if max_ordenes and ordenes > max_ordenes:
+                exceso = ordenes - max_ordenes
+                # $80 CLP por orden extra → convertir a UF
+                extras_clp = exceso * 80
+                extras_uf = round(extras_clp / valor_uf, 4)
+
+            monto_total_uf = round(float(precio_uf or 0) + extras_uf, 4)
+            monto_clp = int(monto_total_uf * valor_uf)
+            fecha_venc = (ahora + timedelta(days=15)).date()
+
+            cur.execute("""
+                INSERT INTO facturacion_lusync
+                    (tenant_id, periodo, plan_codigo, monto_uf, monto_clp, valor_uf_dia,
+                     ordenes_facturadas, ordenes_extras_uf, estado, fecha_vencimiento)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pendiente', %s)
+            """, (tid, periodo, plan_codigo, monto_total_uf, monto_clp, valor_uf,
+                  ordenes, extras_uf, fecha_venc))
+            generadas += 1
+
+        conn.commit()
+        cur.close(); release_conn(conn)
+
+        return jsonify({"ok": True, "generadas": generadas, "ya_existian": ya_existian, "periodo": periodo})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()[:500]}), 500
+
+
+@app.route("/admin/lusync/facturacion/<int:fact_id>/marcar_pagada", methods=["POST"])
+@requiere_lusync_admin
+def admin_lusync_facturacion_marcar_pagada(fact_id):
+    """Marca una factura como pagada."""
+    try:
+        folio = (request.json or {}).get("folio") or None
+        from inventario import get_conn, release_conn
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+        cur.execute("""
+            UPDATE facturacion_lusync
+            SET estado = 'pagado', fecha_pago = NOW(), folio_factura = %s
+            WHERE id = %s
+        """, (folio, fact_id))
+        conn.commit()
+        cur.close(); release_conn(conn)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/lusync/uso", methods=["GET"])
+@requiere_lusync_admin
+def admin_lusync_uso():
+    """Métricas de uso comparativas por cliente."""
+    try:
+        from inventario import get_conn, release_conn
+        from tenancy import listar_tenants
+        from datetime import datetime, timedelta
+
+        tenants = listar_tenants()
+
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+
+        # Stats por tenant
+        stats = {}
+        for t in tenants:
+            tid = t["id"]
+            stats[tid] = {"tenant": t}
+
+            # Órdenes este mes
+            cur.execute("""
+                SELECT COUNT(*) FROM ordenes_procesadas
+                WHERE tenant_id = %s AND fecha >= date_trunc('month', NOW())
+            """, (tid,))
+            stats[tid]["ordenes_mes"] = cur.fetchone()[0]
+
+            # Órdenes mes anterior
+            cur.execute("""
+                SELECT COUNT(*) FROM ordenes_procesadas
+                WHERE tenant_id = %s
+                  AND fecha >= date_trunc('month', NOW() - INTERVAL '1 month')
+                  AND fecha < date_trunc('month', NOW())
+            """, (tid,))
+            stats[tid]["ordenes_mes_anterior"] = cur.fetchone()[0]
+
+            # SKUs activos
+            cur.execute("SELECT COUNT(*) FROM productos WHERE tenant_id = %s", (tid,))
+            stats[tid]["skus"] = cur.fetchone()[0]
+
+            # Movimientos último día
+            cur.execute("""
+                SELECT COUNT(*) FROM movimientos
+                WHERE tenant_id = %s AND fecha >= NOW() - INTERVAL '24 hours'
+            """, (tid,))
+            stats[tid]["movs_24h"] = cur.fetchone()[0]
+
+            # Marketplaces conectados
+            cur.execute("""
+                SELECT COUNT(*) FROM credenciales_marketplace
+                WHERE tenant_id = %s AND activo = TRUE
+            """, (tid,))
+            stats[tid]["mkts"] = cur.fetchone()[0]
+
+            # Usuarios activos
+            cur.execute("""
+                SELECT COUNT(*) FROM usuarios WHERE tenant_id = %s AND activo = TRUE
+            """, (tid,))
+            stats[tid]["usuarios"] = cur.fetchone()[0]
+
+        cur.close(); release_conn(conn)
+
+        filas = ""
+        for tid, s in stats.items():
+            t = s["tenant"]
+            ordenes = s["ordenes_mes"]
+            ordenes_ant = s["ordenes_mes_anterior"]
+
+            # Calcular % de cuota usada según plan
+            max_ordenes = None
+            # Acá necesitamos query directa para obtener max_ordenes_mes del plan
+            try:
+                conn2 = get_conn(is_admin=True); cur2 = conn2.cursor()
+                cur2.execute("""
+                    SELECT max_ordenes_mes FROM planes WHERE id = (SELECT plan_id FROM tenants WHERE id = %s)
+                """, (tid,))
+                rr = cur2.fetchone()
+                max_ordenes = rr[0] if rr else None
+                cur2.close(); release_conn(conn2)
+            except: pass
+
+            uso_pct = (ordenes / max_ordenes * 100) if max_ordenes and max_ordenes > 0 else 0
+            uso_color = "#10b981" if uso_pct < 70 else "#f59e0b" if uso_pct < 95 else "#ef4444"
+            uso_bar = min(100, uso_pct)
+
+            # Tendencia vs mes pasado
+            if ordenes_ant > 0:
+                delta_pct = ((ordenes - ordenes_ant) / ordenes_ant) * 100
+                if delta_pct > 0:
+                    delta_html = f'<span style="color:#10b981;">↑ {delta_pct:.0f}%</span>'
+                elif delta_pct < 0:
+                    delta_html = f'<span style="color:#ef4444;">↓ {abs(delta_pct):.0f}%</span>'
+                else:
+                    delta_html = '<span style="color:#888780;">= 0%</span>'
+            else:
+                delta_html = '<span style="color:#888780;">—</span>'
+
+            filas += f"""
+            <tr style="border-bottom:1px solid #f1efe8;">
+                <td style="padding:11px 12px;">
+                    <a href="/admin/lusync/tenant/{tid}" style="text-decoration:none;color:#1f1e1b;">
+                        <div style="font-weight:500;">{t['nombre']}</div>
+                        <div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:0.04em;">{t.get('plan_codigo') or '—'}</div>
+                    </a>
+                </td>
+                <td style="padding:11px 12px;">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <div style="font-weight:500;min-width:40px;">{ordenes}</div>
+                        <div style="flex:1;background:#f1efe8;height:6px;border-radius:3px;overflow:hidden;max-width:120px;">
+                            <div style="background:{uso_color};height:100%;width:{uso_bar}%;"></div>
+                        </div>
+                        <div style="font-size:10px;color:#888780;min-width:50px;">{uso_pct:.0f}% de {max_ordenes or '∞'}</div>
+                    </div>
+                </td>
+                <td style="padding:11px 12px;font-size:12px;">{delta_html}</td>
+                <td style="padding:11px 12px;font-weight:500;">{s['skus']}</td>
+                <td style="padding:11px 12px;text-align:center;">{s['mkts']}</td>
+                <td style="padding:11px 12px;text-align:center;">{s['usuarios']}</td>
+                <td style="padding:11px 12px;font-size:12px;color:#888780;">{s['movs_24h']}</td>
+            </tr>
+            """
+
+        # Totales
+        total_ordenes = sum(s["ordenes_mes"] for s in stats.values())
+        total_skus = sum(s["skus"] for s in stats.values())
+        total_mkts = sum(s["mkts"] for s in stats.values())
+        total_movs = sum(s["movs_24h"] for s in stats.values())
+
+        return f"""
+        <!DOCTYPE html>
+        <html><head><title>Uso por cliente · Lusync</title></head>
+        <body style="margin:0;font-family:system-ui;background:#fafaf9;min-height:100vh;padding:24px;">
+            <div style="max-width:1200px;margin:0 auto;">
+                <a href="/admin/lusync" style="color:#534AB7;text-decoration:none;font-size:12px;">← Volver al panel master</a>
+                <h1 style="margin:14px 0 4px;font-size:22px;color:#1f1e1b;">📊 Uso por cliente</h1>
+                <p style="font-size:13px;color:#888780;margin-bottom:20px;">Métricas comparativas · {len(tenants)} clientes</p>
+
+                <!-- Totales -->
+                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
+                    <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;padding:14px;">
+                        <div style="font-size:10px;text-transform:uppercase;color:#888780;font-weight:600;">Órdenes mes (total)</div>
+                        <div style="font-size:24px;font-weight:600;margin-top:5px;">{total_ordenes}</div>
+                    </div>
+                    <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;padding:14px;">
+                        <div style="font-size:10px;text-transform:uppercase;color:#888780;font-weight:600;">SKUs totales</div>
+                        <div style="font-size:24px;font-weight:600;margin-top:5px;">{total_skus}</div>
+                    </div>
+                    <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;padding:14px;">
+                        <div style="font-size:10px;text-transform:uppercase;color:#888780;font-weight:600;">MKTs conectados</div>
+                        <div style="font-size:24px;font-weight:600;margin-top:5px;">{total_mkts}</div>
+                    </div>
+                    <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;padding:14px;">
+                        <div style="font-size:10px;text-transform:uppercase;color:#888780;font-weight:600;">Mov. últimas 24h</div>
+                        <div style="font-size:24px;font-weight:600;margin-top:5px;">{total_movs}</div>
+                    </div>
+                </div>
+
+                <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;overflow:hidden;">
+                    <table style="width:100%;border-collapse:collapse;">
+                        <thead style="background:#fafaf9;">
+                            <tr>
+                                <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">Cliente / Plan</th>
+                                <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">Órdenes mes / Cuota</th>
+                                <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">vs mes ant.</th>
+                                <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">SKUs</th>
+                                <th style="padding:9px 12px;text-align:center;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">MKTs</th>
+                                <th style="padding:9px 12px;text-align:center;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">Usuarios</th>
+                                <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">Mov. 24h</th>
+                            </tr>
+                        </thead>
+                        <tbody>{filas}</tbody>
+                    </table>
+                </div>
+            </div>
+        </body></html>
+        """
+    except Exception as e:
+        import traceback
+        return f"<pre>{e}\n\n{traceback.format_exc()}</pre>", 500
+
+
+@app.route("/admin/lusync/planes", methods=["GET"])
+@requiere_lusync_admin
+def admin_lusync_planes():
+    """Gestión de planes: precios UF y límites."""
+    try:
+        from inventario import get_conn, release_conn
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+        cur.execute("""
+            SELECT id, codigo, nombre, precio_uf, max_ordenes_mes, max_skus,
+                   max_usuarios, max_marketplaces, features_json, activo
+            FROM planes
+            ORDER BY precio_uf ASC
+        """)
+        planes = []
+        for r in cur.fetchall():
+            planes.append({
+                "id": r[0], "codigo": r[1], "nombre": r[2],
+                "precio_uf": float(r[3] or 0),
+                "max_ordenes_mes": r[4], "max_skus": r[5],
+                "max_usuarios": r[6], "max_marketplaces": r[7],
+                "features": r[8] or {}, "activo": r[9]
+            })
+
+        # Conteo de tenants por plan
+        cur.execute("""
+            SELECT p.codigo, COUNT(t.id)
+            FROM planes p LEFT JOIN tenants t ON t.plan_id = p.id AND t.estado = 'activo'
+            GROUP BY p.codigo
+        """)
+        tenants_por_plan = {r[0]: r[1] for r in cur.fetchall()}
+        cur.close(); release_conn(conn)
+
+        plan_colors = {
+            "trial": ("#f1efe8", "#6b7280"),
+            "starter": ("#ede9fe", "#5b21b6"),
+            "pro": ("#dbeafe", "#1e40af"),
+            "enterprise": ("#fce7f3", "#9f1239")
+        }
+
+        cards = ""
+        for p in planes:
+            col_bg, col_text = plan_colors.get(p["codigo"], ("#f1efe8", "#6b7280"))
+            tenants_count = tenants_por_plan.get(p["codigo"], 0)
+
+            features_html = ""
+            for k, v in (p["features"] or {}).items():
+                icon = "✓" if v is True else "—" if v is False else f"<b>{v}</b>"
+                features_html += f'<div style="font-size:11px;color:#374151;margin-bottom:3px;"><span style="color:#10b981;">{icon}</span> {k.replace("_", " ")}</div>'
+
+            cards += f"""
+            <div style="background:white;border:1px solid #e8e6e0;border-radius:12px;padding:20px;">
+                <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:12px;">
+                    <div>
+                        <span style="font-size:10px;background:{col_bg};color:{col_text};padding:3px 10px;border-radius:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;">{p['codigo']}</span>
+                        <h3 style="margin:6px 0 2px;font-size:18px;">{p['nombre']}</h3>
+                    </div>
+                    <div style="text-align:right;">
+                        <div style="font-size:24px;font-weight:700;color:#534AB7;line-height:1;">{p['precio_uf']:.1f} <span style="font-size:12px;color:#888780;font-weight:500;">UF/mes</span></div>
+                        <div style="font-size:10px;color:#888780;margin-top:2px;">~${int(p['precio_uf']*39500):,} CLP</div>
+                    </div>
+                </div>
+
+                <div style="border-top:1px solid #f1efe8;padding-top:12px;margin-bottom:12px;">
+                    <div style="font-size:11px;color:#888780;margin-bottom:6px;">LÍMITES</div>
+                    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px;font-size:11px;">
+                        <div>📦 Órdenes/mes: <b>{p['max_ordenes_mes'] or '∞'}</b></div>
+                        <div>🏷️ SKUs: <b>{p['max_skus'] or '∞'}</b></div>
+                        <div>👥 Usuarios: <b>{p['max_usuarios'] or '∞'}</b></div>
+                        <div>🛍️ Marketplaces: <b>{p['max_marketplaces'] or '∞'}</b></div>
+                    </div>
+                </div>
+
+                {f'<div style="border-top:1px solid #f1efe8;padding-top:12px;margin-bottom:12px;"><div style="font-size:11px;color:#888780;margin-bottom:6px;">FEATURES</div>{features_html}</div>' if features_html else ''}
+
+                <div style="border-top:1px solid #f1efe8;padding-top:12px;display:flex;justify-content:space-between;align-items:center;">
+                    <div style="font-size:11px;color:#888780;">Clientes activos: <b style="color:#1f1e1b;">{tenants_count}</b></div>
+                    <button onclick="editarPlan({p['id']}, '{p['codigo']}', {p['precio_uf']})" style="font-size:11px;color:#534AB7;background:white;border:1px solid #e5e7eb;border-radius:5px;padding:5px 10px;cursor:pointer;">Editar precio</button>
+                </div>
+            </div>
+            """
+
+        return f"""
+        <!DOCTYPE html>
+        <html><head><title>Planes · Lusync</title></head>
+        <body style="margin:0;font-family:system-ui;background:#fafaf9;min-height:100vh;padding:24px;">
+            <div style="max-width:1100px;margin:0 auto;">
+                <a href="/admin/lusync" style="color:#534AB7;text-decoration:none;font-size:12px;">← Volver al panel master</a>
+                <h1 style="margin:14px 0 4px;font-size:22px;color:#1f1e1b;">📦 Planes de Lusync</h1>
+                <p style="font-size:13px;color:#888780;margin-bottom:20px;">{len(planes)} planes configurados · Edita precios en UF aquí, se reflejará en facturación</p>
+
+                <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;">
+                    {cards}
+                </div>
+
+                <div style="margin-top:14px;padding:10px 12px;background:#fef3c7;color:#92400e;border-radius:6px;font-size:11px;">
+                    ⚠️ Cambiar el precio de un plan afecta a TODOS los clientes en ese plan a partir del próximo ciclo de facturación. Avísales con anticipación.
+                </div>
+            </div>
+
+            <script>
+            async function editarPlan(id, codigo, precioActual) {{
+                const nuevo = prompt('Nuevo precio para plan ' + codigo + ' (en UF):', precioActual);
+                if (nuevo === null) return;
+                const num = parseFloat(nuevo);
+                if (isNaN(num) || num < 0) {{
+                    alert('Precio inválido');
+                    return;
+                }}
+                const r = await fetch('/admin/lusync/plan/' + id + '/precio', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{precio_uf: num}})
+                }});
+                const data = await r.json();
+                if (data.ok) location.reload();
+                else alert('Error: ' + (data.error || ''));
+            }}
+            </script>
+        </body></html>
+        """
+    except Exception as e:
+        import traceback
+        return f"<pre>{e}\n\n{traceback.format_exc()}</pre>", 500
+
+
+@app.route("/admin/lusync/plan/<int:plan_id>/precio", methods=["POST"])
+@requiere_lusync_admin
+def admin_lusync_plan_precio(plan_id):
+    """Edita el precio UF de un plan."""
+    try:
+        precio = (request.json or {}).get("precio_uf")
+        if precio is None:
+            return jsonify({"error": "Falta precio_uf"}), 400
+        from inventario import get_conn, release_conn
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+        cur.execute("UPDATE planes SET precio_uf = %s WHERE id = %s", (float(precio), plan_id))
+        conn.commit()
+        cur.close(); release_conn(conn)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/lusync/marketplaces", methods=["GET"])
+@requiere_lusync_admin
+def admin_lusync_marketplaces():
+    """Gestión del catálogo de marketplaces soportados."""
+    try:
+        from inventario import get_conn, release_conn
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+        cur.execute("""
+            SELECT id, codigo, nombre, color_hex, color_texto, label_corto, pais,
+                   comision_base_pct, tipo_auth, activo, orden_display
+            FROM marketplaces_catalogo
+            ORDER BY orden_display, id
+        """)
+        mkts = []
+        for r in cur.fetchall():
+            mkts.append({
+                "id": r[0], "codigo": r[1], "nombre": r[2], "color_hex": r[3],
+                "color_texto": r[4], "label_corto": r[5], "pais": r[6],
+                "comision_base_pct": float(r[7] or 0), "tipo_auth": r[8],
+                "activo": r[9], "orden": r[10]
+            })
+
+        # Conteo de clientes usando cada MKT
+        cur.execute("""
+            SELECT canal, COUNT(DISTINCT tenant_id)
+            FROM credenciales_marketplace WHERE activo = TRUE
+            GROUP BY canal
+        """)
+        uso_por_mkt = {r[0]: r[1] for r in cur.fetchall()}
+        cur.close(); release_conn(conn)
+
+        filas = ""
+        for m in mkts:
+            uso = uso_por_mkt.get(m["codigo"], 0)
+            estado_color = "#dcfce7" if m["activo"] else "#f3f4f6"
+            estado_text = "#166534" if m["activo"] else "#6b7280"
+            estado_label = "Activo" if m["activo"] else "Desactivado"
+            accion = "desactivar" if m["activo"] else "activar"
+            filas += f"""
+            <tr style="border-bottom:1px solid #f1efe8;">
+                <td style="padding:10px 12px;">
+                    <span style="display:inline-block;background:{m['color_hex']};color:{m['color_texto']};padding:3px 9px;border-radius:5px;font-size:11px;font-weight:700;letter-spacing:0.04em;min-width:30px;text-align:center;">{m['label_corto']}</span>
+                </td>
+                <td style="padding:10px 12px;">
+                    <div style="font-weight:500;font-size:13px;">{m['nombre']}</div>
+                    <div style="font-size:10px;color:#888780;font-family:monospace;">{m['codigo']}</div>
+                </td>
+                <td style="padding:10px 12px;font-size:12px;">{m['pais']}</td>
+                <td style="padding:10px 12px;font-size:13px;font-weight:500;">{m['comision_base_pct']:.1f}%</td>
+                <td style="padding:10px 12px;font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:0.04em;font-weight:600;">{m['tipo_auth'] or '—'}</td>
+                <td style="padding:10px 12px;">
+                    <span style="font-size:9px;padding:3px 8px;border-radius:10px;font-weight:600;text-transform:uppercase;background:{estado_color};color:{estado_text};">{estado_label}</span>
+                </td>
+                <td style="padding:10px 12px;text-align:center;font-weight:500;color:#534AB7;">{uso}</td>
+                <td style="padding:10px 12px;text-align:right;">
+                    <button onclick="editarMkt({m['id']}, '{m['codigo']}', {m['comision_base_pct']})" style="font-size:10px;color:#534AB7;background:white;border:1px solid #e5e7eb;border-radius:4px;padding:4px 8px;cursor:pointer;margin-right:4px;">Editar</button>
+                    <button onclick="toggleMkt({m['id']}, '{accion}')" style="font-size:10px;color:#1f1e1b;background:white;border:1px solid #e5e7eb;border-radius:4px;padding:4px 8px;cursor:pointer;">{accion.capitalize()}</button>
+                </td>
+            </tr>
+            """
+
+        return f"""
+        <!DOCTYPE html>
+        <html><head><title>Marketplaces · Lusync</title></head>
+        <body style="margin:0;font-family:system-ui;background:#fafaf9;min-height:100vh;padding:24px;">
+            <div style="max-width:1100px;margin:0 auto;">
+                <a href="/admin/lusync" style="color:#534AB7;text-decoration:none;font-size:12px;">← Volver al panel master</a>
+                <h1 style="margin:14px 0 4px;font-size:22px;color:#1f1e1b;">🛍️ Catálogo de Marketplaces</h1>
+                <p style="font-size:13px;color:#888780;margin-bottom:20px;">Lista de MKTs que tus clientes pueden conectar · {len(mkts)} totales</p>
+
+                <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;overflow:hidden;">
+                    <table style="width:100%;border-collapse:collapse;">
+                        <thead style="background:#fafaf9;">
+                            <tr>
+                                <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">Label</th>
+                                <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">Nombre</th>
+                                <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">País</th>
+                                <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">Comisión base</th>
+                                <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">Auth</th>
+                                <th style="padding:9px 12px;text-align:left;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">Estado</th>
+                                <th style="padding:9px 12px;text-align:center;font-size:10px;color:#888780;text-transform:uppercase;font-weight:600;border-bottom:1px solid #e8e6e0;">Clientes usando</th>
+                                <th style="padding:9px 12px;border-bottom:1px solid #e8e6e0;"></th>
+                            </tr>
+                        </thead>
+                        <tbody>{filas}</tbody>
+                    </table>
+                </div>
+
+                <div style="margin-top:14px;padding:10px 12px;background:#dbeafe;color:#1e40af;border-radius:6px;font-size:11px;">
+                    ℹ️ La comisión base se usa como referencia para calcular precios en el motor de precios (próximamente). Cada cliente puede personalizar sus comisiones reales (lo cobra cada MKT puede variar por categoría/contrato).
+                </div>
+            </div>
+
+            <script>
+            async function toggleMkt(id, accion) {{
+                if (!confirm('¿Confirmar ' + accion + '?')) return;
+                const r = await fetch('/admin/lusync/marketplace/' + id + '/' + accion, {{method:'POST'}});
+                const data = await r.json();
+                if (data.ok) location.reload();
+                else alert('Error: ' + (data.error || ''));
+            }}
+            async function editarMkt(id, codigo, comActual) {{
+                const nueva = prompt('Comisión base para ' + codigo + ' (%):', comActual);
+                if (nueva === null) return;
+                const num = parseFloat(nueva);
+                if (isNaN(num) || num < 0 || num > 100) {{
+                    alert('Comisión inválida');
+                    return;
+                }}
+                const r = await fetch('/admin/lusync/marketplace/' + id + '/comision', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{comision: num}})
+                }});
+                const data = await r.json();
+                if (data.ok) location.reload();
+                else alert('Error: ' + (data.error || ''));
+            }}
+            </script>
+        </body></html>
+        """
+    except Exception as e:
+        import traceback
+        return f"<pre>{e}\n\n{traceback.format_exc()}</pre>", 500
+
+
+@app.route("/admin/lusync/marketplace/<int:mkt_id>/<accion>", methods=["POST"])
+@requiere_lusync_admin
+def admin_lusync_marketplace_toggle(mkt_id, accion):
+    """Activa/desactiva un marketplace del catálogo."""
+    if accion not in ("activar", "desactivar"):
+        return jsonify({"error": "Acción inválida"}), 400
+    try:
+        from inventario import get_conn, release_conn
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+        nuevo = True if accion == "activar" else False
+        cur.execute("UPDATE marketplaces_catalogo SET activo = %s WHERE id = %s", (nuevo, mkt_id))
+        conn.commit()
+        cur.close(); release_conn(conn)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/lusync/marketplace/<int:mkt_id>/comision", methods=["POST"])
+@requiere_lusync_admin
+def admin_lusync_marketplace_comision(mkt_id):
+    """Edita la comisión base de un marketplace."""
+    try:
+        com = (request.json or {}).get("comision")
+        if com is None:
+            return jsonify({"error": "Falta comisión"}), 400
+        from inventario import get_conn, release_conn
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+        cur.execute("UPDATE marketplaces_catalogo SET comision_base_pct = %s WHERE id = %s", (float(com), mkt_id))
+        conn.commit()
+        cur.close(); release_conn(conn)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/admin/lusync/nuevo_cliente", methods=["GET", "POST"])
