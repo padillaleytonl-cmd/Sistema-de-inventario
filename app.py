@@ -19237,7 +19237,7 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
     # ── PARIS ─────────────────────────────────────────────────────────────
     if not canales_req or "paris" in canales_req:
         try:
-            from paris import obtener_ordenes_paris_todas
+            from paris import obtener_ordenes_paris_todas, obtener_orden_paris
             from datetime import datetime as _dt
             dias = 30
             if fecha_desde:
@@ -19248,30 +19248,81 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                 except Exception:
                     pass
             for o in obtener_ordenes_paris_todas(dias=dias):
-                created = (o.get("createdAt") or "")[:10]
+                created = (o.get("createdAt") or o.get("originOrderDate") or "")[:10]
                 if fecha_desde and created < fecha_desde: continue
                 if fecha_hasta and created > fecha_hasta: continue
                 order_id = str(o.get("subOrderNumber") or o.get("orderNumber") or "")
-                cust = o.get("customer") or {}
-                addr = o.get("shippingAddress") or {}
-                nombre   = cust.get("firstName") or cust.get("name") or ""
-                apellido = cust.get("lastName") or ""
+
+                # FIX: Paris en el listado NO trae items; hay que ir al detalle de cada sub-orden
+                detalle = None
+                if order_id:
+                    try:
+                        detalle = obtener_orden_paris(order_id)
+                    except Exception:
+                        detalle = None
+                # Combinar datos de listado + detalle
+                o_full = {**o, **(detalle or {})}
+
+                cust = o_full.get("customer") or {}
+                billing = o_full.get("billingAddress") or {}
+                addr = o_full.get("shippingAddress") or {}
+                nombre   = cust.get("firstName") or cust.get("name") or billing.get("firstName") or ""
+                apellido = cust.get("lastName") or billing.get("lastName") or ""
                 email    = cust.get("email") or ""
-                telefono = cust.get("phone") or ""
+                telefono = cust.get("phone") or billing.get("phone") or ""
                 rut      = cust.get("documentNumber") or cust.get("rut") or ""
-                st_name  = addr.get("streetName") or ""
+                st_name  = addr.get("streetName") or addr.get("address1") or billing.get("address1") or ""
                 st_num   = addr.get("streetNumber") or ""
                 direccion= f"{st_name}{' '+st_num if st_num else ''}".strip()
-                comuna   = addr.get("city") or addr.get("commune") or ""
-                tracking = o.get("trackingNumber") or ""
-                m_envio  = o.get("logisticType") or o.get("shippingType") or ""
-                m_pago   = o.get("paymentMethod") or ""
-                envio_c  = float(o.get("shippingCost") or 0)
-                for item in (o.get("items") or o.get("subOrderItems") or []):
-                    sku_s = item.get("sellerSku") or item.get("sku") or ""
-                    prod  = item.get("productName") or item.get("title") or ""
+                comuna   = addr.get("city") or addr.get("commune") or billing.get("city") or ""
+
+                # Items de Paris vienen dentro de shipments[].items o subOrders[].items o items directo
+                items_paris = []
+                # Opción 1: items directo
+                if o_full.get("items"):
+                    items_paris = o_full.get("items") or []
+                # Opción 2: dentro de shipments
+                if not items_paris:
+                    for ship in (o_full.get("shipments") or []):
+                        items_paris.extend(ship.get("items") or [])
+                # Opción 3: dentro de subOrders
+                if not items_paris:
+                    for so in (o_full.get("subOrders") or []):
+                        items_paris.extend(so.get("items") or [])
+
+                tracking = ""
+                m_envio = (o_full.get("deliveryOption") or {}).get("name") if isinstance(o_full.get("deliveryOption"), dict) else (o_full.get("logisticType") or o_full.get("shippingType") or "")
+                m_pago = o_full.get("paymentMethod") or o_full.get("originInvoiceType") or ""
+
+                # Buscar tracking en shipments
+                for ship in (o_full.get("shipments") or []):
+                    tracking = ship.get("trackingNumber") or tracking
+                    if tracking: break
+
+                envio_c = 0
+                # Costo de envío del primer shipment
+                for ship in (o_full.get("shipments") or []):
+                    try:
+                        envio_c = float(ship.get("cost") or 0)
+                        if envio_c > 0: break
+                    except: pass
+
+                if not items_paris:
+                    # Sin items: fila básica sin producto/precio
+                    filas.append(fila("Paris", order_id, created,
+                        nombre, apellido, rut, telefono, email,
+                        "", "", 0, envio_c,
+                        direccion, comuna, m_pago, m_envio, tracking))
+                    continue
+
+                for item in items_paris:
+                    sku_s = (item.get("sellerSku") or item.get("seller_sku") or
+                             item.get("sku") or item.get("jda_sku") or "")
+                    prod  = item.get("name") or item.get("productName") or item.get("title") or ""
                     qty   = int(item.get("quantity") or 1)
-                    price = float(item.get("unitPrice") or item.get("price") or 0)
+                    # Paris pone el precio en base_price (string) según la doc
+                    price = float(item.get("base_price") or item.get("unitPrice") or
+                                  item.get("price") or item.get("amount") or 0)
                     for _ in range(qty):
                         filas.append(fila("Paris", order_id, created,
                             nombre, apellido, rut, telefono, email,
@@ -19296,7 +19347,16 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                 ordenes_wm = raw if isinstance(raw, list) else [raw]
                 for o in ordenes_wm:
                     order_id  = str(o.get("customerOrderId") or "")
-                    created   = (o.get("orderDate") or "")[:10]
+                    # FIX: orderDate puede venir como int (timestamp ms) o string
+                    raw_date = o.get("orderDate")
+                    if isinstance(raw_date, (int, float)):
+                        # timestamp en ms → fecha ISO
+                        from datetime import datetime as _dt_wm
+                        try:
+                            created = _dt_wm.fromtimestamp(raw_date / 1000).strftime("%Y-%m-%d")
+                        except: created = ""
+                    else:
+                        created = (str(raw_date) or "")[:10]
                     email_wm  = o.get("customerEmailId") or ""
                     ship_info = o.get("shippingInfo") or {}
                     addr      = ship_info.get("postalAddress") or {}
@@ -19314,10 +19374,22 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                         prod  = item.get("productName") or ""
                         sku_s = item.get("sku") or line.get("sellerOrderId") or ""
                         qty   = int((line.get("orderLineQuantity") or {}).get("amount") or 1)
+                        # FIX: buscar charge con chargeType=PRODUCT (no siempre es el primero)
+                        # Y SUMAR el IVA (tax.taxAmount.amount) al precio del producto
                         charges = (line.get("charges") or {}).get("charge") or []
+                        if not isinstance(charges, list): charges = [charges]
                         price = 0.0
-                        if isinstance(charges, list) and charges:
-                            price = float((charges[0].get("chargeAmount") or {}).get("amount") or 0)
+                        for ch in charges:
+                            if ch.get("chargeType") == "PRODUCT":
+                                base = float((ch.get("chargeAmount") or {}).get("amount") or 0)
+                                iva = float(((ch.get("tax") or {}).get("taxAmount") or {}).get("amount") or 0)
+                                price = base + iva  # IVA incluido = lo que paga el cliente
+                                break
+                        # Fallback: si no hay PRODUCT, usar el primer charge (también con IVA)
+                        if price == 0.0 and charges:
+                            base = float((charges[0].get("chargeAmount") or {}).get("amount") or 0)
+                            iva = float(((charges[0].get("tax") or {}).get("taxAmount") or {}).get("amount") or 0)
+                            price = base + iva
                         tracking = ""
                         for pkg in ((line.get("fulfillment") or {}).get("trackingInfo") or []):
                             tracking = pkg.get("trackingNumber") or ""; break
@@ -19369,6 +19441,15 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                     items_fa = obtener_items_orden_falabella(order_id) or []
                 except Exception:
                     items_fa = []
+
+                # FIX: el precio total está en la orden, no en los items.
+                # Repartir entre cantidad de items.
+                precio_total_orden = float(o.get("Price") or o.get("GrandTotal") or o.get("ProductTotal") or 0)
+                shipping_total_orden = float(o.get("ShippingFeeTotal") or o.get("ShippingFee") or 0)
+                total_units = sum(int(it.get("Quantity") or 1) for it in items_fa) if items_fa else 1
+                if total_units < 1: total_units = 1
+                precio_unitario_default = precio_total_orden / total_units if precio_total_orden > 0 else 0
+
                 if not items_fa:
                     # Sin items: fila con datos de la orden pero sin producto
                     filas.append(fila("Falabella", order_id, created,
@@ -19378,13 +19459,21 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                 for item in items_fa:
                     sku_s = item.get("SellerSku") or item.get("Sku") or ""
                     prod  = item.get("Name") or item.get("ProductName") or ""
-                    price = float(item.get("PaidPrice") or item.get("ItemPrice") or item.get("Price") or 0)
+                    qty   = int(item.get("Quantity") or 1)
+                    # Probar primero campos individuales, sino fallback al promedio
+                    price = float(item.get("PaidPrice") or item.get("ItemPrice") or
+                                  item.get("Price") or 0)
+                    if price <= 0:
+                        price = precio_unitario_default
                     envio_c = float(item.get("ShippingFee") or item.get("ShippingAmount") or 0)
+                    if envio_c <= 0:
+                        envio_c = shipping_total_orden / total_units if shipping_total_orden > 0 else 0
                     track_i = item.get("TrackingCode") or tracking
-                    filas.append(fila("Falabella", order_id, created,
-                        nombre, apellido, rut, telefono, email,
-                        prod, sku_s, price, envio_c,
-                        direccion, comuna, m_pago, m_envio, track_i))
+                    for _ in range(qty):
+                        filas.append(fila("Falabella", order_id, created,
+                            nombre, apellido, rut, telefono, email,
+                            prod, sku_s, price, envio_c,
+                            direccion, comuna, m_pago, m_envio, track_i))
         except Exception as e:
             print(f"[Reporte ventas] Falabella error: {e}")
 
