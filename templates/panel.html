@@ -10035,10 +10035,26 @@ let _bodegasCambios = {};  // { "sku|bodega_codigo": cantidad_nueva }
 async function cargarFacturacionDashboard(){
   try {
     const r = await fetch('/facturacion/dashboard');
-    const d = await r.json();
+    let d;
+    if (!r.ok) {
+      // El backend devolvió error — extraer JSON si se puede
+      try { d = await r.json(); } catch(_) { d = null; }
+      console.error('[Facturación] Backend respondió', r.status, d);
+      mostrarErrorDashboard(d && d.error || `Error del servidor (HTTP ${r.status})`, d && d.detalle);
+      return;
+    }
+    d = await r.json();
+
+    // Defensivos: garantizar que campos existen aunque el JSON venga raro
+    d.config = d.config || {};
+    d.tipos_dte_disponibles = d.tipos_dte_disponibles || [];
+    d.config_completa = !!d.config_completa;
+    d.cafs_activos_count = d.cafs_activos_count || 0;
+    d.listo_para_emitir = !!d.listo_para_emitir;
+    d.fase_actual = d.fase_actual || 'Fase 1 — Configuración';
 
     // Badge ambiente
-    const amb = (d.config && d.config.ambiente) || 'certificacion';
+    const amb = d.config.ambiente || 'certificacion';
     const ambEl = document.getElementById('facturacionAmbiente');
     if(ambEl){
       if(amb === 'produccion'){
@@ -10062,7 +10078,7 @@ async function cargarFacturacionDashboard(){
       <div style="background:${bgOK(d.config_completa)};padding:14px;border-radius:10px;border:0.5px solid ${colorOK(d.config_completa)}33;">
         <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">${check(d.config_completa)} Configuración</div>
         <div style="font-size:14px;font-weight:600;color:${colorOK(d.config_completa)};">${d.config_completa ? 'Completa' : 'Pendiente'}</div>
-        <div style="font-size:10px;color:var(--muted);margin-top:2px;">${(d.config && d.config.rut_emisor) || 'Configurado por Lusync'}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:2px;">${d.config.rut_emisor || 'Configurado por Lusync'}</div>
       </div>
       <div style="background:${bgOK(!!d.certificado_activo)};padding:14px;border-radius:10px;border:0.5px solid ${colorOK(!!d.certificado_activo)}33;">
         <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">${check(!!d.certificado_activo)} Tu certificado</div>
@@ -10082,10 +10098,24 @@ async function cargarFacturacionDashboard(){
     `;
   } catch(e){
     console.error('[Facturación] Error dashboard:', e);
+    mostrarErrorDashboard('Error inesperado: ' + e.message);
+    return;
   }
 
   // Card de suscripción tributaria (interactiva)
   await renderDtesCliente();
+}
+
+function mostrarErrorDashboard(msg, detalle){
+  const cont = document.getElementById('facturacionEstado');
+  if (cont) {
+    cont.innerHTML = `<div style="grid-column:1/-1;background:#fef2f2;border:1px solid #fecaca;color:#A32D2D;padding:14px;border-radius:10px;font-size:12px;">
+      <b>⚠️ No pudimos cargar el estado de facturación</b><br>
+      ${msg || 'Error desconocido'}
+      ${detalle ? '<br><span style="font-size:10px;opacity:0.7;">Detalle: ' + detalle + '</span>' : ''}
+      <br><span style="font-size:10px;opacity:0.7;margin-top:6px;display:inline-block;">Si el problema persiste, contacta a soporte@lusync.cl</span>
+    </div>`;
+  }
 }
 
 // ── Estado y catálogo de DTEs (cliente) ──
@@ -10288,6 +10318,15 @@ async function cargarListaCertificados(){
   if(!cont) return;
   try {
     const r = await fetch('/facturacion/certificado/listar');
+    if (!r.ok) {
+      let detalle = '';
+      try { const j = await r.json(); detalle = j.error || j.detalle || ''; } catch(_) {}
+      cont.innerHTML = `<div style="background:#fef2f2;border:1px solid #fecaca;color:#A32D2D;padding:14px;border-radius:8px;font-size:12px;">
+        ⚠️ No pudimos cargar los certificados (HTTP ${r.status})<br>
+        <span style="font-size:10px;opacity:0.8;">${detalle || 'Si persiste, contacta soporte@lusync.cl'}</span>
+      </div>`;
+      return;
+    }
     const d = await r.json();
     const certs = d.certificados || [];
     if(!certs.length){
@@ -10299,7 +10338,7 @@ async function cargarListaCertificados(){
       const estado = c.activo ? '<span style="background:#eaf3ee;color:#1D9E75;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:500;">Activo</span>' : '<span style="background:#f1efe8;color:#5f5e5a;padding:2px 8px;border-radius:8px;font-size:10px;">Inactivo</span>';
       return `<div style="background:var(--bg);border:0.5px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;display:grid;grid-template-columns:1fr auto;gap:8px;">
         <div>
-          <div style="font-size:13px;color:var(--text);font-weight:500;margin-bottom:4px;">${c.nombre_archivo} ${estado}</div>
+          <div style="font-size:13px;color:var(--text);font-weight:500;margin-bottom:4px;">${c.nombre_archivo || 'Certificado'} ${estado}</div>
           <div style="font-size:11px;color:var(--muted);">RUT: ${c.rut || '—'} · Titular: ${c.titular || '—'}</div>
           <div style="font-size:11px;color:${venceColor};margin-top:2px;">Vence: ${c.fecha_expiracion || '—'} (${c.dias_para_expirar} días)</div>
         </div>
@@ -10309,7 +10348,7 @@ async function cargarListaCertificados(){
       </div>`;
     }).join('');
   } catch(e){
-    cont.innerHTML = '<div style="color:#E24B4A;padding:20px;">Error: ' + e.message + '</div>';
+    cont.innerHTML = '<div style="color:#E24B4A;padding:20px;font-size:12px;">Error: ' + e.message + '</div>';
   }
 }
 

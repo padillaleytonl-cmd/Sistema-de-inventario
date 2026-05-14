@@ -20599,6 +20599,144 @@ def facturacion_historial_activaciones():
     return jsonify({"historial": historial})
 
 
+@app.route("/facturacion/debug", methods=["GET"])
+def facturacion_debug():
+    """Endpoint debug que ejecuta cada step del dashboard y reporta dónde falla."""
+    if not session.get("logged"):
+        return jsonify({"error": "no autenticado"}), 401
+
+    tenant_id = session.get("tenant_id") or 1
+    diagnostico = {"tenant_id": tenant_id, "steps": []}
+
+    # Step 1: imports
+    try:
+        from facturacion import (obtener_config_facturacion, listar_certificados_tenant,
+                                 listar_cafs_tenant, calcular_mrr_tributario)
+        from inventario import get_conn, release_conn
+        diagnostico["steps"].append({"step": "imports", "ok": True})
+    except Exception as e:
+        diagnostico["steps"].append({"step": "imports", "ok": False, "error": str(e)})
+        return jsonify(diagnostico)
+
+    # Step 2: conexión BD
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.fetchone()
+        cur.close()
+        release_conn(conn)
+        diagnostico["steps"].append({"step": "bd_conn", "ok": True})
+    except Exception as e:
+        import traceback
+        diagnostico["steps"].append({"step": "bd_conn", "ok": False, "error": str(e), "trace": traceback.format_exc()[:500]})
+        return jsonify(diagnostico)
+
+    # Step 3: tabla facturacion_config_tenant existe + columnas
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'facturacion_config_tenant'
+            ORDER BY ordinal_position
+        """)
+        cols = [r[0] for r in cur.fetchall()]
+        cur.close()
+        release_conn(conn)
+        diagnostico["steps"].append({"step": "tabla_config", "ok": True, "columnas": cols})
+    except Exception as e:
+        diagnostico["steps"].append({"step": "tabla_config", "ok": False, "error": str(e)})
+
+    # Step 4: tabla facturacion_certificados existe
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'facturacion_certificados'
+        """)
+        cols = [r[0] for r in cur.fetchall()]
+        cur.close()
+        release_conn(conn)
+        diagnostico["steps"].append({"step": "tabla_certificados", "ok": True, "columnas": cols})
+    except Exception as e:
+        diagnostico["steps"].append({"step": "tabla_certificados", "ok": False, "error": str(e)})
+
+    # Step 5: tabla facturacion_dte_activaciones existe
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'facturacion_dte_activaciones'
+        """)
+        cols = [r[0] for r in cur.fetchall()]
+        cur.close()
+        release_conn(conn)
+        diagnostico["steps"].append({"step": "tabla_activaciones", "ok": True, "columnas": cols})
+    except Exception as e:
+        diagnostico["steps"].append({"step": "tabla_activaciones", "ok": False, "error": str(e)})
+
+    # Step 6: tabla uf_diaria existe
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT count(*) FROM uf_diaria")
+        count = cur.fetchone()[0]
+        cur.close()
+        release_conn(conn)
+        diagnostico["steps"].append({"step": "tabla_uf", "ok": True, "registros": count})
+    except Exception as e:
+        diagnostico["steps"].append({"step": "tabla_uf", "ok": False, "error": str(e)})
+
+    # Step 7: obtener_config_facturacion
+    try:
+        config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+        diagnostico["steps"].append({
+            "step": "obtener_config",
+            "ok": True,
+            "hay_config": config is not None,
+            "rut_emisor": (config or {}).get("rut_emisor"),
+        })
+    except Exception as e:
+        import traceback
+        diagnostico["steps"].append({"step": "obtener_config", "ok": False, "error": str(e), "trace": traceback.format_exc()[:500]})
+
+    # Step 8: listar_certificados_tenant
+    try:
+        certs = listar_certificados_tenant(get_conn, release_conn, tenant_id)
+        diagnostico["steps"].append({"step": "listar_certs", "ok": True, "cantidad": len(certs)})
+    except Exception as e:
+        import traceback
+        diagnostico["steps"].append({"step": "listar_certs", "ok": False, "error": str(e), "trace": traceback.format_exc()[:500]})
+
+    # Step 9: listar_cafs_tenant
+    try:
+        cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id)
+        diagnostico["steps"].append({"step": "listar_cafs", "ok": True, "cantidad": len(cafs)})
+    except Exception as e:
+        import traceback
+        diagnostico["steps"].append({"step": "listar_cafs", "ok": False, "error": str(e), "trace": traceback.format_exc()[:500]})
+
+    # Step 10: calcular_mrr_tributario
+    try:
+        mrr = calcular_mrr_tributario(get_conn, release_conn, tenant_id)
+        diagnostico["steps"].append({
+            "step": "calcular_mrr",
+            "ok": True,
+            "total_uf": mrr.get("total_uf"),
+            "uf_valor": mrr.get("uf_valor"),
+            "uf_fuente": mrr.get("uf_fuente"),
+            "desglose_count": len(mrr.get("desglose", [])),
+        })
+    except Exception as e:
+        import traceback
+        diagnostico["steps"].append({"step": "calcular_mrr", "ok": False, "error": str(e), "trace": traceback.format_exc()[:500]})
+
+    return jsonify(diagnostico)
+
+
 @app.route("/facturacion/dashboard", methods=["GET"])
 def facturacion_dashboard():
     """Cliente: resumen del estado de su facturación."""

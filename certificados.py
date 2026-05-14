@@ -311,9 +311,18 @@ def obtener_certificado(get_conn_func, release_conn_func, tenant_id, certificado
 def listar_certificados_tenant(get_conn_func, release_conn_func, tenant_id):
     """Lista los certificados de un tenant SIN exponer el binario ni password.
     Para mostrar en UI: nombre, RUT, fechas, estado.
+    Resiliente a tabla faltante.
     """
     conn = get_conn_func(); cur = conn.cursor()
     try:
+        # Verificar que la tabla exista
+        cur.execute("""
+            SELECT 1 FROM information_schema.tables
+            WHERE table_name = 'facturacion_certificados' LIMIT 1
+        """)
+        if not cur.fetchone():
+            return []
+
         cur.execute("""
             SELECT id, nombre_archivo, rut_certificado, titular, emisor_cert,
                    fecha_emision_cert, fecha_expiracion_cert, activo,
@@ -327,7 +336,10 @@ def listar_certificados_tenant(get_conn_func, release_conn_func, tenant_id):
         for r in cur.fetchall():
             dias_para_expirar = None
             if r[6]:
-                dias_para_expirar = (r[6] - datetime.utcnow().date()).days
+                try:
+                    dias_para_expirar = (r[6] - datetime.utcnow().date()).days
+                except Exception:
+                    dias_para_expirar = None
             certs.append({
                 "id": r[0],
                 "nombre_archivo": r[1],
@@ -337,11 +349,14 @@ def listar_certificados_tenant(get_conn_func, release_conn_func, tenant_id):
                 "fecha_emision": r[5].isoformat() if r[5] else None,
                 "fecha_expiracion": r[6].isoformat() if r[6] else None,
                 "dias_para_expirar": dias_para_expirar,
-                "activo": r[7],
+                "activo": bool(r[7]),
                 "fecha_subida": r[8].isoformat() if r[8] else None,
                 "fecha_desactivacion": r[9].isoformat() if r[9] else None,
             })
         return certs
+    except Exception as e:
+        print(f"[Facturación] Error listar_certificados_tenant: {e}")
+        return []
     finally:
         cur.close()
         release_conn_func(conn)

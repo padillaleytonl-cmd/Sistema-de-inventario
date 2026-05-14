@@ -197,9 +197,19 @@ def subir_caf(get_conn_func, release_conn_func, tenant_id, xml_caf,
 
 
 def listar_cafs_tenant(get_conn_func, release_conn_func, tenant_id):
-    """Lista CAFs de un tenant para UI. No expone el XML completo."""
+    """Lista CAFs de un tenant para UI. No expone el XML completo.
+    Resiliente a tabla faltante.
+    """
     conn = get_conn_func(); cur = conn.cursor()
     try:
+        # Verificar que la tabla exista
+        cur.execute("""
+            SELECT 1 FROM information_schema.tables
+            WHERE table_name = 'facturacion_cafs' LIMIT 1
+        """)
+        if not cur.fetchone():
+            return []
+
         cur.execute("""
             SELECT id, tipo_dte, folio_desde, folio_hasta, folio_actual,
                    rut_emisor_caf, fecha_autorizacion, ambiente, agotado,
@@ -232,11 +242,14 @@ def listar_cafs_tenant(get_conn_func, release_conn_func, tenant_id):
                 "rut_emisor": r[5],
                 "fecha_autorizacion": r[6].isoformat() if r[6] else None,
                 "ambiente": r[7],
-                "agotado": r[8],
+                "agotado": bool(r[8]),
                 "fecha_subida": r[9].isoformat() if r[9] else None,
                 "fecha_agotamiento": r[10].isoformat() if r[10] else None,
             })
         return cafs
+    except Exception as e:
+        print(f"[Facturación] Error listar_cafs_tenant: {e}")
+        return []
     finally:
         cur.close()
         release_conn_func(conn)
