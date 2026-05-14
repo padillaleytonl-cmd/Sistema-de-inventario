@@ -3328,11 +3328,29 @@ tbody td {
       <div style="text-align:center;color:var(--hint);font-size:12px;padding:20px;">Cargando...</div>
     </div>
 
+    <!-- Suscripción tributaria (DTEs activos + costo) -->
+    <div id="suscripcionTributaria" style="background:var(--bg);border:0.5px solid var(--border);border-radius:12px;padding:18px 20px;margin-bottom:18px;">
+      <div style="display:flex;justify-content:space-between;align-items:start;gap:16px;flex-wrap:wrap;margin-bottom:14px;">
+        <div>
+          <div style="font-size:14px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:6px;">📑 Tu suscripción tributaria</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:4px;">Add-on mensual sobre tu plan base · Solo cobramos por los tipos de DTE que necesitas</div>
+        </div>
+        <div style="text-align:right;background:#EEEDFE;padding:10px 16px;border-radius:10px;min-width:120px;">
+          <div style="font-size:10px;color:#5f5e5a;">Add-on mensual</div>
+          <div style="font-size:18px;font-weight:600;color:#534AB7;margin-top:2px;"><span id="cliMrrUf">0,0</span> UF</div>
+          <div style="font-size:10px;color:#5f5e5a;margin-top:2px;">≈ $<span id="cliMrrClp">0</span></div>
+        </div>
+      </div>
+      <div id="cliDtesActivos" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:6px;font-size:12px;">
+        <div style="grid-column:1/-1;color:var(--hint);text-align:center;padding:10px;">Cargando...</div>
+      </div>
+    </div>
+
     <!-- Info: configuración y folios (read-only) -->
     <div style="background:var(--bg2);border-radius:10px;padding:16px;font-size:12px;color:var(--muted);">
       <b style="color:var(--text);">¿Necesitas cambiar la configuración?</b><br>
-      Los datos de tu empresa (RUT, razón social, ambiente SII) y los folios autorizados (CAFs) los administra Lusync.
-      Si necesitas un cambio, escríbenos a <a href="mailto:soporte@lusync.cl" style="color:var(--primary);">soporte@lusync.cl</a>.
+      Los datos de tu empresa (RUT, razón social, ambiente SII), los folios autorizados (CAFs) y los tipos de DTE activos los administra Lusync.
+      Si necesitas activar más tipos de documento o un cambio, escríbenos a <a href="mailto:soporte@lusync.cl" style="color:var(--primary);">soporte@lusync.cl</a>.
     </div>
 
   </div>
@@ -10020,6 +10038,37 @@ async function cargarFacturacionDashboard(){
     `;
   } catch(e){
     console.error('[Facturación] Error dashboard:', e);
+  }
+
+  // Card de suscripción tributaria
+  try {
+    const r = await fetch('/facturacion/dashboard');
+    const d = await r.json();
+    const mrr = d.mrr_tributario || {total_uf: 0, total_clp: 0, desglose: []};
+    const ufFmt = (mrr.total_uf || 0).toFixed(1).replace('.', ',');
+    const clpFmt = (mrr.total_clp || 0).toLocaleString('es-CL');
+    const ufEl = document.getElementById('cliMrrUf');
+    const clpEl = document.getElementById('cliMrrClp');
+    if (ufEl) ufEl.textContent = ufFmt;
+    if (clpEl) clpEl.textContent = clpFmt;
+
+    const cont = document.getElementById('cliDtesActivos');
+    if (cont) {
+      const activos = (mrr.desglose || []).filter(x => x.activo);
+      if (!activos.length) {
+        cont.innerHTML = '<div style="grid-column:1/-1;color:var(--hint);text-align:center;padding:10px;font-size:12px;">Aún no hay tipos de DTE activados. Contacta a soporte para habilitarlos.</div>';
+      } else {
+        cont.innerHTML = activos.map(d => {
+          const precio = d.precio_uf === 0 ? '<span style="color:#1D9E75;font-weight:500;">Gratis</span>' : `+${d.precio_uf.toFixed(1).replace('.', ',')} UF`;
+          return `<div style="background:var(--bg2);padding:8px 10px;border-radius:6px;display:flex;justify-content:space-between;align-items:center;">
+            <span style="color:var(--text);">${d.nombre} <span style="color:var(--hint);font-size:10px;">(${d.tipo_dte})</span></span>
+            <span style="color:var(--muted);font-size:11px;">${precio}</span>
+          </div>`;
+        }).join('');
+      }
+    }
+  } catch(e) {
+    console.error('[Facturación] Error MRR:', e);
   }
 }
 

@@ -30,18 +30,39 @@ SII_URLS = {
 # ─────────────────────────────────────────────────────────────────────────────
 # TIPOS DE DTE (códigos oficiales SII)
 # ─────────────────────────────────────────────────────────────────────────────
+# precio_uf: cuánto cuesta al tenant tener este DTE habilitado (add-on mensual)
+# Estrategia comercial: boletas y NC gratis (volumen alto, masivo);
+# factura premium (cliente B2B paga más); exportación cara (cliente serio).
 TIPOS_DTE = {
-    33:  {"nombre": "Factura Electrónica",             "afecto_iva": True,  "tipo": "venta"},
-    34:  {"nombre": "Factura Exenta",                   "afecto_iva": False, "tipo": "venta"},
-    39:  {"nombre": "Boleta Electrónica",               "afecto_iva": True,  "tipo": "venta"},
-    41:  {"nombre": "Boleta Exenta",                    "afecto_iva": False, "tipo": "venta"},
-    46:  {"nombre": "Factura de Compra",                "afecto_iva": True,  "tipo": "compra"},
-    52:  {"nombre": "Guía de Despacho",                 "afecto_iva": True,  "tipo": "guia"},
-    56:  {"nombre": "Nota de Débito",                   "afecto_iva": True,  "tipo": "nota"},
-    61:  {"nombre": "Nota de Crédito",                  "afecto_iva": True,  "tipo": "nota"},
-    110: {"nombre": "Factura de Exportación",           "afecto_iva": False, "tipo": "venta"},
-    111: {"nombre": "Nota de Débito de Exportación",    "afecto_iva": False, "tipo": "nota"},
-    112: {"nombre": "Nota de Crédito de Exportación",   "afecto_iva": False, "tipo": "nota"},
+    33:  {"nombre": "Factura Electrónica",             "afecto_iva": True,  "tipo": "venta", "precio_uf": 0.2},
+    34:  {"nombre": "Factura Exenta",                   "afecto_iva": False, "tipo": "venta", "precio_uf": 0.2},
+    39:  {"nombre": "Boleta Electrónica",               "afecto_iva": True,  "tipo": "venta", "precio_uf": 0.0},
+    41:  {"nombre": "Boleta Exenta",                    "afecto_iva": False, "tipo": "venta", "precio_uf": 0.1},
+    43:  {"nombre": "Liquidación de Factura",           "afecto_iva": True,  "tipo": "venta", "precio_uf": 0.1},
+    46:  {"nombre": "Factura de Compra",                "afecto_iva": True,  "tipo": "compra", "precio_uf": 0.1},
+    52:  {"nombre": "Guía de Despacho",                 "afecto_iva": True,  "tipo": "guia",  "precio_uf": 0.1},
+    56:  {"nombre": "Nota de Débito",                   "afecto_iva": True,  "tipo": "nota",  "precio_uf": 0.1},
+    61:  {"nombre": "Nota de Crédito",                  "afecto_iva": True,  "tipo": "nota",  "precio_uf": 0.0},
+    110: {"nombre": "Factura de Exportación",           "afecto_iva": False, "tipo": "venta", "precio_uf": 0.4},
+    111: {"nombre": "Nota de Débito de Exportación",    "afecto_iva": False, "tipo": "nota",  "precio_uf": 0.2},
+    112: {"nombre": "Nota de Crédito de Exportación",   "afecto_iva": False, "tipo": "nota",  "precio_uf": 0.2},
+}
+
+# Mapeo: campo de BD en facturacion_config_tenant → código DTE
+# Útil para calcular el costo tributario a partir de los flags emite_*
+CAMPO_BD_A_TIPO_DTE = {
+    "emite_boleta":         39,
+    "emite_boleta_exenta":  41,
+    "emite_factura":        33,
+    "emite_factura_exenta": 34,
+    "emite_factura_compra": 46,
+    "emite_liquidacion":    43,
+    "emite_nota_credito":   61,
+    "emite_nota_debito":    56,
+    "emite_guia_despacho":  52,
+    "emite_fact_exportacion": 110,
+    "emite_nc_exportacion":   112,
+    "emite_nd_exportacion":   111,
 }
 
 # Subconjunto que vamos a emitir en este SaaS (todos los importantes)

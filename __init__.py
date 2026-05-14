@@ -23,6 +23,7 @@ from .db import (
     init_facturacion_tables,
     obtener_config_facturacion,
     guardar_config_facturacion,
+    calcular_mrr_tributario,
 )
 from .certificados import (
     subir_certificado,
@@ -49,6 +50,7 @@ __all__ = [
     "init_facturacion_tables",
     "obtener_config_facturacion",
     "guardar_config_facturacion",
+    "calcular_mrr_tributario",
     "subir_certificado",
     "obtener_certificado",
     "listar_certificados_tenant",

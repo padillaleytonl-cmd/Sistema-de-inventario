@@ -45,14 +45,35 @@ def init_facturacion_tables(get_conn_func, release_conn_func=None, enable_rls_fu
                 resolucion_sii_numero INTEGER,
                 ambiente TEXT DEFAULT 'certificacion',
                 emite_boleta BOOLEAN DEFAULT TRUE,
+                emite_boleta_exenta BOOLEAN DEFAULT FALSE,
                 emite_factura BOOLEAN DEFAULT TRUE,
+                emite_factura_exenta BOOLEAN DEFAULT FALSE,
+                emite_factura_compra BOOLEAN DEFAULT FALSE,
+                emite_liquidacion BOOLEAN DEFAULT FALSE,
                 emite_nota_credito BOOLEAN DEFAULT TRUE,
                 emite_nota_debito BOOLEAN DEFAULT FALSE,
                 emite_guia_despacho BOOLEAN DEFAULT FALSE,
+                emite_fact_exportacion BOOLEAN DEFAULT FALSE,
+                emite_nc_exportacion BOOLEAN DEFAULT FALSE,
+                emite_nd_exportacion BOOLEAN DEFAULT FALSE,
                 activo BOOLEAN DEFAULT FALSE,
                 fecha_creacion TIMESTAMP DEFAULT NOW(),
                 fecha_actualizacion TIMESTAMP DEFAULT NOW()
             )
+        """)
+
+        # Migración para tablas existentes: agregar columnas nuevas si no están
+        cur.execute("""
+            DO $$
+            BEGIN
+              BEGIN ALTER TABLE facturacion_config_tenant ADD COLUMN emite_boleta_exenta BOOLEAN DEFAULT FALSE; EXCEPTION WHEN duplicate_column THEN NULL; END;
+              BEGIN ALTER TABLE facturacion_config_tenant ADD COLUMN emite_factura_exenta BOOLEAN DEFAULT FALSE; EXCEPTION WHEN duplicate_column THEN NULL; END;
+              BEGIN ALTER TABLE facturacion_config_tenant ADD COLUMN emite_factura_compra BOOLEAN DEFAULT FALSE; EXCEPTION WHEN duplicate_column THEN NULL; END;
+              BEGIN ALTER TABLE facturacion_config_tenant ADD COLUMN emite_liquidacion BOOLEAN DEFAULT FALSE; EXCEPTION WHEN duplicate_column THEN NULL; END;
+              BEGIN ALTER TABLE facturacion_config_tenant ADD COLUMN emite_fact_exportacion BOOLEAN DEFAULT FALSE; EXCEPTION WHEN duplicate_column THEN NULL; END;
+              BEGIN ALTER TABLE facturacion_config_tenant ADD COLUMN emite_nc_exportacion BOOLEAN DEFAULT FALSE; EXCEPTION WHEN duplicate_column THEN NULL; END;
+              BEGIN ALTER TABLE facturacion_config_tenant ADD COLUMN emite_nd_exportacion BOOLEAN DEFAULT FALSE; EXCEPTION WHEN duplicate_column THEN NULL; END;
+            END $$;
         """)
 
         # ─────────────────────────────────────────────────────────────────
@@ -193,7 +214,14 @@ def obtener_config_facturacion(get_conn_func, release_conn_func, tenant_id):
                    telefono, email, resolucion_sii_fecha, resolucion_sii_numero,
                    ambiente, emite_boleta, emite_factura, emite_nota_credito,
                    emite_nota_debito, emite_guia_despacho, activo,
-                   fecha_creacion, fecha_actualizacion
+                   fecha_creacion, fecha_actualizacion,
+                   COALESCE(emite_boleta_exenta, FALSE),
+                   COALESCE(emite_factura_exenta, FALSE),
+                   COALESCE(emite_factura_compra, FALSE),
+                   COALESCE(emite_liquidacion, FALSE),
+                   COALESCE(emite_fact_exportacion, FALSE),
+                   COALESCE(emite_nc_exportacion, FALSE),
+                   COALESCE(emite_nd_exportacion, FALSE)
             FROM facturacion_config_tenant
             WHERE tenant_id = %s
         """, (tenant_id,))
@@ -220,10 +248,57 @@ def obtener_config_facturacion(get_conn_func, release_conn_func, tenant_id):
             "activo": r[16],
             "fecha_creacion": r[17].isoformat() if r[17] else None,
             "fecha_actualizacion": r[18].isoformat() if r[18] else None,
+            "emite_boleta_exenta": r[19],
+            "emite_factura_exenta": r[20],
+            "emite_factura_compra": r[21],
+            "emite_liquidacion": r[22],
+            "emite_fact_exportacion": r[23],
+            "emite_nc_exportacion": r[24],
+            "emite_nd_exportacion": r[25],
         }
     finally:
         cur.close()
         release_conn_func(conn)
+
+
+def calcular_mrr_tributario(get_conn_func, release_conn_func, tenant_id, uf_clp=37000):
+    """Calcula el costo mensual en UF por los DTEs activados del tenant.
+
+    Returns:
+        dict con:
+            total_uf: suma de precios UF de DTEs activos
+            total_clp: equivalente en pesos
+            desglose: lista de {tipo_dte, nombre, precio_uf, activo}
+    """
+    from .utils import TIPOS_DTE, CAMPO_BD_A_TIPO_DTE
+    config = obtener_config_facturacion(get_conn_func, release_conn_func, tenant_id)
+    if not config:
+        return {"total_uf": 0.0, "total_clp": 0, "desglose": []}
+
+    desglose = []
+    total_uf = 0.0
+
+    for campo_bd, tipo_dte in CAMPO_BD_A_TIPO_DTE.items():
+        info = TIPOS_DTE.get(tipo_dte, {})
+        precio = float(info.get("precio_uf", 0))
+        activo = bool(config.get(campo_bd, False))
+        desglose.append({
+            "tipo_dte": tipo_dte,
+            "nombre": info.get("nombre", f"Tipo {tipo_dte}"),
+            "precio_uf": precio,
+            "activo": activo,
+            "campo_bd": campo_bd,
+        })
+        if activo:
+            total_uf += precio
+
+    # Redondeo correcto (los floats acumulan ruido)
+    total_uf = round(total_uf, 2)
+    return {
+        "total_uf": total_uf,
+        "total_clp": int(round(total_uf * uf_clp)),
+        "desglose": desglose,
+    }
 
 
 def guardar_config_facturacion(get_conn_func, release_conn_func, tenant_id, data):
@@ -246,6 +321,9 @@ def guardar_config_facturacion(get_conn_func, release_conn_func, tenant_id, data
             "telefono", "email", "resolucion_sii_fecha", "resolucion_sii_numero",
             "ambiente", "emite_boleta", "emite_factura", "emite_nota_credito",
             "emite_nota_debito", "emite_guia_despacho", "activo",
+            "emite_boleta_exenta", "emite_factura_exenta", "emite_factura_compra",
+            "emite_liquidacion", "emite_fact_exportacion",
+            "emite_nc_exportacion", "emite_nd_exportacion",
         ]
 
         if existe:

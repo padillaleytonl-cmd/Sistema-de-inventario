@@ -20489,12 +20489,13 @@ def facturacion_dashboard():
 
     tenant_id = session.get("tenant_id") or 1
     from facturacion import (obtener_config_facturacion, listar_certificados_tenant,
-                             listar_cafs_tenant)
+                             listar_cafs_tenant, calcular_mrr_tributario)
     from inventario import get_conn, release_conn
 
     config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
     certs = listar_certificados_tenant(get_conn, release_conn, tenant_id)
     cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id)
+    mrr = calcular_mrr_tributario(get_conn, release_conn, tenant_id)
 
     cert_activo = next((c for c in certs if c["activo"]), None)
     cafs_activos = [c for c in cafs if not c["agotado"]]
@@ -20502,6 +20503,8 @@ def facturacion_dashboard():
 
     config_completa = bool(config and config.get("rut_emisor") and config.get("razon_social"))
     listo_para_emitir = bool(config_completa and cert_activo and len(cafs_activos) > 0)
+
+    dtes_activos = [d for d in mrr["desglose"] if d["activo"]]
 
     return jsonify({
         "config": {"rut_emisor": config.get("rut_emisor") if config else None,
@@ -20515,6 +20518,8 @@ def facturacion_dashboard():
         "tipos_dte_disponibles": tipos_dte_disponibles,
         "listo_para_emitir": listo_para_emitir,
         "fase_actual": "Fase 1 — Configuración",
+        "mrr_tributario": mrr,
+        "dtes_activos": dtes_activos,
     })
 
 
@@ -20528,18 +20533,20 @@ def admin_lusync_facturacion_tenant(tenant_id):
     Usado por la vista /admin/lusync/sii/tenant/<id> vía AJAX.
     """
     from facturacion import (obtener_config_facturacion, listar_certificados_tenant,
-                             listar_cafs_tenant)
+                             listar_cafs_tenant, calcular_mrr_tributario)
     from inventario import get_conn, release_conn
 
     config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
     certs = listar_certificados_tenant(get_conn, release_conn, tenant_id)
     cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id)
+    mrr = calcular_mrr_tributario(get_conn, release_conn, tenant_id)
 
     return jsonify({
         "tenant_id": tenant_id,
         "config": config or {},
         "certificados": certs,
         "cafs": cafs,
+        "mrr_tributario": mrr,
     })
 
 
@@ -20629,15 +20636,39 @@ h1{{margin:0 0 4px;font-size:22px;}}
                         <option value="produccion">⚠️ Producción (DTEs reales)</option>
                     </select>
                 </div>
-                <div class="full-span" style="border-top:1px solid #e5e7eb;padding-top:12px;margin-top:4px;">
-                    <div style="font-size:12px;font-weight:500;margin-bottom:8px;">Tipos de DTE habilitados</div>
-                    <div style="display:flex;flex-wrap:wrap;gap:14px;font-size:12px;">
-                        <label><input type="checkbox" id="em_boleta" checked> Boleta (39)</label>
-                        <label><input type="checkbox" id="em_factura" checked> Factura (33)</label>
-                        <label><input type="checkbox" id="em_nc" checked> Nota Crédito (61)</label>
-                        <label><input type="checkbox" id="em_nd"> Nota Débito (56)</label>
-                        <label><input type="checkbox" id="em_gd"> Guía Despacho (52)</label>
+                <div class="full-span" style="border-top:1px solid #e5e7eb;padding-top:14px;margin-top:4px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                        <div>
+                            <div style="font-size:13px;font-weight:500;">Tipos de DTE habilitados</div>
+                            <div style="font-size:11px;color:#6b7280;margin-top:2px;">Add-on tributario sobre el plan base. Boletas y Notas de Crédito son gratis.</div>
+                        </div>
+                        <div style="text-align:right;background:#EEEDFE;padding:8px 14px;border-radius:8px;">
+                            <div style="font-size:10px;color:#6b7280;">💰 Add-on tributario</div>
+                            <div style="font-size:16px;font-weight:600;color:#534AB7;"><span id="mrr_dte_uf">0,0</span> UF/mes</div>
+                            <div style="font-size:10px;color:#6b7280;">≈ $<span id="mrr_dte_clp">0</span></div>
+                        </div>
                     </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;">
+                        <label class="dte-row" data-price="0.0"><input type="checkbox" id="em_boleta" onchange="recalcDte()" checked> Boleta (39) <span class="dte-price">Gratis</span></label>
+                        <label class="dte-row" data-price="0.1"><input type="checkbox" id="em_boleta_exenta" onchange="recalcDte()"> Boleta Exenta (41) <span class="dte-price">+0,1 UF</span></label>
+                        <label class="dte-row" data-price="0.0"><input type="checkbox" id="em_nc" onchange="recalcDte()" checked> Nota Crédito (61) <span class="dte-price">Gratis</span></label>
+                        <label class="dte-row" data-price="0.1"><input type="checkbox" id="em_nd" onchange="recalcDte()"> Nota Débito (56) <span class="dte-price">+0,1 UF</span></label>
+                        <label class="dte-row" data-price="0.2"><input type="checkbox" id="em_factura" onchange="recalcDte()" checked> Factura (33) <span class="dte-price">+0,2 UF</span></label>
+                        <label class="dte-row" data-price="0.2"><input type="checkbox" id="em_factura_exenta" onchange="recalcDte()"> Factura Exenta (34) <span class="dte-price">+0,2 UF</span></label>
+                        <label class="dte-row" data-price="0.1"><input type="checkbox" id="em_fc" onchange="recalcDte()"> Factura de Compra (46) <span class="dte-price">+0,1 UF</span></label>
+                        <label class="dte-row" data-price="0.1"><input type="checkbox" id="em_liq" onchange="recalcDte()"> Liquidación Factura (43) <span class="dte-price">+0,1 UF</span></label>
+                        <label class="dte-row" data-price="0.1"><input type="checkbox" id="em_gd" onchange="recalcDte()"> Guía Despacho (52) <span class="dte-price">+0,1 UF</span></label>
+                        <label class="dte-row" data-price="0.4"><input type="checkbox" id="em_fexp" onchange="recalcDte()"> Factura Exportación (110) <span class="dte-price">+0,4 UF</span></label>
+                        <label class="dte-row" data-price="0.2"><input type="checkbox" id="em_ncexp" onchange="recalcDte()"> NC Exportación (112) <span class="dte-price">+0,2 UF</span></label>
+                        <label class="dte-row" data-price="0.2"><input type="checkbox" id="em_ndexp" onchange="recalcDte()"> ND Exportación (111) <span class="dte-price">+0,2 UF</span></label>
+                    </div>
+                    <style>
+                      .dte-row{{display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border:0.5px solid #e5e7eb;border-radius:6px;cursor:pointer;background:white;}}
+                      .dte-row input{{margin-right:8px;}}
+                      .dte-row:has(input:checked){{background:#EEEDFE;border-color:#534AB7;}}
+                      .dte-price{{font-size:10px;color:#6b7280;font-weight:500;margin-left:auto;}}
+                      .dte-row:has(input:checked) .dte-price{{color:#534AB7;}}
+                    </style>
                 </div>
                 <div class="full-span" style="display:flex;justify-content:flex-end;gap:10px;border-top:1px solid #e5e7eb;padding-top:14px;margin-top:8px;">
                     <button type="button" class="btn btn-secondary" onclick="cargarConfig()">Cancelar</button>
@@ -20757,11 +20788,32 @@ async function cargarConfig(){{
         set('res_fecha', c.resolucion_sii_fecha);
         set('ambiente', c.ambiente || 'certificacion');
         setChk('em_boleta', c.emite_boleta !== false);
+        setChk('em_boleta_exenta', c.emite_boleta_exenta);
         setChk('em_factura', c.emite_factura !== false);
+        setChk('em_factura_exenta', c.emite_factura_exenta);
+        setChk('em_fc', c.emite_factura_compra);
+        setChk('em_liq', c.emite_liquidacion);
         setChk('em_nc', c.emite_nota_credito !== false);
         setChk('em_nd', c.emite_nota_debito);
         setChk('em_gd', c.emite_guia_despacho);
+        setChk('em_fexp', c.emite_fact_exportacion);
+        setChk('em_ncexp', c.emite_nc_exportacion);
+        setChk('em_ndexp', c.emite_nd_exportacion);
+        recalcDte();
     }} catch(e){{ console.error(e); }}
+}}
+
+function recalcDte(){{
+    const UF_CLP = 37000;
+    let total = 0;
+    document.querySelectorAll('.dte-row').forEach(row => {{
+        const cb = row.querySelector('input[type=checkbox]');
+        const price = parseFloat(row.dataset.price || 0);
+        if (cb && cb.checked) total += price;
+    }});
+    total = Math.round(total * 10) / 10;
+    document.getElementById('mrr_dte_uf').textContent = total.toFixed(1).replace('.', ',');
+    document.getElementById('mrr_dte_clp').textContent = Math.round(total * UF_CLP).toLocaleString('es-CL');
 }}
 
 async function guardarConfig(ev){{
@@ -20778,10 +20830,17 @@ async function guardarConfig(ev){{
         resolucion_sii_fecha: document.getElementById('res_fecha').value || null,
         ambiente: document.getElementById('ambiente').value,
         emite_boleta: document.getElementById('em_boleta').checked,
+        emite_boleta_exenta: document.getElementById('em_boleta_exenta').checked,
         emite_factura: document.getElementById('em_factura').checked,
+        emite_factura_exenta: document.getElementById('em_factura_exenta').checked,
+        emite_factura_compra: document.getElementById('em_fc').checked,
+        emite_liquidacion: document.getElementById('em_liq').checked,
         emite_nota_credito: document.getElementById('em_nc').checked,
         emite_nota_debito: document.getElementById('em_nd').checked,
         emite_guia_despacho: document.getElementById('em_gd').checked,
+        emite_fact_exportacion: document.getElementById('em_fexp').checked,
+        emite_nc_exportacion: document.getElementById('em_ncexp').checked,
+        emite_nd_exportacion: document.getElementById('em_ndexp').checked,
     }};
     const r = await fetch(`/admin/lusync/sii/tenant/${{TENANT_ID}}/config`, {{
         method:'POST', headers:{{'Content-Type':'application/json'}},
