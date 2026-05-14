@@ -11391,6 +11391,102 @@ def admin_rls_normalizar_canales_historicos():
         return jsonify({"error": str(e), "trace": traceback.format_exc()[:500]}), 500
 
 
+@app.route("/admin/rls/debug_woo_canceladas", methods=["GET"])
+def admin_rls_debug_woo_canceladas():
+    """Debug: lista las órdenes canceladas recientes en Woo y diagnostica
+    por qué no se reflejan en movimientos."""
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
+        return jsonify({"error": "no autorizado"}), 401
+
+    try:
+        from datetime import timezone as _tz
+        fecha_corte = (datetime.now(_tz.utc) - timedelta(days=7)).isoformat()
+
+        # Traer canceladas/refunded/failed
+        res_c = requests.get(
+            "https://www.babymine.cl/wp-json/wc/v3/orders",
+            params={
+                "consumer_key": WC_KEY, "consumer_secret": WC_SECRET,
+                "status": "cancelled,refunded,failed",
+                "per_page": 30,
+                "after": fecha_corte
+            },
+            timeout=15
+        )
+
+        if res_c.status_code != 200:
+            return jsonify({
+                "error": f"HTTP {res_c.status_code}",
+                "body": res_c.text[:500]
+            })
+
+        ordenes = res_c.json() or []
+
+        from inventario import get_conn, release_conn
+        conn = get_conn(is_admin=True); cur = conn.cursor()
+
+        diagnostico = []
+        for o in ordenes:
+            order_id = str(o.get("id", ""))
+            woo_key = f"WOO-{order_id}"
+            cancel_key = f"WOO-CANCEL-{order_id}"
+
+            # Verificar si la orden fue procesada (positiva)
+            cur.execute("""
+                SELECT id, fecha, tipo, cantidad, sku, motivo
+                FROM movimientos
+                WHERE orden_id = %s OR numero_orden = %s
+                ORDER BY fecha DESC LIMIT 10
+            """, (order_id, order_id))
+            movs = []
+            for r in cur.fetchall():
+                movs.append({
+                    "id": r[0], "fecha": r[1].isoformat() if r[1] else None,
+                    "tipo": r[2], "cantidad": r[3], "sku": r[4], "motivo": r[5]
+                })
+
+            # Verificar el "registro de procesadas"
+            cur.execute("""
+                SELECT id, fecha FROM ordenes_procesadas WHERE orden_key = %s
+            """, (woo_key,))
+            r_proc = cur.fetchone()
+            cur.execute("""
+                SELECT id, fecha FROM ordenes_procesadas WHERE orden_key = %s
+            """, (cancel_key,))
+            r_cancel = cur.fetchone()
+
+            diagnostico.append({
+                "order_id": order_id,
+                "status": o.get("status"),
+                "date_created": o.get("date_created"),
+                "date_modified": o.get("date_modified"),
+                "total": o.get("total"),
+                "line_items_count": len(o.get("line_items", [])),
+                "items_sku": [it.get("sku") for it in (o.get("line_items") or [])],
+                "items_quantity": [it.get("quantity") for it in (o.get("line_items") or [])],
+                "movimientos_en_bd": movs,
+                "orden_proc_ya_marcada_como_venta": bool(r_proc),
+                "cancelacion_ya_marcada": bool(r_cancel),
+                "diagnostico": (
+                    "Cancelación procesada OK" if r_cancel else
+                    ("Orden NO se procesó como venta originalmente (cancelar sin venta previa)" if not r_proc else
+                     "Pendiente: orden procesada pero cancelación no marcada")
+                )
+            })
+
+        cur.close(); release_conn(conn)
+
+        return jsonify({
+            "fecha_corte": fecha_corte,
+            "ordenes_canceladas_total": len(ordenes),
+            "ordenes": diagnostico
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()[:600]}), 500
+
+
 @app.route("/admin/rls/debug_meli_orden", methods=["GET"])
 def admin_rls_debug_meli_orden():
     """Debug profundo: detalle completo de una orden MELI específica.
