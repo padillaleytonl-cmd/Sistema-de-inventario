@@ -20864,6 +20864,97 @@ def admin_lusync_facturacion_tenant(tenant_id):
     })
 
 
+@app.route("/admin/lusync/sii/tenant/<int:tenant_id>/limpiar_dtes_no_autorizados", methods=["POST"])
+@requiere_lusync_admin
+def admin_lusync_limpiar_dtes_no_autorizados(tenant_id):
+    """Bug-fix manual: desactiva DTEs cobrables que están activos pero sin aceptación.
+    
+    Útil para tenants creados antes del fix del DEFAULT TRUE en emite_factura.
+    Solo desactiva DTEs que NO tienen registro de aceptación explícita.
+    """
+    from inventario import get_conn, release_conn
+    
+    # DTEs cobrables (los gratuitos como Boleta/NC no se tocan)
+    DTES_COBRABLES = {
+        'emite_factura': 33,
+        'emite_factura_exenta': 34,
+        'emite_factura_compra': 46,
+        'emite_liquidacion': 43,
+        'emite_nota_debito': 56,
+        'emite_guia_despacho': 52,
+        'emite_boleta_exenta': 41,
+        'emite_fact_exportacion': 110,
+        'emite_nc_exportacion': 112,
+        'emite_nd_exportacion': 111,
+    }
+    
+    desactivados = []
+    
+    try:
+        conn = get_conn(is_admin=True)
+        cur = conn.cursor()
+        
+        # Para cada campo cobrable, verificar si está activado sin aceptación
+        for campo, tipo_dte in DTES_COBRABLES.items():
+            cur.execute(f"""
+                SELECT {campo} FROM facturacion_config_tenant WHERE tenant_id = %s
+            """, (tenant_id,))
+            r = cur.fetchone()
+            
+            if not r or not r[0]:  # Si no está activo, saltar
+                continue
+            
+            # Verificar si hay registro de aceptación
+            cur.execute("""
+                SELECT 1 FROM facturacion_dte_activaciones
+                WHERE tenant_id = %s AND tipo_dte = %s AND activo = TRUE
+                LIMIT 1
+            """, (tenant_id, tipo_dte))
+            
+            tiene_aceptacion = cur.fetchone() is not None
+            
+            if not tiene_aceptacion:
+                # Desactivar
+                cur.execute(f"""
+                    UPDATE facturacion_config_tenant
+                    SET {campo} = FALSE, fecha_actualizacion = NOW()
+                    WHERE tenant_id = %s
+                """, (tenant_id,))
+                desactivados.append({"campo": campo, "tipo_dte": tipo_dte})
+        
+        conn.commit()
+        cur.close()
+        release_conn(conn)
+        
+        # Audit log
+        try:
+            registrar_audit(
+                session.get("lusync_admin_email", "admin"),
+                request.remote_addr,
+                "limpiar_dtes_no_autorizados",
+                entidad="facturacion_config_tenant",
+                detalle=f"tenant_id={tenant_id}, desactivados={[d['tipo_dte'] for d in desactivados]}"
+            )
+        except Exception:
+            pass
+        
+        return jsonify({
+            "ok": True,
+            "tenant_id": tenant_id,
+            "desactivados": desactivados,
+            "total": len(desactivados),
+            "mensaje": f"Se desactivaron {len(desactivados)} DTEs cobrables sin aceptación previa"
+        })
+    
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "trace": traceback.format_exc()[:500]
+        }), 500
+
+
 @app.route("/admin/lusync/sii/tenant/<int:tenant_id>", methods=["GET"])
 @requiere_lusync_admin
 def admin_lusync_sii_tenant(tenant_id):
