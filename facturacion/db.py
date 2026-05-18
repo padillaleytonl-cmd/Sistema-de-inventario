@@ -46,7 +46,7 @@ def init_facturacion_tables(get_conn_func, release_conn_func=None, enable_rls_fu
                 ambiente TEXT DEFAULT 'certificacion',
                 emite_boleta BOOLEAN DEFAULT TRUE,
                 emite_boleta_exenta BOOLEAN DEFAULT FALSE,
-                emite_factura BOOLEAN DEFAULT TRUE,
+                emite_factura BOOLEAN DEFAULT FALSE,
                 emite_factura_exenta BOOLEAN DEFAULT FALSE,
                 emite_factura_compra BOOLEAN DEFAULT FALSE,
                 emite_liquidacion BOOLEAN DEFAULT FALSE,
@@ -201,6 +201,34 @@ def init_facturacion_tables(get_conn_func, release_conn_func=None, enable_rls_fu
             CREATE INDEX IF NOT EXISTS idx_dte_activaciones_tenant
             ON facturacion_dte_activaciones(tenant_id, tipo_dte, activo)
         """)
+
+        # ─────────────────────────────────────────────────────────────────
+        # MIGRACIÓN CORRECTIVA (2026-05-18):
+        # BUG-FIX: Factura 33 estaba con DEFAULT TRUE → tenants creados antes
+        # de este fix tienen Factura activada SIN haber aceptado los términos
+        # de cobro (+0.2 UF/mes). Esto puede ser legalmente problemático.
+        #
+        # Solución: desactivar emite_factura para tenants donde NO existe
+        # registro en facturacion_dte_activaciones con tipo_dte=33 activo
+        # (es decir, donde el cliente NUNCA aceptó explícitamente los términos)
+        # ─────────────────────────────────────────────────────────────────
+        try:
+            cur.execute("""
+                UPDATE facturacion_config_tenant fct
+                SET emite_factura = FALSE
+                WHERE fct.emite_factura = TRUE
+                  AND NOT EXISTS (
+                    SELECT 1 FROM facturacion_dte_activaciones fda
+                    WHERE fda.tenant_id = fct.tenant_id
+                      AND fda.tipo_dte = 33
+                      AND fda.activo = TRUE
+                  )
+            """)
+            filas_corregidas = cur.rowcount
+            if filas_corregidas > 0:
+                print(f"⚠ [Facturación] BUG-FIX aplicado: desactivada emite_factura para {filas_corregidas} tenants sin aceptación previa")
+        except Exception as e:
+            print(f"[Facturación] Skip migración correctiva factura: {e}")
 
         conn.commit()
         print("[Facturación] Tablas creadas/verificadas correctamente")
