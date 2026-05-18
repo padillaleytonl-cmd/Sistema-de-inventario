@@ -203,6 +203,57 @@ def init_facturacion_tables(get_conn_func, release_conn_func=None, enable_rls_fu
         """)
 
         # ─────────────────────────────────────────────────────────────────
+        # 5. TIPOS DE DTE EDITABLES (precios UF, etiquetas, visibilidad)
+        # Tabla maestra que controla los DTEs ofrecidos a los clientes.
+        # El admin Lusync puede editar precios, descripciones, etc.
+        # ─────────────────────────────────────────────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS facturacion_tipos_dte (
+                tipo_dte INTEGER PRIMARY KEY,
+                nombre TEXT NOT NULL,
+                campo_bd TEXT NOT NULL UNIQUE,
+                precio_uf NUMERIC(4, 2) NOT NULL DEFAULT 0,
+                afecto_iva BOOLEAN DEFAULT TRUE,
+                categoria TEXT DEFAULT 'venta',
+                es_gratuito BOOLEAN DEFAULT FALSE,
+                activo_default BOOLEAN DEFAULT FALSE,
+                visible BOOLEAN DEFAULT TRUE,
+                orden_visual INTEGER DEFAULT 99,
+                descripcion TEXT,
+                fecha_actualizacion TIMESTAMP DEFAULT NOW(),
+                actualizado_por TEXT
+            )
+        """)
+
+        # Seed inicial: poblamos con los valores hardcoded actuales SI la tabla está vacía
+        cur.execute("SELECT COUNT(*) FROM facturacion_tipos_dte")
+        if cur.fetchone()[0] == 0:
+            seeds = [
+                # tipo_dte, nombre, campo_bd, precio_uf, afecto_iva, categoria, gratuito, activo_default, visible, orden
+                (39,  'Boleta Electrónica',           'emite_boleta',           0.0, True,  'venta', True,  True,  True, 1),
+                (61,  'Nota de Crédito',              'emite_nota_credito',     0.0, True,  'nota',  True,  True,  True, 2),
+                (33,  'Factura Electrónica',          'emite_factura',          0.2, True,  'venta', False, False, True, 3),
+                (34,  'Factura Exenta',               'emite_factura_exenta',   0.2, False, 'venta', False, False, True, 4),
+                (41,  'Boleta Exenta',                'emite_boleta_exenta',    0.1, False, 'venta', False, False, True, 5),
+                (56,  'Nota de Débito',               'emite_nota_debito',      0.1, True,  'nota',  False, False, True, 6),
+                (52,  'Guía de Despacho',             'emite_guia_despacho',    0.1, True,  'guia',  False, False, True, 7),
+                (43,  'Liquidación de Factura',       'emite_liquidacion',      0.1, True,  'venta', False, False, True, 8),
+                (46,  'Factura de Compra',            'emite_factura_compra',   0.1, True,  'compra',False, False, True, 9),
+                (110, 'Factura de Exportación',       'emite_fact_exportacion', 0.4, False, 'venta', False, False, True, 10),
+                (112, 'Nota de Crédito Exportación',  'emite_nc_exportacion',   0.2, False, 'nota',  False, False, True, 11),
+                (111, 'Nota de Débito Exportación',   'emite_nd_exportacion',   0.2, False, 'nota',  False, False, True, 12),
+            ]
+            for seed in seeds:
+                cur.execute("""
+                    INSERT INTO facturacion_tipos_dte
+                    (tipo_dte, nombre, campo_bd, precio_uf, afecto_iva, categoria,
+                     es_gratuito, activo_default, visible, orden_visual, actualizado_por)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'seed_inicial')
+                    ON CONFLICT (tipo_dte) DO NOTHING
+                """, seed)
+            print(f"[Facturación] Tabla facturacion_tipos_dte poblada con {len(seeds)} DTEs")
+
+        # ─────────────────────────────────────────────────────────────────
         # MIGRACIÓN CORRECTIVA (2026-05-18):
         # BUG-FIX: Factura 33 estaba con DEFAULT TRUE → tenants creados antes
         # de este fix tienen Factura activada SIN haber aceptado los términos

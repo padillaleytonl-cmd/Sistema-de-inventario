@@ -11056,6 +11056,9 @@ def admin_lusync_dashboard():
                     <a href="/admin/lusync/planes" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">📦 Planes</a>
                     <a href="/admin/lusync/marketplaces" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">🛍️ Marketplaces</a>
 
+                    <div style="font-size:9px;text-transform:uppercase;color:#888780;letter-spacing:0.1em;padding:4px 8px;font-weight:600;margin-top:14px;">Facturación</div>
+                    <a href="/admin/lusync/dtes" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">📋 Tipos de DTE</a>
+
                     <div style="font-size:9px;text-transform:uppercase;color:#888780;letter-spacing:0.1em;padding:4px 8px;font-weight:600;margin-top:14px;">Sistema</div>
                     <a href="/admin/rls/health_check?token=lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw" target="_blank" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">🩺 Health check</a>
                     <a href="/admin/tenancy/diagnostico?token=lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw" target="_blank" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">🔍 Diagnóstico</a>
@@ -20862,6 +20865,340 @@ def admin_lusync_facturacion_tenant(tenant_id):
         "cafs": cafs,
         "mrr_tributario": mrr,
     })
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 🆕 ADMIN — Gestión de TIPOS DE DTE (precios, visibilidad, defaults)
+# ════════════════════════════════════════════════════════════════════════════
+@app.route("/admin/lusync/dtes/listar", methods=["GET"])
+@requiere_lusync_admin
+def admin_lusync_dtes_listar():
+    """Lista todos los tipos de DTE configurables con sus valores actuales."""
+    from inventario import get_conn, release_conn
+    try:
+        conn = get_conn(is_admin=True)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT tipo_dte, nombre, campo_bd, precio_uf, afecto_iva, categoria,
+                   es_gratuito, activo_default, visible, orden_visual, descripcion,
+                   fecha_actualizacion, actualizado_por
+            FROM facturacion_tipos_dte
+            ORDER BY orden_visual, tipo_dte
+        """)
+        rows = cur.fetchall()
+        cur.close()
+        release_conn(conn)
+        
+        dtes = []
+        for r in rows:
+            dtes.append({
+                "tipo_dte": r[0],
+                "nombre": r[1],
+                "campo_bd": r[2],
+                "precio_uf": float(r[3]) if r[3] else 0.0,
+                "afecto_iva": r[4],
+                "categoria": r[5],
+                "es_gratuito": r[6],
+                "activo_default": r[7],
+                "visible": r[8],
+                "orden_visual": r[9],
+                "descripcion": r[10] or "",
+                "fecha_actualizacion": str(r[11]) if r[11] else None,
+                "actualizado_por": r[12] or "",
+            })
+        return jsonify({"ok": True, "dtes": dtes, "total": len(dtes)})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/admin/lusync/dtes/actualizar/<int:tipo_dte>", methods=["POST"])
+@requiere_lusync_admin
+def admin_lusync_dtes_actualizar(tipo_dte):
+    """Actualiza un tipo de DTE específico (precio, visibilidad, default).
+    
+    Body esperado:
+    {
+        "precio_uf": 0.2,
+        "es_gratuito": false,
+        "activo_default": false,
+        "visible": true,
+        "orden_visual": 3,
+        "descripcion": "..."
+    }
+    """
+    from inventario import get_conn, release_conn
+    data = request.get_json() or {}
+    
+    # Campos editables (no permitimos cambiar tipo_dte ni campo_bd)
+    campos_permitidos = {
+        "nombre", "precio_uf", "es_gratuito", "activo_default",
+        "visible", "orden_visual", "descripcion", "afecto_iva", "categoria"
+    }
+    
+    updates = {k: v for k, v in data.items() if k in campos_permitidos}
+    if not updates:
+        return jsonify({"ok": False, "error": "No hay campos para actualizar"}), 400
+    
+    # Validación: si es_gratuito es True, precio_uf debe ser 0
+    if updates.get("es_gratuito") and "precio_uf" not in updates:
+        updates["precio_uf"] = 0.0
+    
+    set_clauses = [f"{k} = %s" for k in updates.keys()]
+    set_clauses.append("fecha_actualizacion = NOW()")
+    set_clauses.append("actualizado_por = %s")
+    
+    values = list(updates.values())
+    values.append(session.get("lusync_admin_email", "admin"))
+    values.append(tipo_dte)
+    
+    try:
+        conn = get_conn(is_admin=True)
+        cur = conn.cursor()
+        
+        cur.execute(f"""
+            UPDATE facturacion_tipos_dte
+            SET {', '.join(set_clauses)}
+            WHERE tipo_dte = %s
+        """, values)
+        
+        if cur.rowcount == 0:
+            cur.close()
+            release_conn(conn)
+            return jsonify({"ok": False, "error": f"No existe DTE tipo {tipo_dte}"}), 404
+        
+        conn.commit()
+        cur.close()
+        release_conn(conn)
+        
+        # Audit log
+        try:
+            registrar_audit(
+                session.get("lusync_admin_email", "admin"),
+                request.remote_addr,
+                "actualizar_tipo_dte",
+                entidad="facturacion_tipos_dte",
+                detalle=f"tipo_dte={tipo_dte}, cambios={updates}"
+            )
+        except Exception:
+            pass
+        
+        return jsonify({"ok": True, "tipo_dte": tipo_dte, "actualizado": updates})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/admin/lusync/dtes", methods=["GET"])
+@requiere_lusync_admin
+def admin_lusync_dtes_panel():
+    """Pantalla HTML para gestionar tipos de DTE (precios, visibilidad)."""
+    html = """<!DOCTYPE html>
+<html lang="es"><head>
+<meta charset="utf-8">
+<title>Gestión Tipos DTE · Lusync Admin</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,'Segoe UI',sans-serif;background:#f6f5f1;color:#1f1e1b;padding:24px}
+  .container{max-width:1200px;margin:0 auto}
+  .header-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+  h1{font-size:22px;font-weight:600}
+  .back-link{color:#534AB7;text-decoration:none;font-size:13px;display:inline-flex;align-items:center;gap:4px}
+  .back-link:hover{text-decoration:underline}
+  .logout{font-size:12px;color:#dc2626;text-decoration:none;padding:6px 12px;border-radius:6px;background:#fef2f2;border:1px solid #fecaca;font-weight:500}
+  .card{background:white;border-radius:10px;padding:20px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
+  .info-box{background:#EEEDFE;border-left:3px solid #534AB7;padding:12px 14px;border-radius:6px;font-size:13px;line-height:1.6;margin-bottom:16px;color:#1f1e1b}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{background:#f9f8f5;padding:10px 12px;text-align:left;font-weight:500;color:#5f5e5a;border-bottom:1px solid #e8e6e0}
+  td{padding:10px 12px;border-bottom:1px solid #f0eee9}
+  tr:hover{background:#fafaf7}
+  input[type=number],input[type=text]{padding:5px 8px;border:1px solid #d1cfc8;border-radius:5px;font-size:13px;width:90px}
+  input[type=text]{width:200px}
+  input[type=checkbox]{cursor:pointer;width:16px;height:16px}
+  .btn-save{background:#534AB7;color:white;padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500}
+  .btn-save:hover{background:#3d3690}
+  .btn-save:disabled{background:#bbb;cursor:not-allowed}
+  .badge-gratis{background:#dcfce7;color:#15803d;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:500}
+  .badge-pago{background:#fef3c7;color:#92400e;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:500}
+  .row-edited{background:#fef9c3 !important}
+  .status-msg{position:fixed;top:20px;right:20px;padding:10px 16px;border-radius:8px;font-size:13px;color:white;display:none;z-index:1000}
+  .status-msg.ok{background:#16a34a}
+  .status-msg.err{background:#dc2626}
+</style>
+</head><body>
+<div class="container">
+  <div class="header-bar">
+    <a class="back-link" href="/admin/lusync">← Volver al panel</a>
+    <a href="/admin/lusync/logout" class="logout">🚪 Cerrar sesión</a>
+  </div>
+  
+  <h1>📋 Gestión de Tipos de DTE</h1>
+  
+  <div class="info-box" style="margin-top:14px;">
+    <b>Aquí controlas qué DTEs ofreces a tus clientes y sus precios.</b><br>
+    Edita los valores y haz click en "💾 Guardar" para aplicar los cambios.
+    Los cambios afectan SOLO a tenants nuevos. Los tenants existentes mantienen sus configuraciones (activadas/desactivadas) hasta que ellos mismos las cambien.
+  </div>
+  
+  <div class="card">
+    <table id="tablaDtes">
+      <thead>
+        <tr>
+          <th>Tipo</th>
+          <th>Nombre</th>
+          <th>Precio UF</th>
+          <th>Estado</th>
+          <th>Activo default</th>
+          <th>Visible al cliente</th>
+          <th>Orden</th>
+          <th style="width:120px;">Acción</th>
+        </tr>
+      </thead>
+      <tbody id="cuerpoDtes">
+        <tr><td colspan="8" style="text-align:center;color:#888;padding:30px;">Cargando…</td></tr>
+      </tbody>
+    </table>
+  </div>
+  
+  <div class="info-box" style="background:#fef3c7;border-color:#f59e0b;color:#78350f;">
+    <b>⚠️ Importante sobre cambios de precios:</b><br>
+    • Los precios cambian inmediatamente para todos los clientes que tienen activo ese DTE<br>
+    • Los clientes verán el nuevo monto en su próxima facturación mensual<br>
+    • Considera notificar a clientes existentes antes de subir precios significativamente
+  </div>
+</div>
+
+<div id="statusMsg" class="status-msg"></div>
+
+<script>
+const TOKEN = "";  // Se asume sesión activa
+
+async function cargarDtes(){
+  try{
+    const r = await fetch('/admin/lusync/dtes/listar', {credentials:'include'});
+    const d = await r.json();
+    if(!d.ok){
+      document.getElementById('cuerpoDtes').innerHTML = `<tr><td colspan="8" style="text-align:center;color:#dc2626;padding:30px;">Error: ${d.error}</td></tr>`;
+      return;
+    }
+    renderTabla(d.dtes);
+  }catch(e){
+    document.getElementById('cuerpoDtes').innerHTML = `<tr><td colspan="8" style="text-align:center;color:#dc2626;padding:30px;">Error: ${e.message}</td></tr>`;
+  }
+}
+
+function renderTabla(dtes){
+  const cuerpo = document.getElementById('cuerpoDtes');
+  cuerpo.innerHTML = dtes.map(d => `
+    <tr data-tipo="${d.tipo_dte}">
+      <td><b>${d.tipo_dte}</b></td>
+      <td>${d.nombre}<br><small style="color:#888;">${d.campo_bd}</small></td>
+      <td>
+        <input type="number" step="0.05" min="0" max="10" 
+               class="inp-precio" value="${d.precio_uf}" 
+               onchange="marcarEditado(this)">
+      </td>
+      <td>
+        ${d.es_gratuito 
+          ? '<span class="badge-gratis">Gratis</span>' 
+          : '<span class="badge-pago">Pago</span>'}
+        <br>
+        <label style="font-size:11px;color:#666;margin-top:4px;display:inline-block;">
+          <input type="checkbox" class="inp-gratuito" ${d.es_gratuito ? 'checked' : ''} 
+                 onchange="marcarEditado(this);toggleGratis(this)"> 
+          Gratuito
+        </label>
+      </td>
+      <td style="text-align:center;">
+        <input type="checkbox" class="inp-default" ${d.activo_default ? 'checked' : ''} 
+               onchange="marcarEditado(this)">
+      </td>
+      <td style="text-align:center;">
+        <input type="checkbox" class="inp-visible" ${d.visible ? 'checked' : ''} 
+               onchange="marcarEditado(this)">
+      </td>
+      <td>
+        <input type="number" min="1" max="99" 
+               class="inp-orden" value="${d.orden_visual}" 
+               style="width:60px;" 
+               onchange="marcarEditado(this)">
+      </td>
+      <td>
+        <button class="btn-save" onclick="guardarDte(${d.tipo_dte}, this)" disabled>💾 Guardar</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function marcarEditado(input){
+  const fila = input.closest('tr');
+  fila.classList.add('row-edited');
+  fila.querySelector('.btn-save').disabled = false;
+}
+
+function toggleGratis(checkbox){
+  const fila = checkbox.closest('tr');
+  const inpPrecio = fila.querySelector('.inp-precio');
+  if(checkbox.checked){
+    inpPrecio.value = 0;
+    inpPrecio.disabled = true;
+  }else{
+    inpPrecio.disabled = false;
+  }
+}
+
+async function guardarDte(tipoDte, btn){
+  const fila = btn.closest('tr');
+  const datos = {
+    precio_uf: parseFloat(fila.querySelector('.inp-precio').value),
+    es_gratuito: fila.querySelector('.inp-gratuito').checked,
+    activo_default: fila.querySelector('.inp-default').checked,
+    visible: fila.querySelector('.inp-visible').checked,
+    orden_visual: parseInt(fila.querySelector('.inp-orden').value),
+  };
+  
+  btn.disabled = true;
+  btn.textContent = '⏳ Guardando…';
+  
+  try{
+    const r = await fetch(`/admin/lusync/dtes/actualizar/${tipoDte}`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      credentials:'include',
+      body: JSON.stringify(datos)
+    });
+    const d = await r.json();
+    
+    if(d.ok){
+      mostrarStatus('✓ DTE ' + tipoDte + ' actualizado', 'ok');
+      fila.classList.remove('row-edited');
+      btn.textContent = '✓ Guardado';
+      setTimeout(()=> {
+        btn.textContent = '💾 Guardar';
+        btn.disabled = true;
+      }, 1500);
+    }else{
+      mostrarStatus('Error: ' + (d.error || 'desconocido'), 'err');
+      btn.disabled = false;
+      btn.textContent = '💾 Guardar';
+    }
+  }catch(e){
+    mostrarStatus('Error: ' + e.message, 'err');
+    btn.disabled = false;
+    btn.textContent = '💾 Guardar';
+  }
+}
+
+function mostrarStatus(msg, tipo){
+  const el = document.getElementById('statusMsg');
+  el.textContent = msg;
+  el.className = 'status-msg ' + tipo;
+  el.style.display = 'block';
+  setTimeout(() => el.style.display = 'none', 3000);
+}
+
+cargarDtes();
+</script>
+</body></html>"""
+    return html
 
 
 @app.route("/admin/lusync/sii/tenant/<int:tenant_id>/limpiar_dtes_no_autorizados", methods=["POST"])

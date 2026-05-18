@@ -69,6 +69,67 @@ CAMPO_BD_A_TIPO_DTE = {
 TIPOS_DTE_HABILITADOS = [33, 34, 39, 41, 52, 56, 61]
 
 
+def obtener_tipos_dte_dinamicos(get_conn_func, release_conn_func):
+    """Lee la configuración de TIPOS_DTE desde la BD (tabla facturacion_tipos_dte).
+    
+    Retorna un dict con la misma estructura que TIPOS_DTE pero con valores
+    editables desde el panel admin. Si la tabla no existe o falla, devuelve
+    el TIPOS_DTE hardcoded como fallback.
+    
+    Returns:
+        dict: {tipo_dte: {nombre, afecto_iva, tipo, precio_uf, ...}}
+    """
+    try:
+        conn = get_conn_func()
+        cur = conn.cursor()
+        
+        # Verificar que la tabla existe
+        cur.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_name = 'facturacion_tipos_dte'
+            )
+        """)
+        if not cur.fetchone()[0]:
+            cur.close()
+            release_conn_func(conn)
+            return TIPOS_DTE  # Fallback al hardcode
+        
+        cur.execute("""
+            SELECT tipo_dte, nombre, campo_bd, precio_uf, afecto_iva, 
+                   categoria, es_gratuito, activo_default, visible, orden_visual,
+                   descripcion
+            FROM facturacion_tipos_dte
+            WHERE visible = TRUE
+            ORDER BY orden_visual
+        """)
+        rows = cur.fetchall()
+        cur.close()
+        release_conn_func(conn)
+        
+        if not rows:
+            return TIPOS_DTE  # Fallback si la tabla está vacía
+        
+        result = {}
+        for r in rows:
+            result[r[0]] = {
+                "nombre": r[1],
+                "campo_bd": r[2],
+                "precio_uf": float(r[3]) if r[3] else 0.0,
+                "afecto_iva": r[4],
+                "tipo": r[5] or "venta",
+                "es_gratuito": r[6],
+                "activo_default": r[7],
+                "visible": r[8],
+                "orden": r[9],
+                "descripcion": r[10],
+            }
+        return result
+    except Exception as e:
+        print(f"[Facturación] Error leyendo tipos DTE de BD, usando hardcode: {e}")
+        return TIPOS_DTE
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # VALIDACIÓN RUT CHILENO
 # ─────────────────────────────────────────────────────────────────────────────
