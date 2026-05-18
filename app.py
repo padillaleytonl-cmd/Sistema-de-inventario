@@ -11063,8 +11063,13 @@ def admin_lusync_dashboard():
 
                     <div style="position:absolute;bottom:18px;left:14px;width:202px;border-top:1px solid #2a2926;padding-top:14px;">
                         <div style="font-size:11px;color:white;font-weight:500;">{session.get('lusync_admin_nombre')}</div>
-                        <div style="font-size:10px;color:#888780;">{session.get('lusync_admin_email')}</div>
-                        <a href="/admin/lusync/logout" style="font-size:11px;color:#888780;text-decoration:none;display:inline-block;margin-top:6px;">Cerrar sesión →</a>
+                        <div style="font-size:10px;color:#888780;margin-bottom:10px;">{session.get('lusync_admin_email')}</div>
+                        <a href="/admin/lusync/logout" 
+                           style="display:flex;align-items:center;justify-content:center;gap:6px;background:#2a2926;color:#fca5a5;padding:8px 12px;border-radius:6px;font-size:12px;font-weight:500;text-decoration:none;border:1px solid #3a3936;transition:all 0.15s;"
+                           onmouseover="this.style.background='#5b1d1d';this.style.color='#fecaca';this.style.borderColor='#7a2828';"
+                           onmouseout="this.style.background='#2a2926';this.style.color='#fca5a5';this.style.borderColor='#3a3936';">
+                            🚪 Cerrar sesión
+                        </a>
                     </div>
                 </div>
 
@@ -20904,7 +20909,10 @@ h1{{margin:0 0 4px;font-size:22px;}}
 </style>
 </head><body>
 <div class="container">
-    <a class="back-link" href="/admin/lusync/tenant/{tenant_id}">← Volver a {tenant['nombre']}</a>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <a class="back-link" href="/admin/lusync/tenant/{tenant_id}">← Volver a {tenant['nombre']}</a>
+        <a href="/admin/lusync/logout" style="font-size:12px;color:#dc2626;text-decoration:none;display:inline-flex;align-items:center;gap:4px;padding:6px 12px;border-radius:6px;background:#fef2f2;border:1px solid #fecaca;font-weight:500;">🚪 Cerrar sesión Lusync</a>
+    </div>
     <div class="header">
         <div>
             <h1>📄 Facturación SII · {tenant['nombre']}</h1>
