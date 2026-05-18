@@ -45,6 +45,74 @@ from inventario import (cargar_productos, guardar_productos, guardar_producto,
 app = Flask(__name__)
 app.secret_key = "clave_super_segura"
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# HELPERS GLOBALES — usar EN TODO el código para consistencia
+# ═══════════════════════════════════════════════════════════════════════════
+
+def fmt_uf_smart(valor):
+    """Formatea un valor UF mostrando decimales inteligentemente:
+    - Si tiene centésimas (segundo decimal != 0), muestra 2 decimales
+    - Si NO tiene centésimas, muestra 1 decimal
+    
+    Ejemplos:
+        0.2  → '0,2'
+        0.15 → '0,15'
+        6.4  → '6,4'
+        6.45 → '6,45'
+    """
+    try:
+        n = round(float(valor or 0), 2)
+        tiene_centesimas = round(n * 100) % 10 != 0
+        return (f"{n:.2f}" if tiene_centesimas else f"{n:.1f}").replace('.', ',')
+    except Exception:
+        return '0,0'
+
+
+def calcular_mrr_total_tenant(tenant_id, precio_plan_uf):
+    """Devuelve dict con MRR total (plan base + add-on SII tributario).
+    
+    Returns:
+        {
+            'plan_uf': float,       # solo el plan base
+            'sii_uf': float,        # solo el add-on SII
+            'total_uf': float,      # suma de ambos
+            'plan_fmt': str,        # formato es-CL ('6,0')
+            'sii_fmt': str,         # formato es-CL ('0,4')
+            'total_fmt': str,       # formato es-CL ('6,4')
+        }
+    """
+    plan_base = float(precio_plan_uf or 0)
+    sii_uf = 0.0
+    try:
+        from facturacion import calcular_mrr_tributario
+        from inventario import get_conn, release_conn
+        mrr = calcular_mrr_tributario(get_conn, release_conn, tenant_id)
+        sii_uf = float(mrr.get('total_uf') or 0)
+    except Exception as e:
+        # Silencioso: si falla, el SII queda en 0 (no rompe nada)
+        pass
+    
+    total = round(plan_base + sii_uf, 2)
+    return {
+        'plan_uf': plan_base,
+        'sii_uf': sii_uf,
+        'total_uf': total,
+        'plan_fmt': fmt_uf_smart(plan_base),
+        'sii_fmt': fmt_uf_smart(sii_uf),
+        'total_fmt': fmt_uf_smart(total),
+    }
+
+
+# Hacer disponibles en templates Jinja
+@app.context_processor
+def inject_helpers():
+    return {
+        'fmt_uf_smart': fmt_uf_smart,
+        'calcular_mrr_total_tenant': calcular_mrr_total_tenant,
+    }
+
+
 init_db()
 init_devoluciones()
 try:
@@ -10965,6 +11033,8 @@ def admin_lusync_dashboard():
         filas_tenants = ""
         from datetime import datetime
         ahora = datetime.now()
+        # Acumulador: MRR real = plan base + suma add-ons SII de tenants activos
+        mrr_uf_real_acumulado = mrr_uf  # arranca con suma de planes activos (de la query SQL)
         for t in tenants:
             tid = t["id"]
             actividad = ultimas_actividades.get(tid)
@@ -11000,7 +11070,19 @@ def admin_lusync_dashboard():
             estado_color = "#dcfce7" if t["estado"] == "activo" else "#fee2e2"
             estado_text = "#166534" if t["estado"] == "activo" else "#991b1b"
 
-            mrr_t = float(t.get("precio_uf") or 0)
+            mrr_t_info = calcular_mrr_total_tenant(tid, t.get("precio_uf"))
+            mrr_t = mrr_t_info['total_uf']
+            # Acumular total real (plan + add-on SII de cada tenant)
+            if t["estado"] == "activo":
+                mrr_uf_real_acumulado = mrr_uf_real_acumulado + mrr_t_info['sii_uf']
+
+            # Para mostrar en columna MRR: usa total (plan + SII)
+            mrr_t_fmt = mrr_t_info['total_fmt']
+            # Tooltip o subtitle con desglose si tiene add-on
+            mrr_t_subtitulo = (
+                f'<div style="font-size:9px;color:#888;line-height:1.2;">{mrr_t_info["plan_fmt"]} + {mrr_t_info["sii_fmt"]} SII</div>'
+                if mrr_t_info['sii_uf'] > 0 else ''
+            )
 
             filas_tenants += f"""
             <tr style="border-bottom:1px solid #f1efe8;cursor:pointer;" onclick="window.location='/admin/lusync/tenant/{tid}'">
@@ -11021,7 +11103,10 @@ def admin_lusync_dashboard():
                 </td>
                 <td style="padding:11px 12px;font-weight:500;">{ordenes_t}</td>
                 <td style="padding:11px 12px;">{mkts_badges}</td>
-                <td style="padding:11px 12px;color:#534AB7;font-weight:500;">{mrr_t:.1f} UF</td>
+                <td style="padding:11px 12px;color:#534AB7;font-weight:500;">
+                    <div>{mrr_t_fmt} UF</div>
+                    {mrr_t_subtitulo}
+                </td>
                 <td style="padding:11px 12px;font-size:11px;color:#888780;">{act_str}</td>
                 <td style="padding:11px 12px;text-align:right;" onclick="event.stopPropagation();">
                     <a href="/admin/lusync/impersonate/{tid}" style="font-size:11px;color:#534AB7;text-decoration:none;font-weight:500;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;">Ver como</a>
@@ -11029,6 +11114,9 @@ def admin_lusync_dashboard():
             </tr>
             """
 
+        # Usar el acumulado real (plan + add-ons SII) en lugar del solo plan
+        mrr_uf = round(mrr_uf_real_acumulado, 2)
+        mrr_uf_fmt = fmt_uf_smart(mrr_uf)
         mrr_clp = int(mrr_uf * 39500)  # aproximado, idealmente UF dinámico
 
         return f"""
@@ -11083,7 +11171,7 @@ def admin_lusync_dashboard():
                     <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:20px;">
                         <div>
                             <h1 style="margin:0;font-size:22px;color:#1f1e1b;font-weight:600;">Clientes</h1>
-                            <div style="font-size:12px;color:#888780;margin-top:3px;">Gestión de tenants · {len(tenants)} totales · MRR {mrr_uf:.1f} UF (~${mrr_clp:,} CLP)</div>
+                            <div style="font-size:12px;color:#888780;margin-top:3px;">Gestión de tenants · {len(tenants)} totales · MRR {mrr_uf_fmt} UF (~${mrr_clp:,} CLP)</div>
                         </div>
                         <div>
                             <a href="/admin/lusync/nuevo_cliente" style="background:#534AB7;color:white;padding:9px 16px;border-radius:7px;font-size:13px;font-weight:500;border:0;cursor:pointer;text-decoration:none;display:inline-block;">+ Nuevo cliente</a>
@@ -11099,7 +11187,7 @@ def admin_lusync_dashboard():
                         </div>
                         <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;padding:14px 16px;">
                             <div style="font-size:10px;text-transform:uppercase;color:#888780;letter-spacing:0.05em;font-weight:600;">MRR</div>
-                            <div style="font-size:24px;font-weight:600;color:#534AB7;margin-top:5px;line-height:1;">{mrr_uf:.1f} UF</div>
+                            <div style="font-size:24px;font-weight:600;color:#534AB7;margin-top:5px;line-height:1;">{mrr_uf_fmt} UF</div>
                             <div style="font-size:10px;color:#888780;margin-top:3px;">~${mrr_clp:,} CLP/mes</div>
                         </div>
                         <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;padding:14px 16px;">
@@ -12952,7 +13040,7 @@ def admin_lusync_planes():
                         <h3 style="margin:6px 0 2px;font-size:18px;">{p['nombre']}</h3>
                     </div>
                     <div style="text-align:right;">
-                        <div style="font-size:24px;font-weight:700;color:#534AB7;line-height:1;">{p['precio_uf']:.1f} <span style="font-size:12px;color:#888780;font-weight:500;">UF/mes</span></div>
+                        <div style="font-size:24px;font-weight:700;color:#534AB7;line-height:1;">{fmt_uf_smart(p['precio_uf'])} <span style="font-size:12px;color:#888780;font-weight:500;">UF/mes</span></div>
                         <div style="font-size:10px;color:#888780;margin-top:2px;">~${int(p['precio_uf']*39500):,} CLP</div>
                     </div>
                 </div>
@@ -13572,37 +13660,17 @@ def admin_lusync_tenant_detalle(tenant_id):
         boton_estado = "Suspender" if tenant["estado"] == "activo" else "Reactivar"
         accion_estado = "suspender" if tenant["estado"] == "activo" else "reactivar"
 
-        # 🆕 Calcular MRR tributario para sumar al precio del plan base
-        precio_plan_base = float(tenant.get('precio_uf') or 0)
-        mrr_dte_uf = 0.0
-        try:
-            from facturacion import calcular_mrr_tributario
-            mrr = calcular_mrr_tributario(get_conn, release_conn, tenant_id)
-            mrr_dte_uf = float(mrr.get('total_uf') or 0)
-        except Exception as e:
-            print(f"[admin_lusync_tenant_detalle] Error MRR: {e}")
-
-        precio_total_uf = round(precio_plan_base + mrr_dte_uf, 2)
-
-        # Función JS para formatear UF con decimales inteligentes
-        def fmt_uf(v):
-            n = round(float(v), 2)
-            # Si tiene centésimas (segundo decimal != 0), mostrar 2 decimales
-            tiene_centesimas = round(n * 100) % 10 != 0
-            return (f"{n:.2f}" if tiene_centesimas else f"{n:.1f}").replace('.', ',')
-
-        precio_plan_fmt = fmt_uf(precio_plan_base)
-        mrr_dte_fmt = fmt_uf(mrr_dte_uf)
-        precio_total_fmt = fmt_uf(precio_total_uf)
+        # 🆕 Calcular MRR tributario y sumar al precio del plan base (helper global)
+        mrr_info = calcular_mrr_total_tenant(tenant_id, tenant.get('precio_uf'))
 
         # Bloque HTML del precio: muestra desglose solo si hay add-on
-        if mrr_dte_uf > 0:
+        if mrr_info['sii_uf'] > 0:
             precio_html = f'''
-                <div style="font-size:11px;color:#888780;font-weight:500;">{precio_plan_fmt} UF plan + {mrr_dte_fmt} UF SII</div>
-                <div style="font-size:15px;color:#534AB7;font-weight:700;">{precio_total_fmt} UF/mes</div>
+                <div style="font-size:11px;color:#888780;font-weight:500;">{mrr_info['plan_fmt']} UF plan + {mrr_info['sii_fmt']} UF SII</div>
+                <div style="font-size:15px;color:#534AB7;font-weight:700;">{mrr_info['total_fmt']} UF/mes</div>
             '''
         else:
-            precio_html = f'<div style="font-size:13px;color:#534AB7;font-weight:600;">{precio_plan_fmt} UF/mes</div>'
+            precio_html = f'<div style="font-size:13px;color:#534AB7;font-weight:600;">{mrr_info["plan_fmt"]} UF/mes</div>'
 
         return f"""
         <!DOCTYPE html>

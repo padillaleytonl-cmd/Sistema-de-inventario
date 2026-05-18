@@ -3907,7 +3907,77 @@ function showSection(sec, btn){
     cargarConfiguracion();
     cargarTipificaciones();
   }
+  
+  // ═══════════════════════════════════════════════════════════════
+  // PERSISTENCIA: guardar sección en hash URL + localStorage
+  // ═══════════════════════════════════════════════════════════════
+  try {
+    // Hash URL (sin disparar evento hashchange)
+    if (window.location.hash !== '#' + sec) {
+      history.replaceState(null, '', '#' + sec);
+    }
+    // Backup en localStorage
+    localStorage.setItem('lusync_seccion_actual', sec);
+    
+    // Sincronizar sidebar
+    document.querySelectorAll('.sidebar-link[data-section]').forEach(sb => {
+      sb.classList.toggle('active', sb.dataset.section === sec);
+    });
+  } catch(e) { /* ignorar errores de storage */ }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// RESTAURAR sección al cargar la página (F5, primera carga, etc.)
+// Prioridad: hash URL > localStorage > 'dashboard' (default)
+// ═══════════════════════════════════════════════════════════════
+function _restaurarSeccion(){
+  const SECCIONES_VALIDAS = ['dashboard','inventario','movimientos','devoluciones','audit','configuracion','skumapeo','canales','bodegas','pos','facturacion'];
+  let secObjetivo = null;
+  
+  // 1. Intentar leer del hash
+  const hash = (window.location.hash || '').replace(/^#/, '');
+  if (hash && SECCIONES_VALIDAS.includes(hash)) {
+    secObjetivo = hash;
+  }
+  
+  // 2. Si no hay hash, intentar localStorage
+  if (!secObjetivo) {
+    try {
+      const guardada = localStorage.getItem('lusync_seccion_actual');
+      if (guardada && SECCIONES_VALIDAS.includes(guardada)) {
+        secObjetivo = guardada;
+      }
+    } catch(e) { /* ignorar */ }
+  }
+  
+  // 3. Si hay objetivo distinto al default, navegar a esa sección
+  if (secObjetivo && secObjetivo !== 'dashboard') {
+    // Buscar el botón del sidebar correspondiente
+    const btnSidebar = document.querySelector(`.sidebar-link[data-section="${secObjetivo}"]`);
+    if (btnSidebar) {
+      btnSidebar.click();
+    } else {
+      // Fallback: llamar directo a showSection
+      showSection(secObjetivo, null);
+    }
+  }
+}
+
+// Ejecutar al cargar la página
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _restaurarSeccion);
+} else {
+  _restaurarSeccion();
+}
+
+// Reaccionar al botón "Atrás/Adelante" del navegador
+window.addEventListener('hashchange', () => {
+  const hash = (window.location.hash || '').replace(/^#/, '');
+  const SECCIONES_VALIDAS = ['dashboard','inventario','movimientos','devoluciones','audit','configuracion','skumapeo','canales','bodegas','pos','facturacion'];
+  if (hash && SECCIONES_VALIDAS.includes(hash)) {
+    showSection(hash, null);
+  }
+});
 
 // ── SINCRONIZAR PRECIOS
 function sincronizarPrecios(){
