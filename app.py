@@ -13572,6 +13572,38 @@ def admin_lusync_tenant_detalle(tenant_id):
         boton_estado = "Suspender" if tenant["estado"] == "activo" else "Reactivar"
         accion_estado = "suspender" if tenant["estado"] == "activo" else "reactivar"
 
+        # 🆕 Calcular MRR tributario para sumar al precio del plan base
+        precio_plan_base = float(tenant.get('precio_uf') or 0)
+        mrr_dte_uf = 0.0
+        try:
+            from facturacion import calcular_mrr_tributario
+            mrr = calcular_mrr_tributario(get_conn, release_conn, tenant_id)
+            mrr_dte_uf = float(mrr.get('total_uf') or 0)
+        except Exception as e:
+            print(f"[admin_lusync_tenant_detalle] Error MRR: {e}")
+
+        precio_total_uf = round(precio_plan_base + mrr_dte_uf, 2)
+
+        # Función JS para formatear UF con decimales inteligentes
+        def fmt_uf(v):
+            n = round(float(v), 2)
+            # Si tiene centésimas (segundo decimal != 0), mostrar 2 decimales
+            tiene_centesimas = round(n * 100) % 10 != 0
+            return (f"{n:.2f}" if tiene_centesimas else f"{n:.1f}").replace('.', ',')
+
+        precio_plan_fmt = fmt_uf(precio_plan_base)
+        mrr_dte_fmt = fmt_uf(mrr_dte_uf)
+        precio_total_fmt = fmt_uf(precio_total_uf)
+
+        # Bloque HTML del precio: muestra desglose solo si hay add-on
+        if mrr_dte_uf > 0:
+            precio_html = f'''
+                <div style="font-size:11px;color:#888780;font-weight:500;">{precio_plan_fmt} UF plan + {mrr_dte_fmt} UF SII</div>
+                <div style="font-size:15px;color:#534AB7;font-weight:700;">{precio_total_fmt} UF/mes</div>
+            '''
+        else:
+            precio_html = f'<div style="font-size:13px;color:#534AB7;font-weight:600;">{precio_plan_fmt} UF/mes</div>'
+
         return f"""
         <!DOCTYPE html>
         <html lang="es"><head><meta charset="UTF-8"><title>{tenant['nombre']} · Lusync</title></head>
@@ -13595,7 +13627,7 @@ def admin_lusync_tenant_detalle(tenant_id):
                                 <span style="font-size:10px;padding:4px 10px;border-radius:10px;font-weight:600;text-transform:uppercase;background:{plan_color[0]};color:{plan_color[1]};">{(tenant.get('plan_codigo') or '—').upper()}</span>
                                 <span style="font-size:10px;padding:4px 10px;border-radius:10px;font-weight:600;text-transform:uppercase;background:{estado_color};color:{estado_text};">{tenant['estado']}</span>
                             </div>
-                            <div style="font-size:13px;color:#534AB7;font-weight:600;">{float(tenant.get('precio_uf') or 0):.1f} UF/mes</div>
+                            {precio_html}
                         </div>
                     </div>
                 </div>
@@ -20389,7 +20421,7 @@ def facturacion_dte_toggle():
     activar = bool(data.get("activar"))
     acepta = bool(data.get("acepta_terminos"))
 
-    from facturacion.utils import CAMPO_BD_A_TIPO_DTE, TIPOS_DTE
+    from facturacion.utils import CAMPO_BD_A_TIPO_DTE, TIPOS_DTE, obtener_tipos_dte_dinamicos
     from facturacion import (guardar_config_facturacion, obtener_config_facturacion,
                              registrar_activacion_dte, registrar_desactivacion_dte)
     from inventario import get_conn, release_conn
@@ -20398,7 +20430,9 @@ def facturacion_dte_toggle():
         return jsonify({"ok": False, "error": "Tipo de DTE inválido"}), 400
 
     tipo_dte = CAMPO_BD_A_TIPO_DTE[campo_bd]
-    info = TIPOS_DTE.get(tipo_dte, {})
+    # Leer precio dinámico desde BD (no hardcode)
+    tipos_dte_db = obtener_tipos_dte_dinamicos(get_conn, release_conn)
+    info = tipos_dte_db.get(tipo_dte, {})
     precio = float(info.get("precio_uf", 0))
 
     # DTEs obligatorios (gratis, no se pueden desactivar):
@@ -20782,10 +20816,11 @@ def facturacion_dashboard():
             print(f"[Facturación] Error calcular_mrr_tributario: {e}")
             traceback.print_exc()
             # MRR fallback: desglose con todos los DTEs en estado base
-            from facturacion.utils import TIPOS_DTE, CAMPO_BD_A_TIPO_DTE
+            from facturacion.utils import CAMPO_BD_A_TIPO_DTE, obtener_tipos_dte_dinamicos
+            tipos_dte_db = obtener_tipos_dte_dinamicos(get_conn, release_conn)
             desglose = []
             for campo_bd, tipo_dte in CAMPO_BD_A_TIPO_DTE.items():
-                info = TIPOS_DTE.get(tipo_dte, {})
+                info = tipos_dte_db.get(tipo_dte, {})
                 desglose.append({
                     "tipo_dte": tipo_dte,
                     "nombre": info.get("nombre", f"Tipo {tipo_dte}"),

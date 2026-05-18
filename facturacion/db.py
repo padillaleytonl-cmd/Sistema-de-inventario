@@ -406,8 +406,12 @@ def calcular_mrr_tributario(get_conn_func, release_conn_func, tenant_id, uf_clp=
 
     Si el tenant no tiene config, devuelve un cálculo con defaults
     (boleta y NC activadas como gratis).
+    
+    Los precios se leen DINÁMICAMENTE desde facturacion_tipos_dte (BD),
+    permitiendo al admin Lusync cambiar precios sin tocar código.
+    Si la tabla no existe o está vacía, hace fallback al hardcode TIPOS_DTE.
     """
-    from .utils import TIPOS_DTE, CAMPO_BD_A_TIPO_DTE
+    from .utils import TIPOS_DTE, CAMPO_BD_A_TIPO_DTE, obtener_tipos_dte_dinamicos
     from .uf import obtener_uf_actual
 
     config = obtener_config_facturacion(get_conn_func, release_conn_func, tenant_id) or {
@@ -425,11 +429,14 @@ def calcular_mrr_tributario(get_conn_func, release_conn_func, tenant_id, uf_clp=
             print(f"[MRR] Error obteniendo UF, usando fallback: {e}")
             uf_clp = 37000.0
 
+    # 🆕 Leer tipos DTE dinámicos desde BD (con fallback a hardcode)
+    tipos_dte_db = obtener_tipos_dte_dinamicos(get_conn_func, release_conn_func)
+
     desglose = []
     total_uf = 0.0
 
     for campo_bd, tipo_dte in CAMPO_BD_A_TIPO_DTE.items():
-        info = TIPOS_DTE.get(tipo_dte, {})
+        info = tipos_dte_db.get(tipo_dte, {})
         precio = float(info.get("precio_uf", 0))
         # Default para Boleta y NC: TRUE; resto: lo que diga la config (FALSE si no existe)
         if tipo_dte in (39, 61):
@@ -533,7 +540,8 @@ def registrar_desactivacion_dte(get_conn_func, release_conn_func, tenant_id, tip
 
 def obtener_historial_activaciones(get_conn_func, release_conn_func, tenant_id):
     """Devuelve histórico de activaciones del tenant (para auditoría / mostrar al cliente)."""
-    from .utils import TIPOS_DTE
+    from .utils import obtener_tipos_dte_dinamicos
+    tipos_dte_db = obtener_tipos_dte_dinamicos(get_conn_func, release_conn_func)
     conn = get_conn_func(); cur = conn.cursor()
     try:
         cur.execute("""
@@ -546,7 +554,7 @@ def obtener_historial_activaciones(get_conn_func, release_conn_func, tenant_id):
         rows = cur.fetchall()
         result = []
         for r in rows:
-            info = TIPOS_DTE.get(r[1], {})
+            info = tipos_dte_db.get(r[1], {})
             result.append({
                 "id": r[0],
                 "tipo_dte": r[1],

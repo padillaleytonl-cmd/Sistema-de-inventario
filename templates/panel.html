@@ -10148,8 +10148,19 @@ async function renderDtesCliente(){
   }
 }
 
+// Formatea UF mostrando 1 decimal por defecto, pero 2 si tiene precisión
+function fmtUF(uf){
+  if (uf === null || uf === undefined) return '0,0';
+  const n = parseFloat(uf);
+  if (isNaN(n)) return '0,0';
+  // Si el segundo decimal es 0, mostrar 1 decimal. Sino mostrar 2.
+  const tieneCentesimas = Math.round(n * 100) % 10 !== 0;
+  const decimales = tieneCentesimas ? 2 : 1;
+  return n.toFixed(decimales).replace('.', ',');
+}
+
 function actualizarTotalCliente(mrr){
-  const ufFmt = (mrr.total_uf || 0).toFixed(1).replace('.', ',');
+  const ufFmt = fmtUF(mrr.total_uf || 0);
   const neto = mrr.total_clp_neto || mrr.total_clp || 0;
   const conIva = mrr.total_clp_iva || Math.round(neto * 1.19);
   const setText = (id, v) => { const e = document.getElementById(id); if(e) e.textContent = v; };
@@ -10182,7 +10193,7 @@ function renderGridDtes(desglose){
         ? '<span style="color:#1D9E75;font-weight:500;">Incluido</span>'
         : '<span style="color:#1D9E75;font-weight:500;">Gratis</span>';
     } else {
-      precioLabel = `<span style="color:#5F5E5A;">+${d.precio_uf.toFixed(1).replace('.', ',')} UF</span>`;
+      precioLabel = `<span style="color:#5F5E5A;">+${fmtUF(d.precio_uf)} UF</span>`;
     }
     const lockIcon = esObligatorio
       ? '<span style="font-size:9px;color:#888;margin-left:6px;" title="DTE obligatorio (no se puede desactivar)">🔒</span>'
@@ -10233,7 +10244,7 @@ function onCliClickDte(ev, checkbox){
 function abrirCliModal(nombre, precio, activar){
   const UF_CLP_APROX = parseInt(document.getElementById('cliUfValor').textContent.replace(/\./g, '')) || 37000;
   const IVA = 1.19;
-  const precioFmt = precio.toFixed(1).replace('.', ',');
+  const precioFmt = fmtUF(precio);
   const neto = Math.round(precio * UF_CLP_APROX);
   const conIva = Math.round(neto * IVA);
 
