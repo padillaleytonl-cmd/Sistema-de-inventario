@@ -10945,138 +10945,151 @@ def admin_lusync_tenant_inspeccionar(tenant_id):
         "errores": [],
     }
     
+    # Helper para hacer queries con auto-rollback en caso de error
+    # Cada query usa SAVEPOINT para que si falla, no aborte la transacción global
+    def safe_query(conn, sql, params=()):
+        """Ejecuta query con savepoint para aislar errores."""
+        cur = conn.cursor()
+        try:
+            cur.execute("SAVEPOINT sp_query")
+            cur.execute(sql, params)
+            result = cur.fetchall() if cur.description else None
+            cur.execute("RELEASE SAVEPOINT sp_query")
+            return result, None
+        except Exception as e:
+            try:
+                cur.execute("ROLLBACK TO SAVEPOINT sp_query")
+            except Exception:
+                pass
+            return None, str(e)[:200]
+        finally:
+            try:
+                cur.close()
+            except Exception:
+                pass
+    
     conn = None
     try:
         conn = get_conn(is_admin=True)
-        cur = conn.cursor()
         
-        # Info básica del tenant
-        try:
-            cur.execute("""
-                SELECT id, nombre, rut, email, estado, plan_id, fecha_creacion
-                FROM tenants WHERE id = %s
-            """, (tenant_id,))
-            r = cur.fetchone()
-            if not r:
-                return jsonify({"ok": False, "error": f"Tenant {tenant_id} no existe"}), 404
+        # Info básica del tenant (NOMBRES REALES de columnas)
+        rows, err = safe_query(conn, """
+            SELECT id, nombre, razon_social, rut, email_contacto, telefono,
+                   estado, plan_id, fecha_alta, pais
+            FROM tenants WHERE id = %s
+        """, (tenant_id,))
+        if err:
+            inspeccion["errores"].append(f"tenant_info: {err}")
+        elif rows:
+            r = rows[0]
             inspeccion["tenant_info"] = {
-                "id": r[0], "nombre": r[1], "rut": r[2], "email": r[3],
-                "estado": r[4], "plan_id": r[5],
-                "fecha_creacion": str(r[6]) if r[6] else None
+                "id": r[0], "nombre": r[1], "razon_social": r[2], "rut": r[3],
+                "email_contacto": r[4], "telefono": r[5],
+                "estado": r[6], "plan_id": r[7],
+                "fecha_alta": str(r[8]) if r[8] else None,
+                "pais": r[9],
             }
-            inspeccion["fecha_creacion_tenant"] = str(r[6]) if r[6] else None
-        except Exception as e:
-            inspeccion["errores"].append(f"tenant_info: {e}")
+            inspeccion["fecha_creacion_tenant"] = str(r[8]) if r[8] else None
+        else:
+            return jsonify({"ok": False, "error": f"Tenant {tenant_id} no existe"}), 404
         
-        # Usuarios del tenant
-        try:
-            cur.execute("""
-                SELECT email, nombre, rol, ultimo_login, creado_en
-                FROM usuarios_tenant
-                WHERE tenant_id = %s
-            """, (tenant_id,))
-            for r in cur.fetchall():
+        # Usuarios del tenant (tabla 'usuarios', NO 'usuarios_tenant')
+        rows, err = safe_query(conn, """
+            SELECT email, nombre, rol, ultimo_login, fecha_creacion
+            FROM usuarios
+            WHERE tenant_id = %s
+        """, (tenant_id,))
+        if err:
+            inspeccion["errores"].append(f"usuarios: {err}")
+        elif rows:
+            for r in rows:
                 inspeccion["usuarios"].append({
                     "email": r[0], "nombre": r[1], "rol": r[2],
                     "ultimo_login": str(r[3]) if r[3] else None,
-                    "creado_en": str(r[4]) if r[4] else None
+                    "fecha_creacion": str(r[4]) if r[4] else None
                 })
-            if inspeccion["usuarios"]:
-                logins = [u["ultimo_login"] for u in inspeccion["usuarios"] if u["ultimo_login"]]
-                inspeccion["ultimo_login_usuario"] = max(logins) if logins else None
-        except Exception as e:
-            inspeccion["errores"].append(f"usuarios: {e}")
+            logins = [u["ultimo_login"] for u in inspeccion["usuarios"] if u["ultimo_login"]]
+            inspeccion["ultimo_login_usuario"] = max(logins) if logins else None
         
         # Productos
-        try:
-            cur.execute("SELECT COUNT(*) FROM productos WHERE tenant_id = %s", (tenant_id,))
-            inspeccion["productos_total"] = cur.fetchone()[0]
-        except Exception as e:
-            inspeccion["errores"].append(f"productos: {e}")
+        rows, err = safe_query(conn, "SELECT COUNT(*) FROM productos WHERE tenant_id = %s", (tenant_id,))
+        if err:
+            inspeccion["errores"].append(f"productos: {err}")
+        elif rows:
+            inspeccion["productos_total"] = rows[0][0]
         
         # Órdenes total
-        try:
-            cur.execute("SELECT COUNT(*) FROM ordenes WHERE tenant_id = %s", (tenant_id,))
-            inspeccion["ordenes_total"] = cur.fetchone()[0]
-        except Exception as e:
-            inspeccion["errores"].append(f"ordenes: {e}")
+        rows, err = safe_query(conn, "SELECT COUNT(*) FROM ordenes WHERE tenant_id = %s", (tenant_id,))
+        if err:
+            inspeccion["errores"].append(f"ordenes: {err}")
+        elif rows:
+            inspeccion["ordenes_total"] = rows[0][0]
         
         # Órdenes por canal
-        try:
-            cur.execute("""
-                SELECT canal, COUNT(*) FROM ordenes
-                WHERE tenant_id = %s GROUP BY canal
-            """, (tenant_id,))
-            for r in cur.fetchall():
+        rows, err = safe_query(conn, """
+            SELECT canal, COUNT(*) FROM ordenes
+            WHERE tenant_id = %s GROUP BY canal
+        """, (tenant_id,))
+        if err:
+            inspeccion["errores"].append(f"ordenes_canal: {err}")
+        elif rows:
+            for r in rows:
                 inspeccion["ordenes_por_canal"][r[0] or 'desconocido'] = r[1]
-        except Exception as e:
-            inspeccion["errores"].append(f"ordenes_canal: {e}")
         
         # Últimas órdenes
-        try:
-            cur.execute("""
-                SELECT id, canal, fecha, total, estado
-                FROM ordenes WHERE tenant_id = %s
-                ORDER BY fecha DESC LIMIT 5
-            """, (tenant_id,))
-            for r in cur.fetchall():
+        rows, err = safe_query(conn, """
+            SELECT id, canal, fecha, total, estado
+            FROM ordenes WHERE tenant_id = %s
+            ORDER BY fecha DESC LIMIT 5
+        """, (tenant_id,))
+        if err:
+            inspeccion["errores"].append(f"ordenes_ultimas: {err}")
+        elif rows:
+            for r in rows:
                 inspeccion["ordenes_ultimas"].append({
                     "id": r[0], "canal": r[1],
                     "fecha": str(r[2]) if r[2] else None,
                     "total": float(r[3]) if r[3] else 0,
                     "estado": r[4]
                 })
-        except Exception as e:
-            inspeccion["errores"].append(f"ordenes_ultimas: {e}")
         
         # Movimientos
-        try:
-            cur.execute("SELECT COUNT(*) FROM movimientos WHERE tenant_id = %s", (tenant_id,))
-            inspeccion["movimientos_total"] = cur.fetchone()[0]
-        except Exception as e:
-            inspeccion["errores"].append(f"movimientos: {e}")
+        rows, err = safe_query(conn, "SELECT COUNT(*) FROM movimientos WHERE tenant_id = %s", (tenant_id,))
+        if err:
+            inspeccion["errores"].append(f"movimientos: {err}")
+        elif rows:
+            inspeccion["movimientos_total"] = rows[0][0]
         
         # Bodegas
-        try:
-            cur.execute("SELECT COUNT(*) FROM bodegas WHERE tenant_id = %s", (tenant_id,))
-            inspeccion["bodegas_total"] = cur.fetchone()[0]
-        except Exception as e:
-            inspeccion["errores"].append(f"bodegas: {e}")
+        rows, err = safe_query(conn, "SELECT COUNT(*) FROM bodegas WHERE tenant_id = %s", (tenant_id,))
+        if err:
+            inspeccion["errores"].append(f"bodegas: {err}")
+        elif rows:
+            inspeccion["bodegas_total"] = rows[0][0]
         
         # Marketplaces
-        try:
-            cur.execute("""
-                SELECT canal, COUNT(*) FROM tenant_marketplace_credentials
-                WHERE tenant_id = %s GROUP BY canal
-            """, (tenant_id,))
-            for r in cur.fetchall():
+        rows, err = safe_query(conn, """
+            SELECT canal, COUNT(*) FROM tenant_marketplace_credentials
+            WHERE tenant_id = %s GROUP BY canal
+        """, (tenant_id,))
+        if err:
+            inspeccion["errores"].append(f"marketplaces: {err}")
+        elif rows:
+            for r in rows:
                 inspeccion["marketplaces_configurados"].append({"canal": r[0], "cuentas": r[1]})
-        except Exception as e:
-            inspeccion["errores"].append(f"marketplaces: {e}")
         
         # Facturación
-        try:
-            cur.execute("SELECT COUNT(*) FROM facturacion_config_tenant WHERE tenant_id = %s", (tenant_id,))
-            inspeccion["facturacion_config_existe"] = cur.fetchone()[0] > 0
-        except Exception:
-            pass
-        try:
-            cur.execute("SELECT COUNT(*) FROM facturacion_cafs WHERE tenant_id = %s", (tenant_id,))
-            inspeccion["facturacion_cafs"] = cur.fetchone()[0]
-        except Exception:
-            pass
-        try:
-            cur.execute("SELECT COUNT(*) FROM facturacion_certificados WHERE tenant_id = %s", (tenant_id,))
-            inspeccion["facturacion_certificados"] = cur.fetchone()[0]
-        except Exception:
-            pass
-        try:
-            cur.execute("SELECT COUNT(*) FROM facturacion_dtes WHERE tenant_id = %s", (tenant_id,))
-            inspeccion["facturacion_dtes_emitidos"] = cur.fetchone()[0]
-        except Exception:
-            pass
+        rows, _ = safe_query(conn, "SELECT COUNT(*) FROM facturacion_config_tenant WHERE tenant_id = %s", (tenant_id,))
+        if rows: inspeccion["facturacion_config_existe"] = rows[0][0] > 0
         
-        cur.close()
+        rows, _ = safe_query(conn, "SELECT COUNT(*) FROM facturacion_cafs WHERE tenant_id = %s", (tenant_id,))
+        if rows: inspeccion["facturacion_cafs"] = rows[0][0]
+        
+        rows, _ = safe_query(conn, "SELECT COUNT(*) FROM facturacion_certificados WHERE tenant_id = %s", (tenant_id,))
+        if rows: inspeccion["facturacion_certificados"] = rows[0][0]
+        
+        rows, _ = safe_query(conn, "SELECT COUNT(*) FROM facturacion_dtes WHERE tenant_id = %s", (tenant_id,))
+        if rows: inspeccion["facturacion_dtes_emitidos"] = rows[0][0]
         
         # Análisis automático
         es_seguro_borrar = (
@@ -11171,6 +11184,8 @@ def admin_lusync_tenant_eliminar(tenant_id):
             }), 403
         
         # Borrar en orden CASCADE (de más dependientes a menos)
+        # NOTA: la tabla 'usuarios' debe borrarse al final porque otras
+        # tablas pueden tener FK ON DELETE CASCADE a tenants ya
         tablas_a_limpiar = [
             "movimientos",
             "ordenes",
@@ -11182,7 +11197,7 @@ def admin_lusync_tenant_eliminar(tenant_id):
             "facturacion_certificados",
             "facturacion_config_tenant",
             "facturacion_dte_activaciones",
-            "usuarios_tenant",
+            "usuarios",  # tabla real, NO 'usuarios_tenant'
         ]
         
         resumen = {}
