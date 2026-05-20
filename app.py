@@ -11018,27 +11018,40 @@ def admin_lusync_tenant_inspeccionar(tenant_id):
         elif rows:
             inspeccion["productos_total"] = rows[0][0]
         
-        # Órdenes total (tabla real: ordenes_procesadas)
+        # Órdenes total (tabla ordenes_procesadas — solo registra IDs procesados)
         rows, err = safe_query(conn, "SELECT COUNT(*) FROM ordenes_procesadas WHERE tenant_id = %s", (tenant_id,))
         if err:
             inspeccion["errores"].append(f"ordenes: {err}")
         elif rows:
             inspeccion["ordenes_total"] = rows[0][0]
         
-        # Órdenes por canal
+        # Órdenes por canal: la tabla no tiene columna 'canal', se infiere del order_id_texto
+        # (formatos típicos: 'MELI-12345', 'WOO-67890', 'FALABELLA-XX')
         rows, err = safe_query(conn, """
-            SELECT canal, COUNT(*) FROM ordenes_procesadas
-            WHERE tenant_id = %s GROUP BY canal
+            SELECT 
+              CASE
+                WHEN order_id_texto LIKE 'MELI%%' THEN 'mercadolibre'
+                WHEN order_id_texto LIKE 'WOO%%' THEN 'woocommerce'
+                WHEN order_id_texto LIKE 'FAL%%' THEN 'falabella'
+                WHEN order_id_texto LIKE 'PAR%%' THEN 'paris'
+                WHEN order_id_texto LIKE 'RIP%%' THEN 'ripley'
+                WHEN order_id_texto LIKE 'WAL%%' THEN 'walmart'
+                ELSE 'desconocido'
+              END AS canal_inferido,
+              COUNT(*)
+            FROM ordenes_procesadas
+            WHERE tenant_id = %s
+            GROUP BY canal_inferido
         """, (tenant_id,))
         if err:
             inspeccion["errores"].append(f"ordenes_canal: {err}")
         elif rows:
             for r in rows:
-                inspeccion["ordenes_por_canal"][r[0] or 'desconocido'] = r[1]
+                inspeccion["ordenes_por_canal"][r[0]] = r[1]
         
-        # Últimas órdenes
+        # Últimas órdenes: usar orden_id (PRIMARY KEY), fecha y order_id_texto
         rows, err = safe_query(conn, """
-            SELECT id, canal, fecha, total, estado
+            SELECT orden_id, order_id_texto, fecha
             FROM ordenes_procesadas WHERE tenant_id = %s
             ORDER BY fecha DESC LIMIT 5
         """, (tenant_id,))
@@ -11047,10 +11060,9 @@ def admin_lusync_tenant_inspeccionar(tenant_id):
         elif rows:
             for r in rows:
                 inspeccion["ordenes_ultimas"].append({
-                    "id": r[0], "canal": r[1],
+                    "orden_id": r[0],
+                    "order_id_texto": r[1],
                     "fecha": str(r[2]) if r[2] else None,
-                    "total": float(r[3]) if r[3] else 0,
-                    "estado": r[4]
                 })
         
         # Movimientos
