@@ -21963,12 +21963,15 @@ async function listarCAFs(){{
             const estado = c.agotado ? '<span style="background:#fef2f2;color:#A32D2D;padding:2px 8px;border-radius:8px;font-size:10px;">Agotado</span>' : '<span style="background:#eaf3ee;color:#1D9E75;padding:2px 8px;border-radius:8px;font-size:10px;">Activo</span>';
             const ambBadge = c.ambiente === 'produccion' ? '<span style="background:#fef2f2;color:#A32D2D;padding:2px 6px;border-radius:6px;font-size:9px;margin-left:4px;">PROD</span>' : '<span style="background:#FAEEDA;color:#854F0B;padding:2px 6px;border-radius:6px;font-size:9px;margin-left:4px;">CERT</span>';
             return `<div style="background:#fafaf9;border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin-bottom:8px;">
-                <div style="display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:8px;">
+                <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;margin-bottom:8px;align-items:start;">
                     <div>
                         <div style="font-size:13px;font-weight:500;">${{c.tipo_dte_nombre}} (${{c.tipo_dte}}) ${{estado}}${{ambBadge}}</div>
                         <div style="font-size:11px;color:#6b7280;margin-top:2px;">Folios ${{c.folio_desde}} – ${{c.folio_hasta}} · Próximo: ${{c.folio_actual}}</div>
                     </div>
-                    <div style="text-align:right;font-size:11px;color:${{pctCol}};font-weight:500;">${{c.folios_usados}}/${{c.folios_total}} usados (${{c.pct_usado}}%)</div>
+                    <div style="text-align:right;font-size:11px;color:${{pctCol}};font-weight:500;white-space:nowrap;">${{c.folios_usados}}/${{c.folios_total}} usados (${{c.pct_usado}}%)</div>
+                    <button onclick="eliminarCAF(${{c.id}}, '${{c.tipo_dte_nombre}}', ${{c.folio_desde}}, ${{c.folio_hasta}}, ${{c.folios_usados}})"
+                            title="Eliminar este CAF"
+                            style="background:#fef2f2;color:#dc2626;border:1px solid #fecaca;border-radius:6px;padding:4px 9px;font-size:11px;cursor:pointer;font-weight:500;white-space:nowrap;height:fit-content;">🗑️</button>
                 </div>
                 <div style="background:#e5e7eb;height:5px;border-radius:3px;overflow:hidden;">
                     <div style="height:100%;width:${{c.pct_usado}}%;background:${{pctCol}};"></div>
@@ -21981,6 +21984,39 @@ async function listarCAFs(){{
 // Al cargar la página
 cargarDashboard();
 cargarConfig();
+
+// ═══════════════════════════════════════════════════════════
+// Eliminar CAF con confirmación protegida
+// ═══════════════════════════════════════════════════════════
+async function eliminarCAF(cafId, tipoNombre, folioDesde, folioHasta, foliosUsados){{
+    let mensaje;
+    if (foliosUsados > 0) {{
+        mensaje = `⚠️ ATENCIÓN: este CAF de ${{tipoNombre}} tiene ${{foliosUsados}} folios YA USADOS.\n\n` +
+                  `Folios: ${{folioDesde}} - ${{folioHasta}}\n` +
+                  `Eliminarlo de Lusync NO anula los DTEs ya emitidos, pero perderás el control de continuidad.\n\n` +
+                  `¿Confirmas eliminar?`;
+    }} else {{
+        mensaje = `Eliminar CAF de ${{tipoNombre}} (folios ${{folioDesde}}-${{folioHasta}})\n\n` +
+                  `Como no tiene folios usados, es seguro eliminarlo.\n¿Confirmas?`;
+    }}
+    if (!confirm(mensaje)) return;
+
+    try {{
+        const r = await fetch(`/admin/lusync/facturacion/tenant/${{TENANT_ID}}/caf/${{cafId}}/eliminar`, {{
+            method: 'DELETE',
+            credentials: 'include'
+        }});
+        const d = await r.json();
+        if (d.ok) {{
+            listarCAFs();
+            cargarDashboard();
+        }} else {{
+            alert(`❌ Error al eliminar: ${{d.error || 'desconocido'}}`);
+        }}
+    }} catch(e) {{
+        alert(`❌ Error de red: ${{e.message}}`);
+    }}
+}}
 </script>
 
 <div id="modalDte" style="display:none;position:fixed;inset:0;background:rgba(15,17,21,0.55);z-index:9999;align-items:center;justify-content:center;padding:20px;">
@@ -22129,6 +22165,89 @@ def admin_lusync_sii_tenant_caf_subir(tenant_id):
     return jsonify(resultado)
 
 
+@app.route("/admin/lusync/facturacion/tenant/<int:tenant_id>/caf/<int:caf_id>/eliminar", methods=["DELETE", "POST"])
+@requiere_lusync_admin
+def admin_lusync_caf_eliminar(tenant_id, caf_id):
+    """Elimina un CAF de Lusync (no afecta los folios en el SII).
+    
+    Útil para borrar CAFs viejos, duplicados o que ya no se necesitan.
+    IMPORTANTE: si el CAF tiene folios usados, los DTEs ya emitidos NO se borran,
+    solo se pierde la referencia del CAF en Lusync.
+    """
+    from inventario import get_conn, release_conn
+    
+    conn = None
+    try:
+        conn = get_conn(is_admin=True)
+        cur = conn.cursor()
+        
+        # Verificar que el CAF existe y pertenece a este tenant
+        cur.execute("""
+            SELECT id, tipo_dte, folio_desde, folio_hasta, folio_actual, ambiente
+            FROM facturacion_cafs
+            WHERE id = %s AND tenant_id = %s
+        """, (caf_id, tenant_id))
+        caf_row = cur.fetchone()
+        if not caf_row:
+            cur.close()
+            release_conn(conn)
+            return jsonify({
+                "ok": False,
+                "error": f"CAF {caf_id} no existe o no pertenece al tenant {tenant_id}"
+            }), 404
+        
+        tipo_dte = caf_row[1]
+        folio_desde = caf_row[2]
+        folio_hasta = caf_row[3]
+        folio_actual = caf_row[4]
+        ambiente = caf_row[5]
+        folios_usados = (folio_actual - folio_desde) if folio_actual and folio_actual > folio_desde else 0
+        
+        # Eliminar
+        cur.execute("DELETE FROM facturacion_cafs WHERE id = %s AND tenant_id = %s",
+                    (caf_id, tenant_id))
+        conn.commit()
+        cur.close()
+        release_conn(conn)
+        conn = None
+        
+        # Audit log
+        try:
+            registrar_audit(
+                session.get("lusync_admin_email", "Lusync"), request.remote_addr,
+                "admin_eliminar_caf_sii",
+                entidad="facturacion_cafs",
+                detalle=(f"Tenant {tenant_id}, CAF ID {caf_id}, tipo {tipo_dte}, "
+                         f"folios {folio_desde}-{folio_hasta}, usados={folios_usados}, amb={ambiente}")
+            )
+        except Exception:
+            pass
+        
+        return jsonify({
+            "ok": True,
+            "caf_id": caf_id,
+            "tipo_dte": tipo_dte,
+            "folios_eliminados": folio_hasta - folio_desde + 1,
+            "folios_usados": folios_usados,
+            "mensaje": f"CAF {caf_id} eliminado de Lusync (folios SII no afectados)"
+        })
+    
+    except Exception as e:
+        import traceback
+        if conn:
+            try: conn.rollback()
+            except Exception: pass
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "trace": traceback.format_exc()[:400]
+        }), 500
+    finally:
+        try:
+            if conn is not None:
+                release_conn(conn)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
