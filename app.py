@@ -10899,6 +10899,338 @@ def admin_lusync_logout():
     return redirect("/admin/lusync/login")
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# DIAGNÓSTICO Y MANTENIMIENTO DE TENANTS
+# ════════════════════════════════════════════════════════════════════════════
+@app.route("/admin/lusync/tenant/<int:tenant_id>/inspeccionar", methods=["GET"])
+@requiere_lusync_admin
+def admin_lusync_tenant_inspeccionar(tenant_id):
+    """Inspecciona en detalle qué datos tiene un tenant.
+    Útil para decidir si se puede borrar sin perder información valiosa.
+    Solo LEE, no modifica nada.
+    """
+    from inventario import get_conn, release_conn
+    
+    inspeccion = {
+        "tenant_id": tenant_id,
+        "tenant_info": None,
+        "usuarios": [],
+        "productos_total": 0,
+        "ordenes_total": 0,
+        "ordenes_por_canal": {},
+        "ordenes_ultimas": [],
+        "movimientos_total": 0,
+        "bodegas_total": 0,
+        "marketplaces_configurados": [],
+        "facturacion_dtes_emitidos": 0,
+        "facturacion_config_existe": False,
+        "facturacion_cafs": 0,
+        "facturacion_certificados": 0,
+        "fecha_creacion_tenant": None,
+        "ultimo_login_usuario": None,
+        "errores": [],
+    }
+    
+    conn = None
+    try:
+        conn = get_conn(is_admin=True)
+        cur = conn.cursor()
+        
+        # Info básica del tenant
+        try:
+            cur.execute("""
+                SELECT id, nombre, rut, email, estado, plan_id, fecha_creacion
+                FROM tenants WHERE id = %s
+            """, (tenant_id,))
+            r = cur.fetchone()
+            if not r:
+                return jsonify({"ok": False, "error": f"Tenant {tenant_id} no existe"}), 404
+            inspeccion["tenant_info"] = {
+                "id": r[0], "nombre": r[1], "rut": r[2], "email": r[3],
+                "estado": r[4], "plan_id": r[5],
+                "fecha_creacion": str(r[6]) if r[6] else None
+            }
+            inspeccion["fecha_creacion_tenant"] = str(r[6]) if r[6] else None
+        except Exception as e:
+            inspeccion["errores"].append(f"tenant_info: {e}")
+        
+        # Usuarios del tenant
+        try:
+            cur.execute("""
+                SELECT email, nombre, rol, ultimo_login, creado_en
+                FROM usuarios_tenant
+                WHERE tenant_id = %s
+            """, (tenant_id,))
+            for r in cur.fetchall():
+                inspeccion["usuarios"].append({
+                    "email": r[0], "nombre": r[1], "rol": r[2],
+                    "ultimo_login": str(r[3]) if r[3] else None,
+                    "creado_en": str(r[4]) if r[4] else None
+                })
+            if inspeccion["usuarios"]:
+                logins = [u["ultimo_login"] for u in inspeccion["usuarios"] if u["ultimo_login"]]
+                inspeccion["ultimo_login_usuario"] = max(logins) if logins else None
+        except Exception as e:
+            inspeccion["errores"].append(f"usuarios: {e}")
+        
+        # Productos
+        try:
+            cur.execute("SELECT COUNT(*) FROM productos WHERE tenant_id = %s", (tenant_id,))
+            inspeccion["productos_total"] = cur.fetchone()[0]
+        except Exception as e:
+            inspeccion["errores"].append(f"productos: {e}")
+        
+        # Órdenes total
+        try:
+            cur.execute("SELECT COUNT(*) FROM ordenes WHERE tenant_id = %s", (tenant_id,))
+            inspeccion["ordenes_total"] = cur.fetchone()[0]
+        except Exception as e:
+            inspeccion["errores"].append(f"ordenes: {e}")
+        
+        # Órdenes por canal
+        try:
+            cur.execute("""
+                SELECT canal, COUNT(*) FROM ordenes
+                WHERE tenant_id = %s GROUP BY canal
+            """, (tenant_id,))
+            for r in cur.fetchall():
+                inspeccion["ordenes_por_canal"][r[0] or 'desconocido'] = r[1]
+        except Exception as e:
+            inspeccion["errores"].append(f"ordenes_canal: {e}")
+        
+        # Últimas órdenes
+        try:
+            cur.execute("""
+                SELECT id, canal, fecha, total, estado
+                FROM ordenes WHERE tenant_id = %s
+                ORDER BY fecha DESC LIMIT 5
+            """, (tenant_id,))
+            for r in cur.fetchall():
+                inspeccion["ordenes_ultimas"].append({
+                    "id": r[0], "canal": r[1],
+                    "fecha": str(r[2]) if r[2] else None,
+                    "total": float(r[3]) if r[3] else 0,
+                    "estado": r[4]
+                })
+        except Exception as e:
+            inspeccion["errores"].append(f"ordenes_ultimas: {e}")
+        
+        # Movimientos
+        try:
+            cur.execute("SELECT COUNT(*) FROM movimientos WHERE tenant_id = %s", (tenant_id,))
+            inspeccion["movimientos_total"] = cur.fetchone()[0]
+        except Exception as e:
+            inspeccion["errores"].append(f"movimientos: {e}")
+        
+        # Bodegas
+        try:
+            cur.execute("SELECT COUNT(*) FROM bodegas WHERE tenant_id = %s", (tenant_id,))
+            inspeccion["bodegas_total"] = cur.fetchone()[0]
+        except Exception as e:
+            inspeccion["errores"].append(f"bodegas: {e}")
+        
+        # Marketplaces
+        try:
+            cur.execute("""
+                SELECT canal, COUNT(*) FROM tenant_marketplace_credentials
+                WHERE tenant_id = %s GROUP BY canal
+            """, (tenant_id,))
+            for r in cur.fetchall():
+                inspeccion["marketplaces_configurados"].append({"canal": r[0], "cuentas": r[1]})
+        except Exception as e:
+            inspeccion["errores"].append(f"marketplaces: {e}")
+        
+        # Facturación
+        try:
+            cur.execute("SELECT COUNT(*) FROM facturacion_config_tenant WHERE tenant_id = %s", (tenant_id,))
+            inspeccion["facturacion_config_existe"] = cur.fetchone()[0] > 0
+        except Exception:
+            pass
+        try:
+            cur.execute("SELECT COUNT(*) FROM facturacion_cafs WHERE tenant_id = %s", (tenant_id,))
+            inspeccion["facturacion_cafs"] = cur.fetchone()[0]
+        except Exception:
+            pass
+        try:
+            cur.execute("SELECT COUNT(*) FROM facturacion_certificados WHERE tenant_id = %s", (tenant_id,))
+            inspeccion["facturacion_certificados"] = cur.fetchone()[0]
+        except Exception:
+            pass
+        try:
+            cur.execute("SELECT COUNT(*) FROM facturacion_dtes WHERE tenant_id = %s", (tenant_id,))
+            inspeccion["facturacion_dtes_emitidos"] = cur.fetchone()[0]
+        except Exception:
+            pass
+        
+        cur.close()
+        
+        # Análisis automático
+        es_seguro_borrar = (
+            inspeccion["facturacion_dtes_emitidos"] == 0
+            and not inspeccion["marketplaces_configurados"]
+        )
+        inspeccion["analisis"] = {
+            "es_seguro_borrar": es_seguro_borrar,
+            "razon": (
+                "Sin DTEs emitidos ni marketplaces conectados — eliminar es seguro"
+                if es_seguro_borrar
+                else "⚠ Hay DTEs emitidos o marketplaces conectados — revisar antes de borrar"
+            )
+        }
+        
+        return jsonify({"ok": True, **inspeccion})
+    
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "trace": traceback.format_exc()[:500]
+        }), 500
+    finally:
+        try:
+            if conn is not None:
+                release_conn(conn)
+        except Exception:
+            pass
+
+
+@app.route("/admin/lusync/tenant/<int:tenant_id>/eliminar", methods=["POST"])
+@requiere_lusync_admin
+def admin_lusync_tenant_eliminar(tenant_id):
+    """Elimina un tenant y TODOS sus datos asociados (CASCADE).
+    
+    SEGURIDAD: requiere confirmación con la palabra "ELIMINAR" + el nombre del tenant.
+    
+    Body JSON esperado:
+    {
+        "confirmacion": "ELIMINAR",
+        "nombre_tenant": "TEST"  // debe coincidir exactamente con el nombre en BD
+    }
+    
+    NO se puede deshacer. Borra: usuarios, productos, órdenes, movimientos, 
+    bodegas, configs, facturación, etc.
+    """
+    from inventario import get_conn, release_conn
+    
+    data = request.get_json() or {}
+    confirmacion = (data.get("confirmacion") or "").strip()
+    nombre_tenant_dado = (data.get("nombre_tenant") or "").strip()
+    
+    if confirmacion != "ELIMINAR":
+        return jsonify({
+            "ok": False,
+            "error": "Falta confirmación. Envía {\"confirmacion\": \"ELIMINAR\", \"nombre_tenant\": \"<nombre exacto>\"}"
+        }), 400
+    
+    conn = None
+    try:
+        conn = get_conn(is_admin=True)
+        cur = conn.cursor()
+        
+        # Verificar tenant existe + nombre coincide
+        cur.execute("SELECT nombre FROM tenants WHERE id = %s", (tenant_id,))
+        r = cur.fetchone()
+        if not r:
+            cur.close()
+            release_conn(conn)
+            return jsonify({"ok": False, "error": f"Tenant {tenant_id} no existe"}), 404
+        
+        nombre_bd = r[0]
+        if nombre_bd != nombre_tenant_dado:
+            cur.close()
+            release_conn(conn)
+            return jsonify({
+                "ok": False,
+                "error": f"Nombre no coincide. Esperado: '{nombre_bd}', recibido: '{nombre_tenant_dado}'"
+            }), 400
+        
+        # PROTECCIONES: no permitir borrar tenants con DTEs emitidos
+        cur.execute("SELECT COUNT(*) FROM facturacion_dtes WHERE tenant_id = %s", (tenant_id,))
+        dtes_emitidos = cur.fetchone()[0]
+        if dtes_emitidos > 0:
+            cur.close()
+            release_conn(conn)
+            return jsonify({
+                "ok": False,
+                "error": f"PROTECCIÓN: tenant tiene {dtes_emitidos} DTEs emitidos. No se puede borrar (tributario)."
+            }), 403
+        
+        # Borrar en orden CASCADE (de más dependientes a menos)
+        tablas_a_limpiar = [
+            "movimientos",
+            "ordenes",
+            "productos",
+            "bodegas",
+            "tenant_marketplace_credentials",
+            "facturacion_dtes",
+            "facturacion_cafs",
+            "facturacion_certificados",
+            "facturacion_config_tenant",
+            "facturacion_dte_activaciones",
+            "usuarios_tenant",
+        ]
+        
+        resumen = {}
+        for tabla in tablas_a_limpiar:
+            try:
+                cur.execute(f"DELETE FROM {tabla} WHERE tenant_id = %s", (tenant_id,))
+                resumen[tabla] = cur.rowcount
+            except Exception as e:
+                # Si la tabla no existe o no tiene tenant_id, ignorar
+                resumen[tabla] = f"skip: {str(e)[:80]}"
+                conn.rollback()
+                # Re-abrir transacción
+                cur = conn.cursor()
+        
+        # Finalmente, borrar el tenant
+        cur.execute("DELETE FROM tenants WHERE id = %s", (tenant_id,))
+        tenant_borrado = cur.rowcount
+        
+        conn.commit()
+        cur.close()
+        
+        # Audit log
+        try:
+            registrar_audit(
+                session.get("lusync_admin_email", "admin"),
+                request.remote_addr,
+                "ELIMINACION_TENANT",
+                entidad="tenants",
+                detalle=f"⚠ TENANT BORRADO: id={tenant_id}, nombre={nombre_bd}, resumen={resumen}"
+            )
+        except Exception:
+            pass
+        
+        return jsonify({
+            "ok": True,
+            "tenant_id": tenant_id,
+            "nombre": nombre_bd,
+            "registros_borrados": resumen,
+            "tenant_borrado": tenant_borrado,
+            "mensaje": f"Tenant '{nombre_bd}' (ID {tenant_id}) eliminado completamente"
+        })
+    
+    except Exception as e:
+        import traceback
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "trace": traceback.format_exc()[:500]
+        }), 500
+    finally:
+        try:
+            if conn is not None:
+                release_conn(conn)
+        except Exception:
+            pass
+
+
 @app.route("/admin/lusync", methods=["GET"])
 @requiere_lusync_admin
 def admin_lusync_dashboard():
