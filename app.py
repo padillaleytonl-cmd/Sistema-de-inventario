@@ -45,74 +45,6 @@ from inventario import (cargar_productos, guardar_productos, guardar_producto,
 app = Flask(__name__)
 app.secret_key = "clave_super_segura"
 
-
-# ═══════════════════════════════════════════════════════════════════════════
-# HELPERS GLOBALES — usar EN TODO el código para consistencia
-# ═══════════════════════════════════════════════════════════════════════════
-
-def fmt_uf_smart(valor):
-    """Formatea un valor UF mostrando decimales inteligentemente:
-    - Si tiene centésimas (segundo decimal != 0), muestra 2 decimales
-    - Si NO tiene centésimas, muestra 1 decimal
-    
-    Ejemplos:
-        0.2  → '0,2'
-        0.15 → '0,15'
-        6.4  → '6,4'
-        6.45 → '6,45'
-    """
-    try:
-        n = round(float(valor or 0), 2)
-        tiene_centesimas = round(n * 100) % 10 != 0
-        return (f"{n:.2f}" if tiene_centesimas else f"{n:.1f}").replace('.', ',')
-    except Exception:
-        return '0,0'
-
-
-def calcular_mrr_total_tenant(tenant_id, precio_plan_uf):
-    """Devuelve dict con MRR total (plan base + add-on SII tributario).
-    
-    Returns:
-        {
-            'plan_uf': float,       # solo el plan base
-            'sii_uf': float,        # solo el add-on SII
-            'total_uf': float,      # suma de ambos
-            'plan_fmt': str,        # formato es-CL ('6,0')
-            'sii_fmt': str,         # formato es-CL ('0,4')
-            'total_fmt': str,       # formato es-CL ('6,4')
-        }
-    """
-    plan_base = float(precio_plan_uf or 0)
-    sii_uf = 0.0
-    try:
-        from facturacion import calcular_mrr_tributario
-        from inventario import get_conn, release_conn
-        mrr = calcular_mrr_tributario(get_conn, release_conn, tenant_id)
-        sii_uf = float(mrr.get('total_uf') or 0)
-    except Exception as e:
-        # Silencioso: si falla, el SII queda en 0 (no rompe nada)
-        pass
-    
-    total = round(plan_base + sii_uf, 2)
-    return {
-        'plan_uf': plan_base,
-        'sii_uf': sii_uf,
-        'total_uf': total,
-        'plan_fmt': fmt_uf_smart(plan_base),
-        'sii_fmt': fmt_uf_smart(sii_uf),
-        'total_fmt': fmt_uf_smart(total),
-    }
-
-
-# Hacer disponibles en templates Jinja
-@app.context_processor
-def inject_helpers():
-    return {
-        'fmt_uf_smart': fmt_uf_smart,
-        'calcular_mrr_total_tenant': calcular_mrr_total_tenant,
-    }
-
-
 init_db()
 init_devoluciones()
 try:
@@ -11033,8 +10965,6 @@ def admin_lusync_dashboard():
         filas_tenants = ""
         from datetime import datetime
         ahora = datetime.now()
-        # Acumulador: MRR real = plan base + suma add-ons SII de tenants activos
-        mrr_uf_real_acumulado = mrr_uf  # arranca con suma de planes activos (de la query SQL)
         for t in tenants:
             tid = t["id"]
             actividad = ultimas_actividades.get(tid)
@@ -11070,19 +11000,7 @@ def admin_lusync_dashboard():
             estado_color = "#dcfce7" if t["estado"] == "activo" else "#fee2e2"
             estado_text = "#166534" if t["estado"] == "activo" else "#991b1b"
 
-            mrr_t_info = calcular_mrr_total_tenant(tid, t.get("precio_uf"))
-            mrr_t = mrr_t_info['total_uf']
-            # Acumular total real (plan + add-on SII de cada tenant)
-            if t["estado"] == "activo":
-                mrr_uf_real_acumulado = mrr_uf_real_acumulado + mrr_t_info['sii_uf']
-
-            # Para mostrar en columna MRR: usa total (plan + SII)
-            mrr_t_fmt = mrr_t_info['total_fmt']
-            # Tooltip o subtitle con desglose si tiene add-on
-            mrr_t_subtitulo = (
-                f'<div style="font-size:9px;color:#888;line-height:1.2;">{mrr_t_info["plan_fmt"]} + {mrr_t_info["sii_fmt"]} SII</div>'
-                if mrr_t_info['sii_uf'] > 0 else ''
-            )
+            mrr_t = float(t.get("precio_uf") or 0)
 
             filas_tenants += f"""
             <tr style="border-bottom:1px solid #f1efe8;cursor:pointer;" onclick="window.location='/admin/lusync/tenant/{tid}'">
@@ -11103,10 +11021,7 @@ def admin_lusync_dashboard():
                 </td>
                 <td style="padding:11px 12px;font-weight:500;">{ordenes_t}</td>
                 <td style="padding:11px 12px;">{mkts_badges}</td>
-                <td style="padding:11px 12px;color:#534AB7;font-weight:500;">
-                    <div>{mrr_t_fmt} UF</div>
-                    {mrr_t_subtitulo}
-                </td>
+                <td style="padding:11px 12px;color:#534AB7;font-weight:500;">{mrr_t:.1f} UF</td>
                 <td style="padding:11px 12px;font-size:11px;color:#888780;">{act_str}</td>
                 <td style="padding:11px 12px;text-align:right;" onclick="event.stopPropagation();">
                     <a href="/admin/lusync/impersonate/{tid}" style="font-size:11px;color:#534AB7;text-decoration:none;font-weight:500;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;">Ver como</a>
@@ -11114,9 +11029,6 @@ def admin_lusync_dashboard():
             </tr>
             """
 
-        # Usar el acumulado real (plan + add-ons SII) en lugar del solo plan
-        mrr_uf = round(mrr_uf_real_acumulado, 2)
-        mrr_uf_fmt = fmt_uf_smart(mrr_uf)
         mrr_clp = int(mrr_uf * 39500)  # aproximado, idealmente UF dinámico
 
         return f"""
@@ -11144,9 +11056,6 @@ def admin_lusync_dashboard():
                     <a href="/admin/lusync/planes" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">📦 Planes</a>
                     <a href="/admin/lusync/marketplaces" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">🛍️ Marketplaces</a>
 
-                    <div style="font-size:9px;text-transform:uppercase;color:#888780;letter-spacing:0.1em;padding:4px 8px;font-weight:600;margin-top:14px;">Facturación</div>
-                    <a href="/admin/lusync/dtes" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">📋 Tipos de DTE</a>
-
                     <div style="font-size:9px;text-transform:uppercase;color:#888780;letter-spacing:0.1em;padding:4px 8px;font-weight:600;margin-top:14px;">Sistema</div>
                     <a href="/admin/rls/health_check?token=lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw" target="_blank" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">🩺 Health check</a>
                     <a href="/admin/tenancy/diagnostico?token=lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw" target="_blank" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">🔍 Diagnóstico</a>
@@ -11171,7 +11080,7 @@ def admin_lusync_dashboard():
                     <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:20px;">
                         <div>
                             <h1 style="margin:0;font-size:22px;color:#1f1e1b;font-weight:600;">Clientes</h1>
-                            <div style="font-size:12px;color:#888780;margin-top:3px;">Gestión de tenants · {len(tenants)} totales · MRR {mrr_uf_fmt} UF (~${mrr_clp:,} CLP)</div>
+                            <div style="font-size:12px;color:#888780;margin-top:3px;">Gestión de tenants · {len(tenants)} totales · MRR {mrr_uf:.1f} UF (~${mrr_clp:,} CLP)</div>
                         </div>
                         <div>
                             <a href="/admin/lusync/nuevo_cliente" style="background:#534AB7;color:white;padding:9px 16px;border-radius:7px;font-size:13px;font-weight:500;border:0;cursor:pointer;text-decoration:none;display:inline-block;">+ Nuevo cliente</a>
@@ -11187,7 +11096,7 @@ def admin_lusync_dashboard():
                         </div>
                         <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;padding:14px 16px;">
                             <div style="font-size:10px;text-transform:uppercase;color:#888780;letter-spacing:0.05em;font-weight:600;">MRR</div>
-                            <div style="font-size:24px;font-weight:600;color:#534AB7;margin-top:5px;line-height:1;">{mrr_uf_fmt} UF</div>
+                            <div style="font-size:24px;font-weight:600;color:#534AB7;margin-top:5px;line-height:1;">{mrr_uf:.1f} UF</div>
                             <div style="font-size:10px;color:#888780;margin-top:3px;">~${mrr_clp:,} CLP/mes</div>
                         </div>
                         <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;padding:14px 16px;">
@@ -13040,7 +12949,7 @@ def admin_lusync_planes():
                         <h3 style="margin:6px 0 2px;font-size:18px;">{p['nombre']}</h3>
                     </div>
                     <div style="text-align:right;">
-                        <div style="font-size:24px;font-weight:700;color:#534AB7;line-height:1;">{fmt_uf_smart(p['precio_uf'])} <span style="font-size:12px;color:#888780;font-weight:500;">UF/mes</span></div>
+                        <div style="font-size:24px;font-weight:700;color:#534AB7;line-height:1;">{p['precio_uf']:.1f} <span style="font-size:12px;color:#888780;font-weight:500;">UF/mes</span></div>
                         <div style="font-size:10px;color:#888780;margin-top:2px;">~${int(p['precio_uf']*39500):,} CLP</div>
                     </div>
                 </div>
@@ -13660,18 +13569,6 @@ def admin_lusync_tenant_detalle(tenant_id):
         boton_estado = "Suspender" if tenant["estado"] == "activo" else "Reactivar"
         accion_estado = "suspender" if tenant["estado"] == "activo" else "reactivar"
 
-        # 🆕 Calcular MRR tributario y sumar al precio del plan base (helper global)
-        mrr_info = calcular_mrr_total_tenant(tenant_id, tenant.get('precio_uf'))
-
-        # Bloque HTML del precio: muestra desglose solo si hay add-on
-        if mrr_info['sii_uf'] > 0:
-            precio_html = f'''
-                <div style="font-size:11px;color:#888780;font-weight:500;">{mrr_info['plan_fmt']} UF plan + {mrr_info['sii_fmt']} UF SII</div>
-                <div style="font-size:15px;color:#534AB7;font-weight:700;">{mrr_info['total_fmt']} UF/mes</div>
-            '''
-        else:
-            precio_html = f'<div style="font-size:13px;color:#534AB7;font-weight:600;">{mrr_info["plan_fmt"]} UF/mes</div>'
-
         return f"""
         <!DOCTYPE html>
         <html lang="es"><head><meta charset="UTF-8"><title>{tenant['nombre']} · Lusync</title></head>
@@ -13695,7 +13592,7 @@ def admin_lusync_tenant_detalle(tenant_id):
                                 <span style="font-size:10px;padding:4px 10px;border-radius:10px;font-weight:600;text-transform:uppercase;background:{plan_color[0]};color:{plan_color[1]};">{(tenant.get('plan_codigo') or '—').upper()}</span>
                                 <span style="font-size:10px;padding:4px 10px;border-radius:10px;font-weight:600;text-transform:uppercase;background:{estado_color};color:{estado_text};">{tenant['estado']}</span>
                             </div>
-                            {precio_html}
+                            <div style="font-size:13px;color:#534AB7;font-weight:600;">{float(tenant.get('precio_uf') or 0):.1f} UF/mes</div>
                         </div>
                     </div>
                 </div>
@@ -20489,7 +20386,7 @@ def facturacion_dte_toggle():
     activar = bool(data.get("activar"))
     acepta = bool(data.get("acepta_terminos"))
 
-    from facturacion.utils import CAMPO_BD_A_TIPO_DTE, TIPOS_DTE, obtener_tipos_dte_dinamicos
+    from facturacion.utils import CAMPO_BD_A_TIPO_DTE, TIPOS_DTE
     from facturacion import (guardar_config_facturacion, obtener_config_facturacion,
                              registrar_activacion_dte, registrar_desactivacion_dte)
     from inventario import get_conn, release_conn
@@ -20498,9 +20395,7 @@ def facturacion_dte_toggle():
         return jsonify({"ok": False, "error": "Tipo de DTE inválido"}), 400
 
     tipo_dte = CAMPO_BD_A_TIPO_DTE[campo_bd]
-    # Leer precio dinámico desde BD (no hardcode)
-    tipos_dte_db = obtener_tipos_dte_dinamicos(get_conn, release_conn)
-    info = tipos_dte_db.get(tipo_dte, {})
+    info = TIPOS_DTE.get(tipo_dte, {})
     precio = float(info.get("precio_uf", 0))
 
     # DTEs obligatorios (gratis, no se pueden desactivar):
@@ -20884,11 +20779,10 @@ def facturacion_dashboard():
             print(f"[Facturación] Error calcular_mrr_tributario: {e}")
             traceback.print_exc()
             # MRR fallback: desglose con todos los DTEs en estado base
-            from facturacion.utils import CAMPO_BD_A_TIPO_DTE, obtener_tipos_dte_dinamicos
-            tipos_dte_db = obtener_tipos_dte_dinamicos(get_conn, release_conn)
+            from facturacion.utils import TIPOS_DTE, CAMPO_BD_A_TIPO_DTE
             desglose = []
             for campo_bd, tipo_dte in CAMPO_BD_A_TIPO_DTE.items():
-                info = tipos_dte_db.get(tipo_dte, {})
+                info = TIPOS_DTE.get(tipo_dte, {})
                 desglose.append({
                     "tipo_dte": tipo_dte,
                     "nombre": info.get("nombre", f"Tipo {tipo_dte}"),
@@ -20951,392 +20845,23 @@ def facturacion_dashboard():
 def admin_lusync_facturacion_tenant(tenant_id):
     """JSON: estado completo facturación de un tenant para super-admin.
     Usado por la vista /admin/lusync/sii/tenant/<id> vía AJAX.
-    
-    Defensivo: cada llamada interna en su propio try/except para devolver
-    JSON parcial en caso de error (no HTML 500).
     """
+    from facturacion import (obtener_config_facturacion, listar_certificados_tenant,
+                             listar_cafs_tenant, calcular_mrr_tributario)
     from inventario import get_conn, release_conn
-    
-    config = None
-    certs = []
-    cafs = []
-    mrr = {"total_uf": 0, "total_clp_neto": 0, "total_clp_iva": 0, "desglose": []}
-    errores = []
-    
-    try:
-        from facturacion import obtener_config_facturacion
-        config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
-    except Exception as e:
-        errores.append(f"config: {e}")
-        import traceback
-        print(f"[admin_lusync_facturacion_tenant] config error: {traceback.format_exc()[:300]}")
-    
-    try:
-        from facturacion import listar_certificados_tenant
-        certs = listar_certificados_tenant(get_conn, release_conn, tenant_id) or []
-    except Exception as e:
-        errores.append(f"certs: {e}")
-        import traceback
-        print(f"[admin_lusync_facturacion_tenant] certs error: {traceback.format_exc()[:300]}")
-    
-    try:
-        from facturacion import listar_cafs_tenant
-        cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id) or []
-    except Exception as e:
-        errores.append(f"cafs: {e}")
-        import traceback
-        print(f"[admin_lusync_facturacion_tenant] cafs error: {traceback.format_exc()[:300]}")
-    
-    try:
-        from facturacion import calcular_mrr_tributario
-        mrr = calcular_mrr_tributario(get_conn, release_conn, tenant_id) or mrr
-    except Exception as e:
-        errores.append(f"mrr: {e}")
-        import traceback
-        print(f"[admin_lusync_facturacion_tenant] mrr error: {traceback.format_exc()[:300]}")
-    
+
+    config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+    certs = listar_certificados_tenant(get_conn, release_conn, tenant_id)
+    cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id)
+    mrr = calcular_mrr_tributario(get_conn, release_conn, tenant_id)
+
     return jsonify({
         "tenant_id": tenant_id,
         "config": config or {},
         "certificados": certs,
         "cafs": cafs,
         "mrr_tributario": mrr,
-        "errores_internos": errores,  # vacío si todo OK
     })
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# 🆕 ADMIN — Gestión de TIPOS DE DTE (precios, visibilidad, defaults)
-# ════════════════════════════════════════════════════════════════════════════
-@app.route("/admin/lusync/dtes/listar", methods=["GET"])
-@requiere_lusync_admin
-def admin_lusync_dtes_listar():
-    """Lista todos los tipos de DTE configurables con sus valores actuales."""
-    from inventario import get_conn, release_conn
-    try:
-        conn = get_conn(is_admin=True)
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT tipo_dte, nombre, campo_bd, precio_uf, afecto_iva, categoria,
-                   es_gratuito, activo_default, visible, orden_visual, descripcion,
-                   fecha_actualizacion, actualizado_por
-            FROM facturacion_tipos_dte
-            ORDER BY orden_visual, tipo_dte
-        """)
-        rows = cur.fetchall()
-        cur.close()
-        release_conn(conn)
-        
-        dtes = []
-        for r in rows:
-            dtes.append({
-                "tipo_dte": r[0],
-                "nombre": r[1],
-                "campo_bd": r[2],
-                "precio_uf": float(r[3]) if r[3] else 0.0,
-                "afecto_iva": r[4],
-                "categoria": r[5],
-                "es_gratuito": r[6],
-                "activo_default": r[7],
-                "visible": r[8],
-                "orden_visual": r[9],
-                "descripcion": r[10] or "",
-                "fecha_actualizacion": str(r[11]) if r[11] else None,
-                "actualizado_por": r[12] or "",
-            })
-        return jsonify({"ok": True, "dtes": dtes, "total": len(dtes)})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/admin/lusync/dtes/actualizar/<int:tipo_dte>", methods=["POST"])
-@requiere_lusync_admin
-def admin_lusync_dtes_actualizar(tipo_dte):
-    """Actualiza un tipo de DTE específico (precio, visibilidad, default).
-    
-    Body esperado:
-    {
-        "precio_uf": 0.2,
-        "es_gratuito": false,
-        "activo_default": false,
-        "visible": true,
-        "orden_visual": 3,
-        "descripcion": "..."
-    }
-    """
-    from inventario import get_conn, release_conn
-    data = request.get_json() or {}
-    
-    # Campos editables (no permitimos cambiar tipo_dte ni campo_bd)
-    campos_permitidos = {
-        "nombre", "precio_uf", "es_gratuito", "activo_default",
-        "visible", "orden_visual", "descripcion", "afecto_iva", "categoria"
-    }
-    
-    updates = {k: v for k, v in data.items() if k in campos_permitidos}
-    if not updates:
-        return jsonify({"ok": False, "error": "No hay campos para actualizar"}), 400
-    
-    # Validación: si es_gratuito es True, precio_uf debe ser 0
-    if updates.get("es_gratuito") and "precio_uf" not in updates:
-        updates["precio_uf"] = 0.0
-    
-    set_clauses = [f"{k} = %s" for k in updates.keys()]
-    set_clauses.append("fecha_actualizacion = NOW()")
-    set_clauses.append("actualizado_por = %s")
-    
-    values = list(updates.values())
-    values.append(session.get("lusync_admin_email", "admin"))
-    values.append(tipo_dte)
-    
-    try:
-        conn = get_conn(is_admin=True)
-        cur = conn.cursor()
-        
-        cur.execute(f"""
-            UPDATE facturacion_tipos_dte
-            SET {', '.join(set_clauses)}
-            WHERE tipo_dte = %s
-        """, values)
-        
-        if cur.rowcount == 0:
-            cur.close()
-            release_conn(conn)
-            return jsonify({"ok": False, "error": f"No existe DTE tipo {tipo_dte}"}), 404
-        
-        conn.commit()
-        cur.close()
-        release_conn(conn)
-        
-        # Audit log
-        try:
-            registrar_audit(
-                session.get("lusync_admin_email", "admin"),
-                request.remote_addr,
-                "actualizar_tipo_dte",
-                entidad="facturacion_tipos_dte",
-                detalle=f"tipo_dte={tipo_dte}, cambios={updates}"
-            )
-        except Exception:
-            pass
-        
-        return jsonify({"ok": True, "tipo_dte": tipo_dte, "actualizado": updates})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/admin/lusync/dtes", methods=["GET"])
-@requiere_lusync_admin
-def admin_lusync_dtes_panel():
-    """Pantalla HTML para gestionar tipos de DTE (precios, visibilidad)."""
-    html = """<!DOCTYPE html>
-<html lang="es"><head>
-<meta charset="utf-8">
-<title>Gestión Tipos DTE · Lusync Admin</title>
-<style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:-apple-system,'Segoe UI',sans-serif;background:#f6f5f1;color:#1f1e1b;padding:24px}
-  .container{max-width:1200px;margin:0 auto}
-  .header-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
-  h1{font-size:22px;font-weight:600}
-  .back-link{color:#534AB7;text-decoration:none;font-size:13px;display:inline-flex;align-items:center;gap:4px}
-  .back-link:hover{text-decoration:underline}
-  .logout{font-size:12px;color:#dc2626;text-decoration:none;padding:6px 12px;border-radius:6px;background:#fef2f2;border:1px solid #fecaca;font-weight:500}
-  .card{background:white;border-radius:10px;padding:20px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
-  .info-box{background:#EEEDFE;border-left:3px solid #534AB7;padding:12px 14px;border-radius:6px;font-size:13px;line-height:1.6;margin-bottom:16px;color:#1f1e1b}
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  th{background:#f9f8f5;padding:10px 12px;text-align:left;font-weight:500;color:#5f5e5a;border-bottom:1px solid #e8e6e0}
-  td{padding:10px 12px;border-bottom:1px solid #f0eee9}
-  tr:hover{background:#fafaf7}
-  input[type=number],input[type=text]{padding:5px 8px;border:1px solid #d1cfc8;border-radius:5px;font-size:13px;width:90px}
-  input[type=text]{width:200px}
-  input[type=checkbox]{cursor:pointer;width:16px;height:16px}
-  .btn-save{background:#534AB7;color:white;padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500}
-  .btn-save:hover{background:#3d3690}
-  .btn-save:disabled{background:#bbb;cursor:not-allowed}
-  .badge-gratis{background:#dcfce7;color:#15803d;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:500}
-  .badge-pago{background:#fef3c7;color:#92400e;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:500}
-  .row-edited{background:#fef9c3 !important}
-  .status-msg{position:fixed;top:20px;right:20px;padding:10px 16px;border-radius:8px;font-size:13px;color:white;display:none;z-index:1000}
-  .status-msg.ok{background:#16a34a}
-  .status-msg.err{background:#dc2626}
-</style>
-</head><body>
-<div class="container">
-  <div class="header-bar">
-    <a class="back-link" href="/admin/lusync">← Volver al panel</a>
-    <a href="/admin/lusync/logout" class="logout">🚪 Cerrar sesión</a>
-  </div>
-  
-  <h1>📋 Gestión de Tipos de DTE</h1>
-  
-  <div class="info-box" style="margin-top:14px;">
-    <b>Aquí controlas qué DTEs ofreces a tus clientes y sus precios.</b><br>
-    Edita los valores y haz click en "💾 Guardar" para aplicar los cambios.
-    Los cambios afectan SOLO a tenants nuevos. Los tenants existentes mantienen sus configuraciones (activadas/desactivadas) hasta que ellos mismos las cambien.
-  </div>
-  
-  <div class="card">
-    <table id="tablaDtes">
-      <thead>
-        <tr>
-          <th>Tipo</th>
-          <th>Nombre</th>
-          <th>Precio UF</th>
-          <th>Estado</th>
-          <th>Activo default</th>
-          <th>Visible al cliente</th>
-          <th>Orden</th>
-          <th style="width:120px;">Acción</th>
-        </tr>
-      </thead>
-      <tbody id="cuerpoDtes">
-        <tr><td colspan="8" style="text-align:center;color:#888;padding:30px;">Cargando…</td></tr>
-      </tbody>
-    </table>
-  </div>
-  
-  <div class="info-box" style="background:#fef3c7;border-color:#f59e0b;color:#78350f;">
-    <b>⚠️ Importante sobre cambios de precios:</b><br>
-    • Los precios cambian inmediatamente para todos los clientes que tienen activo ese DTE<br>
-    • Los clientes verán el nuevo monto en su próxima facturación mensual<br>
-    • Considera notificar a clientes existentes antes de subir precios significativamente
-  </div>
-</div>
-
-<div id="statusMsg" class="status-msg"></div>
-
-<script>
-const TOKEN = "";  // Se asume sesión activa
-
-async function cargarDtes(){
-  try{
-    const r = await fetch('/admin/lusync/dtes/listar', {credentials:'include'});
-    const d = await r.json();
-    if(!d.ok){
-      document.getElementById('cuerpoDtes').innerHTML = `<tr><td colspan="8" style="text-align:center;color:#dc2626;padding:30px;">Error: ${d.error}</td></tr>`;
-      return;
-    }
-    renderTabla(d.dtes);
-  }catch(e){
-    document.getElementById('cuerpoDtes').innerHTML = `<tr><td colspan="8" style="text-align:center;color:#dc2626;padding:30px;">Error: ${e.message}</td></tr>`;
-  }
-}
-
-function renderTabla(dtes){
-  const cuerpo = document.getElementById('cuerpoDtes');
-  cuerpo.innerHTML = dtes.map(d => `
-    <tr data-tipo="${d.tipo_dte}">
-      <td><b>${d.tipo_dte}</b></td>
-      <td>${d.nombre}<br><small style="color:#888;">${d.campo_bd}</small></td>
-      <td>
-        <input type="number" step="0.05" min="0" max="10" 
-               class="inp-precio" value="${d.precio_uf}" 
-               onchange="marcarEditado(this)">
-      </td>
-      <td>
-        ${d.es_gratuito 
-          ? '<span class="badge-gratis">Gratis</span>' 
-          : '<span class="badge-pago">Pago</span>'}
-        <br>
-        <label style="font-size:11px;color:#666;margin-top:4px;display:inline-block;">
-          <input type="checkbox" class="inp-gratuito" ${d.es_gratuito ? 'checked' : ''} 
-                 onchange="marcarEditado(this);toggleGratis(this)"> 
-          Gratuito
-        </label>
-      </td>
-      <td style="text-align:center;">
-        <input type="checkbox" class="inp-default" ${d.activo_default ? 'checked' : ''} 
-               onchange="marcarEditado(this)">
-      </td>
-      <td style="text-align:center;">
-        <input type="checkbox" class="inp-visible" ${d.visible ? 'checked' : ''} 
-               onchange="marcarEditado(this)">
-      </td>
-      <td>
-        <input type="number" min="1" max="99" 
-               class="inp-orden" value="${d.orden_visual}" 
-               style="width:60px;" 
-               onchange="marcarEditado(this)">
-      </td>
-      <td>
-        <button class="btn-save" onclick="guardarDte(${d.tipo_dte}, this)" disabled>💾 Guardar</button>
-      </td>
-    </tr>
-  `).join('');
-}
-
-function marcarEditado(input){
-  const fila = input.closest('tr');
-  fila.classList.add('row-edited');
-  fila.querySelector('.btn-save').disabled = false;
-}
-
-function toggleGratis(checkbox){
-  const fila = checkbox.closest('tr');
-  const inpPrecio = fila.querySelector('.inp-precio');
-  if(checkbox.checked){
-    inpPrecio.value = 0;
-    inpPrecio.disabled = true;
-  }else{
-    inpPrecio.disabled = false;
-  }
-}
-
-async function guardarDte(tipoDte, btn){
-  const fila = btn.closest('tr');
-  const datos = {
-    precio_uf: parseFloat(fila.querySelector('.inp-precio').value),
-    es_gratuito: fila.querySelector('.inp-gratuito').checked,
-    activo_default: fila.querySelector('.inp-default').checked,
-    visible: fila.querySelector('.inp-visible').checked,
-    orden_visual: parseInt(fila.querySelector('.inp-orden').value),
-  };
-  
-  btn.disabled = true;
-  btn.textContent = '⏳ Guardando…';
-  
-  try{
-    const r = await fetch(`/admin/lusync/dtes/actualizar/${tipoDte}`, {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      credentials:'include',
-      body: JSON.stringify(datos)
-    });
-    const d = await r.json();
-    
-    if(d.ok){
-      mostrarStatus('✓ DTE ' + tipoDte + ' actualizado', 'ok');
-      fila.classList.remove('row-edited');
-      btn.textContent = '✓ Guardado';
-      setTimeout(()=> {
-        btn.textContent = '💾 Guardar';
-        btn.disabled = true;
-      }, 1500);
-    }else{
-      mostrarStatus('Error: ' + (d.error || 'desconocido'), 'err');
-      btn.disabled = false;
-      btn.textContent = '💾 Guardar';
-    }
-  }catch(e){
-    mostrarStatus('Error: ' + e.message, 'err');
-    btn.disabled = false;
-    btn.textContent = '💾 Guardar';
-  }
-}
-
-function mostrarStatus(msg, tipo){
-  const el = document.getElementById('statusMsg');
-  el.textContent = msg;
-  el.className = 'status-msg ' + tipo;
-  el.style.display = 'block';
-  setTimeout(() => el.style.display = 'none', 3000);
-}
-
-cargarDtes();
-</script>
-</body></html>"""
-    return html
 
 
 @app.route("/admin/lusync/sii/tenant/<int:tenant_id>/limpiar_dtes_no_autorizados", methods=["POST"])
@@ -21629,32 +21154,6 @@ async function cargarDashboard(){{
         const colOK = ok => ok ? '#1D9E75' : '#E24B4A';
         const bgOK = ok => ok ? '#eaf3ee' : '#fef2f2';
 
-        // Mapeo de tipo_dte → nombre corto para mostrar
-        const NOMBRE_DTE_CORTO = {{
-            33: 'Factura',
-            34: 'F. Exenta',
-            39: 'Boleta',
-            41: 'B. Exenta',
-            43: 'Liquidación',
-            46: 'F. Compra',
-            52: 'Guía',
-            56: 'N. Débito',
-            61: 'N. Crédito',
-            110: 'F. Export',
-            111: 'ND Export',
-            112: 'NC Export'
-        }};
-        const nombreDte = t => NOMBRE_DTE_CORTO[t] || ('Tipo ' + t);
-
-        // Render compacto: agrupa por tipo, muestra "Boleta, Factura, NC"
-        // Si hay demasiados (>3), muestra los primeros 3 + "+N más"
-        const renderTiposCafs = (cafs) => {{
-            const tiposUnicos = [...new Set(cafs.map(c => c.tipo_dte))].sort((a,b)=>a-b);
-            const nombres = tiposUnicos.map(nombreDte);
-            if (nombres.length <= 3) return nombres.join(', ');
-            return nombres.slice(0, 3).join(', ') + ` +${{nombres.length - 3}} más`;
-        }};
-
         document.getElementById('cards').innerHTML = `
             <div class="card" style="background:${{bgOK(configCompleta)}};">
                 <div class="card-label">${{check(configCompleta)}} Configuración</div>
@@ -21669,7 +21168,7 @@ async function cargarDashboard(){{
             <div class="card" style="background:${{bgOK(cafsActivos.length>0)}};">
                 <div class="card-label">${{check(cafsActivos.length>0)}} CAFs activos</div>
                 <div class="card-value" style="color:${{colOK(cafsActivos.length>0)}};">${{cafsActivos.length}}</div>
-                <div class="card-sub" title="${{cafsActivos.map(c=>nombreDte(c.tipo_dte)+' ('+c.tipo_dte+')').join(', ')}}">${{cafsActivos.length?renderTiposCafs(cafsActivos):'Sin folios'}}</div>
+                <div class="card-sub">${{cafsActivos.length?'Tipos: '+[...new Set(cafsActivos.map(c=>c.tipo_dte))].join(', '):'Sin folios'}}</div>
             </div>
             <div class="card" style="background:${{bgOK(listo)}};">
                 <div class="card-label">${{check(listo)}} Estado</div>
@@ -21902,19 +21401,12 @@ async function listarCAFs(){{
             const estado = c.agotado ? '<span style="background:#fef2f2;color:#A32D2D;padding:2px 8px;border-radius:8px;font-size:10px;">Agotado</span>' : '<span style="background:#eaf3ee;color:#1D9E75;padding:2px 8px;border-radius:8px;font-size:10px;">Activo</span>';
             const ambBadge = c.ambiente === 'produccion' ? '<span style="background:#fef2f2;color:#A32D2D;padding:2px 6px;border-radius:6px;font-size:9px;margin-left:4px;">PROD</span>' : '<span style="background:#FAEEDA;color:#854F0B;padding:2px 6px;border-radius:6px;font-size:9px;margin-left:4px;">CERT</span>';
             return `<div style="background:#fafaf9;border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin-bottom:8px;">
-                <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;margin-bottom:8px;align-items:start;">
+                <div style="display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:8px;">
                     <div>
                         <div style="font-size:13px;font-weight:500;">${{c.tipo_dte_nombre}} (${{c.tipo_dte}}) ${{estado}}${{ambBadge}}</div>
                         <div style="font-size:11px;color:#6b7280;margin-top:2px;">Folios ${{c.folio_desde}} – ${{c.folio_hasta}} · Próximo: ${{c.folio_actual}}</div>
                     </div>
-                    <div style="text-align:right;font-size:11px;color:${{pctCol}};font-weight:500;white-space:nowrap;">${{c.folios_usados}}/${{c.folios_total}} usados (${{c.pct_usado}}%)</div>
-                    <button onclick="eliminarCAF(${{c.id}}, '${{c.tipo_dte_nombre}}', ${{c.folio_desde}}, ${{c.folio_hasta}}, ${{c.folios_usados}})" 
-                            title="Eliminar este CAF" 
-                            style="background:#fef2f2;color:#dc2626;border:1px solid #fecaca;border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;font-weight:500;white-space:nowrap;"
-                            onmouseover="this.style.background='#fee2e2';this.style.borderColor='#fca5a5';"
-                            onmouseout="this.style.background='#fef2f2';this.style.borderColor='#fecaca';">
-                        🗑️ Eliminar
-                    </button>
+                    <div style="text-align:right;font-size:11px;color:${{pctCol}};font-weight:500;">${{c.folios_usados}}/${{c.folios_total}} usados (${{c.pct_usado}}%)</div>
                 </div>
                 <div style="background:#e5e7eb;height:5px;border-radius:3px;overflow:hidden;">
                     <div style="height:100%;width:${{c.pct_usado}}%;background:${{pctCol}};"></div>
@@ -21927,46 +21419,6 @@ async function listarCAFs(){{
 // Al cargar la página
 cargarDashboard();
 cargarConfig();
-
-// ═══════════════════════════════════════════════════════════════
-// Eliminar CAF con confirmación protegida
-// ═══════════════════════════════════════════════════════════════
-async function eliminarCAF(cafId, tipoNombre, folioDesde, folioHasta, foliosUsados){{
-    // Confirmación reforzada si tiene folios usados
-    let mensaje;
-    if (foliosUsados > 0) {{
-        mensaje = `⚠️ ATENCIÓN: este CAF de ${{tipoNombre}} tiene ${{foliosUsados}} folios YA USADOS.\n\n` +
-                  `Folios: ${{folioDesde}} - ${{folioHasta}}\n` +
-                  `Eliminarlo de Lusync NO anula los DTEs ya emitidos, pero perderás el control de continuidad.\n\n` +
-                  `¿Confirmas eliminar?\n` +
-                  `(Esta acción NO afecta los folios en el SII, solo los borra de Lusync)`;
-    }} else {{
-        mensaje = `Eliminar CAF de ${{tipoNombre}} (folios ${{folioDesde}}-${{folioHasta}})\n\n` +
-                  `Como no tiene folios usados, es seguro eliminarlo.\n` +
-                  `¿Confirmas?`;
-    }}
-    
-    if (!confirm(mensaje)) return;
-    
-    try {{
-        const r = await fetch(`/admin/lusync/facturacion/tenant/${{TENANT_ID}}/caf/${{cafId}}/eliminar`, {{
-            method: 'DELETE',
-            credentials: 'include'
-        }});
-        const d = await r.json();
-        
-        if (d.ok) {{
-            // Mostrar mensaje de éxito breve y recargar lista
-            alert(`✅ CAF eliminado correctamente`);
-            cargarCafs();
-            cargarDashboard();  // refrescar también el contador de tarjetas
-        }} else {{
-            alert(`❌ Error al eliminar: ${{d.error || 'desconocido'}}`);
-        }}
-    }} catch(e) {{
-        alert(`❌ Error de red: ${{e.message}}`);
-    }}
-}}
 </script>
 
 <div id="modalDte" style="display:none;position:fixed;inset:0;background:rgba(15,17,21,0.55);z-index:9999;align-items:center;justify-content:center;padding:20px;">
@@ -22077,91 +21529,6 @@ def admin_lusync_sii_tenant_config(tenant_id):
 
     resultado["cambios_dte"] = cambios
     return jsonify(resultado)
-
-
-@app.route("/admin/lusync/facturacion/tenant/<int:tenant_id>/caf/<int:caf_id>/eliminar", methods=["DELETE", "POST"])
-@requiere_lusync_admin
-def admin_lusync_caf_eliminar(tenant_id, caf_id):
-    """Elimina un CAF de Lusync (no afecta los folios en el SII).
-    
-    Útil para borrar:
-      • CAFs viejos importados por error
-      • CAFs duplicados o de empresas que ya no operan
-      • CAFs agotados que no se necesitan más para histórico
-    
-    IMPORTANTE: si el CAF tiene folios usados, los DTEs ya emitidos NO se borran,
-    solo se pierde la referencia del CAF en Lusync.
-    """
-    from inventario import get_conn, release_conn
-    
-    try:
-        conn = get_conn(is_admin=True)
-        cur = conn.cursor()
-        
-        # 1. Verificar que el CAF existe y pertenece a este tenant
-        cur.execute("""
-            SELECT id, tenant_id, tipo_dte, folio_desde, folio_hasta, folio_actual,
-                   rut_emisor_caf, ambiente
-            FROM facturacion_cafs
-            WHERE id = %s AND tenant_id = %s
-        """, (caf_id, tenant_id))
-        
-        caf_row = cur.fetchone()
-        if not caf_row:
-            cur.close()
-            release_conn(conn)
-            return jsonify({
-                "ok": False,
-                "error": f"CAF {caf_id} no existe o no pertenece al tenant {tenant_id}"
-            }), 404
-        
-        tipo_dte = caf_row[2]
-        folio_desde = caf_row[3]
-        folio_hasta = caf_row[4]
-        folio_actual = caf_row[5]
-        ambiente = caf_row[7]
-        folios_usados = (folio_actual - folio_desde) if folio_actual > folio_desde else 0
-        
-        # 2. Eliminar
-        cur.execute("DELETE FROM facturacion_cafs WHERE id = %s AND tenant_id = %s",
-                    (caf_id, tenant_id))
-        filas_eliminadas = cur.rowcount
-        conn.commit()
-        cur.close()
-        release_conn(conn)
-        
-        # 3. Audit log
-        try:
-            registrar_audit(
-                session.get("lusync_admin_email", "Lusync"),
-                request.remote_addr,
-                "admin_eliminar_caf_sii",
-                entidad="facturacion_cafs",
-                detalle=(
-                    f"Tenant {tenant_id}, CAF ID {caf_id}, "
-                    f"tipo {tipo_dte}, folios {folio_desde}-{folio_hasta}, "
-                    f"folios_usados={folios_usados}, ambiente={ambiente}"
-                )
-            )
-        except Exception:
-            pass
-        
-        return jsonify({
-            "ok": True,
-            "caf_id": caf_id,
-            "tipo_dte": tipo_dte,
-            "folios_eliminados": folio_hasta - folio_desde + 1,
-            "folios_usados": folios_usados,
-            "mensaje": f"CAF {caf_id} eliminado de Lusync (folios SII no afectados)"
-        })
-    
-    except Exception as e:
-        import traceback
-        return jsonify({
-            "ok": False,
-            "error": str(e),
-            "trace": traceback.format_exc()[:500]
-        }), 500
 
 
 @app.route("/admin/lusync/sii/tenant/<int:tenant_id>/caf/subir", methods=["POST"])

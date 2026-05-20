@@ -219,16 +219,7 @@ def listar_cafs_tenant(get_conn_func, release_conn_func, tenant_id):
             ORDER BY tipo_dte ASC, fecha_autorizacion DESC
         """, (tenant_id,))
 
-        from .utils import obtener_tipos_dte_dinamicos
-        # Necesitamos get_conn/release_conn para la función dinámica
-        # Pero ya tenemos conn abierto, así que usamos TIPOS_DTE como fallback
-        # alternativamente podríamos pasar las funciones, pero por compat usamos TIPOS_DTE
         from .utils import TIPOS_DTE
-        # Intento leer dinámico solo si tenemos las funciones disponibles
-        try:
-            tipos_dte_db = obtener_tipos_dte_dinamicos(get_conn_func, release_conn_func)
-        except Exception:
-            tipos_dte_db = TIPOS_DTE
         cafs = []
         for r in cur.fetchall():
             tipo_dte = r[1]
@@ -240,7 +231,7 @@ def listar_cafs_tenant(get_conn_func, release_conn_func, tenant_id):
             cafs.append({
                 "id": r[0],
                 "tipo_dte": tipo_dte,
-                "tipo_dte_nombre": tipos_dte_db.get(tipo_dte, {}).get("nombre", f"Tipo {tipo_dte}"),
+                "tipo_dte_nombre": TIPOS_DTE.get(tipo_dte, {}).get("nombre", f"Tipo {tipo_dte}"),
                 "folio_desde": r[2],
                 "folio_hasta": r[3],
                 "folio_actual": r[4],
