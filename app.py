@@ -21594,6 +21594,32 @@ async function cargarDashboard(){{
         const colOK = ok => ok ? '#1D9E75' : '#E24B4A';
         const bgOK = ok => ok ? '#eaf3ee' : '#fef2f2';
 
+        // Mapeo de tipo_dte → nombre corto para mostrar
+        const NOMBRE_DTE_CORTO = {{
+            33: 'Factura',
+            34: 'F. Exenta',
+            39: 'Boleta',
+            41: 'B. Exenta',
+            43: 'Liquidación',
+            46: 'F. Compra',
+            52: 'Guía',
+            56: 'N. Débito',
+            61: 'N. Crédito',
+            110: 'F. Export',
+            111: 'ND Export',
+            112: 'NC Export'
+        }};
+        const nombreDte = t => NOMBRE_DTE_CORTO[t] || ('Tipo ' + t);
+
+        // Render compacto: agrupa por tipo, muestra "Boleta, Factura, NC"
+        // Si hay demasiados (>3), muestra los primeros 3 + "+N más"
+        const renderTiposCafs = (cafs) => {{
+            const tiposUnicos = [...new Set(cafs.map(c => c.tipo_dte))].sort((a,b)=>a-b);
+            const nombres = tiposUnicos.map(nombreDte);
+            if (nombres.length <= 3) return nombres.join(', ');
+            return nombres.slice(0, 3).join(', ') + ` +${{nombres.length - 3}} más`;
+        }};
+
         document.getElementById('cards').innerHTML = `
             <div class="card" style="background:${{bgOK(configCompleta)}};">
                 <div class="card-label">${{check(configCompleta)}} Configuración</div>
@@ -21608,7 +21634,7 @@ async function cargarDashboard(){{
             <div class="card" style="background:${{bgOK(cafsActivos.length>0)}};">
                 <div class="card-label">${{check(cafsActivos.length>0)}} CAFs activos</div>
                 <div class="card-value" style="color:${{colOK(cafsActivos.length>0)}};">${{cafsActivos.length}}</div>
-                <div class="card-sub">${{cafsActivos.length?'Tipos: '+[...new Set(cafsActivos.map(c=>c.tipo_dte))].join(', '):'Sin folios'}}</div>
+                <div class="card-sub" title="${{cafsActivos.map(c=>nombreDte(c.tipo_dte)+' ('+c.tipo_dte+')').join(', ')}}">${{cafsActivos.length?renderTiposCafs(cafsActivos):'Sin folios'}}</div>
             </div>
             <div class="card" style="background:${{bgOK(listo)}};">
                 <div class="card-label">${{check(listo)}} Estado</div>
