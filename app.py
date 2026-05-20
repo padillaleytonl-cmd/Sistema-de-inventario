@@ -11018,8 +11018,8 @@ def admin_lusync_tenant_inspeccionar(tenant_id):
         elif rows:
             inspeccion["productos_total"] = rows[0][0]
         
-        # Órdenes total
-        rows, err = safe_query(conn, "SELECT COUNT(*) FROM ordenes WHERE tenant_id = %s", (tenant_id,))
+        # Órdenes total (tabla real: ordenes_procesadas)
+        rows, err = safe_query(conn, "SELECT COUNT(*) FROM ordenes_procesadas WHERE tenant_id = %s", (tenant_id,))
         if err:
             inspeccion["errores"].append(f"ordenes: {err}")
         elif rows:
@@ -11027,7 +11027,7 @@ def admin_lusync_tenant_inspeccionar(tenant_id):
         
         # Órdenes por canal
         rows, err = safe_query(conn, """
-            SELECT canal, COUNT(*) FROM ordenes
+            SELECT canal, COUNT(*) FROM ordenes_procesadas
             WHERE tenant_id = %s GROUP BY canal
         """, (tenant_id,))
         if err:
@@ -11039,7 +11039,7 @@ def admin_lusync_tenant_inspeccionar(tenant_id):
         # Últimas órdenes
         rows, err = safe_query(conn, """
             SELECT id, canal, fecha, total, estado
-            FROM ordenes WHERE tenant_id = %s
+            FROM ordenes_procesadas WHERE tenant_id = %s
             ORDER BY fecha DESC LIMIT 5
         """, (tenant_id,))
         if err:
@@ -11067,9 +11067,9 @@ def admin_lusync_tenant_inspeccionar(tenant_id):
         elif rows:
             inspeccion["bodegas_total"] = rows[0][0]
         
-        # Marketplaces
+        # Marketplaces (tabla real: credenciales_marketplace)
         rows, err = safe_query(conn, """
-            SELECT canal, COUNT(*) FROM tenant_marketplace_credentials
+            SELECT canal, COUNT(*) FROM credenciales_marketplace
             WHERE tenant_id = %s GROUP BY canal
         """, (tenant_id,))
         if err:
@@ -11184,20 +11184,19 @@ def admin_lusync_tenant_eliminar(tenant_id):
             }), 403
         
         # Borrar en orden CASCADE (de más dependientes a menos)
-        # NOTA: la tabla 'usuarios' debe borrarse al final porque otras
-        # tablas pueden tener FK ON DELETE CASCADE a tenants ya
+        # NOMBRES REALES verificados contra el código existente
         tablas_a_limpiar = [
             "movimientos",
-            "ordenes",
+            "ordenes_procesadas",          # NO 'ordenes'
             "productos",
             "bodegas",
-            "tenant_marketplace_credentials",
+            "credenciales_marketplace",    # NO 'tenant_marketplace_credentials'
             "facturacion_dtes",
             "facturacion_cafs",
             "facturacion_certificados",
             "facturacion_config_tenant",
             "facturacion_dte_activaciones",
-            "usuarios",  # tabla real, NO 'usuarios_tenant'
+            "usuarios",                    # tabla real, NO 'usuarios_tenant'
         ]
         
         resumen = {}
