@@ -21986,36 +21986,57 @@ cargarDashboard();
 cargarConfig();
 
 // ═══════════════════════════════════════════════════════════
-// Eliminar CAF con confirmación protegida
+// Eliminar CAF con modal de confirmación estilo Lusync
 // ═══════════════════════════════════════════════════════════
-async function eliminarCAF(cafId, tipoNombre, folioDesde, folioHasta, foliosUsados){{
-    let mensaje;
-    if (foliosUsados > 0) {{
-        mensaje = `⚠️ ATENCIÓN: este CAF de ${{tipoNombre}} tiene ${{foliosUsados}} folios YA USADOS.\n\n` +
-                  `Folios: ${{folioDesde}} - ${{folioHasta}}\n` +
-                  `Eliminarlo de Lusync NO anula los DTEs ya emitidos, pero perderás el control de continuidad.\n\n` +
-                  `¿Confirmas eliminar?`;
-    }} else {{
-        mensaje = `Eliminar CAF de ${{tipoNombre}} (folios ${{folioDesde}}-${{folioHasta}})\n\n` +
-                  `Como no tiene folios usados, es seguro eliminarlo.\n¿Confirmas?`;
-    }}
-    if (!confirm(mensaje)) return;
+function cerrarModalCaf(){{
+    document.getElementById('modalEliminarCaf').style.display = 'none';
+}}
 
-    try {{
-        const r = await fetch(`/admin/lusync/facturacion/tenant/${{TENANT_ID}}/caf/${{cafId}}/eliminar`, {{
-            method: 'DELETE',
-            credentials: 'include'
-        }});
-        const d = await r.json();
-        if (d.ok) {{
-            listarCAFs();
-            cargarDashboard();
-        }} else {{
-            alert(`❌ Error al eliminar: ${{d.error || 'desconocido'}}`);
-        }}
-    }} catch(e) {{
-        alert(`❌ Error de red: ${{e.message}}`);
+function eliminarCAF(cafId, tipoNombre, folioDesde, folioHasta, foliosUsados){{
+    const modal = document.getElementById('modalEliminarCaf');
+    const texto = document.getElementById('modalCafTexto');
+    const adv = document.getElementById('modalCafAdvertencia');
+    const btn = document.getElementById('modalCafConfirmar');
+
+    texto.innerHTML = `¿Eliminar el CAF de <b>${{tipoNombre}}</b>?<br>` +
+                      `<span style="color:#6b7280;font-size:12px;">Folios ${{folioDesde}} – ${{folioHasta}}</span>`;
+
+    if (foliosUsados > 0) {{
+        adv.style.display = 'block';
+        adv.innerHTML = `⚠️ Este CAF tiene <b>${{foliosUsados}} folios ya usados</b>. ` +
+                        `Eliminarlo no anula los DTEs emitidos, pero perderás el control de continuidad.`;
+    }} else {{
+        adv.style.display = 'none';
     }}
+
+    modal.style.display = 'flex';
+
+    // Configurar botón confirmar (reemplaza handler previo)
+    btn.onclick = async () => {{
+        btn.disabled = true;
+        btn.textContent = 'Eliminando...';
+        try {{
+            const r = await fetch(`/admin/lusync/facturacion/tenant/${{TENANT_ID}}/caf/${{cafId}}/eliminar`, {{
+                method: 'DELETE',
+                credentials: 'include'
+            }});
+            const d = await r.json();
+            cerrarModalCaf();
+            btn.disabled = false;
+            btn.textContent = 'Eliminar';
+            if (d.ok) {{
+                listarCAFs();
+                cargarDashboard();
+            }} else {{
+                alert(`Error al eliminar: ${{d.error || 'desconocido'}}`);
+            }}
+        }} catch(e) {{
+            cerrarModalCaf();
+            btn.disabled = false;
+            btn.textContent = 'Eliminar';
+            alert(`Error de red: ${{e.message}}`);
+        }}
+    }};
 }}
 </script>
 
@@ -22052,6 +22073,24 @@ async function eliminarCAF(cafId, tipoNombre, folioDesde, folioHasta, foliosUsad
 </div>
 
 <style>#modalBtnAceptar:not(:disabled){{opacity:1 !important;}}</style>
+
+<!-- Modal confirmación eliminar CAF (estilo Lusync) -->
+<div id="modalEliminarCaf" style="display:none;position:fixed;inset:0;background:rgba(15,17,21,0.55);z-index:9999;align-items:center;justify-content:center;padding:20px;">
+  <div style="background:white;border-radius:12px;max-width:440px;width:100%;padding:24px;box-shadow:0 20px 50px rgba(0,0,0,0.18);">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+      <div style="width:34px;height:34px;border-radius:50%;background:#fef2f2;color:#dc2626;display:flex;align-items:center;justify-content:center;font-size:18px;">🗑️</div>
+      <div style="font-size:16px;font-weight:600;color:#1f1e1b;">Eliminar CAF</div>
+    </div>
+    <div id="modalCafTexto" style="font-size:13px;line-height:1.6;color:#1f1e1b;margin-bottom:8px;">—</div>
+    <div id="modalCafAdvertencia" style="display:none;background:#fef3c7;border:1px solid #fbbf24;padding:10px 12px;border-radius:8px;margin-bottom:14px;font-size:12px;color:#92400e;line-height:1.5;"></div>
+    <div style="font-size:11px;color:#9ca3af;margin-bottom:18px;">Esta acción no afecta los folios en el SII, solo los borra de Lusync.</div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button type="button" onclick="cerrarModalCaf()" style="padding:8px 16px;font-size:12px;background:#f3f4f6;color:#1f1e1b;border:1px solid #e5e7eb;border-radius:6px;cursor:pointer;">Cancelar</button>
+      <button type="button" id="modalCafConfirmar" style="padding:8px 16px;font-size:12px;background:#dc2626;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;">Eliminar</button>
+    </div>
+  </div>
+</div>
+
 
 </body></html>"""
     except Exception as e:
