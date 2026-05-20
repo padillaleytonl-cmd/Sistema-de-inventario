@@ -10801,16 +10801,30 @@ def admin_rls_test_aislamiento():
 # ════════════════════════════════════════════════════════════════════════════
 
 def requiere_lusync_admin(func):
-    """Decorador: protege rutas del panel super-admin Lusync."""
+    """Decorador: protege rutas del panel super-admin Lusync.
+    
+    Acepta 3 formas de autenticación:
+      1. session['is_lusync_admin'] = True (login normal)
+      2. Header x-admin-token con el bypass token
+      3. Query param ?token= con el bypass token
+    """
     from functools import wraps
     @wraps(func)
     def wrapper(*args, **kwargs):
-        if not session.get("is_lusync_admin"):
-            # Redirigir a login si es GET, devolver 401 si es POST/API
-            if request.method == "GET":
-                return redirect("/admin/lusync/login")
-            return jsonify({"error": "no autorizado"}), 401
-        return func(*args, **kwargs)
+        # 1. Sesión admin activa
+        if session.get("is_lusync_admin"):
+            return func(*args, **kwargs)
+        
+        # 2. Token bypass (header o query param)
+        bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+        token_recibido = request.headers.get("x-admin-token") or request.args.get("token")
+        if token_recibido and token_recibido == bypass_token:
+            return func(*args, **kwargs)
+        
+        # No autorizado: redirigir si es GET, JSON 401 si es API
+        if request.method == "GET":
+            return redirect("/admin/lusync/login")
+        return jsonify({"error": "no autorizado"}), 401
     return wrapper
 
 
