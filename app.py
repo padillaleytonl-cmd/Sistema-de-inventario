@@ -20951,22 +20951,57 @@ def facturacion_dashboard():
 def admin_lusync_facturacion_tenant(tenant_id):
     """JSON: estado completo facturación de un tenant para super-admin.
     Usado por la vista /admin/lusync/sii/tenant/<id> vía AJAX.
+    
+    Defensivo: cada llamada interna en su propio try/except para devolver
+    JSON parcial en caso de error (no HTML 500).
     """
-    from facturacion import (obtener_config_facturacion, listar_certificados_tenant,
-                             listar_cafs_tenant, calcular_mrr_tributario)
     from inventario import get_conn, release_conn
-
-    config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
-    certs = listar_certificados_tenant(get_conn, release_conn, tenant_id)
-    cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id)
-    mrr = calcular_mrr_tributario(get_conn, release_conn, tenant_id)
-
+    
+    config = None
+    certs = []
+    cafs = []
+    mrr = {"total_uf": 0, "total_clp_neto": 0, "total_clp_iva": 0, "desglose": []}
+    errores = []
+    
+    try:
+        from facturacion import obtener_config_facturacion
+        config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+    except Exception as e:
+        errores.append(f"config: {e}")
+        import traceback
+        print(f"[admin_lusync_facturacion_tenant] config error: {traceback.format_exc()[:300]}")
+    
+    try:
+        from facturacion import listar_certificados_tenant
+        certs = listar_certificados_tenant(get_conn, release_conn, tenant_id) or []
+    except Exception as e:
+        errores.append(f"certs: {e}")
+        import traceback
+        print(f"[admin_lusync_facturacion_tenant] certs error: {traceback.format_exc()[:300]}")
+    
+    try:
+        from facturacion import listar_cafs_tenant
+        cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id) or []
+    except Exception as e:
+        errores.append(f"cafs: {e}")
+        import traceback
+        print(f"[admin_lusync_facturacion_tenant] cafs error: {traceback.format_exc()[:300]}")
+    
+    try:
+        from facturacion import calcular_mrr_tributario
+        mrr = calcular_mrr_tributario(get_conn, release_conn, tenant_id) or mrr
+    except Exception as e:
+        errores.append(f"mrr: {e}")
+        import traceback
+        print(f"[admin_lusync_facturacion_tenant] mrr error: {traceback.format_exc()[:300]}")
+    
     return jsonify({
         "tenant_id": tenant_id,
         "config": config or {},
         "certificados": certs,
         "cafs": cafs,
         "mrr_tributario": mrr,
+        "errores_internos": errores,  # vacío si todo OK
     })
 
 

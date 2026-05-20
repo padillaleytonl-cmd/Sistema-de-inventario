@@ -79,6 +79,8 @@ def obtener_tipos_dte_dinamicos(get_conn_func, release_conn_func):
     Returns:
         dict: {tipo_dte: {nombre, afecto_iva, tipo, precio_uf, ...}}
     """
+    conn = None
+    cur = None
     try:
         conn = get_conn_func()
         cur = conn.cursor()
@@ -90,9 +92,8 @@ def obtener_tipos_dte_dinamicos(get_conn_func, release_conn_func):
                 WHERE table_name = 'facturacion_tipos_dte'
             )
         """)
-        if not cur.fetchone()[0]:
-            cur.close()
-            release_conn_func(conn)
+        existe = cur.fetchone()[0]
+        if not existe:
             return TIPOS_DTE  # Fallback al hardcode
         
         cur.execute("""
@@ -104,8 +105,6 @@ def obtener_tipos_dte_dinamicos(get_conn_func, release_conn_func):
             ORDER BY orden_visual
         """)
         rows = cur.fetchall()
-        cur.close()
-        release_conn_func(conn)
         
         if not rows:
             return TIPOS_DTE  # Fallback si la tabla está vacía
@@ -128,6 +127,18 @@ def obtener_tipos_dte_dinamicos(get_conn_func, release_conn_func):
     except Exception as e:
         print(f"[Facturación] Error leyendo tipos DTE de BD, usando hardcode: {e}")
         return TIPOS_DTE
+    finally:
+        # SIEMPRE cerrar la conexión (incluso si hay excepción)
+        try:
+            if cur is not None:
+                cur.close()
+        except Exception:
+            pass
+        try:
+            if conn is not None:
+                release_conn_func(conn)
+        except Exception:
+            pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
