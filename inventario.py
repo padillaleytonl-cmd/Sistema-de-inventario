@@ -205,16 +205,22 @@ def get_conn(tenant_id=None, is_admin=False):
             # Prioridad 2: sesión Flask
             tid_from_session = None
             admin_from_session = False
+            impersonando = False
             try:
                 from flask import session, has_request_context
                 if has_request_context():
                     tid_from_session = session.get("tenant_id")
                     admin_from_session = bool(session.get("is_lusync_admin"))
+                    impersonando = bool(session.get("impersonating"))
             except Exception:
                 pass
 
             if tid_from_session:
-                _set_rls_context(conn, int(tid_from_session), admin_from_session)
+                # FIX: si está impersonando, NO usar bypass admin → ver datos del
+                # tenant impersonado realmente (no de todos). Sin esto, el admin
+                # bypassa RLS y ve datos mezclados de todos los tenants.
+                usar_admin = admin_from_session and not impersonando
+                _set_rls_context(conn, int(tid_from_session), usar_admin)
             elif admin_from_session:
                 _set_rls_context(conn, 0, True)
             else:

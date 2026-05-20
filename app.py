@@ -14004,7 +14004,104 @@ def admin_lusync_tenant_detalle(tenant_id):
                     <a href="/admin/lusync/sii/tenant/{tenant_id}" style="background:#f59e0b;color:white;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:500;text-decoration:none;">📄 Configurar SII</a>
                     <button onclick="cambiarEstado({tenant_id}, '{accion_estado}')" style="background:white;color:#1f1e1b;border:1px solid #e5e7eb;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">{boton_estado}</button>
                     <button onclick="cambiarPlan({tenant_id})" style="background:white;color:#1f1e1b;border:1px solid #e5e7eb;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">Cambiar plan</button>
+                    <button onclick="inspeccionarTenant({tenant_id})" style="background:white;color:#1f1e1b;border:1px solid #e5e7eb;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;">🔍 Inspeccionar</button>
+                    <button onclick="eliminarTenant({tenant_id}, '{tenant['nombre']}')" style="background:#fef2f2;color:#dc2626;border:1px solid #fecaca;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">🗑️ Eliminar tenant</button>
                 </div>
+
+                <script>
+                async function inspeccionarTenant(tid) {{
+                    try {{
+                        const r = await fetch(`/admin/lusync/tenant/${{tid}}/inspeccionar`, {{credentials:'include'}});
+                        const d = await r.json();
+                        if (!d.ok) {{ alert('Error: ' + (d.error || 'desconocido')); return; }}
+                        const resumen =
+                            `📊 INSPECCIÓN DE TENANT\n\n` +
+                            `Nombre: ${{d.tenant_info?.nombre}}\n` +
+                            `RUT: ${{d.tenant_info?.rut}}\n` +
+                            `Estado: ${{d.tenant_info?.estado}}\n` +
+                            `Creado: ${{d.fecha_creacion_tenant?.split(' ')[0]}}\n\n` +
+                            `── DATOS ──\n` +
+                            `Productos: ${{d.productos_total}}\n` +
+                            `Órdenes: ${{d.ordenes_total}}\n` +
+                            `Movimientos: ${{d.movimientos_total}}\n` +
+                            `Bodegas: ${{d.bodegas_total}}\n` +
+                            `Marketplaces: ${{d.marketplaces_configurados?.length || 0}}\n` +
+                            `DTEs emitidos: ${{d.facturacion_dtes_emitidos}}\n` +
+                            `CAFs: ${{d.facturacion_cafs}}\n` +
+                            `Certificados: ${{d.facturacion_certificados}}\n\n` +
+                            `── ANÁLISIS ──\n` +
+                            `${{d.analisis?.es_seguro_borrar ? '✅' : '⚠️'}} ${{d.analisis?.razon}}`;
+                        alert(resumen);
+                    }} catch(e) {{
+                        alert('Error de red: ' + e.message);
+                    }}
+                }}
+
+                async function eliminarTenant(tid, nombre) {{
+                    // Paso 1: inspeccionar primero
+                    let inspeccion;
+                    try {{
+                        const r = await fetch(`/admin/lusync/tenant/${{tid}}/inspeccionar`, {{credentials:'include'}});
+                        inspeccion = await r.json();
+                    }} catch(e) {{
+                        if (!confirm('No se pudo inspeccionar el tenant. ¿Continuar de todas formas?')) return;
+                    }}
+
+                    // Paso 2: advertir si tiene datos
+                    let advertencia = `🗑️ ELIMINAR TENANT "${{nombre}}" (ID ${{tid}})\n\n`;
+                    if (inspeccion && inspeccion.ok) {{
+                        const datos = [];
+                        if (inspeccion.productos_total > 0) datos.push(`${{inspeccion.productos_total}} productos`);
+                        if (inspeccion.ordenes_total > 0) datos.push(`${{inspeccion.ordenes_total}} órdenes`);
+                        if (inspeccion.movimientos_total > 0) datos.push(`${{inspeccion.movimientos_total}} movimientos`);
+                        if (inspeccion.facturacion_dtes_emitidos > 0) datos.push(`${{inspeccion.facturacion_dtes_emitidos}} DTEs emitidos`);
+                        if (inspeccion.facturacion_cafs > 0) datos.push(`${{inspeccion.facturacion_cafs}} CAFs`);
+
+                        if (datos.length > 0) {{
+                            advertencia += `⚠️ ATENCIÓN: este tenant tiene:\n  • ` + datos.join('\n  • ') + '\n\n';
+                        }} else {{
+                            advertencia += `✅ Tenant vacío (sin datos relevantes)\n\n`;
+                        }}
+
+                        if (inspeccion.facturacion_dtes_emitidos > 0) {{
+                            alert(`🛑 NO SE PUEDE ELIMINAR\n\nEste tenant tiene ${{inspeccion.facturacion_dtes_emitidos}} DTEs emitidos. Por ley tributaria chilena, no se pueden borrar documentos emitidos al SII.`);
+                            return;
+                        }}
+                    }}
+                    advertencia += `Esta acción es IRREVERSIBLE.\n\nPara confirmar, escribe el nombre del tenant exactamente:`;
+
+                    // Paso 3: pedir que escriba el nombre exacto
+                    const nombreConfirmado = prompt(advertencia, '');
+                    if (nombreConfirmado === null) return;  // canceló
+                    if (nombreConfirmado !== nombre) {{
+                        alert(`El nombre no coincide.\nEsperado: "${{nombre}}"\nEscrito: "${{nombreConfirmado}}"\n\nEliminación cancelada.`);
+                        return;
+                    }}
+
+                    // Paso 4: ejecutar
+                    try {{
+                        const r = await fetch(`/admin/lusync/tenant/${{tid}}/eliminar`, {{
+                            method: 'POST',
+                            headers: {{'Content-Type': 'application/json'}},
+                            credentials: 'include',
+                            body: JSON.stringify({{
+                                confirmacion: 'ELIMINAR',
+                                nombre_tenant: nombre
+                            }})
+                        }});
+                        const d = await r.json();
+                        if (d.ok) {{
+                            alert(`✅ Tenant "${{nombre}}" eliminado correctamente.\n\nSerás redirigido al panel.`);
+                            window.location.href = '/admin/lusync';
+                        }} else {{
+                            alert(`❌ Error: ${{d.error || 'desconocido'}}`);
+                        }}
+                    }} catch(e) {{
+                        alert('❌ Error de red: ' + e.message);
+                    }}
+                }}
+                </script>
+
 
                 <!-- Usuarios -->
                 <div style="background:white;border:1px solid #e8e6e0;border-radius:10px;overflow:hidden;margin-bottom:14px;">
