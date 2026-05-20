@@ -1559,6 +1559,41 @@ tbody td {
 </head>
 <body>
 
+<!-- Overlay de carga inicial: evita el "flash" de placeholders crudos -->
+<div id="bootOverlay" style="position:fixed;inset:0;background:#ffffff;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity 0.4s ease;">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;">
+    <div style="width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#534AB7,#7c6ff0);display:flex;align-items:center;justify-content:center;color:white;font-weight:700;font-size:14px;">LS</div>
+    <span style="font-size:20px;font-weight:600;color:#1f1e1b;">Lusync</span>
+  </div>
+  <div style="width:36px;height:36px;border:3px solid #e5e7eb;border-top-color:#534AB7;border-radius:50%;animation:bootSpin 0.7s linear infinite;"></div>
+  <div style="margin-top:14px;font-size:13px;color:#9ca3af;">Cargando tu panel…</div>
+</div>
+<style>
+@keyframes bootSpin { to { transform: rotate(360deg); } }
+#bootOverlay.hidden { opacity: 0; pointer-events: none; }
+</style>
+<script>
+// Ocultar el overlay cuando el dashboard haya cargado, o tras un máximo de 2.5s
+(function() {
+  let oculto = false;
+  function ocultarBoot() {
+    if (oculto) return;
+    oculto = true;
+    const ov = document.getElementById('bootOverlay');
+    if (ov) {
+      ov.classList.add('hidden');
+      setTimeout(() => { if (ov && ov.parentNode) ov.parentNode.removeChild(ov); }, 450);
+    }
+  }
+  // Exponer global para que cargarDashboardCompleto la llame al terminar
+  window.__ocultarBootOverlay = ocultarBoot;
+  // Fallback: ocultar tras 2.5s aunque algo falle (no dejar al usuario trabado)
+  setTimeout(ocultarBoot, 2500);
+  // Ocultar también cuando la ventana termine de cargar (red lenta)
+  window.addEventListener('load', () => setTimeout(ocultarBoot, 400));
+})();
+</script>
+
 <div id="toast"></div>
 
 <div id="dashScreen" class="screen active">
@@ -8931,6 +8966,8 @@ async function cargarDashboardCompleto() {
   ]);
   // Re-aplicar la configuración de vista al final
   if (typeof aplicarVistaDashboard === 'function') aplicarVistaDashboard();
+  // Ocultar el overlay de carga inicial (el dashboard ya está listo)
+  if (typeof window.__ocultarBootOverlay === 'function') window.__ocultarBootOverlay();
 }
 
 // ─── CARD: Devoluciones por revisar ───────────────
