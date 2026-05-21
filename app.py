@@ -22494,5 +22494,133 @@ def admin_lusync_sii_test_firma():
     return html
 
 
+@app.route("/admin/lusync/sii/test-token", methods=["GET"])
+@requiere_lusync_admin
+def admin_lusync_sii_test_token():
+    """Prueba la conexión REAL al SII: semilla → firmar → token.
+
+    Valida que Render puede comunicarse con apicert.sii.cl y que el .pfx
+    autentica correctamente. Despeja el riesgo de IP no autorizada / endpoint
+    caído ANTES de armar el resto del flujo de emisión.
+
+    Uso: /admin/lusync/sii/test-token?token=...&tenant_id=3
+    """
+    from inventario import get_conn, release_conn
+    from facturacion.certificados import obtener_certificado
+
+    tenant_id = request.args.get("tenant_id", default=3, type=int)
+    ambiente = request.args.get("ambiente", default="certificacion")
+
+    pasos = []
+    def paso(nombre, ok, detalle=""):
+        pasos.append({"nombre": nombre, "ok": ok, "detalle": detalle})
+
+    error_fatal = None
+    semilla = None
+    token = None
+    try:
+        # ─── PASO 1: Leer certificado ───
+        cert = obtener_certificado(get_conn, release_conn, tenant_id)
+        if not cert.get("ok"):
+            paso("Leer certificado .pfx", False, cert.get("error", "?"))
+            error_fatal = True
+        else:
+            paso("Leer certificado .pfx", True,
+                 f"Titular: {cert['metadata'].get('titular','?')}")
+
+        # ─── PASO 2: Pedir semilla REAL al SII ───
+        if not error_fatal:
+            from facturacion.dtes.sii_client import obtener_semilla, SIIError
+            try:
+                semilla = obtener_semilla(ambiente)
+                paso("Pedir semilla al SII (apicert)", True, f"Semilla recibida: {semilla}")
+            except SIIError as e:
+                paso("Pedir semilla al SII (apicert)", False, str(e)[:300])
+                error_fatal = True
+            except Exception as e:
+                paso("Pedir semilla al SII (apicert)", False,
+                     f"{type(e).__name__}: {str(e)[:250]}")
+                error_fatal = True
+
+        # ─── PASO 3: Firmar la semilla ───
+        semilla_firmada = None
+        if not error_fatal:
+            from facturacion.dtes.sii_client import firmar_semilla
+            try:
+                semilla_firmada = firmar_semilla(semilla, cert["pfx_bytes"], cert["password"])
+                paso("Firmar la semilla con el .pfx", True,
+                     f"XML firmado: {len(semilla_firmada)} bytes")
+            except Exception as e:
+                paso("Firmar la semilla", False, f"{type(e).__name__}: {str(e)[:250]}")
+                error_fatal = True
+
+        # ─── PASO 4: Obtener TOKEN real ───
+        if not error_fatal:
+            from facturacion.dtes.sii_client import obtener_token, SIIError
+            try:
+                token = obtener_token(semilla_firmada, ambiente)
+                paso("Obtener token del SII", True, f"Token: {token[:20]}…")
+            except SIIError as e:
+                paso("Obtener token del SII", False, str(e)[:300])
+                error_fatal = True
+            except Exception as e:
+                paso("Obtener token del SII", False,
+                     f"{type(e).__name__}: {str(e)[:250]}")
+                error_fatal = True
+
+    except Exception as e:
+        import traceback
+        paso("Error general", False, traceback.format_exc()[:400])
+        error_fatal = True
+
+    todo_ok = all(p["ok"] for p in pasos) and not error_fatal
+    color = "#10b981" if todo_ok else "#dc2626"
+    emoji = "✅" if todo_ok else "❌"
+    titulo = ("Conexión con el SII operativa — autenticación OK"
+              if todo_ok else "Hay un problema con la conexión al SII")
+
+    filas = ""
+    for p in pasos:
+        ic = "✅" if p["ok"] else "❌"
+        col = "#10b981" if p["ok"] else "#dc2626"
+        filas += f"""
+        <div style="display:flex;gap:10px;padding:12px 14px;border-bottom:1px solid #f0f0ee;align-items:flex-start;">
+          <div style="font-size:16px;">{ic}</div>
+          <div style="flex:1;">
+            <div style="font-weight:600;color:#1f1e1b;font-size:13px;">{p['nombre']}</div>
+            <div style="color:{col};font-size:12px;margin-top:2px;font-family:monospace;word-break:break-word;">{p['detalle']}</div>
+          </div>
+        </div>"""
+
+    nota_final = ("🎉 Render se comunica con el SII y tu certificado autentica. "
+                  "Listo para enviar documentos." if todo_ok else
+                  "Si el error es de conexión/timeout, puede ser que el SII bloquee la IP "
+                  "de Render o que el endpoint haya cambiado. Si es de firma, revisa el .pfx.")
+
+    html = f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+    <title>Test Token SII · Lusync</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      body {{ font-family:-apple-system,'Segoe UI',sans-serif; background:#f6f5f1;
+             margin:0; padding:24px; color:#1f1e1b; }}
+      .card {{ max-width:640px; margin:0 auto; background:white; border-radius:14px;
+              overflow:hidden; box-shadow:0 4px 20px rgba(0,0,0,0.06); }}
+      .header {{ background:{color}; color:white; padding:24px; }}
+      .header h1 {{ margin:0; font-size:18px; }}
+      .header p {{ margin:6px 0 0; opacity:0.9; font-size:13px; }}
+      .footer {{ padding:16px 24px; background:#fafaf9; font-size:12px; color:#6b7280; }}
+    </style></head><body>
+    <div class="card">
+      <div class="header">
+        <h1>{emoji} {titulo}</h1>
+        <p>Test de autenticación · ambiente {ambiente} · tenant {tenant_id}</p>
+      </div>
+      <div>{filas}</div>
+      <div class="footer">{nota_final}</div>
+    </div>
+    </body></html>"""
+    return html
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
