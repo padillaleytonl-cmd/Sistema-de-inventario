@@ -23316,6 +23316,15 @@ def admin_lusync_sii_test_rcof():
                 error_fatal = True
             else:
                 rcof_xml_preview = _html.escape(rcof_firmado.decode("iso-8859-1"))
+                # Modo descarga: devuelve el XML como archivo .xml listo para subir al SII
+                if request.args.get("descargar") == "si":
+                    from flask import Response
+                    nombre = f"RCOF_{res_rcof['documento_id']}.xml"
+                    return Response(
+                        rcof_firmado,
+                        mimetype="application/xml",
+                        headers={"Content-Disposition": f'attachment; filename="{nombre}"'},
+                    )
 
     except Exception as e:
         import traceback
@@ -23342,8 +23351,13 @@ def admin_lusync_sii_test_rcof():
 
     preview_block = ""
     if rcof_xml_preview:
+        tok_param = request.args.get("token", "")
+        url_descarga = f"?token={tok_param}&tenant_id={tenant_id}&descargar=si"
         preview_block = f"""
         <div style="padding:14px 24px;">
+          <a href="{url_descarga}" style="display:inline-block;margin-bottom:12px;background:#10b981;
+          color:white;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600;font-size:13px;">
+          ⬇ Descargar RCOF.xml (para subir al SII)</a>
           <div style="font-weight:600;font-size:13px;margin-bottom:8px;">XML del RCOF firmado:</div>
           <textarea readonly style="width:100%;height:220px;font-family:monospace;font-size:10px;
           border:1px solid #e5e5e3;border-radius:8px;padding:10px;box-sizing:border-box;">{rcof_xml_preview}</textarea>
