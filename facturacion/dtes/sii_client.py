@@ -105,10 +105,17 @@ def firmar_semilla(semilla: str, pfx_bytes: bytes, password: str) -> bytes:
     private_key, certificate, _ = pkcs12.load_key_and_certificates(pfx_bytes, password)
 
     from cryptography.hazmat.primitives import serialization
+
+    def _wrap64(s: str) -> str:
+        """Parte un base64 en líneas de 64 caracteres, como el manual del SII.
+        El parser legacy del SII (Java) espera el certificado en este formato
+        PEM-like; con una sola línea larga reporta 'Certificate no existe'."""
+        return "\n".join(s[i:i+64] for i in range(0, len(s), 64))
+
     cert_der = certificate.public_bytes(serialization.Encoding.DER)
-    cert_b64 = base64.b64encode(cert_der).decode("ascii")
+    cert_b64 = _wrap64(base64.b64encode(cert_der).decode("ascii"))
     pub = certificate.public_key().public_numbers()
-    mod_b64 = base64.b64encode(pub.n.to_bytes((pub.n.bit_length()+7)//8, "big")).decode("ascii")
+    mod_b64 = _wrap64(base64.b64encode(pub.n.to_bytes((pub.n.bit_length()+7)//8, "big")).decode("ascii"))
     exp_b64 = base64.b64encode(pub.e.to_bytes((pub.e.bit_length()+7)//8, "big")).decode("ascii")
 
     # XML base (la firma es enveloped sobre todo el documento, Reference URI="")
@@ -122,6 +129,8 @@ def firmar_semilla(semilla: str, pfx_bytes: bytes, password: str) -> bytes:
     # Construir el Signature COMPLETO (con SignatureValue vacío) e insertarlo
     # PRIMERO en el árbol, para canonicalizar SignedInfo en el mismo contexto
     # de namespaces tanto al firmar como al verificar (evita firma inválida).
+    # NOTA: cert_b64 y mod_b64 van partidos en líneas de 64 chars (formato SII).
+    # Esto NO afecta la firma porque KeyInfo no está dentro de SignedInfo.
     signed_info = (
         f'<SignedInfo>'
         f'<CanonicalizationMethod Algorithm="{C14N_METHOD}"/>'
@@ -154,7 +163,7 @@ def firmar_semilla(semilla: str, pfx_bytes: bytes, password: str) -> bytes:
             break
     si_c14n = _c14n(si_en_arbol)
     firma = private_key.sign(si_c14n, padding.PKCS1v15(), hashes.SHA1())
-    sig_value = base64.b64encode(firma).decode("ascii")
+    sig_value = _wrap64(base64.b64encode(firma).decode("ascii"))
 
     # Poner el SignatureValue en el árbol
     for e in sig_el.iter():
@@ -165,8 +174,6 @@ def firmar_semilla(semilla: str, pfx_bytes: bytes, password: str) -> bytes:
     # IMPORTANTE: el SII usa un parser antiguo (Java/Axis) muy estricto.
     # Requiere la declaración XML EXACTA con comillas dobles y sin encoding,
     # tal como aparece en el manual oficial: <?xml version="1.0"?>
-    # lxml genera comillas simples y agrega encoding, lo que el SII rechaza
-    # (reporta "elemento Certificate no existe" porque no parsea bien).
     cuerpo = etree.tostring(root, xml_declaration=False, encoding="UTF-8").decode("utf-8")
     xml_final = '<?xml version="1.0"?>' + cuerpo
     return xml_final.encode("utf-8")
