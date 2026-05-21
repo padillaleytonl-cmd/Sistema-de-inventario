@@ -22743,8 +22743,9 @@ def admin_lusync_sii_test_envio():
         if not error_fatal:
             from facturacion.dtes.firma import firmar_documento
             doc_id = res_bol["documento_id"]
+            # firma.py espera el ID SIN '#' (internamente arma URI="#{id}")
             boleta_firmada = firmar_documento(
-                res_bol["xml"], cert["pfx_bytes"], cert["password"], reference_uri=f"#{doc_id}")
+                res_bol["xml"], cert["pfx_bytes"], cert["password"], reference_uri=doc_id)
             paso("Firmar la boleta (XMLDSig)", True, f"{len(boleta_firmada)} bytes")
 
         # ─── 5. Armar sobre EnvioBOLETA ───
