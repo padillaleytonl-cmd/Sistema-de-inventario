@@ -283,9 +283,9 @@ def enviar_boletas(
         "Expect": "100-continue",
     }
     # multipart/form-data con el archivo.
-    # El SII espera el campo 'archivo' con tipo text/xml (formato confirmado).
+    # El SII espera el campo 'archivo' con tipo text/xml y charset ISO-8859-1.
     files = {
-        "archivo": ("envioBoleta.xml", envio_xml, "text/xml"),
+        "archivo": ("envioBoleta.xml", envio_xml, "text/xml; charset=ISO-8859-1"),
     }
     data = {
         "rutSender": rut_env_num, "dvSender": rut_env_dv,

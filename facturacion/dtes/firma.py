@@ -226,7 +226,10 @@ def firmar_envio(envio_xml: bytes, pfx_bytes: bytes, password: str, set_dte_id: 
             e.text = signature_value
             break
 
-    return etree.tostring(root, xml_declaration=True, encoding="ISO-8859-1")
+    # El SII (parser estricto) requiere la declaración con comillas DOBLES.
+    # lxml genera comillas simples, que el SII rechaza con CHR-00001.
+    cuerpo = etree.tostring(root, xml_declaration=False, encoding="ISO-8859-1")
+    return b'<?xml version="1.0" encoding="ISO-8859-1"?>\n' + cuerpo
 
 
 def verificar_firma_propia(dte_firmado_xml: bytes) -> dict:
