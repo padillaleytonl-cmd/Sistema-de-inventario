@@ -22557,17 +22557,18 @@ def admin_lusync_sii_test_token():
         # ─── PASO 4: Obtener TOKEN real ───
         if not error_fatal:
             from facturacion.dtes.sii_client import obtener_token, SIIError
+            import html as _html
             try:
                 token = obtener_token(semilla_firmada, ambiente)
                 paso("Obtener token del SII", True, f"Token: {token[:20]}…")
             except SIIError as e:
-                # Mostrar también el XML que enviamos y la respuesta cruda para diagnóstico
-                detalle = str(e)[:300]
+                # Mostrar el XML que enviamos y la respuesta cruda (escapados para verlos)
+                detalle = _html.escape(str(e)[:400])
                 paso("Obtener token del SII", False, detalle)
-                # Diagnóstico extra: primeras líneas del XML enviado
                 try:
-                    xml_preview = semilla_firmada.decode("utf-8")[:600]
-                    paso("🔍 XML enviado (diagnóstico)", False, xml_preview)
+                    xml_completo = semilla_firmada.decode("utf-8")
+                    paso("🔍 XML enviado (completo, escapado)", False,
+                         _html.escape(xml_completo))
                 except Exception:
                     pass
                 error_fatal = True
