@@ -175,23 +175,69 @@ def firmar_semilla(semilla: str, pfx_bytes: bytes, password: str) -> bytes:
 def obtener_token(semilla_firmada: bytes, ambiente: str = "certificacion") -> str:
     """Paso 4: envía la semilla firmada y obtiene el token.
 
+    El endpoint REST de boletas (apicert/boleta.electronica.token) espera el XML
+    de la semilla firmada. Probamos las formas conocidas de envío que aceptan
+    las distintas versiones del SII, en orden, hasta obtener el token.
+
     Returns:
         str: el token de autenticación
     """
     url = ENDPOINTS[ambiente]["token"]
-    headers = {"User-Agent": USER_AGENT, "Content-Type": "application/xml", "Accept": "application/xml"}
-    try:
-        resp = requests.post(url, data=semilla_firmada, headers=headers, timeout=TIMEOUT)
-    except Exception as e:
-        raise SIIError(f"No se pudo conectar a {url}: {e}")
+    xml_str = semilla_firmada.decode("utf-8") if isinstance(semilla_firmada, bytes) else semilla_firmada
 
-    if resp.status_code != 200:
-        raise SIIError(f"SII respondió {resp.status_code} al pedir token: {resp.text[:300]}")
+    intentos = []
 
-    m = re.search(r"<TOKEN>\s*([^<]+?)\s*</TOKEN>", resp.text)
-    if not m:
-        raise SIIError(f"No se encontró <TOKEN> en la respuesta: {resp.text[:300]}")
-    return m.group(1).strip()
+    # Forma A: body XML crudo (Content-Type application/xml)
+    intentos.append({
+        "nombre": "body-xml",
+        "kwargs": {
+            "data": xml_str.encode("utf-8"),
+            "headers": {"User-Agent": USER_AGENT, "Content-Type": "application/xml"},
+        },
+    })
+    # Forma B: form-urlencoded con campo 'getToken'
+    intentos.append({
+        "nombre": "form-getToken",
+        "kwargs": {
+            "data": {"getToken": xml_str},
+            "headers": {"User-Agent": USER_AGENT,
+                        "Content-Type": "application/x-www-form-urlencoded"},
+        },
+    })
+    # Forma C: multipart con archivo
+    intentos.append({
+        "nombre": "multipart-archivo",
+        "kwargs": {
+            "files": {"archivo": ("semilla.xml", xml_str.encode("utf-8"), "application/xml")},
+            "headers": {"User-Agent": USER_AGENT},
+        },
+    })
+
+    ultima_respuesta = ""
+    for intento in intentos:
+        try:
+            resp = requests.post(url, timeout=TIMEOUT, **intento["kwargs"])
+        except Exception as e:
+            ultima_respuesta = f"[{intento['nombre']}] error de conexión: {e}"
+            continue
+
+        texto = resp.text
+        ultima_respuesta = f"[{intento['nombre']}] HTTP {resp.status_code}: {texto[:400]}"
+
+        # Buscar token
+        m = re.search(r"<TOKEN>\s*([^<]+?)\s*</TOKEN>", texto)
+        if m:
+            return m.group(1).strip()
+        # Si dio estado 00 pero token en otro formato
+        try:
+            j = resp.json()
+            tok = j.get("token") or j.get("TOKEN")
+            if tok:
+                return tok
+        except Exception:
+            pass
+
+    raise SIIError(f"No se obtuvo TOKEN. Última respuesta: {ultima_respuesta}")
 
 
 def autenticar(pfx_bytes: bytes, password: str, ambiente: str = "certificacion") -> str:
