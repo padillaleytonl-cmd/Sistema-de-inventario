@@ -278,13 +278,14 @@ def enviar_boletas(
 
     headers = {
         "User-Agent": USER_AGENT,
-        "Accept": "application/json",
+        "accept": "application/json",
         "Cookie": f"TOKEN={token}",
-        "Host": host,
+        "Expect": "100-continue",
     }
-    # multipart/form-data con el archivo
+    # multipart/form-data con el archivo.
+    # El SII espera el campo 'archivo' con tipo text/xml (formato confirmado).
     files = {
-        "archivo": ("envio.xml", envio_xml, "application/xml"),
+        "archivo": ("envioBoleta.xml", envio_xml, "text/xml"),
     }
     data = {
         "rutSender": rut_env_num, "dvSender": rut_env_dv,
@@ -301,12 +302,13 @@ def enviar_boletas(
         return {"ok": False, "error": "Token vencido o inválido (NO ESTA AUTENTICADO)",
                 "respuesta_cruda": texto[:500], "status": resp.status_code}
 
-    # Buscar track id (puede venir en JSON o XML)
+    # Buscar track id. La respuesta es JSON: {"trackid":1014,"estado":"REC",...}
     track_id = None
-    # JSON
+    estado = None
     try:
         j = resp.json()
         track_id = j.get("trackid") or j.get("trackId") or j.get("track_id")
+        estado = j.get("estado")
     except Exception:
         pass
     # XML fallback
@@ -319,6 +321,7 @@ def enviar_boletas(
     return {
         "ok": ok,
         "track_id": track_id,
+        "estado": estado,
         "respuesta_cruda": texto[:500],
         "status": resp.status_code,
     }

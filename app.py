@@ -22631,5 +22631,217 @@ def admin_lusync_sii_test_token():
     return html
 
 
+@app.route("/admin/lusync/sii/test-envio", methods=["GET"])
+@requiere_lusync_admin
+def admin_lusync_sii_test_envio():
+    """Prueba el CANAL DE ENVÍO al SII: autentica, genera una boleta CASO-1,
+    la firma, arma el sobre EnvioBOLETA, lo firma y lo envía a pangal.
+
+    Valida que Render puede enviar documentos y que el SII acepta el formato.
+    Devuelve un track_id si todo va bien.
+
+    ⚠ Esto envía una boleta REAL al ambiente de certificación (seguro, no es
+    producción, pero consume un folio del CAF).
+
+    Uso: /admin/lusync/sii/test-envio?token=...&tenant_id=3&confirmar=si
+    """
+    from inventario import get_conn, release_conn
+    from facturacion.certificados import obtener_certificado
+    from facturacion.db import obtener_config_facturacion
+
+    tenant_id = request.args.get("tenant_id", default=3, type=int)
+    ambiente = request.args.get("ambiente", default="certificacion")
+    confirmar = request.args.get("confirmar", default="")
+
+    pasos = []
+    def paso(nombre, ok, detalle=""):
+        pasos.append({"nombre": nombre, "ok": ok, "detalle": detalle})
+
+    # Salvaguarda: exige confirmar=si para evitar envíos accidentales
+    if confirmar != "si":
+        return """<!DOCTYPE html><html><head><meta charset="utf-8">
+        <title>Confirmar envío</title>
+        <style>body{font-family:-apple-system,sans-serif;background:#f6f5f1;padding:40px;}
+        .card{max-width:560px;margin:0 auto;background:white;border-radius:14px;padding:28px;
+        box-shadow:0 4px 20px rgba(0,0,0,0.06);}
+        .warn{background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:14px;color:#92400e;font-size:13px;}
+        a.btn{display:inline-block;margin-top:18px;background:#dc2626;color:white;padding:12px 20px;
+        border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;}</style></head><body>
+        <div class="card">
+        <h2 style="margin-top:0;">⚠️ Confirmar envío de prueba al SII</h2>
+        <div class="warn">
+        Esto enviará una boleta REAL al ambiente de <b>certificación</b> del SII.<br><br>
+        • Es seguro (certificación, NO producción)<br>
+        • Consumirá <b>1 folio</b> del CAF de Boleta 39<br>
+        • Sirve para validar que el canal de envío funciona
+        </div>
+        <p style="font-size:13px;color:#6b7280;">Si estás listo, haz clic para enviar:</p>
+        <a class="btn" href="?token=""" + request.args.get("token", "") + """&tenant_id=""" + str(tenant_id) + """&confirmar=si">
+        Sí, enviar boleta de prueba →</a>
+        </div></body></html>"""
+
+    error_fatal = False
+    track_id = None
+    try:
+        # ─── 1. Certificado ───
+        cert = obtener_certificado(get_conn, release_conn, tenant_id)
+        if not cert.get("ok"):
+            paso("Leer certificado .pfx", False, cert.get("error", "?"))
+            error_fatal = True
+        else:
+            paso("Leer certificado .pfx", True, cert["metadata"].get("titular", "?"))
+
+        # ─── 2. Config emisor + CAF ───
+        if not error_fatal:
+            config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+            emisor = {
+                "rut": config["rut_emisor"],
+                "razon_social": config["razon_social"],
+                "giro": config.get("giro", "Venta al por menor"),
+                "dir_origen": config.get("direccion", "Sin dirección"),
+                "cmna_origen": config.get("comuna", "Santiago"),
+            }
+            paso("Leer datos del emisor", True,
+                 f"{emisor['razon_social']} · {emisor['rut']}")
+
+            # Leer CAF de Boleta 39 de la BD
+            conn = get_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT xml_caf FROM facturacion_cafs
+                        WHERE tenant_id = %s AND tipo_dte = 39
+                        ORDER BY id DESC LIMIT 1
+                    """, (tenant_id,))
+                    row = cur.fetchone()
+            finally:
+                release_conn(conn)
+            if not row:
+                paso("Leer CAF Boleta 39", False, "No hay CAF de Boleta 39 en la BD")
+                error_fatal = True
+            else:
+                from facturacion.dtes.caf_parser import parsear_caf_xml
+                caf = parsear_caf_xml(row[0])
+                folio = caf.rango_desde
+                paso("Leer CAF Boleta 39", True,
+                     f"Rango {caf.rango_desde}-{caf.rango_hasta} · usando folio {folio}")
+
+        # ─── 3. Generar boleta CASO-1 ───
+        if not error_fatal:
+            from facturacion.dtes.boleta import generar_boleta_xml
+            items = [{"nombre": "Item Set Prueba", "cantidad": 1,
+                      "precio_unitario": 29800, "exento": False}]
+            res_bol = generar_boleta_xml(
+                caf=caf, folio=folio, fecha_emision=datetime.now().strftime("%Y-%m-%d"),
+                emisor=emisor, items=items,
+                referencia={"cod_ref": "SET", "razon_ref": "CASO-1"},
+            )
+            paso("Generar boleta CASO-1", True,
+                 f"Folio {folio} · Total ${res_bol['totales']['mnt_total']:,}".replace(",", "."))
+
+        # ─── 4. Firmar la boleta ───
+        if not error_fatal:
+            from facturacion.dtes.firma import firmar_documento
+            doc_id = res_bol["documento_id"]
+            boleta_firmada = firmar_documento(
+                res_bol["xml"], cert["pfx_bytes"], cert["password"], reference_uri=f"#{doc_id}")
+            paso("Firmar la boleta (XMLDSig)", True, f"{len(boleta_firmada)} bytes")
+
+        # ─── 5. Armar sobre EnvioBOLETA ───
+        if not error_fatal:
+            from facturacion.dtes.envio_boleta import armar_envio_boleta
+            set_id = "SetDoc"
+            sobre = armar_envio_boleta(
+                dtes_firmados=[boleta_firmada],
+                rut_emisor=emisor["rut"],
+                rut_envia=cert["metadata"].get("rut", "18849272-K"),
+                fch_resol="2014-08-22", nro_resol=0,
+                tipo_dte=39, set_dte_id=set_id,
+            )
+            paso("Armar sobre EnvioBOLETA", True, f"{len(sobre)} bytes")
+
+        # ─── 6. Firmar el sobre ───
+        if not error_fatal:
+            from facturacion.dtes.firma import firmar_envio
+            sobre_firmado = firmar_envio(sobre, cert["pfx_bytes"], cert["password"], set_dte_id=set_id)
+            paso("Firmar el sobre", True, f"{len(sobre_firmado)} bytes")
+
+        # ─── 7. Autenticar (token) ───
+        if not error_fatal:
+            from facturacion.dtes.sii_client import autenticar
+            tok = autenticar(cert["pfx_bytes"], cert["password"], ambiente)
+            paso("Autenticar (token)", True, f"Token: {tok[:18]}…")
+
+        # ─── 8. Enviar a pangal ───
+        if not error_fatal:
+            from facturacion.dtes.sii_client import enviar_boletas
+            resultado = enviar_boletas(
+                envio_xml=sobre_firmado, token=tok,
+                rut_emisor=emisor["rut"],
+                rut_envia=cert["metadata"].get("rut", "18849272-K"),
+                ambiente=ambiente,
+            )
+            import html as _html
+            if resultado.get("ok"):
+                track_id = resultado["track_id"]
+                paso("Enviar al SII (pangal)", True,
+                     f"✓ Track ID: {track_id} · estado: {resultado.get('estado','?')}")
+            else:
+                detalle = resultado.get("error") or _html.escape(str(resultado.get("respuesta_cruda", ""))[:400])
+                paso("Enviar al SII (pangal)", False,
+                     f"HTTP {resultado.get('status')}: {detalle}")
+                error_fatal = True
+
+    except Exception as e:
+        import traceback, html as _html
+        paso("Error", False, _html.escape(traceback.format_exc()[:500]))
+        error_fatal = True
+
+    todo_ok = all(p["ok"] for p in pasos) and track_id is not None
+    color = "#10b981" if todo_ok else "#dc2626"
+    emoji = "🎉" if todo_ok else "❌"
+    titulo = ("¡Boleta enviada al SII! Canal de envío operativo"
+              if todo_ok else "Hay un problema en el envío")
+
+    filas = ""
+    for p in pasos:
+        ic = "✅" if p["ok"] else "❌"
+        col = "#10b981" if p["ok"] else "#dc2626"
+        filas += f"""
+        <div style="display:flex;gap:10px;padding:12px 14px;border-bottom:1px solid #f0f0ee;align-items:flex-start;">
+          <div style="font-size:16px;">{ic}</div>
+          <div style="flex:1;">
+            <div style="font-weight:600;color:#1f1e1b;font-size:13px;">{p['nombre']}</div>
+            <div style="color:{col};font-size:12px;margin-top:2px;font-family:monospace;word-break:break-word;">{p['detalle']}</div>
+          </div>
+        </div>"""
+
+    nota = (f"🎉 ¡Track ID {track_id}! El SII recibió la boleta. Puedes consultar su estado con ese track id."
+            if todo_ok else
+            "Revisa el paso en rojo. Si el SII rechaza la firma del sobre, hay que migrar firma.py a signxml (igual que la semilla).")
+
+    html = f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+    <title>Test Envío SII · Lusync</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      body {{ font-family:-apple-system,'Segoe UI',sans-serif; background:#f6f5f1; margin:0; padding:24px; color:#1f1e1b; }}
+      .card {{ max-width:660px; margin:0 auto; background:white; border-radius:14px; overflow:hidden; box-shadow:0 4px 20px rgba(0,0,0,0.06); }}
+      .header {{ background:{color}; color:white; padding:24px; }}
+      .header h1 {{ margin:0; font-size:18px; }}
+      .header p {{ margin:6px 0 0; opacity:0.9; font-size:13px; }}
+      .footer {{ padding:16px 24px; background:#fafaf9; font-size:12px; color:#6b7280; }}
+    </style></head><body>
+    <div class="card">
+      <div class="header">
+        <h1>{emoji} {titulo}</h1>
+        <p>Test de envío · ambiente {ambiente} · tenant {tenant_id}</p>
+      </div>
+      <div>{filas}</div>
+      <div class="footer">{nota}</div>
+    </div>
+    </body></html>"""
+    return html
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
