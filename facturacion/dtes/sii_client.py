@@ -97,84 +97,55 @@ def obtener_semilla(ambiente: str = "certificacion") -> str:
 def firmar_semilla(semilla: str, pfx_bytes: bytes, password: str) -> bytes:
     """Paso 2-3: construye <getToken> con la semilla y lo firma con XMLDSig.
 
+    Usa signxml (implementación estándar W3C de XML-DSig) para garantizar que la
+    canonicalización y el digest sean EXACTAMENTE los que el SII valida. El SII
+    requiere SHA1 (inseguro pero obligatorio), por eso se desactiva el bloqueo de
+    SHA1 de signxml mediante una subclase. La estructura resultante coincide con
+    el formato del manual oficial del SII: Reference URI="", transform enveloped,
+    KeyInfo con X509Data/X509Certificate (cert partido en líneas de 64 chars).
+
     Returns:
         bytes del XML <getToken> firmado, listo para enviar
     """
+    from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, NoEncryption
+    from signxml import XMLSigner, methods
+
     if isinstance(password, str):
         password = password.encode("utf-8")
     private_key, certificate, _ = pkcs12.load_key_and_certificates(pfx_bytes, password)
 
-    from cryptography.hazmat.primitives import serialization
+    # Exportar clave y cert a PEM para signxml
+    key_pem = private_key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption())
+    cert_pem = certificate.public_bytes(Encoding.PEM)
 
-    def _wrap64(s: str) -> str:
-        """Parte un base64 en líneas de 64 caracteres, como el manual del SII.
-        El parser legacy del SII (Java) espera el certificado en este formato
-        PEM-like; con una sola línea larga reporta 'Certificate no existe'."""
-        return "\n".join(s[i:i+64] for i in range(0, len(s), 64))
+    # Subclase que permite SHA1 (el SII lo exige)
+    class _SIIXMLSigner(XMLSigner):
+        def check_deprecated_methods(self):
+            pass
 
-    cert_der = certificate.public_bytes(serialization.Encoding.DER)
-    cert_b64 = _wrap64(base64.b64encode(cert_der).decode("ascii"))
-    pub = certificate.public_key().public_numbers()
-    mod_b64 = _wrap64(base64.b64encode(pub.n.to_bytes((pub.n.bit_length()+7)//8, "big")).decode("ascii"))
-    exp_b64 = base64.b64encode(pub.e.to_bytes((pub.e.bit_length()+7)//8, "big")).decode("ascii")
-
-    # XML base (la firma es enveloped sobre todo el documento, Reference URI="")
-    doc_xml = f'<getToken><item><Semilla>{semilla}</Semilla></item></getToken>'
-    root = etree.fromstring(doc_xml.encode("utf-8"))
-
-    # Digest del documento completo (con la firma removida = el doc tal cual, URI="")
-    doc_c14n = _c14n(root)
-    digest_value = base64.b64encode(hashlib.sha1(doc_c14n).digest()).decode("ascii")
-
-    # Construir el Signature COMPLETO (con SignatureValue vacío) e insertarlo
-    # PRIMERO en el árbol, para canonicalizar SignedInfo en el mismo contexto
-    # de namespaces tanto al firmar como al verificar (evita firma inválida).
-    # NOTA: cert_b64 y mod_b64 van partidos en líneas de 64 chars (formato SII).
-    # Esto NO afecta la firma porque KeyInfo no está dentro de SignedInfo.
-    signed_info = (
-        f'<SignedInfo>'
-        f'<CanonicalizationMethod Algorithm="{C14N_METHOD}"/>'
-        f'<SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"/>'
-        f'<Reference URI="">'
-        f'<Transforms><Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/></Transforms>'
-        f'<DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"/>'
-        f'<DigestValue>{digest_value}</DigestValue>'
-        f'</Reference>'
-        f'</SignedInfo>'
+    # Documento a firmar
+    doc = etree.fromstring(
+        f'<getToken><item><Semilla>{semilla}</Semilla></item></getToken>'.encode("utf-8")
     )
-    signature = (
-        f'<Signature xmlns="{NS_DSIG}">'
-        f'{signed_info}'
-        f'<SignatureValue></SignatureValue>'
-        f'<KeyInfo>'
-        f'<KeyValue><RSAKeyValue><Modulus>{mod_b64}</Modulus><Exponent>{exp_b64}</Exponent></RSAKeyValue></KeyValue>'
-        f'<X509Data><X509Certificate>{cert_b64}</X509Certificate></X509Data>'
-        f'</KeyInfo>'
-        f'</Signature>'
+
+    signer = _SIIXMLSigner(
+        method=methods.enveloped,
+        signature_algorithm="rsa-sha1",
+        digest_algorithm="sha1",
+        c14n_algorithm=C14N_METHOD,
     )
-    sig_el = etree.fromstring(signature.encode("utf-8"))
-    root.append(sig_el)
+    # Namespace por defecto (sin prefijo ds:), como en el ejemplo del SII
+    signer.namespaces = {None: NS_DSIG}
 
-    # Canonicalizar el SignedInfo YA DENTRO del árbol y firmar
-    si_en_arbol = None
-    for e in sig_el.iter():
-        if e.tag.endswith("}SignedInfo"):
-            si_en_arbol = e
-            break
-    si_c14n = _c14n(si_en_arbol)
-    firma = private_key.sign(si_c14n, padding.PKCS1v15(), hashes.SHA1())
-    sig_value = _wrap64(base64.b64encode(firma).decode("ascii"))
+    signed = signer.sign(
+        doc,
+        key=key_pem,
+        cert=cert_pem,
+        exclude_c14n_transform_element=True,  # deja solo el transform enveloped
+    )
 
-    # Poner el SignatureValue en el árbol
-    for e in sig_el.iter():
-        if e.tag.endswith("}SignatureValue"):
-            e.text = sig_value
-            break
-
-    # IMPORTANTE: el SII usa un parser antiguo (Java/Axis) muy estricto.
-    # Requiere la declaración XML EXACTA con comillas dobles y sin encoding,
-    # tal como aparece en el manual oficial: <?xml version="1.0"?>
-    cuerpo = etree.tostring(root, xml_declaration=False, encoding="UTF-8").decode("utf-8")
+    # Serializar con la declaración exacta que el SII parser acepta
+    cuerpo = etree.tostring(signed, xml_declaration=False, encoding="UTF-8").decode("utf-8")
     xml_final = '<?xml version="1.0"?>' + cuerpo
     return xml_final.encode("utf-8")
 
