@@ -162,7 +162,14 @@ def firmar_semilla(semilla: str, pfx_bytes: bytes, password: str) -> bytes:
             e.text = sig_value
             break
 
-    return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
+    # IMPORTANTE: el SII usa un parser antiguo (Java/Axis) muy estricto.
+    # Requiere la declaración XML EXACTA con comillas dobles y sin encoding,
+    # tal como aparece en el manual oficial: <?xml version="1.0"?>
+    # lxml genera comillas simples y agrega encoding, lo que el SII rechaza
+    # (reporta "elemento Certificate no existe" porque no parsea bien).
+    cuerpo = etree.tostring(root, xml_declaration=False, encoding="UTF-8").decode("utf-8")
+    xml_final = '<?xml version="1.0"?>' + cuerpo
+    return xml_final.encode("utf-8")
 
 
 def obtener_token(semilla_firmada: bytes, ambiente: str = "certificacion") -> str:

@@ -22561,7 +22561,15 @@ def admin_lusync_sii_test_token():
                 token = obtener_token(semilla_firmada, ambiente)
                 paso("Obtener token del SII", True, f"Token: {token[:20]}…")
             except SIIError as e:
-                paso("Obtener token del SII", False, str(e)[:300])
+                # Mostrar también el XML que enviamos y la respuesta cruda para diagnóstico
+                detalle = str(e)[:300]
+                paso("Obtener token del SII", False, detalle)
+                # Diagnóstico extra: primeras líneas del XML enviado
+                try:
+                    xml_preview = semilla_firmada.decode("utf-8")[:600]
+                    paso("🔍 XML enviado (diagnóstico)", False, xml_preview)
+                except Exception:
+                    pass
                 error_fatal = True
             except Exception as e:
                 paso("Obtener token del SII", False,
