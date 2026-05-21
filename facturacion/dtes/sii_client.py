@@ -187,15 +187,24 @@ def obtener_token(semilla_firmada: bytes, ambiente: str = "certificacion") -> st
 
     intentos = []
 
-    # Forma A: body XML crudo (Content-Type application/xml)
+    # Forma A: body XML con charset explícito
     intentos.append({
-        "nombre": "body-xml",
+        "nombre": "body-xml-charset",
         "kwargs": {
             "data": xml_str.encode("utf-8"),
-            "headers": {"User-Agent": USER_AGENT, "Content-Type": "application/xml"},
+            "headers": {"User-Agent": USER_AGENT,
+                        "Content-Type": "application/xml; charset=utf-8"},
         },
     })
-    # Forma B: form-urlencoded con campo 'getToken'
+    # Forma B: body text/xml
+    intentos.append({
+        "nombre": "body-text-xml",
+        "kwargs": {
+            "data": xml_str.encode("utf-8"),
+            "headers": {"User-Agent": USER_AGENT, "Content-Type": "text/xml"},
+        },
+    })
+    # Forma C: form-urlencoded con campo 'getToken'
     intentos.append({
         "nombre": "form-getToken",
         "kwargs": {
@@ -204,31 +213,28 @@ def obtener_token(semilla_firmada: bytes, ambiente: str = "certificacion") -> st
                         "Content-Type": "application/x-www-form-urlencoded"},
         },
     })
-    # Forma C: multipart con archivo
+    # Forma D: body XML simple (sin charset)
     intentos.append({
-        "nombre": "multipart-archivo",
+        "nombre": "body-xml",
         "kwargs": {
-            "files": {"archivo": ("semilla.xml", xml_str.encode("utf-8"), "application/xml")},
-            "headers": {"User-Agent": USER_AGENT},
+            "data": xml_str.encode("utf-8"),
+            "headers": {"User-Agent": USER_AGENT, "Content-Type": "application/xml"},
         },
     })
 
-    ultima_respuesta = ""
+    log = []
     for intento in intentos:
         try:
             resp = requests.post(url, timeout=TIMEOUT, **intento["kwargs"])
         except Exception as e:
-            ultima_respuesta = f"[{intento['nombre']}] error de conexión: {e}"
+            log.append(f"[{intento['nombre']}] conexión: {str(e)[:120]}")
             continue
 
         texto = resp.text
-        ultima_respuesta = f"[{intento['nombre']}] HTTP {resp.status_code}: {texto[:400]}"
-
         # Buscar token
         m = re.search(r"<TOKEN>\s*([^<]+?)\s*</TOKEN>", texto)
         if m:
             return m.group(1).strip()
-        # Si dio estado 00 pero token en otro formato
         try:
             j = resp.json()
             tok = j.get("token") or j.get("TOKEN")
@@ -236,8 +242,19 @@ def obtener_token(semilla_firmada: bytes, ambiente: str = "certificacion") -> st
                 return tok
         except Exception:
             pass
+        # Extraer estado/glosa si viene
+        est = re.search(r"<ESTADO>([^<]*)</ESTADO>", texto)
+        glo = re.search(r"<GLOSA>([^<]*)</GLOSA>", texto)
+        resumen = ""
+        if est:
+            resumen = f"estado={est.group(1)}"
+            if glo:
+                resumen += f" glosa={glo.group(1)}"
+        else:
+            resumen = texto[:150]
+        log.append(f"[{intento['nombre']}] HTTP {resp.status_code}: {resumen}")
 
-    raise SIIError(f"No se obtuvo TOKEN. Última respuesta: {ultima_respuesta}")
+    raise SIIError("No se obtuvo TOKEN. Respuestas: || " + " || ".join(log))
 
 
 def autenticar(pfx_bytes: bytes, password: str, ambiente: str = "certificacion") -> str:
