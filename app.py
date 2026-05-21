@@ -22289,5 +22289,210 @@ def admin_lusync_caf_eliminar(tenant_id, caf_id):
             pass
 
 
+@app.route("/admin/lusync/sii/test-firma", methods=["GET"])
+@requiere_lusync_admin
+def admin_lusync_sii_test_firma():
+    """Auto-test del motor de firma SII con el .pfx REAL del tenant.
+
+    Valida end-to-end SIN exponer el certificado:
+      1. Lee el .pfx real desde la BD (Fernet)
+      2. Lee el CAF de Boleta 39 del tenant
+      3. Genera la boleta CASO-1 ($29.800)
+      4. Le agrega el TED (firma con clave del CAF)
+      5. La firma con XMLDSig usando el .pfx real
+      6. Verifica que la firma sea válida
+      7. Devuelve un reporte HTML legible
+
+    Uso: /admin/lusync/sii/test-firma?token=...&tenant_id=3
+    """
+    from inventario import get_conn, release_conn
+    from facturacion.certificados import obtener_certificado
+    from facturacion.db import obtener_config_facturacion
+
+    tenant_id = request.args.get("tenant_id", type=int)
+    if not tenant_id:
+        # Buscar el tenant de Grupo PH SPA por defecto
+        tenant_id = 3
+
+    pasos = []
+    def paso(nombre, ok, detalle=""):
+        pasos.append({"nombre": nombre, "ok": ok, "detalle": detalle})
+
+    error_fatal = None
+    try:
+        # ─── PASO 1: Leer certificado .pfx desde BD ───
+        cert = obtener_certificado(get_conn, release_conn, tenant_id)
+        if not cert.get("ok"):
+            paso("Leer certificado .pfx de la BD", False, cert.get("error", "desconocido"))
+            error_fatal = "No se pudo leer el certificado"
+        else:
+            meta = cert.get("metadata", {})
+            paso("Leer certificado .pfx de la BD", True,
+                 f"Titular: {meta.get('titular','?')} · RUT: {meta.get('rut','?')} · "
+                 f"Expira: {meta.get('fecha_expiracion','?')}")
+
+        # ─── PASO 2: Cargar la clave privada del .pfx ───
+        if not error_fatal:
+            from facturacion.dtes.firma import cargar_pfx
+            try:
+                priv, cert_obj, cert_b64, mod_b64, exp_b64 = cargar_pfx(
+                    cert["pfx_bytes"], cert["password"])
+                paso("Cargar clave privada del .pfx", True,
+                     f"Clave RSA cargada · módulo {len(mod_b64)} chars b64")
+            except Exception as e:
+                paso("Cargar clave privada del .pfx", False, str(e)[:200])
+                error_fatal = "El .pfx no se pudo abrir (¿contraseña incorrecta?)"
+
+        # ─── PASO 3: Leer el CAF de Boleta 39 ───
+        caf_parsed = None
+        if not error_fatal:
+            conn = get_conn(is_admin=True)
+            try:
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT xml_caf, folio_desde, folio_hasta, folio_actual
+                    FROM facturacion_cafs
+                    WHERE tenant_id = %s AND tipo_dte = 39
+                    ORDER BY fecha_subida DESC LIMIT 1
+                """, (tenant_id,))
+                row = cur.fetchone()
+                cur.close()
+            finally:
+                release_conn(conn)
+
+            if not row:
+                paso("Leer CAF de Boleta 39", False,
+                     "No hay CAF tipo 39 cargado para este tenant")
+                error_fatal = "Falta el CAF de Boleta 39"
+            else:
+                from facturacion.dtes.caf_parser import parsear_caf_xml
+                try:
+                    caf_parsed = parsear_caf_xml(row[0])
+                    folio_test = row[3]  # folio_actual (próximo a usar)
+                    paso("Leer y parsear CAF de Boleta 39", True,
+                         f"Rango {row[1]}-{row[2]} · próximo folio {folio_test} · "
+                         f"IDK {caf_parsed.idk}")
+                except Exception as e:
+                    paso("Leer y parsear CAF de Boleta 39", False, str(e)[:200])
+                    error_fatal = "El CAF no se pudo parsear"
+
+        # ─── PASO 4: Datos del emisor ───
+        emisor = None
+        if not error_fatal:
+            config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+            if not config or not config.get("rut_emisor"):
+                paso("Leer datos del emisor", False, "Config de facturación incompleta")
+                error_fatal = "Falta configurar los datos del emisor"
+            else:
+                emisor = {
+                    "rut": config["rut_emisor"],
+                    "razon_social": config.get("razon_social", ""),
+                    "giro": config.get("giro", ""),
+                    "dir_origen": config.get("direccion", ""),
+                    "cmna_origen": config.get("comuna", ""),
+                }
+                paso("Leer datos del emisor", True,
+                     f"{emisor['razon_social']} · {emisor['rut']}")
+
+        # ─── PASO 5: Generar boleta CASO-1 ───
+        boleta_result = None
+        if not error_fatal:
+            from facturacion.dtes.boleta import generar_boleta_xml
+            try:
+                boleta_result = generar_boleta_xml(
+                    caf=caf_parsed, folio=folio_test, fecha_emision="2026-05-20",
+                    emisor=emisor,
+                    items=[
+                        {"nombre": "Cambio de aceite", "cantidad": 1, "precio_unitario": 19900},
+                        {"nombre": "Alineacion y balanceo", "cantidad": 1, "precio_unitario": 9900},
+                    ],
+                    referencia={"cod_ref": "SET", "razon_ref": "CASO-1"},
+                    timestamp_firma="2026-05-20T15:00:00",
+                )
+                t = boleta_result["totales"]
+                paso("Generar boleta CASO-1 (con TED)", True,
+                     f"Neto ${t['mnt_neto']:,} + IVA ${t['mnt_iva']:,} = "
+                     f"Total ${t['mnt_total']:,}".replace(",", "."))
+            except Exception as e:
+                import traceback
+                paso("Generar boleta CASO-1", False, traceback.format_exc()[:300])
+                error_fatal = "Error generando la boleta"
+
+        # ─── PASO 6: Firmar con XMLDSig (el .pfx real) ───
+        boleta_firmada = None
+        if not error_fatal:
+            from facturacion.dtes.firma import firmar_documento
+            try:
+                boleta_firmada = firmar_documento(
+                    boleta_result["xml"], cert["pfx_bytes"], cert["password"],
+                    boleta_result["documento_id"])
+                paso("Firmar boleta con XMLDSig (.pfx real)", True,
+                     f"Documento firmado · {len(boleta_firmada):,} bytes")
+            except Exception as e:
+                import traceback
+                paso("Firmar boleta con XMLDSig", False, traceback.format_exc()[:300])
+                error_fatal = "Error al firmar"
+
+        # ─── PASO 7: Verificar la firma ───
+        if not error_fatal:
+            from facturacion.dtes.firma import verificar_firma_propia
+            v = verificar_firma_propia(boleta_firmada)
+            paso("Verificar la firma XMLDSig", v["ok"], v["mensaje"])
+            if not v["ok"]:
+                error_fatal = "La firma no verifica"
+
+    except Exception as e:
+        import traceback
+        error_fatal = f"Error inesperado: {str(e)[:200]}"
+        paso("Error general", False, traceback.format_exc()[:400])
+
+    # ─── Construir reporte HTML ───
+    todo_ok = all(p["ok"] for p in pasos) and not error_fatal
+    color_header = "#10b981" if todo_ok else "#dc2626"
+    emoji = "✅" if todo_ok else "❌"
+    titulo = ("Tu .pfx firma correctamente — motor SII operativo"
+              if todo_ok else "Hay un problema que resolver")
+
+    filas = ""
+    for p in pasos:
+        ic = "✅" if p["ok"] else "❌"
+        col = "#10b981" if p["ok"] else "#dc2626"
+        filas += f"""
+        <div style="display:flex;gap:10px;padding:12px 14px;border-bottom:1px solid #f0f0ee;align-items:flex-start;">
+          <div style="font-size:16px;">{ic}</div>
+          <div style="flex:1;">
+            <div style="font-weight:600;color:#1f1e1b;font-size:13px;">{p['nombre']}</div>
+            <div style="color:{col};font-size:12px;margin-top:2px;font-family:monospace;word-break:break-word;">{p['detalle']}</div>
+          </div>
+        </div>"""
+
+    html = f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+    <title>Test Firma SII · Lusync</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      body {{ font-family:-apple-system,'Segoe UI',sans-serif; background:#f6f5f1;
+             margin:0; padding:24px; color:#1f1e1b; }}
+      .card {{ max-width:640px; margin:0 auto; background:white; border-radius:14px;
+              overflow:hidden; box-shadow:0 4px 20px rgba(0,0,0,0.06); }}
+      .header {{ background:{color_header}; color:white; padding:24px; }}
+      .header h1 {{ margin:0; font-size:18px; }}
+      .header p {{ margin:6px 0 0; opacity:0.9; font-size:13px; }}
+      .footer {{ padding:16px 24px; background:#fafaf9; font-size:12px; color:#6b7280; }}
+    </style></head><body>
+    <div class="card">
+      <div class="header">
+        <h1>{emoji} {titulo}</h1>
+        <p>Auto-test del motor de firma · tenant {tenant_id}</p>
+      </div>
+      <div>{filas}</div>
+      <div class="footer">
+        {"🎉 Todo el motor criptográfico funciona con tu certificado real. Listo para construir el cliente SII." if todo_ok else "Revisa el paso marcado en rojo. El certificado nunca salió de tu infraestructura."}
+      </div>
+    </div>
+    </body></html>"""
+
+    return html
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
