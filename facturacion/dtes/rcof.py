@@ -148,6 +148,12 @@ def generar_rcof_xml(
         # ID único para el RCOF
         documento_id = "RCOF_" + datetime.now().strftime("%Y%m%d%H%M%S")
 
+    # El SII espera los RUT sin puntos, solo con guión (ej '76922862-4').
+    def _normalizar_rut(rut: str) -> str:
+        return str(rut).replace(".", "").strip()
+    rut_emisor = _normalizar_rut(rut_emisor)
+    rut_envia = _normalizar_rut(rut_envia)
+
     caratula = (
         '<Caratula version="1.0">'
         f"<RutEmisor>{rut_emisor}</RutEmisor>"
