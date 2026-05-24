@@ -71,13 +71,18 @@ def _c14n(elemento) -> bytes:
     return etree.tostring(elemento, method="c14n", exclusive=False, with_comments=False)
 
 
-def _b64_multilinea(b64: str, ancho: int = 64) -> str:
+def _b64_multilinea(b64: str, ancho: int = 76) -> str:
     """Quiebra una cadena base64 en líneas de 'ancho' caracteres.
 
-    El SII (instructivo técnico, pág 23) exige que los campos base64 de la
-    firma (SignatureValue, Modulus, X509Certificate) NO vayan en una sola
-    línea larga, o rechaza con CHR-00002 (Line too long). Los saltos de línea
-    en base64 son ignorados al decodificar, así que NO afectan la firma.
+    El instructivo técnico del SII (pág 19/23) exige que los campos base64
+    del certificado y claves (X509Certificate, Modulus) se impriman a lo más
+    76 caracteres por línea, o el envío puede ser rechazado con CHR-00002
+    (Line too long). Los saltos en base64 se ignoran al decodificar.
+
+    NOTA: NO se aplica al SignatureValue. Aunque el estándar lo permitiría,
+    el validador del SII rechazó la firma al quebrar ese campo, así que se
+    deja en una sola línea (su largo ~344 chars para RSA-2048 está bajo el
+    límite de 4090 de todos modos).
     """
     return "\n".join(b64[i:i + ancho] for i in range(0, len(b64), ancho))
 
@@ -158,7 +163,7 @@ def firmar_documento(dte_xml: bytes, pfx_bytes: bytes, password: str, reference_
             break
     signed_info_c14n = _c14n(signed_info_en_arbol)
     firma = private_key.sign(signed_info_c14n, padding.PKCS1v15(), hashes.SHA1())
-    signature_value = _b64_multilinea(base64.b64encode(firma).decode("ascii"))
+    signature_value = base64.b64encode(firma).decode("ascii")
 
     # 4. Poner el SignatureValue calculado en el árbol
     for e in signature_el.iter():
@@ -239,7 +244,7 @@ def firmar_envio(envio_xml: bytes, pfx_bytes: bytes, password: str, set_dte_id: 
             break
     signed_info_c14n = _c14n(signed_info_en_arbol)
     firma = private_key.sign(signed_info_c14n, padding.PKCS1v15(), hashes.SHA1())
-    signature_value = _b64_multilinea(base64.b64encode(firma).decode("ascii"))
+    signature_value = base64.b64encode(firma).decode("ascii")
 
     for e in signature_el.iter():
         if e.tag.endswith("}SignatureValue"):
