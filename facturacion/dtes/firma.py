@@ -71,6 +71,17 @@ def _c14n(elemento) -> bytes:
     return etree.tostring(elemento, method="c14n", exclusive=False, with_comments=False)
 
 
+def _b64_multilinea(b64: str, ancho: int = 64) -> str:
+    """Quiebra una cadena base64 en líneas de 'ancho' caracteres.
+
+    El SII (instructivo técnico, pág 23) exige que los campos base64 de la
+    firma (SignatureValue, Modulus, X509Certificate) NO vayan en una sola
+    línea larga, o rechaza con CHR-00002 (Line too long). Los saltos de línea
+    en base64 son ignorados al decodificar, así que NO afectan la firma.
+    """
+    return "\n".join(b64[i:i + ancho] for i in range(0, len(b64), ancho))
+
+
 def _digest_sha1_b64(data: bytes) -> str:
     """Calcula SHA1 de data y lo devuelve en base64."""
     h = hashlib.sha1(data).digest()
@@ -90,6 +101,8 @@ def firmar_documento(dte_xml: bytes, pfx_bytes: bytes, password: str, reference_
         bytes del <DTE> ahora con su <Signature> agregada antes de </DTE>
     """
     private_key, cert, cert_b64, mod_b64, exp_b64 = cargar_pfx(pfx_bytes, password)
+    cert_b64 = _b64_multilinea(cert_b64)
+    mod_b64 = _b64_multilinea(mod_b64)
 
     # Parsear el DTE
     parser = etree.XMLParser(remove_blank_text=False)
@@ -145,7 +158,7 @@ def firmar_documento(dte_xml: bytes, pfx_bytes: bytes, password: str, reference_
             break
     signed_info_c14n = _c14n(signed_info_en_arbol)
     firma = private_key.sign(signed_info_c14n, padding.PKCS1v15(), hashes.SHA1())
-    signature_value = base64.b64encode(firma).decode("ascii")
+    signature_value = _b64_multilinea(base64.b64encode(firma).decode("ascii"))
 
     # 4. Poner el SignatureValue calculado en el árbol
     for e in signature_el.iter():
@@ -153,7 +166,12 @@ def firmar_documento(dte_xml: bytes, pfx_bytes: bytes, password: str, reference_
             e.text = signature_value
             break
 
-    return etree.tostring(root, xml_declaration=True, encoding="ISO-8859-1")
+    # El SII (parser estricto) requiere la declaración con comillas DOBLES.
+    # lxml genera comillas simples. Para documentos que se envían directo al SII
+    # (como el RCOF), esto importa. Para boletas dentro del sobre no afecta,
+    # porque _extraer_dte_interno quita la declaración de todos modos.
+    cuerpo = etree.tostring(root, xml_declaration=False, encoding="ISO-8859-1")
+    return b'<?xml version="1.0" encoding="ISO-8859-1"?>\n' + cuerpo
 
 
 def firmar_envio(envio_xml: bytes, pfx_bytes: bytes, password: str, set_dte_id: str) -> bytes:
@@ -169,6 +187,8 @@ def firmar_envio(envio_xml: bytes, pfx_bytes: bytes, password: str, set_dte_id: 
         bytes del envío con la <Signature> del sobre agregada.
     """
     private_key, cert, cert_b64, mod_b64, exp_b64 = cargar_pfx(pfx_bytes, password)
+    cert_b64 = _b64_multilinea(cert_b64)
+    mod_b64 = _b64_multilinea(mod_b64)
 
     parser = etree.XMLParser(remove_blank_text=False)
     root = etree.fromstring(envio_xml, parser)
@@ -219,7 +239,7 @@ def firmar_envio(envio_xml: bytes, pfx_bytes: bytes, password: str, set_dte_id: 
             break
     signed_info_c14n = _c14n(signed_info_en_arbol)
     firma = private_key.sign(signed_info_c14n, padding.PKCS1v15(), hashes.SHA1())
-    signature_value = base64.b64encode(firma).decode("ascii")
+    signature_value = _b64_multilinea(base64.b64encode(firma).decode("ascii"))
 
     for e in signature_el.iter():
         if e.tag.endswith("}SignatureValue"):
