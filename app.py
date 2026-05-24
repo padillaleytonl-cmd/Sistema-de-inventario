@@ -22997,12 +22997,15 @@ def admin_lusync_sii_test_set_boletas():
     tenant_id = request.args.get("tenant_id", default=3, type=int)
     ambiente = request.args.get("ambiente", default="certificacion")
     confirmar = request.args.get("confirmar", default="")
+    descargar = request.args.get("descargar", default="")
 
     pasos = []
     def paso(nombre, ok, detalle=""):
         pasos.append({"nombre": nombre, "ok": ok, "detalle": detalle})
 
-    if confirmar != "si":
+    # Modo descarga: genera y firma el sobre pero NO lo envía por pangal.
+    # No exige confirmar=si porque no consume nada en el SII (solo genera el .xml).
+    if confirmar != "si" and descargar != "si":
         tok_param = request.args.get("token", "")
         return """<!DOCTYPE html><html><head><meta charset="utf-8">
         <title>Confirmar Set BE</title>
@@ -23118,6 +23121,16 @@ def admin_lusync_sii_test_set_boletas():
             from facturacion.dtes.firma import firmar_envio
             sobre_firmado = firmar_envio(sobre, cert["pfx_bytes"], cert["password"], set_dte_id=set_id)
             paso("Firmar el sobre", True, f"{len(sobre_firmado)} bytes")
+
+            # Modo descarga: devuelve el sobre .xml para subir al SII (upload certificación).
+            # NO envía por pangal, NO consume folios extra.
+            if descargar == "si":
+                from flask import Response
+                return Response(
+                    sobre_firmado,
+                    mimetype="application/xml",
+                    headers={"Content-Disposition": 'attachment; filename="EnvioBOLETA_SetBE.xml"'},
+                )
 
         # ─── 6. Autenticar ───
         if not error_fatal:
