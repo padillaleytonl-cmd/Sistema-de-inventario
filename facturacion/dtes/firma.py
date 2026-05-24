@@ -163,7 +163,7 @@ def firmar_documento(dte_xml: bytes, pfx_bytes: bytes, password: str, reference_
             break
     signed_info_c14n = _c14n(signed_info_en_arbol)
     firma = private_key.sign(signed_info_c14n, padding.PKCS1v15(), hashes.SHA1())
-    signature_value = base64.b64encode(firma).decode("ascii")
+    signature_value = _b64_multilinea(base64.b64encode(firma).decode("ascii"))
 
     # 4. Poner el SignatureValue calculado en el árbol
     for e in signature_el.iter():
@@ -244,7 +244,7 @@ def firmar_envio(envio_xml: bytes, pfx_bytes: bytes, password: str, set_dte_id: 
             break
     signed_info_c14n = _c14n(signed_info_en_arbol)
     firma = private_key.sign(signed_info_c14n, padding.PKCS1v15(), hashes.SHA1())
-    signature_value = base64.b64encode(firma).decode("ascii")
+    signature_value = _b64_multilinea(base64.b64encode(firma).decode("ascii"))
 
     for e in signature_el.iter():
         if e.tag.endswith("}SignatureValue"):
