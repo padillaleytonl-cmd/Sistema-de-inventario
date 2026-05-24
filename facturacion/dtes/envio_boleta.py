@@ -74,6 +74,10 @@ def armar_envio_boleta(
 
     nro_dte = len(dtes_firmados)
 
+    # El schema SII exige RUT sin puntos: [0-9]+-([0-9]|K)
+    rut_emisor = str(rut_emisor).replace('.', '').strip()
+    rut_envia = str(rut_envia).replace('.', '').strip()
+
     # Carátula
     caratula = (
         f'<Caratula version="1.0">'

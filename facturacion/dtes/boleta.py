@@ -168,16 +168,16 @@ def generar_boleta_xml(
             f'<NroLinRef>1</NroLinRef>'
             f'<TpoDocRef>SET</TpoDocRef>'
             f'<FolioRef>{folio}</FolioRef>'
-            f'<FchRef>{fecha_emision}</FchRef>'
             f'<CodRef>{cod_ref}</CodRef>'
             f'<RazonRef>{_escape_xml(razon_ref)}</RazonRef>'
             f'</Referencia>'
         )
 
-    # 5. Emisor
+    # 5. Emisor — el RUT debe ir sin puntos (schema SII: [0-9]+-([0-9]|K))
+    _rut_emisor = str(emisor["rut"]).replace(".", "").strip()
     emisor_xml = (
         f'<Emisor>'
-        f'<RUTEmisor>{emisor["rut"]}</RUTEmisor>'
+        f'<RUTEmisor>{_rut_emisor}</RUTEmisor>'
         f'<RznSocEmisor>{_escape_xml(emisor.get("razon_social", ""))}</RznSocEmisor>'
         f'<GiroEmisor>{_escape_xml(emisor.get("giro", "")[:80])}</GiroEmisor>'
         f'<DirOrigen>{_escape_xml(emisor.get("dir_origen", ""))}</DirOrigen>'
