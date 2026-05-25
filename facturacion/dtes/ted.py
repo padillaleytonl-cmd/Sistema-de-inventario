@@ -97,9 +97,16 @@ def construir_dd(
     rsr_safe = _truncar(razon_social_receptor or 'Consumidor Final', 40)
     
     # Bloque DD: el orden y formato es CRÍTICO para que el SII valide.
-    # NOTA: el atributo del CAF original (version="1.0" típicamente) lo extraemos tal cual
+    # El SII, al validar el timbre (FRMT), reconstruye el DD eliminando los
+    # caracteres de fin de línea y blancos/tabs ENTRE tags (según instructivo SII).
+    # Por eso el CAF embebido debe ir SIN saltos de línea entre sus tags; si no,
+    # el DD que firmamos no coincide con el que el SII reconstruye → TED-2-510.
     caf_bloque = caf_node_para_ted(caf).decode('utf-8')
-    
+    # Eliminar saltos de línea, tabs y espacios entre tags del CAF (> ... <)
+    import re as _re
+    caf_bloque = _re.sub(r'>\s+<', '><', caf_bloque)
+    caf_bloque = caf_bloque.strip()
+
     dd_xml = (
         f'<DD>'
         f'<RE>{rut_emisor}</RE>'
