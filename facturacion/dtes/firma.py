@@ -66,16 +66,30 @@ def cargar_pfx(pfx_bytes: bytes, password: str) -> Tuple:
     return private_key, certificate, cert_der_b64, modulus_b64, exponent_b64
 
 
-def _c14n(elemento) -> bytes:
-    """Canonicaliza un elemento XML según C14N INCLUSIVE (xml-c14n-20010315).
+def _c14n(elemento, quitar_ns_heredado: bool = True) -> bytes:
+    """Canonicaliza un elemento XML según C14N inclusive.
 
-    Es el método que usa el SII (confirmado: CryptoSys y el XML de Lioren declaran
-    inclusive). CLAVE: para que la firma valide, el <SignedInfo> debe canonicalizarse
-    EN SU CONTEXTO dentro del árbol final (heredando los namespaces de los ancestros,
-    como xmlns:xsi del EnvioBOLETA). Por eso los documentos se firman DESPUÉS de
-    insertarse en el sobre, no antes.
+    VERIFICADO byte a byte contra un EnvioDTE real de Lioren que el SII aceptó.
+
+    quitar_ns_heredado=True (para <Documento>): quita el namespace SiiDte heredado
+      antes de canonicalizar. Lioren firma cada Documento aislado, sin el namespace
+      del sobre. Verificado: reproduce el DigestValue del DTE de Lioren.
+
+    quitar_ns_heredado=False (para <SetDTE>): conserva el namespace pero quita los
+      xmlns="" espurios que lxml inyecta en los hijos. Verificado: reproduce el
+      DigestValue del SetDTE de Lioren.
+
+    Sin esto, los digests NO coincidían con los del SII → "Error en Firma".
     """
-    return etree.tostring(elemento, method="c14n", exclusive=False, with_comments=False)
+    import re as _re
+    serial = etree.tostring(elemento, encoding="unicode")
+    if quitar_ns_heredado:
+        serial = _re.sub(r'\sxmlns="http://www\.sii\.cl/SiiDte"', "", serial, count=1)
+        serial = _re.sub(r'\sxmlns:xsi="http://www\.w3\.org/2001/XMLSchema-instance"', "", serial, count=1)
+        serial = _re.sub(r'\sxsi:schemaLocation="[^"]*"', "", serial, count=1)
+    reparsed = etree.fromstring(serial.encode("utf-8"))
+    c = etree.tostring(reparsed, method="c14n", exclusive=False, with_comments=False)
+    return c.replace(b' xmlns=""', b"")
 
 
 def _b64_multilinea(b64: str, ancho: int = 76) -> str:
@@ -168,7 +182,7 @@ def firmar_documento(dte_xml: bytes, pfx_bytes: bytes, password: str, reference_
         if e.tag.endswith("}SignedInfo"):
             signed_info_en_arbol = e
             break
-    signed_info_c14n = _c14n(signed_info_en_arbol)
+    signed_info_c14n = _c14n(signed_info_en_arbol, quitar_ns_heredado=False)
     firma = private_key.sign(signed_info_c14n, padding.PKCS1v15(), hashes.SHA1())
     signature_value = _b64_multilinea(base64.b64encode(firma).decode("ascii"))
 
@@ -214,7 +228,7 @@ def firmar_envio(envio_xml: bytes, pfx_bytes: bytes, password: str, set_dte_id: 
     if set_dte is None:
         raise ValueError(f"No se encontró SetDTE con ID='{set_dte_id}'")
 
-    set_c14n = _c14n(set_dte)
+    set_c14n = _c14n(set_dte, quitar_ns_heredado=False)
     digest_value = _digest_sha1_b64(set_c14n)
 
     # Insertar Signature completo (con value vacío) primero, firmar desde el árbol
@@ -249,7 +263,7 @@ def firmar_envio(envio_xml: bytes, pfx_bytes: bytes, password: str, set_dte_id: 
         if e.tag.endswith("}SignedInfo"):
             signed_info_en_arbol = e
             break
-    signed_info_c14n = _c14n(signed_info_en_arbol)
+    signed_info_c14n = _c14n(signed_info_en_arbol, quitar_ns_heredado=False)
     firma = private_key.sign(signed_info_c14n, padding.PKCS1v15(), hashes.SHA1())
     signature_value = _b64_multilinea(base64.b64encode(firma).decode("ascii"))
 
@@ -322,7 +336,7 @@ def _firmar_id_en_arbol(root, elemento_id, private_key, cert_b64, mod_b64, exp_b
         if e.tag.endswith("}SignedInfo"):
             signed_info = e
             break
-    firma = private_key.sign(_c14n(signed_info), padding.PKCS1v15(), hashes.SHA1())
+    firma = private_key.sign(_c14n(signed_info, quitar_ns_heredado=False), padding.PKCS1v15(), hashes.SHA1())
     signature_value = _b64_multilinea(base64.b64encode(firma).decode("ascii"))
     for e in signature_el.iter():
         if e.tag.endswith("}SignatureValue"):
@@ -370,7 +384,7 @@ def firmar_envio_completo(envio_sin_firmar_xml: bytes, pfx_bytes: bytes, passwor
             break
     if set_dte is None:
         raise ValueError(f"No se encontró SetDTE con ID='{set_dte_id}'")
-    digest_set = _digest_sha1_b64(_c14n(set_dte))
+    digest_set = _digest_sha1_b64(_c14n(set_dte, quitar_ns_heredado=False))
     sig_set_xml = (
         f'<Signature xmlns="{NS_DSIG}">'
         f'<SignedInfo>'
@@ -401,7 +415,7 @@ def firmar_envio_completo(envio_sin_firmar_xml: bytes, pfx_bytes: bytes, passwor
         if e.tag.endswith("}SignedInfo"):
             si_set = e
             break
-    firma_set = private_key.sign(_c14n(si_set), padding.PKCS1v15(), hashes.SHA1())
+    firma_set = private_key.sign(_c14n(si_set, quitar_ns_heredado=False), padding.PKCS1v15(), hashes.SHA1())
     for e in sig_set.iter():
         if e.tag.endswith("}SignatureValue"):
             e.text = _b64_multilinea(base64.b64encode(firma_set).decode("ascii"))
@@ -470,9 +484,10 @@ def verificar_firma_propia(dte_firmado_xml: bytes) -> dict:
             return {"ok": False, "mensaje": f"No se encontró elemento ID='{ref_uri}'"}
 
         # Para "enveloped", hay que remover el Signature del subárbol antes de digerir.
-        # Como el Signature es hermano (no hijo) del Documento, el subárbol del
-        # referenciado no lo contiene → digest directo.
-        digest_real = _digest_sha1_b64(_c14n(referenciado))
+        # El SetDTE conserva su namespace (quitar_ns_heredado=False); el Documento se
+        # canonicaliza sin el namespace heredado (True), como hace el SII/Lioren.
+        es_setdte = referenciado.tag.endswith("}SetDTE") or referenciado.tag == "SetDTE"
+        digest_real = _digest_sha1_b64(_c14n(referenciado, quitar_ns_heredado=not es_setdte))
         digest_en_firma = digest_el.text.strip()
         if digest_real != digest_en_firma:
             return {"ok": False,
@@ -484,7 +499,7 @@ def verificar_firma_propia(dte_firmado_xml: bytes) -> dict:
         cert = x509.load_der_x509_certificate(cert_der)
         pub_key = cert.public_key()
 
-        signed_info_c14n = _c14n(signed_info)
+        signed_info_c14n = _c14n(signed_info, quitar_ns_heredado=False)
         firma = base64.b64decode(sig_value_el.text.strip())
         pub_key.verify(firma, signed_info_c14n, padding.PKCS1v15(), hashes.SHA1())
 
