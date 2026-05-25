@@ -22,3 +22,12 @@ pyOpenSSL>=23.3.0        # Manejar archivos .pfx (PKCS#12) — leer cert + priva
  
 # Nota: cryptography ya incluye pkcs12 (cryptography.hazmat.primitives.serialization.pkcs12)
 # así que pyOpenSSL solo se usa como fallback si hay incompatibilidades.
+
+# ─── Dependencias para la representación gráfica (PDF) de boletas ───
+# Agregar estas líneas a tu requirements.txt si no están ya presentes.
+# (reportlab y Pillow quizás ya estén; pdf417gen es el nuevo seguro.)
+ 
+reportlab==4.4.10
+Pillow==12.1.1
+pdf417gen==0.8.1
+ 

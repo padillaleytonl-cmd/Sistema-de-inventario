@@ -23236,6 +23236,77 @@ SET_NOTAS_CREDITO = [
 ]
 
 
+@app.route("/admin/lusync/sii/test-pdf-boleta", methods=["GET"])
+@requiere_lusync_admin
+def admin_lusync_sii_test_pdf_boleta():
+    """Genera la representación gráfica (PDF) de una boleta del Set.
+
+    Formato configurable:
+      ?formato=carta  (hoja, estilo factura — default)
+      ?formato=rollo  (ticket térmico 80mm)
+    Folio configurable con ?folio_desde=N (default 16, las boletas aceptadas).
+
+    Uso: /admin/lusync/sii/test-pdf-boleta?token=...&tenant_id=3&formato=carta
+    """
+    from inventario import get_conn, release_conn
+    from facturacion.certificados import obtener_certificado
+    from facturacion import obtener_config_facturacion
+    from flask import request, Response
+
+    tenant_id = int(request.args.get("tenant_id", "3"))
+    formato = request.args.get("formato", "carta").strip().lower()
+    if formato not in ("carta", "rollo"):
+        formato = "carta"
+    _fd = request.args.get("folio_desde", "").strip()
+    folio = int(_fd) if _fd.isdigit() else 16
+
+    try:
+        config = obtener_config_facturacion(get_conn, release_conn, tenant_id) or {}
+        # CAF de boletas tipo 39
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT xml_caf FROM facturacion_cafs
+                    WHERE tenant_id = %s AND tipo_dte = 39
+                    ORDER BY id DESC LIMIT 1
+                """, (tenant_id,))
+                row = cur.fetchone()
+        finally:
+            release_conn(conn)
+        if not row:
+            return Response("No hay CAF de Boleta 39 para este tenant", status=400)
+
+        from facturacion.dtes.caf_parser import parsear_caf_xml
+        from facturacion.dtes.boleta import generar_boleta_xml
+        from facturacion.dtes.pdf_boleta import generar_pdf_boleta
+        caf = parsear_caf_xml(row[0])
+
+        emisor = {
+            "rut": config.get("rut_emisor", "76.922.862-4"),
+            "razon_social": config.get("razon_social", "GRUPO PH SPA"),
+            "giro": config.get("giro", ""),
+            "dir_origen": config.get("direccion", ""),
+            "cmna_origen": config.get("comuna", "Santiago"),
+        }
+        # Usa el CASO-1 del Set como muestra
+        res_bol = generar_boleta_xml(
+            caf=caf, folio=folio, fecha_emision=datetime.now().strftime("%Y-%m-%d"),
+            emisor=emisor,
+            items=[{"nombre": "Cambio de aceite", "cantidad": 1, "precio_unitario": 19900, "exento": False},
+                   {"nombre": "Alineacion y balanceo", "cantidad": 1, "precio_unitario": 9900, "exento": False}],
+            referencia={"cod_ref": "SET", "razon_ref": "CASO-1"})
+
+        pdf_bytes = generar_pdf_boleta(res_bol["xml"], formato=formato)
+        nombre = f"boleta_{folio}_{formato}.pdf"
+        return Response(pdf_bytes, mimetype="application/pdf",
+                        headers={"Content-Disposition": f'inline; filename="{nombre}"'})
+    except Exception as e:
+        import traceback
+        return Response(f"Error generando PDF: {e}\n\n{traceback.format_exc()}",
+                        status=500, mimetype="text/plain")
+
+
 @app.route("/admin/lusync/sii/test-rcof", methods=["GET"])
 @requiere_lusync_admin
 def admin_lusync_sii_test_rcof():
