@@ -23082,10 +23082,10 @@ def admin_lusync_sii_test_set_boletas():
                      f"Rango {caf.rango_desde}-{caf.rango_hasta} · folios {folio_inicial}-{folio_inicial+4}")
 
         # ─── 3. Generar y firmar las 5 boletas ───
-        boletas_firmadas = []
+        boletas_sin_firma = []
+        documento_ids = []
         if not error_fatal:
             from facturacion.dtes.boleta import generar_boleta_xml
-            from facturacion.dtes.firma import firmar_documento
             fecha = datetime.now().strftime("%Y-%m-%d")
             folio = folio_inicial
             for caso, items in SET_BOLETAS_BE.items():
@@ -23094,21 +23094,19 @@ def admin_lusync_sii_test_set_boletas():
                     emisor=emisor, items=items,
                     referencia={"cod_ref": "SET", "razon_ref": caso},
                 )
-                firmada = firmar_documento(
-                    res_bol["xml"], cert["pfx_bytes"], cert["password"],
-                    reference_uri=res_bol["documento_id"])
-                boletas_firmadas.append(firmada)
+                boletas_sin_firma.append(res_bol["xml"])
+                documento_ids.append(res_bol["documento_id"])
                 detalles_casos.append(
                     f"{caso}: folio {folio} · ${res_bol['totales']['mnt_total']:,}".replace(",", "."))
                 folio += 1
-            paso("Generar y firmar 5 boletas", True, " · ".join(detalles_casos))
+            paso("Generar 5 boletas (sin firma)", True, " · ".join(detalles_casos))
 
-        # ─── 4. Armar UN sobre con las 5 boletas ───
+        # ─── 4. Armar UN sobre con las 5 boletas SIN firmar ───
         if not error_fatal:
             from facturacion.dtes.envio_boleta import armar_envio_boleta
             set_id = "SetDoc"
             sobre = armar_envio_boleta(
-                dtes_firmados=boletas_firmadas,
+                dtes_firmados=boletas_sin_firma,  # van sin firma; se firman en contexto
                 rut_emisor=emisor["rut"],
                 rut_envia=cert["metadata"].get("rut", "18849272-K"),
                 fch_resol="2014-08-22", nro_resol=0,
@@ -23116,11 +23114,13 @@ def admin_lusync_sii_test_set_boletas():
             )
             paso("Armar sobre EnvioBOLETA (5 boletas)", True, f"{len(sobre)} bytes")
 
-        # ─── 5. Firmar el sobre ───
+        # ─── 5. Firmar TODO el sobre en contexto (documentos + SetDTE) ───
         if not error_fatal:
-            from facturacion.dtes.firma import firmar_envio
-            sobre_firmado = firmar_envio(sobre, cert["pfx_bytes"], cert["password"], set_dte_id=set_id)
-            paso("Firmar el sobre", True, f"{len(sobre_firmado)} bytes")
+            from facturacion.dtes.firma import firmar_envio_completo
+            sobre_firmado = firmar_envio_completo(
+                sobre, cert["pfx_bytes"], cert["password"],
+                set_dte_id=set_id, documento_ids=documento_ids)
+            paso("Firmar sobre completo (firma en contexto)", True, f"{len(sobre_firmado)} bytes")
 
             # Modo descarga: devuelve el sobre .xml para subir al SII (upload certificación).
             # NO envía por pangal, NO consume folios extra.

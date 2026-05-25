@@ -67,15 +67,15 @@ def cargar_pfx(pfx_bytes: bytes, password: str) -> Tuple:
 
 
 def _c14n(elemento) -> bytes:
-    """Canonicaliza un elemento XML según C14N EXCLUSIVE.
+    """Canonicaliza un elemento XML según C14N INCLUSIVE (xml-c14n-20010315).
 
-    VERIFICADO contra un DTE real de Lioren que el SII aceptó: la firma del
-    <SignedInfo> sólo valida con canonicalización EXCLUSIVE (exclusive=True),
-    NO con la inclusiva. Con inclusive el SII rechaza con "Error en Firma".
-    Para el digest del <Documento> ambos métodos dan el mismo resultado
-    (no tiene namespaces que difieran), así que exclusive sirve para los dos.
+    Es el método que usa el SII (confirmado: CryptoSys y el XML de Lioren declaran
+    inclusive). CLAVE: para que la firma valide, el <SignedInfo> debe canonicalizarse
+    EN SU CONTEXTO dentro del árbol final (heredando los namespaces de los ancestros,
+    como xmlns:xsi del EnvioBOLETA). Por eso los documentos se firman DESPUÉS de
+    insertarse en el sobre, no antes.
     """
-    return etree.tostring(elemento, method="c14n", exclusive=True, with_comments=False)
+    return etree.tostring(elemento, method="c14n", exclusive=False, with_comments=False)
 
 
 def _b64_multilinea(b64: str, ancho: int = 76) -> str:
@@ -260,6 +260,153 @@ def firmar_envio(envio_xml: bytes, pfx_bytes: bytes, password: str, set_dte_id: 
 
     # El SII (parser estricto) requiere la declaración con comillas DOBLES.
     # lxml genera comillas simples, que el SII rechaza con CHR-00001.
+    cuerpo = etree.tostring(root, xml_declaration=False, encoding="ISO-8859-1")
+    return b'<?xml version="1.0" encoding="ISO-8859-1"?>\n' + cuerpo
+
+
+def _firmar_id_en_arbol(root, elemento_id, private_key, cert_b64, mod_b64, exp_b64):
+    """Firma (XMLDSig enveloped) el elemento con ID dado, YA dentro de su árbol.
+
+    La <Signature> se inserta como hijo del elemento referenciado y el SignedInfo
+    se canonicaliza EN CONTEXTO (heredando namespaces de los ancestros, como el
+    xmlns:xsi del EnvioBOLETA). Así firma y validación del SII coinciden.
+
+    Inserta la Signature como hermano siguiente del elemento (igual que Lioren:
+    la firma del DTE va después de </Documento>, dentro del <DTE>).
+    """
+    # Buscar el elemento por ID y su padre
+    elemento = None
+    for el in root.iter():
+        if el.get("ID") == elemento_id:
+            elemento = el
+            break
+    if elemento is None:
+        raise ValueError(f"No se encontró elemento ID='{elemento_id}' en el árbol")
+    padre = elemento.getparent()
+
+    # 1. Digest del elemento referenciado (en su contexto)
+    digest_value = _digest_sha1_b64(_c14n(elemento))
+
+    # 2. Construir Signature con SignatureValue vacío
+    signature_xml = (
+        f'<Signature xmlns="{NS_DSIG}">'
+        f'<SignedInfo>'
+        f'<CanonicalizationMethod Algorithm="{C14N_METHOD}"/>'
+        f'<SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"/>'
+        f'<Reference URI="#{elemento_id}">'
+        f'<Transforms>'
+        f'<Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/>'
+        f'</Transforms>'
+        f'<DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"/>'
+        f'<DigestValue>{digest_value}</DigestValue>'
+        f'</Reference>'
+        f'</SignedInfo>'
+        f'<SignatureValue></SignatureValue>'
+        f'<KeyInfo>'
+        f'<KeyValue><RSAKeyValue>'
+        f'<Modulus>{mod_b64}</Modulus>'
+        f'<Exponent>{exp_b64}</Exponent>'
+        f'</RSAKeyValue></KeyValue>'
+        f'<X509Data><X509Certificate>{cert_b64}</X509Certificate></X509Data>'
+        f'</KeyInfo>'
+        f'</Signature>'
+    )
+    signature_el = etree.fromstring(signature_xml.encode("utf-8"))
+    # Insertar como hijo del padre, justo después del elemento referenciado
+    idx = list(padre).index(elemento)
+    padre.insert(idx + 1, signature_el)
+
+    # 3. Firmar el SignedInfo EN CONTEXTO (arrastra namespaces heredados)
+    signed_info = None
+    for e in signature_el.iter():
+        if e.tag.endswith("}SignedInfo"):
+            signed_info = e
+            break
+    firma = private_key.sign(_c14n(signed_info), padding.PKCS1v15(), hashes.SHA1())
+    signature_value = _b64_multilinea(base64.b64encode(firma).decode("ascii"))
+    for e in signature_el.iter():
+        if e.tag.endswith("}SignatureValue"):
+            e.text = signature_value
+            break
+
+
+def firmar_envio_completo(envio_sin_firmar_xml: bytes, pfx_bytes: bytes, password: str,
+                          set_dte_id: str, documento_ids: list) -> bytes:
+    """Firma un EnvioBOLETA completo de la forma que el SII valida:
+
+    1. Arma el árbol del sobre (con los DTE SIN firmar dentro).
+    2. Firma cada <Documento> EN CONTEXTO (dentro del sobre, viendo el xmlns:xsi).
+    3. Firma el <SetDTE> en contexto.
+
+    Esto resuelve el "Error en Firma": el SignedInfo de cada firma se canonicaliza
+    con los mismos namespaces heredados que el SII ve al validar.
+
+    Args:
+        envio_sin_firmar_xml: EnvioBOLETA con DTEs sin firma de Documento
+        pfx_bytes, password: certificado
+        set_dte_id: ID del SetDTE
+        documento_ids: lista de IDs de los <Documento> a firmar (ej ['F11T39', ...])
+
+    Returns:
+        bytes del EnvioBOLETA totalmente firmado.
+    """
+    private_key, cert, cert_b64, mod_b64, exp_b64 = cargar_pfx(pfx_bytes, password)
+    cert_b64 = _b64_multilinea(cert_b64)
+    mod_b64 = _b64_multilinea(mod_b64)
+
+    parser = etree.XMLParser(remove_blank_text=False)
+    root = etree.fromstring(envio_sin_firmar_xml, parser)
+
+    # 1. Firmar cada documento EN CONTEXTO
+    for doc_id in documento_ids:
+        _firmar_id_en_arbol(root, doc_id, private_key, cert_b64, mod_b64, exp_b64)
+
+    # 2. Firmar el SetDTE EN CONTEXTO (la firma va como hijo del EnvioBOLETA,
+    #    después del SetDTE)
+    set_dte = None
+    for el in root.iter():
+        if el.get("ID") == set_dte_id:
+            set_dte = el
+            break
+    if set_dte is None:
+        raise ValueError(f"No se encontró SetDTE con ID='{set_dte_id}'")
+    digest_set = _digest_sha1_b64(_c14n(set_dte))
+    sig_set_xml = (
+        f'<Signature xmlns="{NS_DSIG}">'
+        f'<SignedInfo>'
+        f'<CanonicalizationMethod Algorithm="{C14N_METHOD}"/>'
+        f'<SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"/>'
+        f'<Reference URI="#{set_dte_id}">'
+        f'<Transforms>'
+        f'<Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/>'
+        f'</Transforms>'
+        f'<DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"/>'
+        f'<DigestValue>{digest_set}</DigestValue>'
+        f'</Reference>'
+        f'</SignedInfo>'
+        f'<SignatureValue></SignatureValue>'
+        f'<KeyInfo>'
+        f'<KeyValue><RSAKeyValue>'
+        f'<Modulus>{mod_b64}</Modulus>'
+        f'<Exponent>{exp_b64}</Exponent>'
+        f'</RSAKeyValue></KeyValue>'
+        f'<X509Data><X509Certificate>{cert_b64}</X509Certificate></X509Data>'
+        f'</KeyInfo>'
+        f'</Signature>'
+    )
+    sig_set = etree.fromstring(sig_set_xml.encode("utf-8"))
+    root.append(sig_set)  # hermano del SetDTE, dentro de EnvioBOLETA
+    si_set = None
+    for e in sig_set.iter():
+        if e.tag.endswith("}SignedInfo"):
+            si_set = e
+            break
+    firma_set = private_key.sign(_c14n(si_set), padding.PKCS1v15(), hashes.SHA1())
+    for e in sig_set.iter():
+        if e.tag.endswith("}SignatureValue"):
+            e.text = _b64_multilinea(base64.b64encode(firma_set).decode("ascii"))
+            break
+
     cuerpo = etree.tostring(root, xml_declaration=False, encoding="ISO-8859-1")
     return b'<?xml version="1.0" encoding="ISO-8859-1"?>\n' + cuerpo
 
