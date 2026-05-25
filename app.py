@@ -23314,10 +23314,12 @@ def admin_lusync_sii_test_rcof():
 
         # ─── 7. Firmar el RCOF ───
         if not error_fatal:
-            from facturacion.dtes.firma import firmar_documento, verificar_firma_propia
-            rcof_firmado = firmar_documento(
+            from facturacion.dtes.firma import firmar_envio, verificar_firma_propia
+            # El RCOF se firma como un contenedor (igual que el SetDTE): se firma
+            # el DocumentoConsumoFolios por su ID, conservando el namespace (quitar_ns=False).
+            rcof_firmado = firmar_envio(
                 res_rcof["xml"], cert["pfx_bytes"], cert["password"],
-                reference_uri=res_rcof["documento_id"])
+                set_dte_id=res_rcof["documento_id"])
             ver = verificar_firma_propia(rcof_firmado)
             paso("Firmar el RCOF (XMLDSig)", ver.get("ok", False),
                  f"{len(rcof_firmado)} bytes · firma {'válida' if ver.get('ok') else 'INVÁLIDA'}")

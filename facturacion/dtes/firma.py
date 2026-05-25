@@ -490,7 +490,15 @@ def verificar_firma_propia(dte_firmado_xml: bytes) -> dict:
         # Para "enveloped", hay que remover el Signature del subárbol antes de digerir.
         # El SetDTE conserva su namespace (quitar_ns_heredado=False); el Documento se
         # canonicaliza sin el namespace heredado (True), como hace el SII/Lioren.
-        es_setdte = referenciado.tag.endswith("}SetDTE") or referenciado.tag == "SetDTE"
+        # El SetDTE y el DocumentoConsumoFolios (RCOF) son contenedores con
+        # namespace propio: se canonicalizan SIN quitar el namespace (False).
+        # Un Documento individual (DTE) sí se canonicaliza quitándolo (True).
+        es_contenedor = (
+            referenciado.tag.endswith("}SetDTE") or referenciado.tag == "SetDTE"
+            or referenciado.tag.endswith("}DocumentoConsumoFolios")
+            or referenciado.tag == "DocumentoConsumoFolios"
+        )
+        es_setdte = es_contenedor
         digest_real = _digest_sha1_b64(_c14n(referenciado, quitar_ns_heredado=not es_setdte))
         digest_en_firma = digest_el.text.strip()
         if digest_real != digest_en_firma:
