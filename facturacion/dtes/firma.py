@@ -67,8 +67,15 @@ def cargar_pfx(pfx_bytes: bytes, password: str) -> Tuple:
 
 
 def _c14n(elemento) -> bytes:
-    """Canonicaliza un elemento XML según C14N (el método que pide el SII)."""
-    return etree.tostring(elemento, method="c14n", exclusive=False, with_comments=False)
+    """Canonicaliza un elemento XML según C14N EXCLUSIVE.
+
+    VERIFICADO contra un DTE real de Lioren que el SII aceptó: la firma del
+    <SignedInfo> sólo valida con canonicalización EXCLUSIVE (exclusive=True),
+    NO con la inclusiva. Con inclusive el SII rechaza con "Error en Firma".
+    Para el digest del <Documento> ambos métodos dan el mismo resultado
+    (no tiene namespaces que difieran), así que exclusive sirve para los dos.
+    """
+    return etree.tostring(elemento, method="c14n", exclusive=True, with_comments=False)
 
 
 def _b64_multilinea(b64: str, ancho: int = 76) -> str:
