@@ -330,13 +330,14 @@ def _firmar_id_en_arbol(root, elemento_id, private_key, cert_b64, mod_b64, exp_b
     idx = list(padre).index(elemento)
     padre.insert(idx + 1, signature_el)
 
-    # 3. Firmar el SignedInfo EN CONTEXTO (arrastra namespaces heredados)
+    # 3. Firmar el SignedInfo del Documento. quitar_ns_heredado=True: verificado
+    #    contra el DTE individual de Lioren — su SignedInfo valida sólo así.
     signed_info = None
     for e in signature_el.iter():
         if e.tag.endswith("}SignedInfo"):
             signed_info = e
             break
-    firma = private_key.sign(_c14n(signed_info, quitar_ns_heredado=False), padding.PKCS1v15(), hashes.SHA1())
+    firma = private_key.sign(_c14n(signed_info, quitar_ns_heredado=True), padding.PKCS1v15(), hashes.SHA1())
     signature_value = _b64_multilinea(base64.b64encode(firma).decode("ascii"))
     for e in signature_el.iter():
         if e.tag.endswith("}SignatureValue"):
@@ -499,8 +500,8 @@ def verificar_firma_propia(dte_firmado_xml: bytes) -> dict:
         cert = x509.load_der_x509_certificate(cert_der)
         pub_key = cert.public_key()
 
-        signed_info_c14n = _c14n(signed_info, quitar_ns_heredado=False)
-        firma = base64.b64decode(sig_value_el.text.strip())
+        signed_info_c14n = _c14n(signed_info, quitar_ns_heredado=not es_setdte)
+        firma = base64.b64decode(sig_value_el.text.strip().replace("\n", "").replace(" ", ""))
         pub_key.verify(firma, signed_info_c14n, padding.PKCS1v15(), hashes.SHA1())
 
         return {"ok": True, "mensaje": "Firma XMLDSig válida (digest + firma verificados)"}
