@@ -176,13 +176,16 @@ def firmar_documento(dte_xml: bytes, pfx_bytes: bytes, password: str, reference_
     signature_el = etree.fromstring(signature_xml.encode("utf-8"))
     root.append(signature_el)
 
-    # 3. Canonicalizar el SignedInfo YA DENTRO del árbol y firmarlo (RSA-SHA1)
+    # 3. Canonicalizar el SignedInfo YA DENTRO del árbol y firmarlo (RSA-SHA1).
+    #    quitar_ns_heredado=True: el documento (DTE / DocumentoConsumoFolios) se
+    #    canonicaliza sin los namespaces heredados, igual que el digest y el
+    #    verificador. Verificado contra los DTE reales aceptados por el SII.
     signed_info_en_arbol = None
     for e in signature_el.iter():
         if e.tag.endswith("}SignedInfo"):
             signed_info_en_arbol = e
             break
-    signed_info_c14n = _c14n(signed_info_en_arbol, quitar_ns_heredado=False)
+    signed_info_c14n = _c14n(signed_info_en_arbol, quitar_ns_heredado=True)
     firma = private_key.sign(signed_info_c14n, padding.PKCS1v15(), hashes.SHA1())
     signature_value = _b64_multilinea(base64.b64encode(firma).decode("ascii"))
 

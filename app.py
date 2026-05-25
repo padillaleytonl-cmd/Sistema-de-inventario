@@ -23285,31 +23285,20 @@ def admin_lusync_sii_test_rcof():
             paso("Calcular Resumen Boletas (tipo 39)", True,
                  f"neto ${neto39:,} + IVA ${iva39:,} + exento ${exento39:,} = ${total39:,}".replace(",", "."))
 
-        # ─── 4. Calcular Resumen tipo 61 (2 NC) ───
-        if not error_fatal:
-            from facturacion.dtes.nota_credito import _calcular_totales_bruto
-            neto61 = iva61 = exento61 = total61 = 0
-            for nc in SET_NOTAS_CREDITO:
-                t = _calcular_totales_bruto(nc["items"])
-                neto61 += t["mnt_neto"]; iva61 += t["mnt_iva"]
-                exento61 += t["mnt_exento"]; total61 += t["mnt_total"]
-            paso("Calcular Resumen Notas Crédito (tipo 61)", True,
-                 f"neto ${neto61:,} + IVA ${iva61:,} + exento ${exento61:,} = ${total61:,}".replace(",", "."))
-
-        # ─── 5. Construir los 2 Resúmenes ───
+        # ─── 5. Construir el Resumen (solo tipo 39: el Set de boletas no lleva NC) ───
         if not error_fatal:
             from facturacion.dtes.rcof import construir_resumen
+            # Rango configurable: ?folio_desde=N (debe coincidir con los folios
+            # de las boletas que el SII ACEPTÓ). Por defecto 16-20.
+            _fd = request.args.get("folio_desde", "").strip()
+            _ini = int(_fd) if _fd.isdigit() else 16
             resumen_39 = construir_resumen(
                 tipo_documento=39, mnt_neto=neto39, mnt_iva=iva39, mnt_total=total39,
                 mnt_exento=exento39, folios_emitidos=5, folios_utilizados=5,
-                rangos_utilizados=[{"inicial": 11, "final": 15}],
+                rangos_utilizados=[{"inicial": _ini, "final": _ini + 4}],
             )
-            resumen_61 = construir_resumen(
-                tipo_documento=61, mnt_neto=neto61, mnt_iva=iva61, mnt_total=total61,
-                mnt_exento=exento61, folios_emitidos=2, folios_utilizados=2,
-                rangos_utilizados=[{"inicial": 101, "final": 102}],
-            )
-            paso("Construir Resúmenes RCOF", True, "Resumen 39 + Resumen 61")
+            paso("Construir Resumen RCOF (tipo 39)", True,
+                 f"5 boletas · folios {_ini}-{_ini+4}")
 
         # ─── 6. Generar el RCOF ───
         if not error_fatal:
@@ -23317,7 +23306,7 @@ def admin_lusync_sii_test_rcof():
             fecha = datetime.now().strftime("%Y-%m-%d")
             res_rcof = generar_rcof_xml(
                 rut_emisor=rut_emisor, rut_envia=rut_envia, fecha=fecha,
-                resumenes=[resumen_39, resumen_61],
+                resumenes=[resumen_39],
                 fch_resol="2026-05-15", nro_resol=0, sec_envio=1,
             )
             paso("Generar RCOF (ConsumoFolios)", True,
