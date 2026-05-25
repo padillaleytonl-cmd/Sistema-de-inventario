@@ -159,9 +159,9 @@ def generar_boleta_xml(
         detalles_xml += linea
 
     # 4. Referencia (Set de Pruebas)
-    # Formato oficial del Set de boletas del SII: TpoDocRef=SET, FchRef, CodRef=SET,
-    # RazonRef=CASO-N. El FchRef (fecha de la referencia) es requerido por el formato;
-    # se usa la misma fecha de emisión. Verificado contra el manual de certificación SII.
+    # IMPORTANTE: el schema de BOLETAS (EnvioBOLETA_v11.xsd) NO permite <FchRef>
+    # (a diferencia del schema de facturas). Tras FolioRef solo acepta CodRef,
+    # RazonRef, CodVndor o CodCaja. El Set de boletas pide CodRef=SET, RazonRef=CASO-N.
     referencia_xml = ''
     if referencia:
         cod_ref = referencia.get('cod_ref', 'SET')
@@ -171,7 +171,6 @@ def generar_boleta_xml(
             f'<NroLinRef>1</NroLinRef>'
             f'<TpoDocRef>SET</TpoDocRef>'
             f'<FolioRef>{folio}</FolioRef>'
-            f'<FchRef>{fecha_emision}</FchRef>'
             f'<CodRef>{cod_ref}</CodRef>'
             f'<RazonRef>{_escape_xml(razon_ref)}</RazonRef>'
             f'</Referencia>'
