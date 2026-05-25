@@ -22756,7 +22756,7 @@ def admin_lusync_sii_test_envio():
                 dtes_firmados=[boleta_firmada],
                 rut_emisor=emisor["rut"],
                 rut_envia=cert["metadata"].get("rut", "18849272-K"),
-                fch_resol="2014-08-22", nro_resol=0,
+                fch_resol="2014-08-22", nro_resol=80,
                 tipo_dte=39, set_dte_id=set_id,
             )
             paso("Armar sobre EnvioBOLETA", True, f"{len(sobre)} bytes")
@@ -23109,7 +23109,7 @@ def admin_lusync_sii_test_set_boletas():
                 dtes_firmados=boletas_sin_firma,  # van sin firma; se firman en contexto
                 rut_emisor=emisor["rut"],
                 rut_envia=cert["metadata"].get("rut", "18849272-K"),
-                fch_resol="2014-08-22", nro_resol=0,
+                fch_resol="2014-08-22", nro_resol=80,
                 tipo_dte=39, set_dte_id=set_id,
             )
             paso("Armar sobre EnvioBOLETA (5 boletas)", True, f"{len(sobre)} bytes")
@@ -23311,7 +23311,7 @@ def admin_lusync_sii_test_rcof():
             res_rcof = generar_rcof_xml(
                 rut_emisor=rut_emisor, rut_envia=rut_envia, fecha=fecha,
                 resumenes=[resumen_39, resumen_61],
-                fch_resol="2014-08-22", nro_resol=0, sec_envio=1,
+                fch_resol="2014-08-22", nro_resol=80, sec_envio=1,
             )
             paso("Generar RCOF (ConsumoFolios)", True,
                  f"ID {res_rcof['documento_id']} · {len(res_rcof['xml'])} bytes")
