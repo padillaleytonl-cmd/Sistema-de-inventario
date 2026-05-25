@@ -23077,7 +23077,14 @@ def admin_lusync_sii_test_set_boletas():
             else:
                 from facturacion.dtes.caf_parser import parsear_caf_xml
                 caf = parsear_caf_xml(row[0])
-                folio_inicial = caf.rango_desde
+                # folio_inicial: por defecto el inicio del rango del CAF, pero se
+                # puede sobrescribir con ?folio_desde=N (útil al reintentar, porque
+                # el SII no permite reusar folios ya registrados → DTE-3-100).
+                folio_param = request.args.get("folio_desde", "").strip()
+                if folio_param.isdigit():
+                    folio_inicial = int(folio_param)
+                else:
+                    folio_inicial = caf.rango_desde
                 paso("Leer CAF Boleta 39", True,
                      f"Rango {caf.rango_desde}-{caf.rango_hasta} · folios {folio_inicial}-{folio_inicial+4}")
 
