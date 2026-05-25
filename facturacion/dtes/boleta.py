@@ -159,6 +159,9 @@ def generar_boleta_xml(
         detalles_xml += linea
 
     # 4. Referencia (Set de Pruebas)
+    # Formato oficial del Set de boletas del SII: TpoDocRef=SET, FchRef, CodRef=SET,
+    # RazonRef=CASO-N. El FchRef (fecha de la referencia) es requerido por el formato;
+    # se usa la misma fecha de emisión. Verificado contra el manual de certificación SII.
     referencia_xml = ''
     if referencia:
         cod_ref = referencia.get('cod_ref', 'SET')
@@ -168,6 +171,7 @@ def generar_boleta_xml(
             f'<NroLinRef>1</NroLinRef>'
             f'<TpoDocRef>SET</TpoDocRef>'
             f'<FolioRef>{folio}</FolioRef>'
+            f'<FchRef>{fecha_emision}</FchRef>'
             f'<CodRef>{cod_ref}</CodRef>'
             f'<RazonRef>{_escape_xml(razon_ref)}</RazonRef>'
             f'</Referencia>'
@@ -225,7 +229,7 @@ def generar_boleta_xml(
     documento_id = f'F{folio}T39'
     dte_xml = (
         '<?xml version="1.0" encoding="ISO-8859-1"?>'
-        '<DTE version="1.0" xmlns="http://www.sii.cl/SiiDte">'
+        '<DTE version="1.0">'
         f'<Documento ID="{documento_id}">'
         f'{encabezado_xml}'
         f'{detalles_xml}'
