@@ -218,15 +218,14 @@ def generar_boleta_xml(
     encabezado_xml = f'<Encabezado>{iddoc_xml}{emisor_xml}{receptor_xml}{tot}</Encabezado>'
 
     # 10. DTE completo (sin XMLDSig todavía)
-    # IMPORTANTE: el <DTE> NO declara el namespace SiiDte (igual que Lioren).
-    # El namespace lo aporta el sobre <EnvioBOLETA> que envuelve el DTE.
-    # Si se declarara aquí, el <Documento> lo heredaría y el DigestValue
-    # calculado al firmar no coincidiría con el que el SII recalcula dentro
-    # del sobre → "Rechazado por Error en Firma".
+    # El <DTE> declara el namespace SiiDte. Con C14N EXCLUSIVE, el digest del
+    # <Documento> es idéntico tanto firmado aislado como dentro del sobre
+    # EnvioBOLETA (verificado). Si NO se declarara, el documento heredaría el
+    # namespace al entrar al sobre y el digest cambiaría → Error en Firma.
     documento_id = f'F{folio}T39'
     dte_xml = (
         '<?xml version="1.0" encoding="ISO-8859-1"?>'
-        '<DTE version="1.0">'
+        '<DTE version="1.0" xmlns="http://www.sii.cl/SiiDte">'
         f'<Documento ID="{documento_id}">'
         f'{encabezado_xml}'
         f'{detalles_xml}'
