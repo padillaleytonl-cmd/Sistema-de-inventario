@@ -21010,7 +21010,14 @@ def facturacion_boleta_emitir():
 
         caf = parsear_caf_xml(folio_res["xml_caf"])
         fecha = datetime.now().strftime("%Y-%m-%d")
-        receptor = data.get("receptor") or None
+        # Si no viene receptor, usar el RUT genérico de consumidor final.
+        # IMPORTANTE: en el XML al SII va "Consumidor Final" (lo validado en certificación).
+        # El PDF mostrará "Cliente General" como etiqueta visible (lo hace pdf_dte.py).
+        receptor = data.get("receptor") or {"rut": "66666666-6", "razon_social": "Consumidor Final"}
+        if not receptor.get("rut"):
+            receptor["rut"] = "66666666-6"
+        if not receptor.get("razon_social"):
+            receptor["razon_social"] = "Consumidor Final"
 
         # 4. Generar la boleta
         res_bol = generar_boleta_xml(

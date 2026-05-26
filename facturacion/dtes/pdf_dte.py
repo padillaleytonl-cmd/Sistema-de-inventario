@@ -56,8 +56,8 @@ from pdf417gen import encode as _pdf417_encode, render_image as _pdf417_render
 DTE_INFO = {
     33: {"nombre": "FACTURA ELECTRÓNICA",            "receptor": True,  "referencia": True,  "es_boleta": False},
     34: {"nombre": "FACTURA EXENTA ELECTRÓNICA",      "receptor": True,  "referencia": True,  "es_boleta": False},
-    39: {"nombre": "BOLETA ELECTRÓNICA",              "receptor": False, "referencia": False, "es_boleta": True},
-    41: {"nombre": "BOLETA EXENTA ELECTRÓNICA",       "receptor": False, "referencia": False, "es_boleta": True},
+    39: {"nombre": "BOLETA ELECTRÓNICA",              "receptor": True,  "referencia": False, "es_boleta": True},
+    41: {"nombre": "BOLETA EXENTA ELECTRÓNICA",       "receptor": True,  "referencia": False, "es_boleta": True},
     52: {"nombre": "GUÍA DE DESPACHO ELECTRÓNICA",    "receptor": True,  "referencia": True,  "es_boleta": False},
     56: {"nombre": "NOTA DE DÉBITO ELECTRÓNICA",      "receptor": True,  "referencia": True,  "es_boleta": False},
     61: {"nombre": "NOTA DE CRÉDITO ELECTRÓNICA",     "receptor": True,  "referencia": True,  "es_boleta": False},
@@ -144,6 +144,13 @@ def parsear_dte_xml(dte_xml: bytes) -> dict:
         'ciudad': _txt(encabezado, 'CiudadRecep'),
         'contacto': _txt(encabezado, 'Contacto'),
     }
+    # RUT genérico de consumidor final → mostrar "Cliente General" en el impreso
+    _rut_rec_limpio = (receptor['rut'] or '').replace('.', '').replace('-', '').strip().upper()
+    receptor['es_generico'] = _rut_rec_limpio in ('666666666', '66666666K', '')
+    if receptor['es_generico']:
+        receptor['rut'] = receptor['rut'] or '66666666-6'
+        if not receptor['razon_social'] or receptor['razon_social'].lower() == 'consumidor final':
+            receptor['razon_social'] = 'Cliente General'  # etiqueta visible
 
     totales = {
         'neto': _txt(encabezado, 'MntNeto'),
