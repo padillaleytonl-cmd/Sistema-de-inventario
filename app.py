@@ -1582,13 +1582,9 @@ scheduler.add_job(_sync_full_meli_diario, "interval", hours=24, id="full_meli_di
                   next_run_time=(datetime.now() + timedelta(hours=6)))
 
 # ── Jobs de facturación electrónica (blindaje profesional) ──
-# Consulta de estado real en el SII: cada 15 min revisa boletas 'enviado' y las
-# actualiza a aceptado/rechazado (LIMBO 3).
-scheduler.add_job(_fact_job_consultar_estados, "interval", minutes=15,
-                  id="fact_consultar_estados", replace_existing=True,
-                  misfire_grace_time=120,
-                  next_run_time=(datetime.now() + timedelta(minutes=3)))
-
+# El registro del job _fact_job_consultar_estados se hace MÁS ABAJO, después de que
+# la función esté definida (no se puede registrar aquí porque se define luego).
+#
 # NOTA RCOF: La Resolución Ex. SII N°53 de 2022 ELIMINÓ la obligación de enviar el
 # RCOF (Reporte de Consumo de Folios / Resumen de Ventas Diarias) desde el 01-08-2022.
 # En el modelo actual cada boleta se informa individualmente al SII al emitirse (lo que
@@ -21629,6 +21625,18 @@ def _fact_job_consultar_estados():
                 print("[RCOF/Estado] Error tenant %s: %s" % (tid, str(e)[:120]))
     except Exception as e:
         print("[RCOF/Estado] Error general: %s" % str(e)[:200])
+
+
+# ── Registro diferido del job de consulta de estados ──
+# Se registra aquí (no arriba) porque la función ya está definida en este punto.
+try:
+    scheduler.add_job(_fact_job_consultar_estados, "interval", minutes=15,
+                      id="fact_consultar_estados", replace_existing=True,
+                      misfire_grace_time=120,
+                      next_run_time=(datetime.now() + timedelta(minutes=3)))
+    print("[Facturación] Job de consulta de estados SII registrado (cada 15 min)")
+except Exception as _e:
+    print("[Facturación] No se pudo registrar el job de estados: %s" % _e)
 
 
 def _fact_job_rcof_diario():
