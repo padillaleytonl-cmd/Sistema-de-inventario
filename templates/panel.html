@@ -13604,14 +13604,17 @@ async function dtConsultarEstado(id){
     const r=await fetch('/facturacion/boleta/'+id+'/consultar-estado',{method:'POST'});
     const d=await r.json();
     if(d.ok){
-      // Mostrar la respuesta real del SII
       let msg='Estado en el SII: '+(d.glosa||d.estado_sii||d.estado);
+      if(d.estado_sii){ msg+='\n(código SII: '+d.estado_sii+')'; }
       if(d.estado==='en_proceso'){ msg+='\n\nEl SII aún está procesando. Vuelve a consultar en unos minutos.'; }
+      // Diagnóstico: si el SII no devolvió un código de estado, mostrar la respuesta cruda
+      if(!d.estado_sii && d.respuesta_sii){
+        msg+='\n\n[Diagnóstico] El SII respondió sin un código de estado reconocible. Respuesta:\n'+(d.respuesta_sii||'').slice(0,500);
+      }
       alert(msg);
-      // Refrescar la tabla de Consultar boleta si está activa
       if(typeof conBuscar==='function' && document.getElementById('conResultados')) conBuscar();
     } else {
-      alert(d.error||'No se pudo consultar');
+      alert((d.error||'No se pudo consultar')+(d.respuesta_sii?('\n\nRespuesta SII:\n'+d.respuesta_sii.slice(0,400)):''));
     }
   }catch(e){ alert('Error: '+e.message); }
 }
@@ -13628,14 +13631,17 @@ function facNav(pane, btn){
   // Recordar la sub-sección para no volver al inicio al recargar
   try{ localStorage.setItem('lusync_fac_pane', pane); }catch(e){}
   // Inicializar contenido según la sub-sección
-  if(pane==='consultar' && !document.getElementById('conDesde').value){
-    // por defecto: desde el primer día del mes en curso hasta hoy
-    const hoy=new Date();
-    const primerDiaMes=new Date(hoy.getFullYear(), hoy.getMonth(), 1);
-    // usar fecha local (no UTC) para evitar desfase de día por zona horaria
-    const fmt=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-    document.getElementById('conHasta').value=fmt(hoy);
-    document.getElementById('conDesde').value=fmt(primerDiaMes);
+  if(pane==='consultar'){
+    if(!document.getElementById('conDesde').value){
+      // por defecto: desde el primer día del mes en curso hasta hoy
+      const hoy=new Date();
+      const primerDiaMes=new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+      const fmt=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      document.getElementById('conHasta').value=fmt(hoy);
+      document.getElementById('conDesde').value=fmt(primerDiaMes);
+    }
+    // Cargar el listado automáticamente, sin tener que pulsar Buscar
+    if(typeof conBuscar==='function') conBuscar();
   }
 }
 
@@ -13648,6 +13654,10 @@ function facRestaurarPane(){
 }
 
 // ═══════════ CONSULTAR BOLETA (filtro por fechas) ═══════════
+let _conDocs = [];      // resultados actuales
+let _conPag = 1;        // página actual
+const _CON_POR_PAG = 20;
+
 async function conBuscar(){
   const cont=document.getElementById('conResultados');
   const resumen=document.getElementById('conResumen');
@@ -13662,30 +13672,53 @@ async function conBuscar(){
   try{
     const r=await fetch(url); const d=await r.json();
     if(!d.ok){ cont.innerHTML='<div style="color:#dc2626;">'+(d.error||'Error')+'</div>'; return; }
-    if(!d.documentos.length){ resumen.style.display='none'; cont.innerHTML='<div style="color:var(--muted);padding:14px;">No se encontraron boletas en ese rango.</div>'; return; }
+    _conDocs = d.documentos||[];
+    _conPag = 1;
+    if(!_conDocs.length){ resumen.style.display='none'; cont.innerHTML='<div style="color:var(--muted);padding:14px;">No se encontraron boletas en ese rango.</div>'; return; }
     resumen.style.display='block';
     resumen.innerHTML='<b>'+d.cantidad+'</b> documento(s) · Total del período: <b>'+_dtCLP(d.total_periodo)+'</b>';
-    let h='<table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr style="text-align:left;color:var(--muted);font-size:11px;">'
-      +'<th style="padding:8px;">Tipo</th><th style="padding:8px;">Folio</th><th style="padding:8px;">Cliente</th><th style="padding:8px;text-align:right;">Total</th><th style="padding:8px;">Fecha</th><th style="padding:8px;">Estado</th><th style="padding:8px;text-align:right;">Acciones</th></tr></thead><tbody>';
-    d.documentos.forEach(doc=>{
-      const f=doc.fecha_emision?doc.fecha_emision.slice(0,10):'—';
-      const eb=(typeof DT_ESTADO!=='undefined'&&DT_ESTADO[doc.estado])||{bg:'#f1efe8',color:'#6b6880',label:doc.estado||'—'};
-      h+=`<tr style="border-top:1px solid var(--border);">
-        <td style="padding:9px 8px;color:var(--text);">${doc.tipo_nombre}</td>
-        <td style="padding:9px 8px;color:var(--text);font-weight:600;">${doc.folio}</td>
-        <td style="padding:9px 8px;color:var(--muted);">${doc.razon_social_receptor||'Cliente General'}</td>
-        <td style="padding:9px 8px;text-align:right;color:var(--text);font-weight:600;">${_dtCLP(doc.monto_total)}</td>
-        <td style="padding:9px 8px;color:var(--muted);">${f}</td>
-        <td style="padding:9px 8px;"><span style="font-size:11px;padding:3px 8px;border-radius:6px;background:${eb.bg};color:${eb.color};font-weight:600;">${eb.label}</span></td>
-        <td style="padding:9px 8px;text-align:right;white-space:nowrap;">
-          <button onclick="dtVerDoc(${doc.id},'${doc.pdf_url}')" style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:7px;font-size:12px;cursor:pointer;font-weight:600;">👁 Ver</button>
-          ${['enviado','en_proceso'].includes(doc.estado)?`<button onclick="dtConsultarEstado(${doc.id})" style="background:none;border:none;color:#2563eb;cursor:pointer;font-weight:600;font-size:12px;margin-left:4px;">Consultar SII</button>`:''}
-          ${dtMenuPuntitos(doc)}
-        </td></tr>`;
-    });
-    h+='</tbody></table>'; cont.innerHTML=h;
+    conRenderPagina();
   }catch(e){ cont.innerHTML='<div style="color:#dc2626;">Error: '+e.message+'</div>'; }
 }
+
+function conRenderPagina(){
+  const cont=document.getElementById('conResultados');
+  const total=_conDocs.length;
+  const paginas=Math.ceil(total/_CON_POR_PAG);
+  if(_conPag>paginas) _conPag=paginas;
+  if(_conPag<1) _conPag=1;
+  const ini=(_conPag-1)*_CON_POR_PAG;
+  const pagina=_conDocs.slice(ini, ini+_CON_POR_PAG);
+  let h='<table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr style="text-align:left;color:var(--muted);font-size:11px;">'
+    +'<th style="padding:8px;">Tipo</th><th style="padding:8px;">Folio</th><th style="padding:8px;">Cliente</th><th style="padding:8px;text-align:right;">Total</th><th style="padding:8px;">Fecha</th><th style="padding:8px;">Estado</th><th style="padding:8px;text-align:right;">Acciones</th></tr></thead><tbody>';
+  pagina.forEach(doc=>{
+    const f=doc.fecha_emision?doc.fecha_emision.slice(0,10):'—';
+    const eb=(typeof DT_ESTADO!=='undefined'&&DT_ESTADO[doc.estado])||{bg:'#f1efe8',color:'#6b6880',label:doc.estado||'—'};
+    h+=`<tr style="border-top:1px solid var(--border);">
+      <td style="padding:9px 8px;color:var(--text);">${doc.tipo_nombre}</td>
+      <td style="padding:9px 8px;color:var(--text);font-weight:600;">${doc.folio}</td>
+      <td style="padding:9px 8px;color:var(--muted);">${doc.razon_social_receptor||'Cliente General'}</td>
+      <td style="padding:9px 8px;text-align:right;color:var(--text);font-weight:600;">${_dtCLP(doc.monto_total)}</td>
+      <td style="padding:9px 8px;color:var(--muted);">${f}</td>
+      <td style="padding:9px 8px;"><span style="font-size:11px;padding:3px 8px;border-radius:6px;background:${eb.bg};color:${eb.color};font-weight:600;">${eb.label}</span></td>
+      <td style="padding:9px 8px;text-align:right;white-space:nowrap;">
+        <button onclick="dtVerDoc(${doc.id},'${doc.pdf_url}')" style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:7px;font-size:12px;cursor:pointer;font-weight:600;">👁 Ver</button>
+        ${['enviado','en_proceso'].includes(doc.estado)?`<button onclick="dtConsultarEstado(${doc.id})" style="background:none;border:none;color:#2563eb;cursor:pointer;font-weight:600;font-size:12px;margin-left:4px;">Consultar SII</button>`:''}
+        ${dtMenuPuntitos(doc)}
+      </td></tr>`;
+  });
+  h+='</tbody></table>';
+  // Controles de paginación (solo si hay más de una página)
+  if(paginas>1){
+    h+=`<div style="display:flex;justify-content:center;align-items:center;gap:12px;margin-top:16px;">
+      <button onclick="conPag(-1)" ${_conPag<=1?'disabled':''} style="padding:7px 14px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;cursor:${_conPag<=1?'not-allowed':'pointer'};font-family:inherit;font-size:13px;opacity:${_conPag<=1?'.5':'1'};">← Anterior</button>
+      <span style="font-size:13px;color:var(--muted);">Página ${_conPag} de ${paginas}</span>
+      <button onclick="conPag(1)" ${_conPag>=paginas?'disabled':''} style="padding:7px 14px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;cursor:${_conPag>=paginas?'not-allowed':'pointer'};font-family:inherit;font-size:13px;opacity:${_conPag>=paginas?'.5':'1'};">Siguiente →</button>
+    </div>`;
+  }
+  cont.innerHTML=h;
+}
+function conPag(delta){ _conPag+=delta; conRenderPagina(); window.scrollTo({top:document.getElementById('conResultados').offsetTop-120,behavior:'smooth'}); }
 
 // ═══════════ MENÚ 3 PUNTITOS (descargas) ═══════════
 function dtMenuPuntitos(doc){

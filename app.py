@@ -21726,12 +21726,18 @@ def facturacion_consultar_estado(boleta_id):
 
     estado_sii = (res.get("estado") or "").upper()
     nuevo_estado, glosa = _fact_mapear_estado_sii(estado_sii)
+    # Si el SII devolvió su propia glosa textual, usarla (es más precisa)
+    if res.get("glosa_sii"):
+        glosa = res["glosa_sii"]
     es_aceptada = nuevo_estado in ("aceptado", "aceptado_reparos")
     _fact_actualizar_estado_dte(boleta_id, nuevo_estado, estado_sii=estado_sii,
                                 glosa=glosa,
                                 set_fecha_aceptacion=es_aceptada)
     return jsonify({"ok": True, "estado": nuevo_estado, "estado_sii": estado_sii,
                     "glosa": glosa,
+                    "track_id": track_id,
+                    "respuesta_sii": res.get("respuesta_cruda", "")[:1500],
+                    "status_http": res.get("status"),
                     "respuesta": res.get("respuesta_cruda", "")[:400]})
 
 

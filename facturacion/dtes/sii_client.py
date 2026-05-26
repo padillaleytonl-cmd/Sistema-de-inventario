@@ -359,16 +359,46 @@ def consultar_estado_envio(
     if "NO ESTA AUTENTICADO" in texto.upper():
         return {"ok": False, "error": "Token vencido", "respuesta_cruda": texto[:500]}
 
+    # El SII puede devolver el estado en distintos campos/anidaciones según el recurso.
+    # Buscamos en todos los nombres conocidos, incluyendo objetos anidados.
     estado = None
+    glosa_sii = None
     try:
         j = resp.json()
-        estado = j.get("estado") or j.get("status")
+        def _buscar(d, claves):
+            if isinstance(d, dict):
+                for k, v in d.items():
+                    if k.lower() in claves and isinstance(v, str) and v.strip():
+                        return v.strip()
+                for v in d.values():
+                    r = _buscar(v, claves)
+                    if r:
+                        return r
+            elif isinstance(d, list):
+                for v in d:
+                    r = _buscar(v, claves)
+                    if r:
+                        return r
+            return None
+        # Nombres posibles del código de estado en la API de boletas del SII
+        estado = _buscar(j, {"estado", "status", "statuscode", "estadoenvio",
+                             "codigoestado", "cod_estado", "estado_envio"})
+        glosa_sii = _buscar(j, {"glosa", "descripcion", "mensaje", "message",
+                                "descripcionestado", "glosaestado", "detalle"})
     except Exception:
-        pass
+        # No vino JSON: intentar extraer del texto plano/XML
+        import re as _re
+        m = _re.search(r'<ESTADO>([^<]+)</ESTADO>', texto)
+        if m:
+            estado = m.group(1).strip()
+        mg = _re.search(r'<GLOSA>([^<]+)</GLOSA>', texto)
+        if mg:
+            glosa_sii = mg.group(1).strip()
 
     return {
         "ok": resp.status_code == 200,
         "estado": estado,
-        "respuesta_cruda": texto[:800],
+        "glosa_sii": glosa_sii,
+        "respuesta_cruda": texto[:1500],
         "status": resp.status_code,
     }
