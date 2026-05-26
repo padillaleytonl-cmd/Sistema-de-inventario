@@ -3364,10 +3364,6 @@ tbody td {
           style="flex:1;padding:14px;border:none;background:none;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;">
           📊 Uso de folios
         </button>
-        <button class="dt-tab" data-dt="docs" onclick="dtTab('docs',this)"
-          style="flex:1;padding:14px;border:none;background:none;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;">
-          📄 Documentos emitidos
-        </button>
       </div>
 
       <!-- TAB: EMITIR -->
@@ -3441,9 +3437,6 @@ tbody td {
       </div>
 
       <!-- TAB: DOCUMENTOS -->
-      <div id="dt-pane-docs" class="dt-pane" style="padding:22px;display:none;">
-        <div id="dtDocsCont" style="color:var(--muted);font-size:13px;">Cargando documentos…</div>
-      </div>
     </div>
     <!-- Modal buscador de productos -->
     <div id="dtBuscadorModal" onclick="if(event.target===this)dtCerrarBuscador()" style="display:none;position:fixed;inset:0;background:rgba(15,12,30,.65);backdrop-filter:blur(2px);z-index:100000;align-items:center;justify-content:center;padding:20px;">
@@ -13331,7 +13324,6 @@ function dtTab(tab, btn){
   document.getElementById('dt-pane-'+tab).style.display='block';
   if(tab==='emitir' && !document.querySelector('.dt-item')) dtAddItem();
   if(tab==='folios') dtCargarFolios();
-  if(tab==='docs') dtCargarDocs();
 }
 // Garantizar primera fila apenas el panel existe en el DOM
 function dtInit(){
@@ -13571,11 +13563,13 @@ async function dtCargarFolios(){
 }
 
 const DT_ESTADO = {
-  generado:  {bg:'#f1efe8', color:'#6b6880', label:'Generado'},
-  enviado:   {bg:'#e7eefb', color:'#2563eb', label:'Enviado al SII'},
-  aceptado:  {bg:'#eaf3ee', color:'#1D9E75', label:'Aceptado'},
-  rechazado: {bg:'#fdf2f2', color:'#dc2626', label:'Rechazado'},
-  error_envio:{bg:'#fef3e2', color:'#b45309', label:'Error de envío'},
+  generado:        {bg:'#f1efe8', color:'#6b6880', label:'Generado'},
+  enviado:         {bg:'#e7eefb', color:'#2563eb', label:'Enviado al SII'},
+  en_proceso:      {bg:'#e7eefb', color:'#2563eb', label:'En proceso en SII'},
+  aceptado:        {bg:'#eaf3ee', color:'#1D9E75', label:'Aceptado por SII'},
+  aceptado_reparos:{bg:'#fef9e7', color:'#a16207', label:'Aceptado c/reparos'},
+  rechazado:       {bg:'#fdf2f2', color:'#dc2626', label:'Rechazado'},
+  error_envio:     {bg:'#fef3e2', color:'#b45309', label:'Error de envío'},
 };
 async function dtCargarDocs(){
   const cont=document.getElementById('dtDocsCont');
@@ -13606,15 +13600,20 @@ async function dtCargarDocs(){
   }catch(e){cont.innerHTML='<div style="color:#dc2626;">Error cargando documentos: '+e.message+'</div>';}
 }
 async function dtConsultarEstado(id){
-  const fila=document.getElementById('dtdoc-'+id);
-  const badge=fila?fila.querySelector('.dt-estado-badge'):null;
-  if(badge){badge.textContent='Consultando…';}
   try{
     const r=await fetch('/facturacion/boleta/'+id+'/consultar-estado',{method:'POST'});
     const d=await r.json();
-    if(d.ok){ dtCargarDocs(); }
-    else if(badge){ badge.textContent='Error'; alert(d.error||'No se pudo consultar'); }
-  }catch(e){ if(badge) badge.textContent='Error'; }
+    if(d.ok){
+      // Mostrar la respuesta real del SII
+      let msg='Estado en el SII: '+(d.glosa||d.estado_sii||d.estado);
+      if(d.estado==='en_proceso'){ msg+='\n\nEl SII aún está procesando. Vuelve a consultar en unos minutos.'; }
+      alert(msg);
+      // Refrescar la tabla de Consultar boleta si está activa
+      if(typeof conBuscar==='function' && document.getElementById('conResultados')) conBuscar();
+    } else {
+      alert(d.error||'No se pudo consultar');
+    }
+  }catch(e){ alert('Error: '+e.message); }
 }
 
 
@@ -13677,6 +13676,7 @@ async function conBuscar(){
         <td style="padding:9px 8px;"><span style="font-size:11px;padding:3px 8px;border-radius:6px;background:${eb.bg};color:${eb.color};font-weight:600;">${eb.label}</span></td>
         <td style="padding:9px 8px;text-align:right;white-space:nowrap;">
           <button onclick="dtVerDoc(${doc.id},'${doc.pdf_url}')" style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:7px;font-size:12px;cursor:pointer;font-weight:600;">👁 Ver</button>
+          ${['enviado','en_proceso'].includes(doc.estado)?`<button onclick="dtConsultarEstado(${doc.id})" style="background:none;border:none;color:#2563eb;cursor:pointer;font-weight:600;font-size:12px;margin-left:4px;">Consultar SII</button>`:''}
           ${dtMenuPuntitos(doc)}
         </td></tr>`;
     });

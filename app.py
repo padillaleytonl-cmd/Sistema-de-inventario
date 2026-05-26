@@ -21641,6 +21641,48 @@ def facturacion_documentos_listar():
                     "total_periodo": total_periodo, "cantidad": len(docs)})
 
 
+def _fact_mapear_estado_sii(estado_sii):
+    """Mapea el código de estado del SII (boletas) a estado interno + glosa legible.
+    Códigos oficiales (diagrama de estados de envíos de boleta del SII):
+      Intermedios (en proceso): REC, SOK, FOK, PRD, CRT, EPR
+      Final aceptado:           RPR (envío procesado/aceptado), EPR final, DOK
+      Final con reparos:        RLV, RPR con reparos
+      Final rechazado:          RCT, RFR, RPT, RSC, VOF, RCH
+    Devuelve: (estado_interno, glosa_legible)
+    """
+    e = (estado_sii or "").strip().upper()
+    intermedios = {"REC": "Envío recibido por el SII",
+                   "SOK": "Esquema validado",
+                   "FOK": "Firma validada",
+                   "PRD": "En proceso",
+                   "CRT": "Carátula OK",
+                   "EPR": "Envío en proceso"}
+    aceptados = {"RPR": "Aceptado por el SII",
+                 "DOK": "Aceptado por el SII",
+                 "ACEPTADO": "Aceptado por el SII"}
+    reparos = {"RLV": "Aceptado con reparos",
+               "RPRREP": "Aceptado con reparos"}
+    rechazados = {"RCT": "Rechazado por carátula",
+                  "RFR": "Rechazado por firma",
+                  "RPT": "Rechazado",
+                  "RSC": "Rechazado por esquema",
+                  "RCH": "Rechazado",
+                  "VOF": "Error interno en el SII",
+                  "RECHAZADO": "Rechazado"}
+    if e in aceptados:
+        return "aceptado", aceptados[e]
+    if e in reparos:
+        return "aceptado_reparos", reparos[e]
+    if e in rechazados:
+        return "rechazado", rechazados[e]
+    if e in intermedios:
+        return "en_proceso", intermedios[e]
+    if not e:
+        return "en_proceso", "En espera de respuesta del SII"
+    # Código desconocido: dejar en proceso pero guardar el código crudo para diagnóstico
+    return "en_proceso", "Estado SII: " + e
+
+
 @app.route("/facturacion/boleta/<int:boleta_id>/consultar-estado", methods=["POST", "GET"])
 def facturacion_consultar_estado(boleta_id):
     """LIMBO 3: consulta el estado REAL en el SII de una boleta enviada.
@@ -21683,14 +21725,13 @@ def facturacion_consultar_estado(boleta_id):
         return jsonify({"ok": False, "error": "No se pudo consultar: " + str(e)[:200]}), 502
 
     estado_sii = (res.get("estado") or "").upper()
-    # Mapear estado del SII a estado interno
-    aceptada = estado_sii in ("ACEPTADO", "EPK", "DOK", "ACEPTADA", "PROCESADO")
-    rechazada = estado_sii in ("RECHAZADO", "RCH", "RFR", "RECHAZADA", "RSC")
-    nuevo_estado = "aceptado" if aceptada else ("rechazado" if rechazada else "enviado")
+    nuevo_estado, glosa = _fact_mapear_estado_sii(estado_sii)
+    es_aceptada = nuevo_estado in ("aceptado", "aceptado_reparos")
     _fact_actualizar_estado_dte(boleta_id, nuevo_estado, estado_sii=estado_sii,
-                                glosa=res.get("respuesta_cruda", "")[:300],
-                                set_fecha_aceptacion=aceptada)
+                                glosa=glosa,
+                                set_fecha_aceptacion=es_aceptada)
     return jsonify({"ok": True, "estado": nuevo_estado, "estado_sii": estado_sii,
+                    "glosa": glosa,
                     "respuesta": res.get("respuesta_cruda", "")[:400]})
 
 
@@ -21742,11 +21783,11 @@ def _fact_job_consultar_estados():
                     try:
                         res = consultar_estado_envio(trk, tok, config["rut_emisor"], ambiente)
                         est = (res.get("estado") or "").upper()
-                        aceptada = est in ("ACEPTADO", "EPK", "DOK", "ACEPTADA", "PROCESADO")
-                        rechazada = est in ("RECHAZADO", "RCH", "RFR", "RECHAZADA", "RSC")
-                        if aceptada or rechazada:
-                            _fact_actualizar_estado_dte(bid, "aceptado" if aceptada else "rechazado",
-                                                        estado_sii=est, set_fecha_aceptacion=aceptada)
+                        nuevo_est, glosa_est = _fact_mapear_estado_sii(est)
+                        # Solo actualizar si llegó a un estado final (no re-escribir 'en_proceso')
+                        if nuevo_est in ("aceptado", "aceptado_reparos", "rechazado"):
+                            _fact_actualizar_estado_dte(bid, nuevo_est, estado_sii=est, glosa=glosa_est,
+                                                        set_fecha_aceptacion=nuevo_est.startswith("aceptado"))
                     except Exception as e:
                         print("[RCOF/Estado] Error boleta %s: %s" % (bid, str(e)[:120]))
             except Exception as e:
