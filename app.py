@@ -21054,15 +21054,20 @@ def facturacion_boleta_emitir():
         # 8. Guardar la boleta emitida
         conn = get_conn()
         try:
+            rut_recep = (receptor or {}).get("rut", "66666666-6")
+            rs_recep = (receptor or {}).get("razon_social", "Consumidor Final")
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO facturacion_dtes
-                      (tenant_id, tipo_dte, folio, ambiente, track_id, estado,
-                       monto_total, xml_dte, fecha_emision)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+                      (tenant_id, tipo_dte, folio, rut_receptor, razon_social_receptor,
+                       monto_neto, monto_iva, monto_total, xml_firmado, estado,
+                       track_id_sii, estado_sii, fecha_emision, fecha_envio_sii)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
                     RETURNING id
-                """, (tenant_id, tipo_dte, folio, ambiente, track_id, "enviado",
-                      total, boleta_xml.decode("iso-8859-1", errors="replace")))
+                """, (tenant_id, tipo_dte, folio, rut_recep, rs_recep,
+                      res_bol["totales"]["mnt_neto"], res_bol["totales"]["mnt_iva"],
+                      total, boleta_xml.decode("iso-8859-1", errors="replace"),
+                      "enviado", track_id, resultado.get("estado")))
                 boleta_id = cur.fetchone()[0]
             conn.commit()
         except Exception as e:
@@ -21100,7 +21105,7 @@ def facturacion_boleta_pdf(boleta_id):
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT xml_dte FROM facturacion_dtes
+                SELECT xml_firmado FROM facturacion_dtes
                 WHERE id = %s AND tenant_id = %s
             """, (boleta_id, tenant_id))
             row = cur.fetchone()
@@ -21115,6 +21120,137 @@ def facturacion_boleta_pdf(boleta_id):
     pdf = generar_pdf_dte(xml, formato=formato, url_consulta=url_consulta)
     return Response(pdf, mimetype="application/pdf",
                     headers={"Content-Disposition": 'inline; filename="boleta_' + str(boleta_id) + '.pdf"'})
+
+
+
+@app.route("/facturacion/folios/resumen", methods=["GET"])
+def facturacion_folios_resumen():
+    """Resumen de uso de folios por tipo de DTE (estilo dashboard tributario):
+    asignados, usados, libres, vencimiento (6 meses desde autorización) y
+    estimación de días de operación según consumo promedio reciente.
+    """
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    tenant_id = session.get("tenant_id") or 1
+
+    from inventario import get_conn, release_conn
+    from facturacion.cafs import listar_cafs_tenant
+    from facturacion.utils import TIPOS_DTE
+    from datetime import date, timedelta
+
+    cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id)
+
+    # Consumo promedio diario por tipo (últimos 30 días) desde facturacion_dtes
+    consumo = {}
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT tipo_dte, COUNT(*)::float / 30.0
+                FROM facturacion_dtes
+                WHERE tenant_id = %s AND fecha_emision >= NOW() - INTERVAL '30 days'
+                GROUP BY tipo_dte
+            """, (tenant_id,))
+            for tipo, prom in cur.fetchall():
+                consumo[int(tipo)] = round(prom, 1)
+    except Exception:
+        pass
+    finally:
+        release_conn(conn)
+
+    # Agrupar CAFs por tipo de DTE
+    por_tipo = {}
+    for caf in cafs:
+        t = caf["tipo_dte"]
+        if t not in por_tipo:
+            por_tipo[t] = {
+                "tipo_dte": t,
+                "nombre": TIPOS_DTE.get(t, {}).get("nombre", f"Tipo {t}"),
+                "asignados": 0, "usados": 0, "libres": 0, "total": 0,
+                "vencimientos": [],
+            }
+        g = por_tipo[t]
+        g["asignados"] += caf["folios_total"]
+        g["usados"] += caf["folios_usados"]
+        g["libres"] += caf["folios_restantes"]
+        g["total"] += caf["folios_total"]
+        # Vencimiento: 6 meses desde autorización
+        if caf.get("fecha_autorizacion") and not caf.get("agotado"):
+            try:
+                fa = date.fromisoformat(caf["fecha_autorizacion"][:10])
+                # sumar ~6 meses (182 días)
+                venc = fa + timedelta(days=182)
+                dias = (venc - date.today()).days
+                if caf["folios_restantes"] > 0:
+                    g["vencimientos"].append({
+                        "folios": caf["folios_restantes"],
+                        "autorizado": caf["fecha_autorizacion"][:10],
+                        "vence": venc.isoformat(),
+                        "dias_restantes": dias,
+                    })
+            except Exception:
+                pass
+
+    # Estimar días de operación según consumo
+    resultado = []
+    for t, g in sorted(por_tipo.items()):
+        prom = consumo.get(t, 0)
+        g["consumo_diario"] = prom
+        g["dias_estimados"] = int(g["libres"] / prom) if prom > 0 else None
+        resultado.append(g)
+
+    return jsonify({"ok": True, "folios": resultado})
+
+
+@app.route("/facturacion/documentos", methods=["GET"])
+def facturacion_documentos_listar():
+    """Lista los DTEs emitidos por el tenant (para la tabla de documentos).
+    Query: ?tipo=39 (opcional), ?limite=50
+    """
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    tenant_id = session.get("tenant_id") or 1
+    tipo = request.args.get("tipo", type=int)
+    limite = min(request.args.get("limite", default=50, type=int), 200)
+
+    from inventario import get_conn, release_conn
+    from facturacion.utils import TIPOS_DTE
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            if tipo:
+                cur.execute("""
+                    SELECT id, tipo_dte, folio, rut_receptor, razon_social_receptor,
+                           monto_total, estado, track_id_sii, estado_sii, fecha_emision
+                    FROM facturacion_dtes
+                    WHERE tenant_id = %s AND tipo_dte = %s
+                    ORDER BY fecha_emision DESC LIMIT %s
+                """, (tenant_id, tipo, limite))
+            else:
+                cur.execute("""
+                    SELECT id, tipo_dte, folio, rut_receptor, razon_social_receptor,
+                           monto_total, estado, track_id_sii, estado_sii, fecha_emision
+                    FROM facturacion_dtes
+                    WHERE tenant_id = %s
+                    ORDER BY fecha_emision DESC LIMIT %s
+                """, (tenant_id, limite))
+            rows = cur.fetchall()
+    finally:
+        release_conn(conn)
+
+    docs = []
+    for r in rows:
+        docs.append({
+            "id": r[0], "tipo_dte": r[1],
+            "tipo_nombre": TIPOS_DTE.get(r[1], {}).get("nombre", f"Tipo {r[1]}"),
+            "folio": r[2], "rut_receptor": r[3], "razon_social_receptor": r[4],
+            "monto_total": int(r[5]) if r[5] is not None else 0,
+            "estado": r[6], "track_id": r[7], "estado_sii": r[8],
+            "fecha_emision": r[9].isoformat() if r[9] else None,
+            "pdf_url": f"/facturacion/boleta/{r[0]}/pdf",
+        })
+    return jsonify({"ok": True, "documentos": docs})
 
 
 # ═══════════════════════════════════════════════════════════════════════════

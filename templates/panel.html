@@ -3339,6 +3339,88 @@ tbody td {
       <div style="text-align:center;color:var(--hint);padding:20px;grid-column:1/-1;">Cargando estado...</div>
     </div>
 
+    <!-- ═══════════ PANEL DOCUMENTOS TRIBUTARIOS (emisión + folios + documentos) ═══════════ -->
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:14px;margin-bottom:20px;overflow:hidden;">
+      <!-- Sub-tabs -->
+      <div style="display:flex;border-bottom:1px solid var(--border);">
+        <button class="dt-tab dt-tab-active" data-dt="emitir" onclick="dtTab('emitir',this)"
+          style="flex:1;padding:14px;border:none;background:none;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;color:var(--text);border-bottom:2px solid #059669;">
+          🧾 Emitir documento
+        </button>
+        <button class="dt-tab" data-dt="folios" onclick="dtTab('folios',this)"
+          style="flex:1;padding:14px;border:none;background:none;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;">
+          📊 Uso de folios
+        </button>
+        <button class="dt-tab" data-dt="docs" onclick="dtTab('docs',this)"
+          style="flex:1;padding:14px;border:none;background:none;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;">
+          📄 Documentos emitidos
+        </button>
+      </div>
+
+      <!-- TAB: EMITIR -->
+      <div id="dt-pane-emitir" class="dt-pane" style="padding:22px;">
+        <div style="display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap;">
+          <button class="dt-tipo dt-tipo-active" data-tipo="39" onclick="dtTipo('39',this)"
+            style="padding:8px 16px;border:1px solid #059669;background:#059669;color:#fff;border-radius:8px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Boleta</button>
+          <button class="dt-tipo" data-tipo="41" onclick="dtTipo('41',this)"
+            style="padding:8px 16px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Boleta exenta</button>
+        </div>
+
+        <!-- Receptor -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+          <div>
+            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">RUT cliente (opcional)</label>
+            <input id="dtRecRut" placeholder="66666666-6 (consumidor final)"
+              style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+          </div>
+          <div>
+            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Nombre / Razón social</label>
+            <input id="dtRecNombre" placeholder="Consumidor Final"
+              style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+          </div>
+        </div>
+
+        <!-- Items -->
+        <table style="width:100%;margin-bottom:6px;">
+          <thead><tr>
+            <th style="font-size:11px;color:var(--muted);text-align:left;font-weight:600;padding:0 8px 8px;">Descripción</th>
+            <th style="font-size:11px;color:var(--muted);text-align:left;font-weight:600;padding:0 8px 8px;width:72px;">Cant.</th>
+            <th style="font-size:11px;color:var(--muted);text-align:left;font-weight:600;padding:0 8px 8px;width:120px;">Precio unit.</th>
+            <th style="width:60px;font-size:11px;color:var(--muted);text-align:center;font-weight:600;padding:0 8px 8px;">Exento</th>
+            <th style="width:34px;"></th>
+          </tr></thead>
+          <tbody id="dtItems"></tbody>
+        </table>
+        <button onclick="dtAddItem()" style="background:var(--bg2);color:#534AB7;border:none;padding:9px 14px;border-radius:9px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">+ Agregar ítem</button>
+
+        <!-- Totales -->
+        <div style="margin-top:16px;border-top:1px dashed var(--border);padding-top:14px;max-width:280px;margin-left:auto;">
+          <div style="display:flex;justify-content:space-between;font-size:13px;color:var(--muted);padding:3px 0;"><span>Neto</span><span id="dtNeto">$ 0</span></div>
+          <div id="dtLineExe" style="display:none;justify-content:space-between;font-size:13px;color:var(--muted);padding:3px 0;"><span>Exento</span><span id="dtExe">$ 0</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:13px;color:var(--muted);padding:3px 0;"><span>IVA (19%)</span><span id="dtIva">$ 0</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:19px;font-weight:700;color:var(--text);margin-top:6px;"><span>TOTAL</span><span id="dtTotal">$ 0</span></div>
+        </div>
+
+        <button id="dtBtnEmitir" onclick="dtEmitir()"
+          style="width:100%;background:#059669;color:#fff;border:none;padding:15px;border-radius:11px;font-family:inherit;font-weight:700;font-size:15px;cursor:pointer;margin-top:16px;">
+          Emitir y enviar al SII
+        </button>
+        <div id="dtResultado" style="margin-top:16px;"></div>
+      </div>
+
+      <!-- TAB: FOLIOS -->
+      <div id="dt-pane-folios" class="dt-pane" style="padding:22px;display:none;">
+        <div id="dtFoliosCont" style="color:var(--muted);font-size:13px;">Cargando uso de folios…</div>
+      </div>
+
+      <!-- TAB: DOCUMENTOS -->
+      <div id="dt-pane-docs" class="dt-pane" style="padding:22px;display:none;">
+        <div id="dtDocsCont" style="color:var(--muted);font-size:13px;">Cargando documentos…</div>
+      </div>
+    </div>
+    <!-- ═══════════ FIN PANEL DOCUMENTOS TRIBUTARIOS ═══════════ -->
+
+
     <!-- Tarjeta principal: subir certificado -->
     <div style="background:var(--bg);border:0.5px solid var(--border);border-radius:12px;padding:24px;margin-bottom:18px;max-width:700px;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
@@ -10152,6 +10234,9 @@ async function cargarFacturacionDashboard(){
 
   // Card de suscripción tributaria (interactiva)
   await renderDtesCliente();
+
+  // Inicializar panel documentos tributarios
+  if(document.getElementById('dtItems') && !document.querySelector('.dt-item')) dtAddItem();
 }
 
 function mostrarErrorDashboard(msg, detalle){
@@ -13132,6 +13217,156 @@ function vtaDescargarCSV(){
   a.click();
   setTimeout(()=>URL.revokeObjectURL(url), 2000);
 }
+
+
+// ═══════════ PANEL DOCUMENTOS TRIBUTARIOS ═══════════
+let _dtTipo = '39';
+const _dtCLP = n => '$ ' + (Math.round(n||0)).toLocaleString('es-CL');
+
+function dtTab(tab, btn){
+  document.querySelectorAll('.dt-tab').forEach(b=>{b.style.color='var(--muted)';b.style.borderBottom='2px solid transparent';});
+  btn.style.color='var(--text)'; btn.style.borderBottom='2px solid #059669';
+  document.querySelectorAll('.dt-pane').forEach(p=>p.style.display='none');
+  document.getElementById('dt-pane-'+tab).style.display='block';
+  if(tab==='folios') dtCargarFolios();
+  if(tab==='docs') dtCargarDocs();
+}
+
+function dtTipo(tipo, btn){
+  _dtTipo = tipo;
+  document.querySelectorAll('.dt-tipo').forEach(b=>{b.style.background='var(--card)';b.style.color='var(--text)';b.style.borderColor='var(--border)';});
+  btn.style.background='#059669'; btn.style.color='#fff'; btn.style.borderColor='#059669';
+  // si es boleta exenta, marcar todos los items como exentos visualmente no hace falta; el backend decide por items
+}
+
+function dtAddItem(nombre='',cant=1,precio=''){
+  const tr=document.createElement('tr'); tr.className='dt-item';
+  const exe = _dtTipo==='41';
+  tr.innerHTML=`
+    <td style="padding:0 4px 8px;"><input class="dti-n" placeholder="Producto o servicio" value="${nombre}" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);"></td>
+    <td style="padding:0 4px 8px;"><input class="dti-c" type="number" min="0" step="any" value="${cant}" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);"></td>
+    <td style="padding:0 4px 8px;"><input class="dti-p" type="number" min="0" placeholder="0" value="${precio}" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);"></td>
+    <td style="padding:0 4px 8px;text-align:center;"><input class="dti-e" type="checkbox" ${exe?'checked':''} style="width:18px;height:18px;cursor:pointer;"></td>
+    <td style="padding:0 4px 8px;"><button onclick="this.closest('tr').remove();dtCalc();" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:6px;">×</button></td>`;
+  document.getElementById('dtItems').appendChild(tr);
+  tr.querySelectorAll('input').forEach(i=>i.addEventListener('input',dtCalc));
+  dtCalc();
+}
+
+function dtLeerItems(){
+  return [...document.querySelectorAll('.dt-item')].map(tr=>({
+    nombre: tr.querySelector('.dti-n').value.trim(),
+    cantidad: parseFloat(tr.querySelector('.dti-c').value)||0,
+    precio_unitario: parseFloat(tr.querySelector('.dti-p').value)||0,
+    exento: tr.querySelector('.dti-e').checked,
+  })).filter(it=>it.nombre && it.precio_unitario>0);
+}
+
+function dtCalc(){
+  let af=0,ex=0;
+  dtLeerItems().forEach(it=>{const s=Math.round(it.cantidad*it.precio_unitario); if(it.exento)ex+=s;else af+=s;});
+  const neto=af>0?Math.round(af/1.19):0, iva=af>0?af-neto:0, total=neto+iva+ex;
+  document.getElementById('dtNeto').textContent=_dtCLP(neto);
+  document.getElementById('dtIva').textContent=_dtCLP(iva);
+  document.getElementById('dtTotal').textContent=_dtCLP(total);
+  const le=document.getElementById('dtLineExe'); le.style.display=ex>0?'flex':'none';
+  document.getElementById('dtExe').textContent=_dtCLP(ex);
+}
+
+async function dtEmitir(){
+  const items=dtLeerItems();
+  if(!items.length){alert('Agrega al menos un ítem con nombre y precio.');return;}
+  const btn=document.getElementById('dtBtnEmitir');
+  btn.disabled=true; btn.textContent='Emitiendo y enviando al SII…';
+  const receptor={};
+  if(document.getElementById('dtRecRut').value.trim())receptor.rut=document.getElementById('dtRecRut').value.trim();
+  if(document.getElementById('dtRecNombre').value.trim())receptor.razon_social=document.getElementById('dtRecNombre').value.trim();
+  try{
+    const r=await fetch('/facturacion/boleta/emitir',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({items,receptor:Object.keys(receptor).length?receptor:null})});
+    const d=await r.json();
+    const cont=document.getElementById('dtResultado');
+    if(d.ok){
+      cont.innerHTML=`<div style="background:#f0fbf6;border:1px solid #b8e6d2;border-radius:11px;padding:16px;">
+        <div style="font-size:15px;font-weight:700;color:#047a56;margin-bottom:10px;">🎉 Documento emitido — Folio N° ${d.folio}</div>
+        <div style="font-size:13px;color:var(--muted);margin-bottom:12px;">Total ${_dtCLP(d.total)} · Track ID SII: ${d.track_id||'—'}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <a href="${d.pdf_url}?formato=carta" target="_blank" style="background:#534AB7;color:#fff;text-decoration:none;padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;">📄 PDF carta</a>
+          <a href="${d.pdf_url}?formato=rollo" target="_blank" style="background:#6b6880;color:#fff;text-decoration:none;padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;">🧾 PDF rollo</a>
+          <button onclick="dtReset()" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;cursor:pointer;">Emitir otro</button>
+        </div></div>`;
+      document.getElementById('dtItems').innerHTML=''; dtCalc();
+    } else {
+      cont.innerHTML=`<div style="background:#fdf2f2;border:1px solid #f3c2c2;border-radius:11px;padding:16px;color:#dc2626;font-size:13px;">
+        ❌ ${d.error||'Error'} ${d.folio?'<br>Folio reservado: N° '+d.folio:''}</div>`;
+    }
+  }catch(e){
+    document.getElementById('dtResultado').innerHTML=`<div style="color:#dc2626;font-size:13px;">Error de conexión: ${e.message}</div>`;
+  }
+  btn.disabled=false; btn.textContent='Emitir y enviar al SII';
+}
+
+function dtReset(){
+  document.getElementById('dtResultado').innerHTML='';
+  document.getElementById('dtRecRut').value=''; document.getElementById('dtRecNombre').value='';
+  document.getElementById('dtItems').innerHTML=''; dtAddItem();
+}
+
+async function dtCargarFolios(){
+  const cont=document.getElementById('dtFoliosCont');
+  try{
+    const r=await fetch('/facturacion/folios/resumen'); const d=await r.json();
+    if(!d.ok||!d.folios.length){cont.innerHTML='<div style="color:var(--muted);">Aún no hay folios cargados. Lusync los gestiona por ti.</div>';return;}
+    let h='<div style="display:grid;gap:14px;">';
+    d.folios.forEach(g=>{
+      const pct=g.total>0?Math.round(g.usados/g.total*100):0;
+      h+=`<div style="border:1px solid var(--border);border-radius:12px;padding:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <div style="font-weight:700;font-size:15px;color:var(--text);">${g.nombre}</div>
+          <div style="font-size:12px;color:var(--muted);">${g.dias_estimados!=null?('~'+g.dias_estimados+' días de operación'):''}</div>
+        </div>
+        <div style="height:8px;background:var(--bg2);border-radius:5px;overflow:hidden;margin-bottom:10px;">
+          <div style="height:100%;width:${pct}%;background:#059669;"></div></div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:12px;">
+          <div><div style="color:var(--muted);">Asignados</div><div style="font-weight:700;color:var(--text);">${g.asignados.toLocaleString('es-CL')}</div></div>
+          <div><div style="color:var(--muted);">Usados</div><div style="font-weight:700;color:var(--text);">${g.usados.toLocaleString('es-CL')}</div></div>
+          <div><div style="color:var(--muted);">Libres</div><div style="font-weight:700;color:#059669;">${g.libres.toLocaleString('es-CL')}</div></div>
+          <div><div style="color:var(--muted);">Consumo/día</div><div style="font-weight:700;color:var(--text);">${g.consumo_diario||0}</div></div>
+        </div>`;
+      g.vencimientos.forEach(v=>{
+        const urge=v.dias_restantes<30;
+        h+=`<div style="margin-top:10px;font-size:11px;color:${urge?'#dc2626':'var(--muted)'};">⏱ ${v.folios} folios vencen el ${v.vence} (${v.dias_restantes} días)</div>`;
+      });
+      h+='</div>';
+    });
+    h+='</div>';
+    cont.innerHTML=h;
+  }catch(e){cont.innerHTML='<div style="color:#dc2626;">Error cargando folios: '+e.message+'</div>';}
+}
+
+async function dtCargarDocs(){
+  const cont=document.getElementById('dtDocsCont');
+  try{
+    const r=await fetch('/facturacion/documentos?limite=50'); const d=await r.json();
+    if(!d.ok||!d.documentos.length){cont.innerHTML='<div style="color:var(--muted);">Todavía no has emitido documentos.</div>';return;}
+    let h='<table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr style="text-align:left;color:var(--muted);font-size:11px;">'
+      +'<th style="padding:8px;">Tipo</th><th style="padding:8px;">Folio</th><th style="padding:8px;">Cliente</th><th style="padding:8px;text-align:right;">Total</th><th style="padding:8px;">Fecha</th><th style="padding:8px;">Estado</th><th style="padding:8px;"></th></tr></thead><tbody>';
+    d.documentos.forEach(doc=>{
+      const f=doc.fecha_emision?doc.fecha_emision.slice(0,10):'—';
+      h+=`<tr style="border-top:1px solid var(--border);">
+        <td style="padding:9px 8px;color:var(--text);">${doc.tipo_nombre}</td>
+        <td style="padding:9px 8px;color:var(--text);font-weight:600;">${doc.folio}</td>
+        <td style="padding:9px 8px;color:var(--muted);">${doc.razon_social_receptor||'Consumidor Final'}</td>
+        <td style="padding:9px 8px;text-align:right;color:var(--text);font-weight:600;">${_dtCLP(doc.monto_total)}</td>
+        <td style="padding:9px 8px;color:var(--muted);">${f}</td>
+        <td style="padding:9px 8px;"><span style="font-size:11px;padding:3px 8px;border-radius:6px;background:#eaf3ee;color:#1D9E75;">${doc.estado||'—'}</span></td>
+        <td style="padding:9px 8px;"><a href="${doc.pdf_url}?formato=carta" target="_blank" style="color:#534AB7;text-decoration:none;font-weight:600;">PDF</a></td></tr>`;
+    });
+    h+='</tbody></table>';
+    cont.innerHTML=h;
+  }catch(e){cont.innerHTML='<div style="color:#dc2626;">Error cargando documentos: '+e.message+'</div>';}
+}
+
 </script>
 </body>
 </html>
