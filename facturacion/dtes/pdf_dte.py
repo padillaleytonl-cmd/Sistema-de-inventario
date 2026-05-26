@@ -243,7 +243,7 @@ def _pdf_carta(d: dict, url_consulta: str) -> bytes:
     c.setFont("Helvetica-Bold", 13 if len(titulo) <= 20 else 10)
     c.drawCentredString(rec_x + rec_w / 2, rec_y + rec_h - 1.45 * cm, titulo)
     c.setFont("Helvetica-Bold", 13)
-    c.drawCentredString(rec_x + rec_w / 2, rec_y + rec_h - 2.2 * cm, f"N° {d['folio']}")
+    c.drawCentredString(rec_x + rec_w / 2, rec_y + rec_h - 2.2 * cm, ("BORRADOR" if str(d['folio']) in ("0","") else f"N° {d['folio']}"))
     c.setFont("Helvetica-Bold", 10)
     c.drawCentredString(rec_x + rec_w / 2, rec_y + 0.4 * cm, "S.I.I. - SANTIAGO")
     c.setFillColorRGB(0, 0, 0)
@@ -374,6 +374,16 @@ def _pdf_carta(d: dict, url_consulta: str) -> bytes:
         c.setFont("Helvetica", 7)
         c.drawString(x, 1.7 * cm, "Timbre Electrónico SII")
         c.drawString(x, 1.4 * cm, f"Verifique en {url_consulta}")
+    else:
+        # Borrador/preview: placeholder donde irá el timbre real al emitir
+        tw, th = 7 * cm, 2.6 * cm
+        c.setStrokeColorRGB(0.7, 0.7, 0.7); c.setLineWidth(0.7)
+        c.setDash(3, 3)
+        c.rect(x, 2 * cm, tw, th); c.setDash()
+        c.setFillColorRGB(0.6, 0.6, 0.6); c.setFont("Helvetica-Oblique", 8)
+        c.drawCentredString(x + tw/2, 2 * cm + th/2 + 0.2*cm, "VISTA PREVIA — BORRADOR")
+        c.drawCentredString(x + tw/2, 2 * cm + th/2 - 0.3*cm, "El timbre electrónico se genera al emitir")
+        c.setFillColorRGB(0, 0, 0)
 
     c.showPage()
     c.save()
@@ -414,7 +424,7 @@ def _pdf_rollo(d: dict, url_consulta: str) -> bytes:
     c.setFillColorRGB(0.8, 0, 0)
     c.setFont("Helvetica-Bold", 8 if len(info['nombre']) <= 22 else 7)
     c.drawCentredString(cx, y - 4 * mm, info['nombre'])
-    c.drawCentredString(cx, y - 8.5 * mm, f"N° {d['folio']}")
+    c.drawCentredString(cx, y - 8.5 * mm, ("BORRADOR" if str(d['folio']) in ("0","") else f"N° {d['folio']}"))
     c.setFillColorRGB(0, 0, 0)
     y -= 15 * mm
 
@@ -474,6 +484,14 @@ def _pdf_rollo(d: dict, url_consulta: str) -> bytes:
         c.setFont("Helvetica", 6)
         c.drawCentredString(cx, y, "Timbre Electrónico SII"); y -= 3 * mm
         c.drawCentredString(cx, y, f"Verifique en {url_consulta}")
+    else:
+        tw, th = 60 * mm, 20 * mm
+        c.setStrokeColorRGB(0.7, 0.7, 0.7); c.setLineWidth(0.6); c.setDash(2, 2)
+        c.rect((ancho - tw)/2, y - th, tw, th); c.setDash()
+        c.setFillColorRGB(0.6, 0.6, 0.6); c.setFont("Helvetica-Oblique", 6)
+        c.drawCentredString(cx, y - th/2 + 1*mm, "VISTA PREVIA — BORRADOR"); 
+        c.drawCentredString(cx, y - th/2 - 2.5*mm, "Timbre se genera al emitir")
+        c.setFillColorRGB(0, 0, 0); y -= th + 2 * mm
 
     c.showPage()
     c.save()

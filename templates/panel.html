@@ -3365,6 +3365,13 @@ tbody td {
             style="padding:8px 16px;border:1px solid #059669;background:#059669;color:#fff;border-radius:8px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Boleta</button>
           <button class="dt-tipo" data-tipo="41" onclick="dtTipo('41',this)"
             style="padding:8px 16px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Boleta exenta</button>
+          <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
+            <span style="font-size:12px;color:var(--muted);font-weight:600;">Formato:</span>
+            <select id="dtFormato" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);font-weight:600;cursor:pointer;">
+              <option value="carta" selected>Carta (hoja)</option>
+              <option value="rollo">Rollo (ticket 80mm)</option>
+            </select>
+          </div>
         </div>
 
         <!-- Receptor -->
@@ -3426,15 +3433,16 @@ tbody td {
       </div>
     </div>
     <!-- Modal buscador de productos -->
-    <div id="dtBuscadorModal" style="display:none;position:fixed;inset:0;background:rgba(20,15,40,.45);z-index:9999;align-items:flex-start;justify-content:center;padding-top:8vh;">
-      <div style="background:var(--card);border-radius:14px;width:90%;max-width:560px;max-height:70vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3);">
-        <div style="padding:16px 18px;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:center;">
-          <input id="dtBuscadorInput" placeholder="Buscar por SKU o nombre…" autocomplete="off" oninput="dtFiltrarProductos(this.value)"
-            style="flex:1;padding:11px 13px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
-          <button onclick="dtCerrarBuscador()" style="background:none;border:none;font-size:22px;color:var(--muted);cursor:pointer;">×</button>
+    <div id="dtBuscadorModal" onclick="if(event.target===this)dtCerrarBuscador()" style="display:none;position:fixed;inset:0;background:rgba(15,12,30,.65);backdrop-filter:blur(2px);z-index:100000;align-items:center;justify-content:center;padding:20px;">
+      <div onclick="event.stopPropagation()" style="background:#ffffff;border-radius:16px;width:100%;max-width:580px;max-height:75vh;display:flex;flex-direction:column;box-shadow:0 24px 70px rgba(0,0,0,.45);overflow:hidden;">
+        <div style="padding:18px 20px;border-bottom:1px solid #e3e1ee;display:flex;gap:12px;align-items:center;background:#f7f6fb;">
+          <span style="font-size:18px;">🔍</span>
+          <input id="dtBuscadorInput" placeholder="Buscar por SKU o nombre del producto…" autocomplete="off" oninput="dtFiltrarProductos(this.value)"
+            style="flex:1;padding:12px 14px;border:1px solid #d9d6ea;border-radius:10px;font-family:inherit;font-size:15px;background:#fff;color:#1d1b2e;">
+          <button onclick="dtCerrarBuscador()" style="background:#eceaf5;border:none;width:34px;height:34px;border-radius:8px;font-size:20px;color:#6b6880;cursor:pointer;line-height:1;">×</button>
         </div>
-        <div id="dtBuscadorResultados" style="overflow-y:auto;padding:8px;">
-          <div style="padding:20px;text-align:center;color:var(--muted);font-size:13px;">Escribe para buscar entre tus productos…</div>
+        <div id="dtBuscadorResultados" style="overflow-y:auto;padding:10px;background:#fff;">
+          <div style="padding:28px 20px;text-align:center;color:#9b97ad;font-size:14px;">Escribe para buscar entre tus productos…</div>
         </div>
       </div>
     </div>
@@ -13251,9 +13259,15 @@ function dtTab(tab, btn){
   btn.style.color='var(--text)'; btn.style.borderBottom='2px solid #059669';
   document.querySelectorAll('.dt-pane').forEach(p=>p.style.display='none');
   document.getElementById('dt-pane-'+tab).style.display='block';
+  if(tab==='emitir' && !document.querySelector('.dt-item')) dtAddItem();
   if(tab==='folios') dtCargarFolios();
   if(tab==='docs') dtCargarDocs();
 }
+// Garantizar primera fila apenas el panel existe en el DOM
+function dtInit(){
+  if(document.getElementById('dtItems') && !document.querySelector('.dt-item')) dtAddItem();
+}
+document.addEventListener('DOMContentLoaded', ()=>{ setTimeout(dtInit, 300); });
 
 function dtTipo(tipo, btn){
   _dtTipo = tipo;
@@ -13312,22 +13326,22 @@ async function dtCargarProductos(){
 async function dtFiltrarProductos(q){
   const cont=document.getElementById('dtBuscadorResultados');
   q=(q||'').trim().toLowerCase();
-  if(!q){ cont.innerHTML='<div style="padding:20px;text-align:center;color:var(--muted);font-size:13px;">Escribe para buscar entre tus productos…</div>'; return; }
+  if(!q){ cont.innerHTML='<div style="padding:28px 20px;text-align:center;color:#9b97ad;font-size:14px;">Escribe para buscar entre tus productos…</div>'; return; }
   // Esperar a que los productos terminen de cargar
-  if(_dtProductos===null){ cont.innerHTML='<div style="padding:20px;text-align:center;color:var(--muted);font-size:13px;">Cargando productos…</div>'; await dtCargarProductos(); }
-  if(!_dtProductos||!_dtProductos.length){ cont.innerHTML='<div style="padding:20px;text-align:center;color:var(--muted);font-size:13px;">No tienes productos cargados. Puedes escribir el nombre a mano en el ítem.</div>'; return; }
+  if(_dtProductos===null){ cont.innerHTML='<div style="padding:28px 20px;text-align:center;color:#9b97ad;font-size:14px;">Cargando productos…</div>'; await dtCargarProductos(); }
+  if(!_dtProductos||!_dtProductos.length){ cont.innerHTML='<div style="padding:28px 20px;text-align:center;color:#9b97ad;font-size:14px;">No tienes productos cargados. Puedes escribir el nombre a mano en el ítem.</div>'; return; }
   const res=_dtProductos.filter(p=>(p.sku||'').toLowerCase().includes(q)||(p.nombre||'').toLowerCase().includes(q)).slice(0,30);
-  if(!res.length){ cont.innerHTML='<div style="padding:20px;text-align:center;color:var(--muted);font-size:13px;">Sin resultados para «'+q+'»</div>'; return; }
+  if(!res.length){ cont.innerHTML='<div style="padding:28px 20px;text-align:center;color:#9b97ad;font-size:14px;">Sin resultados para «'+q+'»</div>'; return; }
   cont.innerHTML=res.map(p=>{
     const precio = p.precio_oferta>0?p.precio_oferta:p.precio_normal;
     return `<div onclick='dtElegirProducto(${JSON.stringify(p).replace(/'/g,"&#39;")})'
-      style="padding:11px 13px;border-radius:9px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;"
-      onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'">
+      style="padding:12px 14px;border-radius:10px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;border-bottom:1px solid #f0eef7;"
+      onmouseover="this.style.background='#f3f1fb'" onmouseout="this.style.background='transparent'">
       <div style="min-width:0;">
-        <div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.nombre||'(sin nombre)'}</div>
-        <div style="font-size:11px;color:var(--muted);">SKU: ${p.sku||'—'} · Stock: ${p.stock!=null?p.stock:'—'}</div>
+        <div style="font-size:14px;font-weight:600;color:#1d1b2e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.nombre||'(sin nombre)'}</div>
+        <div style="font-size:12px;color:#9b97ad;margin-top:2px;">SKU: ${p.sku||'—'} · Stock: ${p.stock!=null?p.stock:'—'}</div>
       </div>
-      <div style="font-size:13px;font-weight:700;color:#059669;white-space:nowrap;">${precio>0?_dtCLP(precio):'sin precio'}</div>
+      <div style="font-size:14px;font-weight:700;color:#059669;white-space:nowrap;">${precio>0?_dtCLP(precio):'sin precio'}</div>
     </div>`;
   }).join('');
 }
@@ -13365,57 +13379,50 @@ function dtCalc(){
   document.getElementById('dtExe').textContent=_dtCLP(ex);
 }
 
-// ── Vista previa antes de firmar ──
-function dtVistaPrevia(){
+// ── Vista previa antes de firmar: muestra el PDF REAL (borrador) embebido ──
+async function dtVistaPrevia(){
   const items=dtLeerItems();
   if(!items.length){alert('Agrega al menos un ítem con nombre y precio.');return;}
-  let af=0,ex=0;
-  items.forEach(it=>{const s=Math.round(it.cantidad*it.precio_unitario); if(it.exento)ex+=s;else af+=s;});
-  const neto=af>0?Math.round(af/1.19):0, iva=af>0?af-neto:0, total=neto+iva+ex;
-  const recNombre=document.getElementById('dtRecNombre').value.trim()||'Consumidor Final';
-  const recRut=document.getElementById('dtRecRut').value.trim()||'66666666-6';
-  const tipoNombre = _dtTipo==='41'?'Boleta Exenta Electrónica':'Boleta Electrónica';
+  const formato = document.getElementById('dtFormato').value || 'carta';
+  const receptor={};
+  if(document.getElementById('dtRecRut').value.trim())receptor.rut=document.getElementById('dtRecRut').value.trim();
+  if(document.getElementById('dtRecNombre').value.trim())receptor.razon_social=document.getElementById('dtRecNombre').value.trim();
 
-  let filas=items.map(it=>`<tr style="border-top:1px solid var(--border);">
-    <td style="padding:8px 6px;font-size:13px;color:var(--text);">${it.nombre}${it.sku?' <span style="color:var(--muted);font-size:11px;">('+it.sku+')</span>':''}${it.exento?' <span style="font-size:10px;color:#d97706;">EXENTO</span>':''}</td>
-    <td style="padding:8px 6px;font-size:13px;color:var(--text);text-align:center;">${it.cantidad} ${it.unidad||''}</td>
-    <td style="padding:8px 6px;font-size:13px;color:var(--text);text-align:right;">${_dtCLP(it.precio_unitario)}</td>
-    <td style="padding:8px 6px;font-size:13px;color:var(--text);text-align:right;font-weight:600;">${_dtCLP(Math.round(it.cantidad*it.precio_unitario))}</td>
-  </tr>`).join('');
-
-  const html=`
-    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px;margin-bottom:16px;font-size:13px;color:#92400e;">
-      ⚠️ Revisa los datos antes de enviar. Una vez emitida y enviada al SII, la boleta <b>no se puede deshacer</b> (solo anular con nota de crédito).
-    </div>
-    <div style="border:1px solid var(--border);border-radius:12px;padding:18px;">
-      <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:14px;">
-        <div><div style="font-size:16px;font-weight:700;color:var(--text);">${tipoNombre}</div>
-          <div style="font-size:12px;color:var(--muted);margin-top:2px;">Cliente: ${recNombre} · ${recRut}</div></div>
-      </div>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
-        <thead><tr style="background:var(--bg2);">
-          <th style="padding:8px 6px;font-size:11px;color:var(--muted);text-align:left;">Descripción</th>
-          <th style="padding:8px 6px;font-size:11px;color:var(--muted);text-align:center;">Cant.</th>
-          <th style="padding:8px 6px;font-size:11px;color:var(--muted);text-align:right;">P. Unit.</th>
-          <th style="padding:8px 6px;font-size:11px;color:var(--muted);text-align:right;">Monto</th>
-        </tr></thead><tbody>${filas}</tbody>
-      </table>
-      <div style="max-width:260px;margin-left:auto;border-top:1px dashed var(--border);padding-top:10px;">
-        ${neto>0?`<div style="display:flex;justify-content:space-between;font-size:13px;color:var(--muted);padding:2px 0;"><span>Neto</span><span>${_dtCLP(neto)}</span></div>`:''}
-        ${ex>0?`<div style="display:flex;justify-content:space-between;font-size:13px;color:var(--muted);padding:2px 0;"><span>Exento</span><span>${_dtCLP(ex)}</span></div>`:''}
-        ${iva>0?`<div style="display:flex;justify-content:space-between;font-size:13px;color:var(--muted);padding:2px 0;"><span>IVA (19%)</span><span>${_dtCLP(iva)}</span></div>`:''}
-        <div style="display:flex;justify-content:space-between;font-size:18px;font-weight:700;color:var(--text);margin-top:6px;"><span>TOTAL</span><span>${_dtCLP(total)}</span></div>
-      </div>
-    </div>
-    <div style="display:flex;gap:10px;margin-top:16px;">
-      <button onclick="dtCancelarPrevia()" style="flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);padding:14px;border-radius:11px;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;">← Volver a editar</button>
-      <button id="dtBtnConfirmar" onclick="dtEmitir()" style="flex:2;background:#059669;color:#fff;border:none;padding:14px;border-radius:11px;font-family:inherit;font-weight:700;font-size:15px;cursor:pointer;">✓ Confirmar y enviar al SII</button>
-    </div>`;
-  // Ocultar el formulario, mostrar la previa en el mismo pane
+  // Mostrar la previa con un loader mientras se genera el PDF
   document.getElementById('dtFormWrap').style.display='none';
-  const prev=document.getElementById('dtPreviaWrap');
-  prev.style.display='block'; prev.innerHTML=html;
+  const prev=document.getElementById('dtPreviaWrap'); prev.style.display='block';
+  prev.innerHTML=`<div style="padding:40px;text-align:center;color:var(--muted);font-size:14px;">Generando vista previa…</div>`;
+
+  try{
+    const r=await fetch('/facturacion/boleta/preview',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({items,receptor:Object.keys(receptor).length?receptor:null,formato})});
+    if(!r.ok){
+      let msg='No se pudo generar la vista previa';
+      try{const e=await r.json(); msg=e.error||msg;}catch(_){}
+      prev.innerHTML=`<div style="background:#fdf2f2;border:1px solid #f3c2c2;border-radius:11px;padding:16px;color:#dc2626;font-size:13px;">${msg}</div>
+        <button onclick="dtCancelarPrevia()" style="margin-top:12px;background:var(--card);border:1px solid var(--border);color:var(--text);padding:12px 18px;border-radius:10px;font-weight:600;cursor:pointer;">← Volver a editar</button>`;
+      return;
+    }
+    const blob=await r.blob();
+    const pdfUrl=URL.createObjectURL(blob);
+    const alto = formato==='rollo' ? '620px' : '780px';
+    prev.innerHTML=`
+      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px;margin-bottom:14px;font-size:13px;color:#92400e;">
+        ⚠️ Esta es la vista previa de cómo el cliente verá el documento. Revísala bien: una vez emitida y enviada al SII, la boleta <b>no se puede deshacer</b> (solo anular con nota de crédito). El folio y el timbre se generan al confirmar.
+      </div>
+      <div style="border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#525659;">
+        <iframe src="${pdfUrl}" style="width:100%;height:${alto};border:none;display:block;"></iframe>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:14px;">
+        <button onclick="dtCancelarPrevia()" style="flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);padding:14px;border-radius:11px;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;">← Volver a editar</button>
+        <button id="dtBtnConfirmar" onclick="dtEmitir()" style="flex:2;background:#059669;color:#fff;border:none;padding:14px;border-radius:11px;font-family:inherit;font-weight:700;font-size:15px;cursor:pointer;">✓ Confirmar y enviar al SII</button>
+      </div>`;
+  }catch(e){
+    prev.innerHTML=`<div style="color:#dc2626;font-size:13px;">Error generando vista previa: ${e.message}</div>
+      <button onclick="dtCancelarPrevia()" style="margin-top:12px;background:var(--card);border:1px solid var(--border);color:var(--text);padding:12px 18px;border-radius:10px;font-weight:600;cursor:pointer;">← Volver a editar</button>`;
+  }
 }
+
 function dtCancelarPrevia(){
   document.getElementById('dtPreviaWrap').style.display='none';
   document.getElementById('dtPreviaWrap').innerHTML='';
@@ -13431,8 +13438,9 @@ async function dtEmitir(){
   if(document.getElementById('dtRecRut').value.trim())receptor.rut=document.getElementById('dtRecRut').value.trim();
   if(document.getElementById('dtRecNombre').value.trim())receptor.razon_social=document.getElementById('dtRecNombre').value.trim();
   try{
+    const formato=document.getElementById('dtFormato')?document.getElementById('dtFormato').value:'carta';
     const r=await fetch('/facturacion/boleta/emitir',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({items,receptor:Object.keys(receptor).length?receptor:null})});
+      body:JSON.stringify({items,receptor:Object.keys(receptor).length?receptor:null,formato})});
     const d=await r.json();
     document.getElementById('dtPreviaWrap').style.display='none';
     const cont=document.getElementById('dtResultado');
@@ -13441,7 +13449,7 @@ async function dtEmitir(){
         <div style="font-size:15px;font-weight:700;color:#047a56;margin-bottom:10px;">🎉 Documento emitido — Folio N° ${d.folio}</div>
         <div style="font-size:13px;color:var(--muted);margin-bottom:12px;">Total ${_dtCLP(d.total)} · Track ID SII: ${d.track_id||'—'}</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <a href="${d.pdf_url}?formato=carta" target="_blank" style="background:#534AB7;color:#fff;text-decoration:none;padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;">📄 PDF carta</a>
+          <a href="${d.pdf_url}?formato="+formato+"" target="_blank" style="background:#534AB7;color:#fff;text-decoration:none;padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;">📄 PDF carta</a>
           <a href="${d.pdf_url}?formato=rollo" target="_blank" style="background:#6b6880;color:#fff;text-decoration:none;padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;">🧾 PDF rollo</a>
           <button onclick="dtReset()" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;cursor:pointer;">Emitir otro</button>
         </div></div>`;

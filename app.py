@@ -21089,6 +21089,119 @@ def facturacion_boleta_emitir():
     })
 
 
+@app.route("/facturacion/boleta/preview", methods=["POST"])
+def facturacion_boleta_preview():
+    """Genera un PDF de VISTA PREVIA (borrador) con el mismo diseño que el documento
+    final, SIN reservar folio, SIN firmar y SIN enviar al SII. El folio se muestra
+    como BORRADOR y el timbre como placeholder.
+
+    Body JSON igual que /facturacion/boleta/emitir + "formato": "carta"|"rollo"
+    Returns: PDF (application/pdf)
+    """
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+
+    tenant_id = session.get("tenant_id") or 1
+    data = request.get_json(silent=True) or {}
+    formato = data.get("formato", "carta")
+
+    from inventario import get_conn, release_conn
+    from facturacion.db import obtener_config_facturacion
+    from facturacion.dtes.pdf_dte import generar_pdf_dte
+    from flask import Response
+
+    items = data.get("items") or []
+    if not items:
+        return jsonify({"ok": False, "error": "Sin ítems"}), 400
+
+    config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+    if not config:
+        return jsonify({"ok": False, "error": "Sin configuración"}), 400
+
+    todos_exentos = all(it.get("exento") for it in items)
+    tipo_dte = 41 if todos_exentos else 39
+
+    # Calcular totales (precios incluyen IVA, igual que boleta.py)
+    bruto_af = 0; mnt_exe = 0
+    for it in items:
+        sub = int(round(float(it.get("cantidad", 1)) * float(it.get("precio_unitario", 0))))
+        if it.get("exento"):
+            mnt_exe += sub
+        else:
+            bruto_af += sub
+    neto = int(round(bruto_af / 1.19)) if bruto_af > 0 else 0
+    iva = bruto_af - neto if bruto_af > 0 else 0
+    total = neto + iva + mnt_exe
+
+    receptor = data.get("receptor") or {}
+    from datetime import datetime as _dt
+    fecha = _dt.now().strftime("%Y-%m-%d")
+
+    # Detalles XML
+    detalles = ""
+    for i, it in enumerate(items, 1):
+        sub = int(round(float(it.get("cantidad", 1)) * float(it.get("precio_unitario", 0))))
+        cant = it.get("cantidad", 1)
+        cant_str = str(int(cant)) if float(cant) == int(cant) else f"{float(cant):.3f}".rstrip("0").rstrip(".")
+        detalles += "<Detalle>"
+        detalles += f"<NroLinDet>{i}</NroLinDet>"
+        if it.get("exento"):
+            detalles += "<IndExe>1</IndExe>"
+        detalles += f"<NmbItem>{_esc_xml_preview(it.get('nombre',''))}</NmbItem>"
+        detalles += f"<QtyItem>{cant_str}</QtyItem>"
+        if it.get("unidad"):
+            detalles += f"<UnmdItem>{_esc_xml_preview(it.get('unidad'))}</UnmdItem>"
+        detalles += f"<PrcItem>{int(round(float(it.get('precio_unitario',0))))}</PrcItem>"
+        detalles += f"<MontoItem>{sub}</MontoItem>"
+        detalles += "</Detalle>"
+
+    tot = "<Totales>"
+    if bruto_af > 0:
+        tot += f"<MntNeto>{neto}</MntNeto>"
+    if mnt_exe > 0:
+        tot += f"<MntExe>{mnt_exe}</MntExe>"
+    if bruto_af > 0:
+        tot += f"<IVA>{iva}</IVA>"
+    tot += f"<MntTotal>{total}</MntTotal></Totales>"
+
+    # XML borrador (sin TED real → el PDF mostrará placeholder de timbre)
+    xml = (
+        '<?xml version="1.0" encoding="ISO-8859-1"?>'
+        '<DTE version="1.0"><Documento ID="BORRADOR">'
+        '<Encabezado>'
+        f'<IdDoc><TipoDTE>{tipo_dte}</TipoDTE><Folio>0</Folio><FchEmis>{fecha}</FchEmis></IdDoc>'
+        '<Emisor>'
+        f'<RUTEmisor>{config.get("rut_emisor","")}</RUTEmisor>'
+        f'<RznSocEmisor>{_esc_xml_preview(config.get("razon_social",""))}</RznSocEmisor>'
+        f'<GiroEmisor>{_esc_xml_preview(config.get("giro",""))}</GiroEmisor>'
+        f'<DirOrigen>{_esc_xml_preview(config.get("direccion",""))}</DirOrigen>'
+        f'<CmnaOrigen>{_esc_xml_preview(config.get("comuna",""))}</CmnaOrigen>'
+        '</Emisor>'
+        '<Receptor>'
+        f'<RUTRecep>{receptor.get("rut","66666666-6")}</RUTRecep>'
+        f'<RznSocRecep>{_esc_xml_preview(receptor.get("razon_social","Consumidor Final"))}</RznSocRecep>'
+        '</Receptor>'
+        f'{tot}'
+        '</Encabezado>'
+        f'{detalles}'
+        '<TmstFirma>BORRADOR</TmstFirma>'
+        '</Documento></DTE>'
+    ).encode("iso-8859-1", errors="replace")
+
+    url_consulta = "lusync.cl/consultadte"
+    pdf = generar_pdf_dte(xml, formato=formato, url_consulta=url_consulta)
+    return Response(pdf, mimetype="application/pdf",
+                    headers={"Content-Disposition": 'inline; filename="preview.pdf"'})
+
+
+def _esc_xml_preview(s):
+    if s is None:
+        return ""
+    s = str(s)
+    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+             .replace('"', "&quot;").replace("'", "&apos;"))
+
+
 @app.route("/facturacion/boleta/<int:boleta_id>/pdf", methods=["GET"])
 def facturacion_boleta_pdf(boleta_id):
     """Descarga/visualiza el PDF de una boleta emitida. Query: ?formato=carta|rollo"""
