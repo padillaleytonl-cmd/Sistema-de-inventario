@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Emitir Boleta · Lusync</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --morado:#534AB7; --morado-claro:#EEEDFE; --crema:#F1EFE8;
+    --verde:#059669; --rojo:#dc2626; --tinta:#1d1b2e; --gris:#6b6880;
+    --borde:#e3e1ee; --blanco:#fff;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'DM Sans',sans-serif;background:var(--crema);color:var(--tinta);
+       padding:28px 16px;line-height:1.45;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:760px;margin:0 auto}
+  .head{display:flex;align-items:center;justify-content:space-between;margin-bottom:22px}
+  .head h1{font-size:24px;font-weight:700;letter-spacing:-0.02em}
+  .head .sub{color:var(--gris);font-size:13px;margin-top:2px}
+  .badge{font-size:11px;font-weight:600;padding:5px 11px;border-radius:20px;
+         background:var(--morado-claro);color:var(--morado)}
+  .badge.prod{background:#fde8e8;color:var(--rojo)}
+  .card{background:var(--blanco);border:1px solid var(--borde);border-radius:16px;
+        padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(40,30,80,.04)}
+  .card h2{font-size:14px;font-weight:600;margin-bottom:14px;color:var(--tinta);
+           display:flex;align-items:center;gap:8px}
+  label{display:block;font-size:12px;font-weight:600;color:var(--gris);margin-bottom:5px}
+  input,select{width:100%;padding:10px 12px;border:1px solid var(--borde);border-radius:9px;
+        font-family:inherit;font-size:14px;background:#fcfcfb;transition:border .15s,box-shadow .15s}
+  input:focus,select:focus{outline:none;border-color:var(--morado);
+        box-shadow:0 0 0 3px var(--morado-claro)}
+  .row{display:grid;gap:12px}
+  .row.r2{grid-template-columns:1fr 1fr}
+  /* tabla items */
+  .items thead th{font-size:11px;color:var(--gris);text-align:left;font-weight:600;
+        padding:0 8px 8px}
+  .items td{padding:0 4px 8px;vertical-align:top}
+  .item-row td input{font-size:13px;padding:9px 10px}
+  .col-cant{width:72px}.col-precio{width:110px}.col-exe{width:54px;text-align:center}
+  .col-x{width:34px}
+  .chk{appearance:none;width:20px;height:20px;border:1.5px solid var(--borde);border-radius:6px;
+        cursor:pointer;position:relative;margin:8px auto 0;display:block;background:#fcfcfb}
+  .chk:checked{background:var(--morado);border-color:var(--morado)}
+  .chk:checked::after{content:'✓';color:#fff;font-size:12px;position:absolute;
+        top:50%;left:50%;transform:translate(-50%,-50%)}
+  .btn-x{background:none;border:none;color:var(--gris);font-size:18px;cursor:pointer;
+        padding:6px;border-radius:6px;line-height:1}
+  .btn-x:hover{background:#fbeaea;color:var(--rojo)}
+  .add{background:var(--morado-claro);color:var(--morado);border:none;padding:9px 14px;
+        border-radius:9px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;
+        margin-top:4px}
+  .add:hover{background:#e3e0fc}
+  /* totales */
+  .tot{margin-top:8px;border-top:1px dashed var(--borde);padding-top:14px}
+  .tot .line{display:flex;justify-content:space-between;font-size:13px;color:var(--gris);
+        padding:3px 0}
+  .tot .line.big{font-size:19px;font-weight:700;color:var(--tinta);margin-top:6px}
+  /* emitir */
+  .emitir{display:flex;gap:12px;align-items:center;margin-top:4px}
+  .btn-emitir{flex:1;background:var(--verde);color:#fff;border:none;padding:15px;
+        border-radius:11px;font-family:inherit;font-weight:700;font-size:15px;cursor:pointer;
+        transition:transform .1s,background .15s}
+  .btn-emitir:hover{background:#047a56}
+  .btn-emitir:active{transform:scale(.99)}
+  .btn-emitir:disabled{background:#a7d8c4;cursor:not-allowed}
+  /* resultado */
+  #resultado{display:none}
+  .res-ok{border:1px solid #b8e6d2;background:#f0fbf6}
+  .res-err{border:1px solid #f3c2c2;background:#fdf2f2}
+  .res-head{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+  .res-head .ico{font-size:30px}
+  .res-head h2{font-size:18px;margin:0}
+  .res-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
+  .res-grid .box{background:#fff;border:1px solid var(--borde);border-radius:10px;padding:12px}
+  .res-grid .box .k{font-size:11px;color:var(--gris);font-weight:600}
+  .res-grid .box .v{font-size:18px;font-weight:700;margin-top:2px}
+  .btn-pdf{display:inline-flex;align-items:center;gap:8px;background:var(--morado);color:#fff;
+        text-decoration:none;padding:11px 18px;border-radius:10px;font-weight:600;font-size:14px}
+  .btn-pdf:hover{background:#453d9e}
+  .btn-sec{background:#fff;border:1px solid var(--borde);color:var(--tinta);padding:11px 16px;
+        border-radius:10px;font-weight:600;font-size:14px;cursor:pointer;font-family:inherit}
+  .pasos{margin-top:14px;font-size:12px}
+  .pasos .p{display:flex;gap:8px;padding:4px 0;color:var(--gris)}
+  .spinner{width:16px;height:16px;border:2px solid #fff;border-top-color:transparent;
+        border-radius:50%;display:inline-block;animation:spin .7s linear infinite;vertical-align:-3px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .hint{font-size:11px;color:var(--gris);margin-top:5px}
+  @media(max-width:560px){.row.r2{grid-template-columns:1fr}.res-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="head">
+    <div>
+      <h1>Emitir boleta</h1>
+      <div class="sub">Boleta electrónica de ventas y servicios (DTE 39/41)</div>
+    </div>
+    <span class="badge" id="ambBadge">certificación</span>
+  </div>
+
+  <!-- FORMULARIO -->
+  <div id="form">
+    <div class="card">
+      <h2>Receptor <span style="font-weight:400;color:var(--gris)">(opcional)</span></h2>
+      <div class="row r2">
+        <div>
+          <label>RUT cliente</label>
+          <input id="recRut" placeholder="66666666-6 (consumidor final)">
+          <div class="hint">Déjalo vacío para consumidor final</div>
+        </div>
+        <div>
+          <label>Nombre / Razón social</label>
+          <input id="recNombre" placeholder="Consumidor Final">
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Detalle</h2>
+      <table class="items" style="width:100%">
+        <thead><tr>
+          <th>Descripción</th><th class="col-cant">Cant.</th>
+          <th class="col-precio">Precio unit.</th><th class="col-exe">Exento</th><th class="col-x"></th>
+        </tr></thead>
+        <tbody id="itemsBody"></tbody>
+      </table>
+      <button class="add" onclick="addItem()">+ Agregar ítem</button>
+
+      <div class="tot">
+        <div class="line"><span>Neto</span><span id="tNeto">$ 0</span></div>
+        <div class="line" id="lineExe" style="display:none"><span>Exento</span><span id="tExe">$ 0</span></div>
+        <div class="line"><span>IVA (19%)</span><span id="tIva">$ 0</span></div>
+        <div class="line big"><span>TOTAL</span><span id="tTotal">$ 0</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="emitir">
+        <button class="btn-emitir" id="btnEmitir" onclick="emitir()">Emitir boleta y enviar al SII</button>
+      </div>
+      <div class="hint" style="text-align:center;margin-top:10px">
+        Se reservará un folio y se enviará el documento firmado al SII. Esta acción no se puede deshacer.
+      </div>
+    </div>
+  </div>
+
+  <!-- RESULTADO -->
+  <div class="card" id="resultado">
+    <div class="res-head">
+      <span class="ico" id="resIco"></span>
+      <h2 id="resTitulo"></h2>
+    </div>
+    <div id="resBody"></div>
+  </div>
+
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const clp = n => '$ ' + (Math.round(n||0)).toLocaleString('es-CL');
+
+// ── Items dinámicos ──
+function addItem(nombre='', cant=1, precio='', exento=false){
+  const tr = document.createElement('tr');
+  tr.className = 'item-row';
+  tr.innerHTML = `
+    <td><input class="i-nombre" placeholder="Producto o servicio" value="${nombre}"></td>
+    <td class="col-cant"><input class="i-cant" type="number" min="0" step="any" value="${cant}"></td>
+    <td class="col-precio"><input class="i-precio" type="number" min="0" placeholder="0" value="${precio}"></td>
+    <td class="col-exe"><input class="chk i-exe" type="checkbox" ${exento?'checked':''}></td>
+    <td class="col-x"><button class="btn-x" title="Quitar">×</button></td>`;
+  $('itemsBody').appendChild(tr);
+  tr.querySelectorAll('input').forEach(i=>i.addEventListener('input',calc));
+  tr.querySelector('.btn-x').addEventListener('click',()=>{tr.remove();calc()});
+  calc();
+}
+
+function leerItems(){
+  return [...document.querySelectorAll('.item-row')].map(tr=>({
+    nombre: tr.querySelector('.i-nombre').value.trim(),
+    cantidad: parseFloat(tr.querySelector('.i-cant').value)||0,
+    precio_unitario: parseFloat(tr.querySelector('.i-precio').value)||0,
+    exento: tr.querySelector('.i-exe').checked,
+  })).filter(it=>it.nombre && it.precio_unitario>0);
+}
+
+// ── Cálculo de totales (precios incluyen IVA, igual que el backend) ──
+function calc(){
+  let brutoAfecto=0, exento=0;
+  leerItems().forEach(it=>{
+    const sub = Math.round(it.cantidad*it.precio_unitario);
+    if(it.exento) exento+=sub; else brutoAfecto+=sub;
+  });
+  const neto = brutoAfecto>0 ? Math.round(brutoAfecto/1.19) : 0;
+  const iva = brutoAfecto>0 ? brutoAfecto-neto : 0;
+  const total = neto+iva+exento;
+  $('tNeto').textContent = clp(neto);
+  $('tIva').textContent = clp(iva);
+  $('tTotal').textContent = clp(total);
+  $('lineExe').style.display = exento>0 ? 'flex':'none';
+  $('tExe').textContent = clp(exento);
+}
+
+// ── Emitir ──
+async function emitir(){
+  const items = leerItems();
+  if(!items.length){ alert('Agrega al menos un ítem con nombre y precio.'); return; }
+
+  const btn = $('btnEmitir');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Emitiendo y enviando al SII…';
+
+  const receptor = {};
+  if($('recRut').value.trim()) receptor.rut = $('recRut').value.trim();
+  if($('recNombre').value.trim()) receptor.razon_social = $('recNombre').value.trim();
+
+  try{
+    const r = await fetch('/facturacion/boleta/emitir',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ items, receptor: Object.keys(receptor).length?receptor:null })
+    });
+    const data = await r.json();
+    mostrarResultado(data, r.ok);
+  }catch(e){
+    mostrarResultado({ok:false,error:'Error de conexión: '+e.message}, false);
+  }
+  btn.disabled = false;
+  btn.textContent = 'Emitir boleta y enviar al SII';
+}
+
+function mostrarResultado(data, httpOk){
+  const ok = data.ok === true;
+  $('form').style.display = 'none';
+  const box = $('resultado');
+  box.style.display = 'block';
+  box.className = 'card ' + (ok?'res-ok':'res-err');
+  $('resIco').textContent = ok ? '🎉' : '❌';
+  $('resTitulo').textContent = ok ? '¡Boleta emitida y enviada!' : 'No se pudo emitir';
+
+  let html = '';
+  if(ok){
+    html += `<div class="res-grid">
+      <div class="box"><div class="k">Folio</div><div class="v">N° ${data.folio}</div></div>
+      <div class="box"><div class="k">Total</div><div class="v">${clp(data.total)}</div></div>
+      <div class="box"><div class="k">Track ID SII</div><div class="v" style="font-size:14px">${data.track_id||'—'}</div></div>
+      <div class="box"><div class="k">Tipo</div><div class="v" style="font-size:14px">${data.tipo_dte==41?'Boleta exenta':'Boleta'}</div></div>
+    </div>`;
+    if(data.pdf_url){
+      html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
+        <a class="btn-pdf" href="${data.pdf_url}?formato=carta" target="_blank">📄 Ver PDF (carta)</a>
+        <a class="btn-pdf" href="${data.pdf_url}?formato=rollo" target="_blank" style="background:#6b6880">🧾 Ver PDF (rollo)</a>
+      </div>`;
+    }
+  } else {
+    html += `<p style="color:var(--rojo);font-size:14px;margin-bottom:8px">${data.error||'Error desconocido'}</p>`;
+    if(data.folio) html += `<p class="hint">Folio reservado: N° ${data.folio}</p>`;
+  }
+
+  // pasos
+  if(data.pasos && data.pasos.length){
+    html += '<div class="pasos">';
+    data.pasos.forEach(p=>{
+      html += `<div class="p">${p.ok?'✅':'❌'} <b>${p.nombre}</b> ${p.detalle?'· '+p.detalle:''}</div>`;
+    });
+    html += '</div>';
+  }
+  html += `<button class="btn-sec" style="margin-top:16px" onclick="location.reload()">← Emitir otra boleta</button>`;
+  $('resBody').innerHTML = html;
+}
+
+// init: una fila vacía
+addItem();
+</script>
+</body>
+</html>
