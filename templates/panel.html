@@ -3480,6 +3480,7 @@ tbody td {
             <input id="conQ" placeholder="Ej: 16, Juan, 12345678" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
           </div>
           <button onclick="conBuscar()" style="background:#534AB7;color:#fff;border:none;padding:10px 22px;border-radius:9px;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;">Buscar</button>
+          <button onclick="conDescargarZip()" title="Descarga los PDF del rango filtrado (máx 30)" style="background:var(--card);color:#534AB7;border:1px solid #534AB7;padding:10px 18px;border-radius:9px;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;">📥 Descargar PDF (ZIP)</button>
         </div>
         <div id="conResumen" style="display:none;font-size:13px;color:var(--muted);margin-bottom:12px;padding:10px 14px;background:var(--bg2);border-radius:9px;"></div>
         <div id="conResultados" style="color:var(--muted);font-size:13px;">Selecciona un rango de fechas y pulsa Buscar.</div>
@@ -3488,6 +3489,28 @@ tbody td {
 
     <!-- ═══════════ SUB-SECCIÓN: CONFIGURACIÓN ═══════════ -->
     <div id="fac-pane-config" class="fac-pane" style="display:none;">
+
+      <!-- Switch de ambiente (SOLO ADMIN) -->
+      <div id="facAmbienteAdmin" style="display:none;background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:18px 20px;margin-bottom:18px;max-width:700px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+          <div style="width:32px;height:32px;border-radius:8px;background:#FAEEDA;color:#854F0B;display:flex;align-items:center;justify-content:center;font-size:16px;">🔀</div>
+          <div>
+            <div style="font-size:15px;font-weight:600;color:var(--text);">Ambiente de emisión</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:2px;">Solo administradores. En Certificación las boletas NO se envían a clientes ni a marketplaces.</div>
+          </div>
+        </div>
+        <div id="facAmbienteAviso" style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px 14px;margin:12px 0;font-size:12px;color:#92400e;line-height:1.5;">
+          ⚠️ Estás en <b id="facAmbienteActualTxt">—</b>. Cambia a Producción solo cuando hayas terminado la certificación con el SII.
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <select id="facAmbienteSelect" style="padding:9px 14px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);font-weight:600;">
+            <option value="certificacion">Certificación (pruebas)</option>
+            <option value="produccion">Producción (real)</option>
+          </select>
+          <button onclick="facCambiarAmbiente()" style="background:#534AB7;color:#fff;border:none;padding:10px 20px;border-radius:9px;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;">Guardar ambiente</button>
+        </div>
+      </div>
+
 
 
     <!-- Tarjeta principal: subir certificado -->
@@ -10256,6 +10279,8 @@ async function cargarFacturacionDashboard(){
 
     // Badge ambiente
     const amb = d.config.ambiente || 'certificacion';
+    // Mostrar el switch de ambiente solo si el usuario es admin
+    if(typeof facMostrarAmbienteAdmin==='function') facMostrarAmbienteAdmin(!!d.es_admin, amb);
     const ambEl = document.getElementById('facturacionAmbiente');
     if(ambEl){
       if(amb === 'produccion'){
@@ -13706,6 +13731,64 @@ function dtVerDoc(id, pdfUrl){
   modal.style.display='flex';
 }
 
+
+// Descarga masiva de PDF (ZIP) — respeta el filtro de fechas y el límite del servidor
+async function conDescargarZip(){
+  const desde=document.getElementById('conDesde').value;
+  const hasta=document.getElementById('conHasta').value;
+  const q=document.getElementById('conQ').value.trim();
+  let url='/facturacion/boletas/descargar-zip?1=1';
+  if(desde) url+='&desde='+desde;
+  if(hasta) url+='&hasta='+hasta;
+  if(q) url+='&q='+encodeURIComponent(q);
+  try{
+    const r=await fetch(url);
+    if(!r.ok){
+      let msg='No se pudo generar la descarga';
+      try{const e=await r.json(); msg=e.error||msg;}catch(_){}
+      alert(msg);
+      return;
+    }
+    // Descargar el blob ZIP
+    const blob=await r.blob();
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='boletas_'+(desde||'inicio')+'_'+(hasta||'hoy')+'.zip';
+    document.body.appendChild(a); a.click(); a.remove();
+  }catch(e){ alert('Error: '+e.message); }
+}
+
+// ── Switch de ambiente (solo admin) ──
+function facMostrarAmbienteAdmin(esAdmin, ambienteActual){
+  const box=document.getElementById('facAmbienteAdmin');
+  if(!box) return;
+  if(esAdmin){
+    box.style.display='block';
+    const amb=ambienteActual||'certificacion';
+    const sel=document.getElementById('facAmbienteSelect'); if(sel) sel.value=amb;
+    const txt=document.getElementById('facAmbienteActualTxt');
+    if(txt) txt.textContent = amb==='produccion'?'Producción (real)':'Certificación (pruebas)';
+    const aviso=document.getElementById('facAmbienteAviso');
+    if(aviso) aviso.style.display = amb==='produccion' ? 'none' : 'block';
+  } else {
+    box.style.display='none';
+  }
+}
+async function facCambiarAmbiente(){
+  const nuevo=document.getElementById('facAmbienteSelect').value;
+  const txt = nuevo==='produccion'?'PRODUCCIÓN (boletas reales que se envían a clientes y marketplaces)':'Certificación (pruebas, no se envía nada a clientes)';
+  if(!confirm('¿Cambiar el ambiente a '+txt+'?')) return;
+  try{
+    const r=await fetch('/facturacion/cambiar-ambiente',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ambiente:nuevo})});
+    const d=await r.json();
+    if(d.ok){
+      alert('Ambiente cambiado a '+(d.ambiente==='produccion'?'Producción':'Certificación'));
+      if(typeof cargarFacturacionDashboard==='function') cargarFacturacionDashboard();
+    } else {
+      alert(d.error||'No se pudo cambiar el ambiente');
+    }
+  }catch(e){ alert('Error: '+e.message); }
+}
 </script>
 </body>
 </html>

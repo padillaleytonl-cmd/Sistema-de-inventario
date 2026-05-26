@@ -21449,6 +21449,134 @@ def facturacion_folios_resumen():
     return jsonify({"ok": True, "folios": resultado})
 
 
+@app.route("/facturacion/cambiar-ambiente", methods=["POST"])
+def facturacion_cambiar_ambiente():
+    """Cambia el ambiente (certificacion/produccion). SOLO ADMIN.
+    Crítico: en 'certificacion' las boletas NO se suben a marketplaces ni se
+    envían correos reales — evita que documentos de prueba lleguen a clientes.
+    """
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    if session.get("rol") != "admin":
+        return jsonify({"ok": False, "error": "Solo un administrador puede cambiar el ambiente"}), 403
+
+    tenant_id = session.get("tenant_id") or 1
+    data = request.get_json(silent=True) or {}
+    nuevo = (data.get("ambiente") or "").strip().lower()
+    if nuevo not in ("certificacion", "produccion"):
+        return jsonify({"ok": False, "error": "Ambiente inválido"}), 400
+
+    from inventario import get_conn, release_conn
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""UPDATE facturacion_config_tenant
+                           SET ambiente = %s, fecha_actualizacion = NOW()
+                           WHERE tenant_id = %s""", (nuevo, tenant_id))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"ok": False, "error": str(e)[:200]}), 500
+    finally:
+        release_conn(conn)
+
+    try:
+        registrar_audit(session.get("lusync_admin_email", "admin"), request.remote_addr,
+                        "cambiar_ambiente_facturacion",
+                        entidad="facturacion_config_tenant",
+                        detalle="tenant_id=%s, nuevo=%s" % (tenant_id, nuevo))
+    except Exception:
+        pass
+    return jsonify({"ok": True, "ambiente": nuevo})
+
+
+def _fact_ambiente_es_produccion(tenant_id):
+    """Helper de seguridad: True solo si el tenant está en producción.
+    Las acciones que tocan al cliente o al marketplace (subir boleta, enviar
+    correo) DEBEN llamar esto antes de ejecutar. En certificación devuelve False.
+    """
+    from inventario import get_conn, release_conn
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT ambiente FROM facturacion_config_tenant WHERE tenant_id=%s", (tenant_id,))
+            r = cur.fetchone()
+        return bool(r and (r[0] or "").lower() == "produccion")
+    except Exception:
+        return False  # ante la duda, NO es producción (no subir nada)
+    finally:
+        release_conn(conn)
+
+
+@app.route("/facturacion/boletas/descargar-zip", methods=["GET"])
+def facturacion_descargar_zip():
+    """Descarga masiva: genera un ZIP con los PDF de las boletas del rango filtrado.
+    Límite conservador (multi-tenant): MAX_ZIP documentos por descarga para no
+    saturar el servidor cuando varias empresas descargan a la vez.
+    Query: ?desde=YYYY-MM-DD&hasta=YYYY-MM-DD&q=texto&tipo=39
+    """
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    tenant_id = session.get("tenant_id") or 1
+    MAX_ZIP = 30  # límite conservador para entorno multi-tenant
+
+    desde = request.args.get("desde")
+    hasta = request.args.get("hasta")
+    q = (request.args.get("q") or "").strip()
+    tipo = request.args.get("tipo", type=int)
+
+    from inventario import get_conn, release_conn
+    from facturacion.dtes.pdf_dte import generar_pdf_dte
+    from flask import Response
+    import io, zipfile
+
+    where = ["tenant_id = %s", "estado IN ('enviado','aceptado','rechazado')"]
+    params = [tenant_id]
+    if tipo:
+        where.append("tipo_dte = %s"); params.append(tipo)
+    if desde:
+        where.append("DATE(fecha_emision) >= %s"); params.append(desde)
+    if hasta:
+        where.append("DATE(fecha_emision) <= %s"); params.append(hasta)
+    if q:
+        where.append("(razon_social_receptor ILIKE %s OR rut_receptor ILIKE %s OR CAST(folio AS TEXT)=%s)")
+        params.extend(["%"+q+"%", "%"+q+"%", q])
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            # Primero contar
+            cur.execute("SELECT COUNT(*) FROM facturacion_dtes WHERE " + " AND ".join(where), params)
+            total = cur.fetchone()[0]
+            if total == 0:
+                return jsonify({"ok": False, "error": "No hay documentos en ese rango"}), 404
+            if total > MAX_ZIP:
+                return jsonify({"ok": False, "limite_excedido": True, "total": total, "max": MAX_ZIP,
+                                "error": "Tu búsqueda tiene %d boletas. La descarga masiva permite hasta %d a la vez. Ajusta el rango de fechas." % (total, MAX_ZIP)}), 400
+            cur.execute("""SELECT id, tipo_dte, folio, xml_firmado FROM facturacion_dtes
+                           WHERE """ + " AND ".join(where) + """
+                           ORDER BY fecha_emision DESC LIMIT %s""", params + [MAX_ZIP])
+            rows = cur.fetchall()
+    finally:
+        release_conn(conn)
+
+    buf = io.BytesIO()
+    errores = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for r in rows:
+            try:
+                xml = r[3].encode("iso-8859-1", errors="replace") if isinstance(r[3], str) else r[3]
+                pdf = generar_pdf_dte(xml, formato="carta", url_consulta="lusync.cl/consultadte")
+                zf.writestr("boleta_%s_folio_%s.pdf" % (r[1], r[2]), pdf)
+            except Exception as e:
+                errores += 1
+                print("[ZIP] Error generando PDF boleta %s: %s" % (r[0], str(e)[:120]))
+    buf.seek(0)
+    fname = "boletas_%s_%s.zip" % (desde or "inicio", hasta or "hoy")
+    return Response(buf.getvalue(), mimetype="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="%s"' % fname})
+
+
 @app.route("/facturacion/documentos", methods=["GET"])
 def facturacion_documentos_listar():
     """Lista los DTEs emitidos por el tenant.
@@ -22326,6 +22454,7 @@ def facturacion_dashboard():
             "fase_actual": "Fase 1 — Configuración",
             "mrr_tributario": mrr,
             "dtes_activos": dtes_activos,
+            "es_admin": session.get("rol") == "admin",
         })
 
     except Exception as e:
