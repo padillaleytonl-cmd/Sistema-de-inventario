@@ -13689,22 +13689,57 @@ function dtMenuPuntitos(doc){
   // Solo habilitado cuando el documento ya fue enviado al SII
   const habilitado = ['enviado','aceptado','rechazado'].includes(doc.estado);
   if(!habilitado) return '';
-  const id='menu-'+doc.id;
-  return `<span style="position:relative;display:inline-block;margin-left:6px;">
-    <button onclick="dtToggleMenu('${id}',event)" style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:7px;font-size:14px;cursor:pointer;line-height:1;">⋮</button>
-    <div id="${id}" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:var(--card);border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.15);z-index:1000;min-width:190px;overflow:hidden;text-align:left;">
-      <a href="${doc.pdf_url}?formato=carta" target="_blank" style="display:block;padding:10px 14px;font-size:13px;color:var(--text);text-decoration:none;border-bottom:1px solid var(--border);">📄 Descargar PDF</a>
-      <a href="${doc.xml_url}" style="display:block;padding:10px 14px;font-size:13px;color:var(--text);text-decoration:none;border-bottom:1px solid var(--border);">📥 Descargar XML</a>
-      <a href="${doc.xml_receptor_url}" style="display:block;padding:10px 14px;font-size:13px;color:var(--text);text-decoration:none;">📥 XML Receptor</a>
-    </div></span>`;
+  // Guardamos las URLs en data-attrs y dejamos el menú como elemento flotante global
+  const datos = encodeURIComponent(JSON.stringify({
+    pdf: (doc.pdf_url||'') + '?formato=carta',
+    xml: doc.xml_url||'',
+    xmlr: doc.xml_receptor_url||''
+  }));
+  return `<button onclick="event.stopPropagation();dtToggleMenu(this,'${datos}')" title="Más opciones"
+    style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:7px;font-size:14px;cursor:pointer;line-height:1;margin-left:6px;">⋮</button>`;
 }
-function dtToggleMenu(id, ev){
-  if(ev) ev.stopPropagation();
-  document.querySelectorAll('[id^="menu-"]').forEach(m=>{ if(m.id!==id) m.style.display='none'; });
-  const el=document.getElementById(id);
-  if(el) el.style.display = el.style.display==='none'?'block':'none';
+
+// Menú flotante único (position:fixed) — no lo corta el overflow de la tabla
+function dtToggleMenu(btn, datosEnc){
+  let menu=document.getElementById('dtFloatMenu');
+  if(menu) menu.remove();  // cerrar si ya había uno
+  // si se hizo clic en el mismo botón que lo abrió, solo cerrar
+  if(btn.__menuOpen){ btn.__menuOpen=false; return; }
+  document.querySelectorAll('[data-dtmenu-btn]').forEach(b=>b.__menuOpen=false);
+
+  const d=JSON.parse(decodeURIComponent(datosEnc));
+  menu=document.createElement('div'); menu.id='dtFloatMenu';
+  menu.style.cssText='position:fixed;background:var(--card);border:1px solid var(--border);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.22);z-index:100001;min-width:200px;overflow:hidden;';
+  const opt=(href,txt,target)=>{
+    const a=document.createElement('a'); a.href=href; if(target)a.target=target;
+    a.textContent=txt;
+    a.style.cssText='display:block;padding:11px 15px;font-size:13px;color:var(--text);text-decoration:none;border-bottom:1px solid var(--border);';
+    a.onmouseover=()=>a.style.background='var(--bg2)'; a.onmouseout=()=>a.style.background='transparent';
+    return a;
+  };
+  menu.appendChild(opt(d.pdf,'📄 Descargar PDF','_blank'));
+  menu.appendChild(opt(d.xml,'📥 Descargar XML',null));
+  const last=opt(d.xmlr,'📥 XML Receptor',null); last.style.borderBottom='none';
+  menu.appendChild(last);
+  document.body.appendChild(menu);
+
+  // Posicionar bajo el botón, alineado a la derecha; si no cabe abajo, hacia arriba
+  const r=btn.getBoundingClientRect();
+  const mw=menu.offsetWidth, mh=menu.offsetHeight;
+  let left=r.right-mw; if(left<8) left=8;
+  let top=r.bottom+4;
+  if(top+mh>window.innerHeight-8) top=r.top-mh-4;  // abrir hacia arriba si no cabe
+  menu.style.left=left+'px'; menu.style.top=top+'px';
+  btn.setAttribute('data-dtmenu-btn','1'); btn.__menuOpen=true;
 }
-document.addEventListener('click', ()=>{ document.querySelectorAll('[id^="menu-"]').forEach(m=>m.style.display='none'); });
+// Cerrar al hacer clic fuera o al hacer scroll
+document.addEventListener('click', function(e){
+  const m=document.getElementById('dtFloatMenu');
+  if(m && !e.target.closest('#dtFloatMenu')){
+    m.remove(); document.querySelectorAll('[data-dtmenu-btn]').forEach(b=>b.__menuOpen=false);
+  }
+});
+window.addEventListener('scroll', function(){ const m=document.getElementById('dtFloatMenu'); if(m){ m.remove(); document.querySelectorAll('[data-dtmenu-btn]').forEach(b=>b.__menuOpen=false);} }, true);
 
 // Ver documento (PDF embebido en modal)
 function dtVerDoc(id, pdfUrl){
