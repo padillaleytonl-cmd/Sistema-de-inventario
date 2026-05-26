@@ -13629,10 +13629,13 @@ function facNav(pane, btn){
   try{ localStorage.setItem('lusync_fac_pane', pane); }catch(e){}
   // Inicializar contenido según la sub-sección
   if(pane==='consultar' && !document.getElementById('conDesde').value){
-    // por defecto: últimos 30 días
-    const hoy=new Date(); const hace30=new Date(hoy.getTime()-30*86400000);
-    document.getElementById('conHasta').value=hoy.toISOString().slice(0,10);
-    document.getElementById('conDesde').value=hace30.toISOString().slice(0,10);
+    // por defecto: desde el primer día del mes en curso hasta hoy
+    const hoy=new Date();
+    const primerDiaMes=new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    // usar fecha local (no UTC) para evitar desfase de día por zona horaria
+    const fmt=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    document.getElementById('conHasta').value=fmt(hoy);
+    document.getElementById('conDesde').value=fmt(primerDiaMes);
   }
 }
 
