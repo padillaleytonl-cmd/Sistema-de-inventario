@@ -3339,6 +3339,19 @@ tbody td {
       <div style="text-align:center;color:var(--hint);padding:20px;grid-column:1/-1;">Cargando estado...</div>
     </div>
 
+    <!-- ═══════════ SUB-MENÚ FACTURACIÓN ═══════════ -->
+    <div style="display:flex;gap:8px;margin-bottom:18px;border-bottom:1px solid var(--border);padding-bottom:0;">
+      <button class="fac-nav fac-nav-active" data-fac="facturar" onclick="facNav('facturar',this)"
+        style="padding:11px 18px;border:none;background:none;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;color:var(--text);border-bottom:2px solid #534AB7;margin-bottom:-1px;">🧾 Facturar</button>
+      <button class="fac-nav" data-fac="consultar" onclick="facNav('consultar',this)"
+        style="padding:11px 18px;border:none;background:none;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;">🔍 Consultar boleta</button>
+      <button class="fac-nav" data-fac="config" onclick="facNav('config',this)"
+        style="padding:11px 18px;border:none;background:none;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;">⚙️ Configuración</button>
+    </div>
+
+    <!-- ═══════════ SUB-SECCIÓN: FACTURAR ═══════════ -->
+    <div id="fac-pane-facturar" class="fac-pane">
+
     <!-- ═══════════ PANEL DOCUMENTOS TRIBUTARIOS (emisión + folios + documentos) ═══════════ -->
     <div style="background:var(--card);border:1px solid var(--border);border-radius:14px;margin-bottom:20px;overflow:hidden;">
       <!-- Sub-tabs -->
@@ -3448,6 +3461,33 @@ tbody td {
     </div>
 
     <!-- ═══════════ FIN PANEL DOCUMENTOS TRIBUTARIOS ═══════════ -->
+    </div><!-- /fac-pane-facturar -->
+
+    <!-- ═══════════ SUB-SECCIÓN: CONSULTAR BOLETA ═══════════ -->
+    <div id="fac-pane-consultar" class="fac-pane" style="display:none;">
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:14px;padding:22px;margin-bottom:20px;">
+        <div style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:18px;">
+          <div>
+            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Desde</label>
+            <input id="conDesde" type="date" style="padding:9px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+          </div>
+          <div>
+            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Hasta</label>
+            <input id="conHasta" type="date" style="padding:9px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+          </div>
+          <div style="flex:1;min-width:160px;">
+            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Buscar (folio, RUT o nombre)</label>
+            <input id="conQ" placeholder="Ej: 16, Juan, 12345678" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+          </div>
+          <button onclick="conBuscar()" style="background:#534AB7;color:#fff;border:none;padding:10px 22px;border-radius:9px;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;">Buscar</button>
+        </div>
+        <div id="conResumen" style="display:none;font-size:13px;color:var(--muted);margin-bottom:12px;padding:10px 14px;background:var(--bg2);border-radius:9px;"></div>
+        <div id="conResultados" style="color:var(--muted);font-size:13px;">Selecciona un rango de fechas y pulsa Buscar.</div>
+      </div>
+    </div>
+
+    <!-- ═══════════ SUB-SECCIÓN: CONFIGURACIÓN ═══════════ -->
+    <div id="fac-pane-config" class="fac-pane" style="display:none;">
 
 
     <!-- Tarjeta principal: subir certificado -->
@@ -3555,6 +3595,8 @@ tbody td {
     </div>
 
   </div>
+    </div><!-- /fac-pane-config -->
+
   <!-- ═══════════ FIN SECCIÓN FACTURACIÓN CLIENTE ═══════════ -->
 
   <div id="sec-configuracion" class="main" style="display:none;">
@@ -10266,6 +10308,9 @@ async function cargarFacturacionDashboard(){
 
   // Inicializar panel documentos tributarios
   if(document.getElementById('dtItems') && !document.querySelector('.dt-item')) dtAddItem();
+
+  // Restaurar la sub-sección de facturación donde estaba el usuario
+  if(typeof facRestaurarPane==='function') facRestaurarPane();
 }
 
 function mostrarErrorDashboard(msg, detalle){
@@ -13500,6 +13545,13 @@ async function dtCargarFolios(){
   }catch(e){cont.innerHTML='<div style="color:#dc2626;">Error cargando folios: '+e.message+'</div>';}
 }
 
+const DT_ESTADO = {
+  generado:  {bg:'#f1efe8', color:'#6b6880', label:'Generado'},
+  enviado:   {bg:'#e7eefb', color:'#2563eb', label:'Enviado al SII'},
+  aceptado:  {bg:'#eaf3ee', color:'#1D9E75', label:'Aceptado'},
+  rechazado: {bg:'#fdf2f2', color:'#dc2626', label:'Rechazado'},
+  error_envio:{bg:'#fef3e2', color:'#b45309', label:'Error de envío'},
+};
 async function dtCargarDocs(){
   const cont=document.getElementById('dtDocsCont');
   try{
@@ -13509,17 +13561,149 @@ async function dtCargarDocs(){
       +'<th style="padding:8px;">Tipo</th><th style="padding:8px;">Folio</th><th style="padding:8px;">Cliente</th><th style="padding:8px;text-align:right;">Total</th><th style="padding:8px;">Fecha</th><th style="padding:8px;">Estado</th><th style="padding:8px;"></th></tr></thead><tbody>';
     d.documentos.forEach(doc=>{
       const f=doc.fecha_emision?doc.fecha_emision.slice(0,10):'—';
-      h+=`<tr style="border-top:1px solid var(--border);">
+      const eb=DT_ESTADO[doc.estado]||{bg:'#f1efe8',color:'#6b6880',label:doc.estado||'—'};
+      // Acciones: Ver + menú 3 puntitos (PDF/XML/XML receptor) + consultar SII si enviado
+      let accion=`<button onclick="dtVerDoc(${doc.id},'${doc.pdf_url}')" style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:7px;font-size:12px;cursor:pointer;font-weight:600;">👁 Ver</button>`;
+      if(doc.estado==='enviado'){
+        accion+=` <a onclick="dtConsultarEstado(${doc.id})" style="color:#2563eb;cursor:pointer;font-weight:600;font-size:12px;">Consultar SII</a>`;
+      }
+      accion+=dtMenuPuntitos(doc);
+      h+=`<tr style="border-top:1px solid var(--border);" id="dtdoc-${doc.id}">
         <td style="padding:9px 8px;color:var(--text);">${doc.tipo_nombre}</td>
         <td style="padding:9px 8px;color:var(--text);font-weight:600;">${doc.folio}</td>
         <td style="padding:9px 8px;color:var(--muted);">${doc.razon_social_receptor||'Consumidor Final'}</td>
         <td style="padding:9px 8px;text-align:right;color:var(--text);font-weight:600;">${_dtCLP(doc.monto_total)}</td>
         <td style="padding:9px 8px;color:var(--muted);">${f}</td>
-        <td style="padding:9px 8px;"><span style="font-size:11px;padding:3px 8px;border-radius:6px;background:#eaf3ee;color:#1D9E75;">${doc.estado||'—'}</span></td>
-        <td style="padding:9px 8px;"><a href="${doc.pdf_url}?formato=carta" target="_blank" style="color:#534AB7;text-decoration:none;font-weight:600;">PDF</a></td></tr>`;
+        <td style="padding:9px 8px;"><span class="dt-estado-badge" style="font-size:11px;padding:3px 8px;border-radius:6px;background:${eb.bg};color:${eb.color};font-weight:600;">${eb.label}</span></td>
+        <td style="padding:9px 8px;white-space:nowrap;text-align:right;">${accion}</td></tr>`;
     });
     h+='</tbody></table>'; cont.innerHTML=h;
   }catch(e){cont.innerHTML='<div style="color:#dc2626;">Error cargando documentos: '+e.message+'</div>';}
+}
+async function dtConsultarEstado(id){
+  const fila=document.getElementById('dtdoc-'+id);
+  const badge=fila?fila.querySelector('.dt-estado-badge'):null;
+  if(badge){badge.textContent='Consultando…';}
+  try{
+    const r=await fetch('/facturacion/boleta/'+id+'/consultar-estado',{method:'POST'});
+    const d=await r.json();
+    if(d.ok){ dtCargarDocs(); }
+    else if(badge){ badge.textContent='Error'; alert(d.error||'No se pudo consultar'); }
+  }catch(e){ if(badge) badge.textContent='Error'; }
+}
+
+
+
+// ═══════════ NAVEGACIÓN SUB-SECCIONES FACTURACIÓN ═══════════
+function facNav(pane, btn){
+  document.querySelectorAll('.fac-nav').forEach(b=>{b.style.color='var(--muted)';b.style.borderBottom='2px solid transparent';});
+  if(btn){ btn.style.color='var(--text)'; btn.style.borderBottom='2px solid #534AB7'; }
+  document.querySelectorAll('.fac-pane').forEach(p=>p.style.display='none');
+  const el=document.getElementById('fac-pane-'+pane);
+  if(el) el.style.display='block';
+  // Recordar la sub-sección para no volver al inicio al recargar
+  try{ localStorage.setItem('lusync_fac_pane', pane); }catch(e){}
+  // Inicializar contenido según la sub-sección
+  if(pane==='consultar' && !document.getElementById('conDesde').value){
+    // por defecto: últimos 30 días
+    const hoy=new Date(); const hace30=new Date(hoy.getTime()-30*86400000);
+    document.getElementById('conHasta').value=hoy.toISOString().slice(0,10);
+    document.getElementById('conDesde').value=hace30.toISOString().slice(0,10);
+  }
+}
+
+// Restaurar sub-sección guardada al abrir Facturación
+function facRestaurarPane(){
+  let pane='facturar';
+  try{ pane=localStorage.getItem('lusync_fac_pane')||'facturar'; }catch(e){}
+  const btn=document.querySelector('.fac-nav[data-fac="'+pane+'"]');
+  facNav(pane, btn);
+}
+
+// ═══════════ CONSULTAR BOLETA (filtro por fechas) ═══════════
+async function conBuscar(){
+  const cont=document.getElementById('conResultados');
+  const resumen=document.getElementById('conResumen');
+  const desde=document.getElementById('conDesde').value;
+  const hasta=document.getElementById('conHasta').value;
+  const q=document.getElementById('conQ').value.trim();
+  cont.innerHTML='<div style="padding:20px;text-align:center;color:var(--muted);">Buscando…</div>';
+  let url='/facturacion/documentos?limite=500';
+  if(desde) url+='&desde='+desde;
+  if(hasta) url+='&hasta='+hasta;
+  if(q) url+='&q='+encodeURIComponent(q);
+  try{
+    const r=await fetch(url); const d=await r.json();
+    if(!d.ok){ cont.innerHTML='<div style="color:#dc2626;">'+(d.error||'Error')+'</div>'; return; }
+    if(!d.documentos.length){ resumen.style.display='none'; cont.innerHTML='<div style="color:var(--muted);padding:14px;">No se encontraron boletas en ese rango.</div>'; return; }
+    resumen.style.display='block';
+    resumen.innerHTML='<b>'+d.cantidad+'</b> documento(s) · Total del período: <b>'+_dtCLP(d.total_periodo)+'</b>';
+    let h='<table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr style="text-align:left;color:var(--muted);font-size:11px;">'
+      +'<th style="padding:8px;">Tipo</th><th style="padding:8px;">Folio</th><th style="padding:8px;">Cliente</th><th style="padding:8px;text-align:right;">Total</th><th style="padding:8px;">Fecha</th><th style="padding:8px;">Estado</th><th style="padding:8px;text-align:right;">Acciones</th></tr></thead><tbody>';
+    d.documentos.forEach(doc=>{
+      const f=doc.fecha_emision?doc.fecha_emision.slice(0,10):'—';
+      const eb=(typeof DT_ESTADO!=='undefined'&&DT_ESTADO[doc.estado])||{bg:'#f1efe8',color:'#6b6880',label:doc.estado||'—'};
+      h+=`<tr style="border-top:1px solid var(--border);">
+        <td style="padding:9px 8px;color:var(--text);">${doc.tipo_nombre}</td>
+        <td style="padding:9px 8px;color:var(--text);font-weight:600;">${doc.folio}</td>
+        <td style="padding:9px 8px;color:var(--muted);">${doc.razon_social_receptor||'Cliente General'}</td>
+        <td style="padding:9px 8px;text-align:right;color:var(--text);font-weight:600;">${_dtCLP(doc.monto_total)}</td>
+        <td style="padding:9px 8px;color:var(--muted);">${f}</td>
+        <td style="padding:9px 8px;"><span style="font-size:11px;padding:3px 8px;border-radius:6px;background:${eb.bg};color:${eb.color};font-weight:600;">${eb.label}</span></td>
+        <td style="padding:9px 8px;text-align:right;white-space:nowrap;">
+          <button onclick="dtVerDoc(${doc.id},'${doc.pdf_url}')" style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:7px;font-size:12px;cursor:pointer;font-weight:600;">👁 Ver</button>
+          ${dtMenuPuntitos(doc)}
+        </td></tr>`;
+    });
+    h+='</tbody></table>'; cont.innerHTML=h;
+  }catch(e){ cont.innerHTML='<div style="color:#dc2626;">Error: '+e.message+'</div>'; }
+}
+
+// ═══════════ MENÚ 3 PUNTITOS (descargas) ═══════════
+function dtMenuPuntitos(doc){
+  // Solo habilitado cuando el documento ya fue enviado al SII
+  const habilitado = ['enviado','aceptado','rechazado'].includes(doc.estado);
+  if(!habilitado) return '';
+  const id='menu-'+doc.id;
+  return `<span style="position:relative;display:inline-block;margin-left:6px;">
+    <button onclick="dtToggleMenu('${id}',event)" style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:7px;font-size:14px;cursor:pointer;line-height:1;">⋮</button>
+    <div id="${id}" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:var(--card);border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.15);z-index:1000;min-width:190px;overflow:hidden;text-align:left;">
+      <a href="${doc.pdf_url}?formato=carta" target="_blank" style="display:block;padding:10px 14px;font-size:13px;color:var(--text);text-decoration:none;border-bottom:1px solid var(--border);">📄 Descargar PDF</a>
+      <a href="${doc.xml_url}" style="display:block;padding:10px 14px;font-size:13px;color:var(--text);text-decoration:none;border-bottom:1px solid var(--border);">📥 Descargar XML</a>
+      <a href="${doc.xml_receptor_url}" style="display:block;padding:10px 14px;font-size:13px;color:var(--text);text-decoration:none;">📥 XML Receptor</a>
+    </div></span>`;
+}
+function dtToggleMenu(id, ev){
+  if(ev) ev.stopPropagation();
+  document.querySelectorAll('[id^="menu-"]').forEach(m=>{ if(m.id!==id) m.style.display='none'; });
+  const el=document.getElementById(id);
+  if(el) el.style.display = el.style.display==='none'?'block':'none';
+}
+document.addEventListener('click', ()=>{ document.querySelectorAll('[id^="menu-"]').forEach(m=>m.style.display='none'); });
+
+// Ver documento (PDF embebido en modal)
+function dtVerDoc(id, pdfUrl){
+  let modal=document.getElementById('dtVerModal');
+  if(!modal){
+    modal=document.createElement('div'); modal.id='dtVerModal';
+    modal.style.cssText='position:fixed;inset:0;background:rgba(15,12,30,.65);z-index:100000;display:flex;align-items:center;justify-content:center;padding:20px;';
+    modal.addEventListener('click', function(e){ if(e.target===modal) modal.style.display='none'; });
+    const box=document.createElement('div');
+    box.style.cssText='background:#fff;border-radius:14px;width:100%;max-width:760px;height:88vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.4);';
+    const bar=document.createElement('div');
+    bar.style.cssText='padding:14px 18px;border-bottom:1px solid #e3e1ee;display:flex;justify-content:space-between;align-items:center;background:#f7f6fb;';
+    const tit=document.createElement('b'); tit.textContent='Vista del documento'; tit.style.color='#1d1b2e';
+    const cls=document.createElement('button'); cls.textContent='×';
+    cls.style.cssText='background:#eceaf5;border:none;width:32px;height:32px;border-radius:8px;font-size:18px;cursor:pointer;color:#6b6880;';
+    cls.addEventListener('click', function(){ modal.style.display='none'; });
+    bar.appendChild(tit); bar.appendChild(cls);
+    const fr=document.createElement('iframe'); fr.id='dtVerFrame';
+    fr.style.cssText='flex:1;border:none;width:100%;';
+    box.appendChild(bar); box.appendChild(fr); modal.appendChild(box);
+    document.body.appendChild(modal);
+  }
+  document.getElementById('dtVerFrame').src = pdfUrl + '?formato=carta';
+  modal.style.display='flex';
 }
 
 </script>
