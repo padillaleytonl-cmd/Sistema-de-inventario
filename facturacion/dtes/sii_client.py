@@ -597,11 +597,16 @@ def consultar_estado_dte(
     estado = m_estado.group(1).strip() if m_estado else None
     glosa = m_glosa.group(1).strip() if m_glosa else None
 
+    # "DTE Recibido" en la glosa confirma que el SII tiene el documento registrado,
+    # aunque el ESTADO sea DNK (datos no coinciden 100% en el ambiente de pruebas).
+    glosa_l = (glosa or "").lower() + " " + desesc.lower()
+    recibido_en_sii = ("dte recibido" in glosa_l) or (estado in ("DOK", "DNK"))
     return {
         "ok": r.status_code == 200 and estado is not None,
         "estado": estado,
         "glosa": glosa,
         "aceptado": estado == "DOK",
+        "recibido_en_sii": recibido_en_sii,
         "status": r.status_code,
         "respuesta_cruda": texto[:1500],
     }
