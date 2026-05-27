@@ -44,7 +44,11 @@ ENDPOINTS = {
         "semilla": "https://apicert.sii.cl/recursos/v1/boleta.electronica.semilla",
         "token":   "https://apicert.sii.cl/recursos/v1/boleta.electronica.token",
         "envio":   "https://pangal.sii.cl/recursos/v1/boleta.electronica.envio",
-        # Estado del envío: {rut}-{dv}-{trackid}/estado  (track id boletas = 15 díg)
+        # ⚠️ ENDPOINT DE CONSULTA DE ESTADO — PENDIENTE DE CONFIRMAR LA URL EXACTA
+        # El path correcto NO está documentado públicamente (la API Swagger del SII
+        # requiere login en www4c.sii.cl/bolcoreinternetui/api/). Las variantes
+        # probadas dan 404. Cuando se confirme la URL real (desde el acceso SII del
+        # contribuyente), reemplazar SOLO esta línea. Placeholders: {rut} {dv} {trackid}.
         "estado_envio": "https://apicert.sii.cl/recursos/v1/boleta.electronica.envio/{rut}-{dv}-{trackid}/estado",
         "host_envio": "pangal.sii.cl",
     },
@@ -359,6 +363,20 @@ def consultar_estado_envio(
     texto = resp.text
     if "NO ESTA AUTENTICADO" in texto.upper():
         return {"ok": False, "error": "Token vencido", "respuesta_cruda": texto[:500]}
+
+    # Si el SII devuelve una página de error HTML (404/500), no es un estado válido.
+    # Devolvemos un mensaje limpio en vez de volcar el HTML al usuario.
+    if resp.status_code == 404 or "JBWEB" in texto or "HTTP Status 404" in texto:
+        return {
+            "ok": False,
+            "status": resp.status_code,
+            "estado_envio": None,
+            "endpoint_no_disponible": True,
+            "error": ("El servicio de consulta de estado del SII no respondió en esta URL. "
+                      "La boleta fue enviada correctamente (tiene track id); puedes verificar "
+                      "su estado en el portal del SII mientras se ajusta la consulta automática."),
+            "respuesta_cruda": texto[:300],
+        }
 
     # Interpretar la respuesta JSON del SII
     estado_envio = None       # EPR, RCH, etc. (estado del sobre)

@@ -13614,6 +13614,9 @@ async function dtConsultarEstado(id){
       }
       alert(msg);
       if(typeof conBuscar==='function' && document.getElementById('conResultados')) conBuscar();
+    } else if(d.endpoint_no_disponible){
+      // Mensaje limpio: la consulta automática aún no está disponible
+      alert((d.error||'La consulta de estado no está disponible.')+'\n\nTrack ID: '+(d.track_id||'—'));
     } else {
       let m=(d.error||'No se pudo consultar');
       if(d.respuesta_sii){ m+='\n\nRespuesta SII:\n'+d.respuesta_sii.slice(0,400); }

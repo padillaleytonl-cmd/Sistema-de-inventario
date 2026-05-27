@@ -21724,12 +21724,12 @@ def facturacion_consultar_estado(boleta_id):
     except Exception as e:
         return jsonify({"ok": False, "error": "No se pudo consultar: " + str(e)[:200]}), 502
 
-    # Si la consulta no encontró un endpoint válido (404)
-    if res.get("status") == 404 and not res.get("estado_envio"):
+    # Si el endpoint de consulta no está disponible (404), mensaje limpio (no HTML)
+    if res.get("endpoint_no_disponible") or (res.get("status") == 404 and not res.get("estado_envio")):
         return jsonify({"ok": False,
-                        "error": "El SII devolvió 404 al consultar el estado del envío",
-                        "track_id": track_id,
-                        "respuesta_sii": res.get("respuesta_cruda", "")[:800]}), 502
+                        "endpoint_no_disponible": True,
+                        "error": res.get("error", "El servicio de consulta de estado del SII no está disponible en esta URL. La boleta fue enviada (tiene track id); verifica su estado en el portal del SII."),
+                        "track_id": track_id}), 200
 
     # Interpretar la respuesta del sii_client (estado_envio + estadísticas).
     # estado_envio = código del sobre (REC, EPR, RPR, etc.)
