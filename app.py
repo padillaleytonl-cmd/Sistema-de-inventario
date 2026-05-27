@@ -21693,6 +21693,59 @@ def _fact_mapear_estado_sii(estado_sii):
     return "en_proceso", "Estado SII: " + e
 
 
+@app.route("/facturacion/config/resolucion", methods=["POST"])
+def facturacion_actualizar_resolucion():
+    """SOLO ADMIN. Actualiza FchResol y NroResol de la empresa.
+    Estos campos van en la Carátula del EnvioBOLETA. Si están mal, el SII recibe
+    el envío, le da track id, pero al validar lo descarta silenciosamente (FAU).
+    Body JSON: {fecha: 'YYYY-MM-DD', numero: int}
+    """
+    try:
+        if not session.get("logged"):
+            return jsonify({"ok": False, "error": "no autenticado"}), 401
+        if session.get("rol") != "admin":
+            return jsonify({"ok": False, "error": "Solo admin puede ajustar la resolución SII"}), 403
+        tenant_id = session.get("tenant_id") or 1
+        data = request.get_json(silent=True) or {}
+        fecha = (data.get("fecha") or "").strip()
+        numero = data.get("numero")
+        if numero is None:
+            return jsonify({"ok": False, "error": "Indica el número de resolución (0 para certificación)"}), 400
+        try:
+            numero = int(numero)
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "El número de resolución debe ser un entero"}), 400
+        # Validar formato fecha YYYY-MM-DD
+        import re as _re
+        if fecha and not _re.match(r'^\d{4}-\d{2}-\d{2}$', fecha):
+            return jsonify({"ok": False, "error": "La fecha debe ir en formato YYYY-MM-DD"}), 400
+        from inventario import get_conn, release_conn
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                # Ver valores actuales para devolverlos
+                cur.execute("""SELECT resolucion_sii_fecha, resolucion_sii_numero
+                               FROM facturacion_config_tenant WHERE tenant_id=%s""", (tenant_id,))
+                anterior = cur.fetchone()
+                cur.execute("""UPDATE facturacion_config_tenant
+                               SET resolucion_sii_fecha=%s, resolucion_sii_numero=%s,
+                                   fecha_actualizacion=NOW()
+                               WHERE tenant_id=%s""",
+                            (fecha or None, numero, tenant_id))
+                conn.commit()
+        finally:
+            release_conn(conn)
+        return jsonify({"ok": True,
+                        "anterior": {"fecha": str(anterior[0]) if anterior and anterior[0] else None,
+                                     "numero": anterior[1] if anterior else None} if anterior else None,
+                        "nuevo": {"fecha": fecha, "numero": numero},
+                        "mensaje": "Resolución SII actualizada. El próximo envío usará FchResol=%s, NroResol=%s." % (fecha, numero)})
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": "Error interno: " + str(e)[:300],
+                        "trace": traceback.format_exc()[:500]}), 500
+
+
 @app.route("/facturacion/caf/ajustar-folio", methods=["POST"])
 def facturacion_ajustar_folio():
     """SOLO ADMIN. Ajusta el folio_actual (próximo folio a emitir) de un CAF.
