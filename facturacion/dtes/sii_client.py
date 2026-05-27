@@ -542,9 +542,10 @@ def consultar_estado_dte(
     rc, dvc = _split(rut_consultante)
     re_, dvr_e = _split(rut_emisor)
     rr, dvr_r = _split(rut_receptor)
-    # El monto va sin separadores; la fecha en formato DD-MM-YYYY para getEstDte
+    # El monto va sin separadores. La fecha en formato DDMMAAAA SIN guiones
+    # (según manual oficial SII OI2004_CEDTE: FechaEmisionDte, formato DDMMAAAA).
     y, m, d = fecha_emision.split("-")
-    fecha_sii = f"{d}-{m}-{y}"
+    fecha_sii = f"{d}{m}{y}"
 
     url = DTEWS[ambiente]["query"]
     soap = (
