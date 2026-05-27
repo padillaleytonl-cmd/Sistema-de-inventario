@@ -13605,17 +13605,17 @@ async function dtConsultarEstado(id){
     const d=await r.json();
     if(d.ok){
       let msg='Estado en el SII: '+(d.glosa||d.estado_sii||d.estado);
-      if(d.estado_sii){ msg+='\n(código SII: '+d.estado_sii+')'; }
+      if(d.aceptados!=null||d.rechazados!=null||d.reparos!=null){
+        msg+='\n\nAceptados: '+(d.aceptados!=null?d.aceptados:'—')+'  ·  Rechazados: '+(d.rechazados!=null?d.rechazados:'—')+'  ·  Reparos: '+(d.reparos!=null?d.reparos:'—');
+      }
       if(d.estado==='en_proceso'){ msg+='\n\nEl SII aún está procesando. Vuelve a consultar en unos minutos.'; }
-      // Diagnóstico: si el SII no devolvió un código de estado, mostrar la respuesta cruda
       if(!d.estado_sii && d.respuesta_sii){
-        msg+='\n\n[Diagnóstico] El SII respondió sin un código de estado reconocible. Respuesta:\n'+(d.respuesta_sii||'').slice(0,500);
+        msg+='\n\n[Diagnóstico] Respuesta del SII:\n'+(d.respuesta_sii||'').slice(0,500);
       }
       alert(msg);
       if(typeof conBuscar==='function' && document.getElementById('conResultados')) conBuscar();
     } else {
       let m=(d.error||'No se pudo consultar');
-      if(d.urls_probadas){ m+='\n\nURLs probadas:\n'+d.urls_probadas.join('\n'); }
       if(d.respuesta_sii){ m+='\n\nRespuesta SII:\n'+d.respuesta_sii.slice(0,400); }
       alert(m);
     }

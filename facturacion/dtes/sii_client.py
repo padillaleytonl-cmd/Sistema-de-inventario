@@ -44,14 +44,15 @@ ENDPOINTS = {
         "semilla": "https://apicert.sii.cl/recursos/v1/boleta.electronica.semilla",
         "token":   "https://apicert.sii.cl/recursos/v1/boleta.electronica.token",
         "envio":   "https://pangal.sii.cl/recursos/v1/boleta.electronica.envio",
-        "estado_envio": "https://apicert.sii.cl/recursos/v1/boleta.electronica.envio/{trackid}",
+        # Estado del envío: {rut}-{dv}-{trackid}/estado  (track id boletas = 15 díg)
+        "estado_envio": "https://apicert.sii.cl/recursos/v1/boleta.electronica.envio/{rut}-{dv}-{trackid}/estado",
         "host_envio": "pangal.sii.cl",
     },
     "produccion": {
         "semilla": "https://api.sii.cl/recursos/v1/boleta.electronica.semilla",
         "token":   "https://api.sii.cl/recursos/v1/boleta.electronica.token",
         "envio":   "https://rahue.sii.cl/recursos/v1/boleta.electronica.envio",
-        "estado_envio": "https://api.sii.cl/recursos/v1/boleta.electronica.envio/{trackid}",
+        "estado_envio": "https://api.sii.cl/recursos/v1/boleta.electronica.envio/{rut}-{dv}-{trackid}/estado",
         "host_envio": "rahue.sii.cl",
     },
 }
@@ -343,105 +344,56 @@ def consultar_estado_envio(
         return rut[:-1], rut[-1]
     rut_num, rut_dv = _split_rut(rut_emisor)
 
-    # Host de consultas (apicert para certificación, api para producción).
-    # IMPORTANTE: el recurso de CONSULTA de estado es distinto al de ENVÍO.
-    # El de envío es boleta.electronica.envio (POST). El de consulta de estado
-    # del envío usa el track id con un recurso específico. Probamos los paths
-    # candidatos conocidos hasta dar con el que responde (no 404).
-    host = "apicert.sii.cl" if ambiente == "certificacion" else "api.sii.cl"
-    base = f"https://{host}/recursos/v1"
+    url = ENDPOINTS[ambiente]["estado_envio"].format(
+        rut=rut_num, dv=rut_dv, trackid=track_id)
     headers = {
         "User-Agent": USER_AGENT,
         "Accept": "application/json",
         "Cookie": f"TOKEN={token}",
     }
-    # Candidatos de URL para consultar el estado del envío por track id.
-    # El SII documenta el recurso de boletas en bolcoreinternetui; estos son los
-    # paths REST conocidos que usan los integradores para el estado del envío.
-    candidatos = [
-        # recurso "estado" del envío de boleta (forma REST más común)
-        (f"{base}/boleta.electronica.envio/{rut_num}-{rut_dv}/{track_id}/estado", None),
-        (f"{base}/boleta.electronica.envio/{track_id}/estado",
-         {"rutConsultante": rut_num, "dvConsultante": rut_dv}),
-        # variante con RUT emisor como query
-        (f"{base}/boleta.electronica.envio/{track_id}",
-         {"rutEmisor": rut_num, "dvEmisor": rut_dv}),
-        # variante bolcoreinternetui (servidor de UI de boletas)
-        (f"https://www4c.sii.cl/bolcoreinternetui/api/get/estado/envio/{track_id}",
-         {"rutConsultante": rut_num, "dvConsultante": rut_dv}),
-        # la original (por si en algún ambiente sí responde)
-        (f"{base}/boleta.electronica.envio/{track_id}",
-         {"rutConsultante": rut_num, "dvConsultante": rut_dv}),
-    ]
-
-    resp = None
-    url_usada = None
-    ultimo_texto = ""
-    for url, params in candidatos:
-        try:
-            r = requests.get(url, headers=headers, params=params or {}, timeout=TIMEOUT)
-        except Exception:
-            continue
-        ultimo_texto = r.text
-        # Si NO es 404 ni una página de error JBWEB, lo damos por válido
-        if r.status_code != 404 and "JBWEB" not in r.text and "HTTP Status 404" not in r.text:
-            resp = r
-            url_usada = url
-            break
-    if resp is None:
-        # Todos dieron 404: devolvemos diagnóstico claro
-        return {"ok": False, "estado": None, "glosa_sii": None,
-                "error": "El endpoint de consulta de estado devolvió 404 en todas las variantes probadas. "
-                         "Hay que confirmar el path exacto en la API del SII (bolcoreinternetui).",
-                "respuesta_cruda": ultimo_texto[:1500],
-                "status": 404,
-                "urls_probadas": [u for u, _ in candidatos]}
+    try:
+        resp = requests.get(url, headers=headers, timeout=TIMEOUT)
+    except Exception as e:
+        raise SIIError(f"No se pudo conectar a {url}: {e}")
 
     texto = resp.text
     if "NO ESTA AUTENTICADO" in texto.upper():
         return {"ok": False, "error": "Token vencido", "respuesta_cruda": texto[:500]}
 
-    # El SII puede devolver el estado en distintos campos/anidaciones según el recurso.
-    # Buscamos en todos los nombres conocidos, incluyendo objetos anidados.
-    estado = None
-    glosa_sii = None
+    # Interpretar la respuesta JSON del SII
+    estado_envio = None       # EPR, RCH, etc. (estado del sobre)
+    aceptados = rechazados = reparos = informados = None
+    aceptado_final = None     # True si las boletas quedaron aceptadas sin reparos
     try:
         j = resp.json()
-        def _buscar(d, claves):
-            if isinstance(d, dict):
-                for k, v in d.items():
-                    if k.lower() in claves and isinstance(v, str) and v.strip():
-                        return v.strip()
-                for v in d.values():
-                    r = _buscar(v, claves)
-                    if r:
-                        return r
-            elif isinstance(d, list):
-                for v in d:
-                    r = _buscar(v, claves)
-                    if r:
-                        return r
-            return None
-        # Nombres posibles del código de estado en la API de boletas del SII
-        estado = _buscar(j, {"estado", "status", "statuscode", "estadoenvio",
-                             "codigoestado", "cod_estado", "estado_envio"})
-        glosa_sii = _buscar(j, {"glosa", "descripcion", "mensaje", "message",
-                                "descripcionestado", "glosaestado", "detalle"})
+        estado_envio = j.get("estado") or j.get("statusCode") or j.get("status")
+        # El SII devuelve estadísticas del envío en distintas formas según versión
+        est = j.get("estadistica") or j.get("estadisticas") or []
+        if isinstance(est, list) and est:
+            e0 = est[0]
+            informados = e0.get("informados")
+            aceptados = e0.get("aceptados")
+            rechazados = e0.get("rechazados")
+            reparos = e0.get("reparos") or e0.get("aceptadosConReparo")
+        # Algunos formatos traen los totales directo
+        aceptados = aceptados if aceptados is not None else j.get("aceptados")
+        rechazados = rechazados if rechazados is not None else j.get("rechazados")
+        reparos = reparos if reparos is not None else j.get("reparos")
+
+        if rechazados is not None and reparos is not None:
+            aceptado_final = (int(rechazados) == 0 and int(reparos) == 0
+                              and int(aceptados or 0) > 0)
     except Exception:
-        # No vino JSON: intentar extraer del texto plano/XML
-        import re as _re
-        m = _re.search(r'<ESTADO>([^<]+)</ESTADO>', texto)
-        if m:
-            estado = m.group(1).strip()
-        mg = _re.search(r'<GLOSA>([^<]+)</GLOSA>', texto)
-        if mg:
-            glosa_sii = mg.group(1).strip()
+        pass
 
     return {
         "ok": resp.status_code == 200,
-        "estado": estado,
-        "glosa_sii": glosa_sii,
-        "respuesta_cruda": texto[:1500],
         "status": resp.status_code,
-        "url_usada": url_usada,
+        "estado_envio": estado_envio,
+        "informados": informados,
+        "aceptados": aceptados,
+        "rechazados": rechazados,
+        "reparos": reparos,
+        "aceptado_sin_reparos": aceptado_final,
+        "respuesta_cruda": texto[:1500],
     }

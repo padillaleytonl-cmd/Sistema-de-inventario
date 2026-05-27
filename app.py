@@ -21724,27 +21724,44 @@ def facturacion_consultar_estado(boleta_id):
     except Exception as e:
         return jsonify({"ok": False, "error": "No se pudo consultar: " + str(e)[:200]}), 502
 
-    # Si la consulta no encontró un endpoint válido (404 en todas las variantes)
-    if res.get("status") == 404 and not res.get("estado"):
+    # Si la consulta no encontró un endpoint válido (404)
+    if res.get("status") == 404 and not res.get("estado_envio"):
         return jsonify({"ok": False,
-                        "error": res.get("error", "El SII devolvió 404 al consultar el estado"),
+                        "error": "El SII devolvió 404 al consultar el estado del envío",
                         "track_id": track_id,
-                        "urls_probadas": res.get("urls_probadas"),
                         "respuesta_sii": res.get("respuesta_cruda", "")[:800]}), 502
 
-    estado_sii = (res.get("estado") or "").upper()
-    nuevo_estado, glosa = _fact_mapear_estado_sii(estado_sii)
-    # Si el SII devolvió su propia glosa textual, usarla (es más precisa)
-    if res.get("glosa_sii"):
-        glosa = res["glosa_sii"]
+    # Interpretar la respuesta del sii_client (estado_envio + estadísticas).
+    # estado_envio = código del sobre (REC, EPR, RPR, etc.)
+    # aceptado_sin_reparos = True cuando rechazados=0, reparos=0, aceptados>0
+    estado_envio = (res.get("estado_envio") or "").upper()
+    aceptados = res.get("aceptados")
+    rechazados = res.get("rechazados")
+    reparos = res.get("reparos")
+    aceptado_sin_reparos = res.get("aceptado_sin_reparos")
+
+    # Determinar el estado interno
+    if aceptado_sin_reparos is True:
+        nuevo_estado = "aceptado"
+        glosa = "Aceptado por el SII"
+    elif rechazados is not None and int(rechazados or 0) > 0:
+        nuevo_estado = "rechazado"
+        glosa = "Rechazado por el SII (%s rechazo/s)" % rechazados
+    elif reparos is not None and int(reparos or 0) > 0:
+        nuevo_estado = "aceptado_reparos"
+        glosa = "Aceptado con reparos (%s)" % reparos
+    else:
+        # Aún sin estadísticas finales: interpretar el código del sobre
+        nuevo_estado, glosa = _fact_mapear_estado_sii(estado_envio)
+
     es_aceptada = nuevo_estado in ("aceptado", "aceptado_reparos")
-    _fact_actualizar_estado_dte(boleta_id, nuevo_estado, estado_sii=estado_sii,
+    _fact_actualizar_estado_dte(boleta_id, nuevo_estado, estado_sii=estado_envio,
                                 glosa=glosa,
                                 set_fecha_aceptacion=es_aceptada)
-    return jsonify({"ok": True, "estado": nuevo_estado, "estado_sii": estado_sii,
+    return jsonify({"ok": True, "estado": nuevo_estado, "estado_sii": estado_envio,
                     "glosa": glosa,
                     "track_id": track_id,
-                    "url_usada": res.get("url_usada"),
+                    "aceptados": aceptados, "rechazados": rechazados, "reparos": reparos,
                     "respuesta_sii": res.get("respuesta_cruda", "")[:1500],
                     "status_http": res.get("status"),
                     "respuesta": res.get("respuesta_cruda", "")[:400]})
@@ -21797,14 +21814,23 @@ def _fact_job_consultar_estados():
                 for bid, trk in lista:
                     try:
                         res = consultar_estado_envio(trk, tok, config["rut_emisor"], ambiente)
-                        est = (res.get("estado") or "").upper()
-                        nuevo_est, glosa_est = _fact_mapear_estado_sii(est)
+                        estado_envio = (res.get("estado_envio") or "").upper()
+                        rechazados = res.get("rechazados")
+                        reparos = res.get("reparos")
+                        if res.get("aceptado_sin_reparos") is True:
+                            nuevo_est, glosa_est = "aceptado", "Aceptado por el SII"
+                        elif rechazados is not None and int(rechazados or 0) > 0:
+                            nuevo_est, glosa_est = "rechazado", "Rechazado por el SII"
+                        elif reparos is not None and int(reparos or 0) > 0:
+                            nuevo_est, glosa_est = "aceptado_reparos", "Aceptado con reparos"
+                        else:
+                            nuevo_est, glosa_est = _fact_mapear_estado_sii(estado_envio)
                         # Solo actualizar si llegó a un estado final (no re-escribir 'en_proceso')
                         if nuevo_est in ("aceptado", "aceptado_reparos", "rechazado"):
-                            _fact_actualizar_estado_dte(bid, nuevo_est, estado_sii=est, glosa=glosa_est,
+                            _fact_actualizar_estado_dte(bid, nuevo_est, estado_sii=estado_envio, glosa=glosa_est,
                                                         set_fecha_aceptacion=nuevo_est.startswith("aceptado"))
                     except Exception as e:
-                        print("[RCOF/Estado] Error boleta %s: %s" % (bid, str(e)[:120]))
+                        print("[Estado SII] Error boleta %s: %s" % (bid, str(e)[:120]))
             except Exception as e:
                 print("[RCOF/Estado] Error tenant %s: %s" % (tid, str(e)[:120]))
     except Exception as e:
@@ -24019,9 +24045,11 @@ def admin_lusync_sii_test_estado():
             res = consultar_estado_envio(
                 track_id=trackid, token=tok, rut_emisor=rut_emisor, ambiente=ambiente)
             if res.get("ok"):
-                estado = res.get("estado") or "(sin campo estado)"
+                estado = res.get("estado_envio") or "(sin estado)"
+                extra = "Aceptados:%s Rechazados:%s Reparos:%s" % (
+                    res.get("aceptados"), res.get("rechazados"), res.get("reparos"))
                 paso(f"Consultar estado (track {trackid})", True,
-                     f"Estado: {estado}")
+                     f"Estado: {estado} · {extra}")
                 paso("Respuesta del SII", True,
                      _html.escape(str(res.get("respuesta_cruda", ""))[:600]))
             else:
