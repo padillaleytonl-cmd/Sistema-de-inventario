@@ -21067,11 +21067,12 @@ def facturacion_boleta_emitir():
                       (tenant_id, tipo_dte, folio, rut_receptor, razon_social_receptor,
                        monto_neto, monto_iva, monto_total, xml_firmado, estado,
                        fecha_emision)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     RETURNING id
                 """, (tenant_id, tipo_dte, folio, receptor["rut"], receptor["razon_social"],
                       res_bol["totales"]["mnt_neto"], res_bol["totales"]["mnt_iva"],
-                      total, boleta_xml.decode("iso-8859-1", errors="replace"), "generado"))
+                      total, boleta_xml.decode("iso-8859-1", errors="replace"), "generado",
+                      fecha))  # fecha TIMBRADA en el XML (no NOW), para que la consulta al SII coincida
                 boleta_id = cur.fetchone()[0]
             conn.commit()
             paso("Registrar boleta (pre-envío)", True, "ID " + str(boleta_id) + " · estado: generado")
