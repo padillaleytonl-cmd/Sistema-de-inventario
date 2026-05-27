@@ -21746,7 +21746,10 @@ def facturacion_consultar_estado(boleta_id):
     if estado_dte == "DOK":
         nuevo_estado, glosa = "aceptado", "Aceptado por el SII (datos verificados)"
     elif estado_dte in ("DNK",):
-        nuevo_estado, glosa = "en_proceso", "Recibido por el SII, pero los datos no coinciden — verifica monto/fecha"
+        nuevo_estado, glosa = "en_proceso", ("Recibido por el SII, pero los datos consultados no coinciden con los registrados. "
+                                             "Consulté: tipo=%s, folio=%s, fecha=%s, monto=%s, receptor=%s. "
+                                             "Si la boleta es correcta, el receptor o el monto consultado difiere del timbrado." % (
+                                             tipo_dte, folio, fecha_str, monto_total, rut_receptor))
     elif estado_dte in ("FAU",):
         nuevo_estado, glosa = "en_proceso", "El SII aún no registra este documento (puede estar procesándose)"
     elif estado_dte in ("FAN", "FNA"):
