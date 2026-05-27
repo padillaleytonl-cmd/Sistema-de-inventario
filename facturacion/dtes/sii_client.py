@@ -467,29 +467,20 @@ def _dtews_obtener_semilla(ambiente: str = "certificacion") -> str:
 
 def _dtews_obtener_token(pfx_bytes: bytes, password: str,
                          ambiente: str = "certificacion") -> str:
-    """Obtiene el token del WS clásico (GetTokenFromSeed): semilla → firmar → token."""
-    from signxml import XMLSigner, methods
-    from cryptography.hazmat.primitives.serialization import pkcs12
-    from lxml import etree
+    """Obtiene el token del WS clásico (GetTokenFromSeed): semilla → firmar → token.
 
+    Reutiliza firmar_semilla() — la MISMA firma XMLDSig que ya está aprobada por el
+    SII para las boletas (PKCS8, namespace por defecto sin prefijo ds:, transform
+    C14N). Antes esta función tenía su propia firma que el SII rechazaba con
+    'ESTADO 10 - Error Interno'.
+    """
+    import html as _html
     semilla = _dtews_obtener_semilla(ambiente)
-    # Armar y firmar el getToken
-    key, cert, _ = pkcs12.load_key_and_certificates(pfx_bytes, password.encode())
-    root = etree.fromstring(
-        f'<getToken><item><Semilla>{semilla}</Semilla></item></getToken>'.encode())
-
-    class _S(XMLSigner):
-        def check_deprecated_methods(self):  # permitir SHA1 (lo exige el SII)
-            pass
-    from cryptography.hazmat.primitives import serialization
-    key_pem = key.private_bytes(serialization.Encoding.PEM,
-                                serialization.PrivateFormat.TraditionalOpenSSL,
-                                serialization.NoEncryption())
-    cert_pem = cert.public_bytes(serialization.Encoding.PEM)
-    signer = _S(method=methods.enveloped, signature_algorithm="rsa-sha1",
-                digest_algorithm="sha1", c14n_algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315")
-    signed = signer.sign(root, key=key_pem, cert=cert_pem)
-    signed_xml = etree.tostring(signed, encoding="ISO-8859-1").decode("ISO-8859-1")
+    # Firmar el getToken con la técnica aprobada (firmar_semilla devuelve bytes del XML firmado)
+    signed_bytes = firmar_semilla(semilla, pfx_bytes, password)
+    signed_xml = signed_bytes.decode("utf-8") if isinstance(signed_bytes, bytes) else signed_bytes
+    # Quitar la declaración <?xml...?> del documento firmado para anidarlo en el SOAP
+    signed_xml = re.sub(r'<\?xml[^>]*\?>', '', signed_xml).strip()
 
     url = DTEWS[ambiente]["token"].replace("?WSDL", "")
     soap = (
@@ -501,7 +492,6 @@ def _dtews_obtener_token(pfx_bytes: bytes, password: str,
     r = requests.post(url, data=soap.encode("ISO-8859-1"),
                       headers={"Content-Type": "text/xml; charset=utf-8",
                                "User-Agent": USER_AGENT, "SOAPAction": ""}, timeout=TIMEOUT)
-    import html as _html
     desesc = r.text
     for _ in range(3):
         desesc = _html.unescape(desesc)
