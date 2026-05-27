@@ -13614,7 +13614,10 @@ async function dtConsultarEstado(id){
       alert(msg);
       if(typeof conBuscar==='function' && document.getElementById('conResultados')) conBuscar();
     } else {
-      alert((d.error||'No se pudo consultar')+(d.respuesta_sii?('\n\nRespuesta SII:\n'+d.respuesta_sii.slice(0,400)):''));
+      let m=(d.error||'No se pudo consultar');
+      if(d.urls_probadas){ m+='\n\nURLs probadas:\n'+d.urls_probadas.join('\n'); }
+      if(d.respuesta_sii){ m+='\n\nRespuesta SII:\n'+d.respuesta_sii.slice(0,400); }
+      alert(m);
     }
   }catch(e){ alert('Error: '+e.message); }
 }

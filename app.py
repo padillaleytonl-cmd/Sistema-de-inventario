@@ -21724,6 +21724,14 @@ def facturacion_consultar_estado(boleta_id):
     except Exception as e:
         return jsonify({"ok": False, "error": "No se pudo consultar: " + str(e)[:200]}), 502
 
+    # Si la consulta no encontró un endpoint válido (404 en todas las variantes)
+    if res.get("status") == 404 and not res.get("estado"):
+        return jsonify({"ok": False,
+                        "error": res.get("error", "El SII devolvió 404 al consultar el estado"),
+                        "track_id": track_id,
+                        "urls_probadas": res.get("urls_probadas"),
+                        "respuesta_sii": res.get("respuesta_cruda", "")[:800]}), 502
+
     estado_sii = (res.get("estado") or "").upper()
     nuevo_estado, glosa = _fact_mapear_estado_sii(estado_sii)
     # Si el SII devolvió su propia glosa textual, usarla (es más precisa)
@@ -21736,6 +21744,7 @@ def facturacion_consultar_estado(boleta_id):
     return jsonify({"ok": True, "estado": nuevo_estado, "estado_sii": estado_sii,
                     "glosa": glosa,
                     "track_id": track_id,
+                    "url_usada": res.get("url_usada"),
                     "respuesta_sii": res.get("respuesta_cruda", "")[:1500],
                     "status_http": res.get("status"),
                     "respuesta": res.get("respuesta_cruda", "")[:400]})

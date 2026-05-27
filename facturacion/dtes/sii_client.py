@@ -343,17 +343,59 @@ def consultar_estado_envio(
         return rut[:-1], rut[-1]
     rut_num, rut_dv = _split_rut(rut_emisor)
 
-    url = ENDPOINTS[ambiente]["estado_envio"].format(trackid=track_id)
+    # Host de consultas (apicert para certificación, api para producción).
+    # IMPORTANTE: el recurso de CONSULTA de estado es distinto al de ENVÍO.
+    # El de envío es boleta.electronica.envio (POST). El de consulta de estado
+    # del envío usa el track id con un recurso específico. Probamos los paths
+    # candidatos conocidos hasta dar con el que responde (no 404).
+    host = "apicert.sii.cl" if ambiente == "certificacion" else "api.sii.cl"
+    base = f"https://{host}/recursos/v1"
     headers = {
         "User-Agent": USER_AGENT,
         "Accept": "application/json",
         "Cookie": f"TOKEN={token}",
     }
-    params = {"rutConsultante": rut_num, "dvConsultante": rut_dv}
-    try:
-        resp = requests.get(url, headers=headers, params=params, timeout=TIMEOUT)
-    except Exception as e:
-        raise SIIError(f"No se pudo conectar a {url}: {e}")
+    # Candidatos de URL para consultar el estado del envío por track id.
+    # El SII documenta el recurso de boletas en bolcoreinternetui; estos son los
+    # paths REST conocidos que usan los integradores para el estado del envío.
+    candidatos = [
+        # recurso "estado" del envío de boleta (forma REST más común)
+        (f"{base}/boleta.electronica.envio/{rut_num}-{rut_dv}/{track_id}/estado", None),
+        (f"{base}/boleta.electronica.envio/{track_id}/estado",
+         {"rutConsultante": rut_num, "dvConsultante": rut_dv}),
+        # variante con RUT emisor como query
+        (f"{base}/boleta.electronica.envio/{track_id}",
+         {"rutEmisor": rut_num, "dvEmisor": rut_dv}),
+        # variante bolcoreinternetui (servidor de UI de boletas)
+        (f"https://www4c.sii.cl/bolcoreinternetui/api/get/estado/envio/{track_id}",
+         {"rutConsultante": rut_num, "dvConsultante": rut_dv}),
+        # la original (por si en algún ambiente sí responde)
+        (f"{base}/boleta.electronica.envio/{track_id}",
+         {"rutConsultante": rut_num, "dvConsultante": rut_dv}),
+    ]
+
+    resp = None
+    url_usada = None
+    ultimo_texto = ""
+    for url, params in candidatos:
+        try:
+            r = requests.get(url, headers=headers, params=params or {}, timeout=TIMEOUT)
+        except Exception:
+            continue
+        ultimo_texto = r.text
+        # Si NO es 404 ni una página de error JBWEB, lo damos por válido
+        if r.status_code != 404 and "JBWEB" not in r.text and "HTTP Status 404" not in r.text:
+            resp = r
+            url_usada = url
+            break
+    if resp is None:
+        # Todos dieron 404: devolvemos diagnóstico claro
+        return {"ok": False, "estado": None, "glosa_sii": None,
+                "error": "El endpoint de consulta de estado devolvió 404 en todas las variantes probadas. "
+                         "Hay que confirmar el path exacto en la API del SII (bolcoreinternetui).",
+                "respuesta_cruda": ultimo_texto[:1500],
+                "status": 404,
+                "urls_probadas": [u for u, _ in candidatos]}
 
     texto = resp.text
     if "NO ESTA AUTENTICADO" in texto.upper():
@@ -401,4 +443,5 @@ def consultar_estado_envio(
         "glosa_sii": glosa_sii,
         "respuesta_cruda": texto[:1500],
         "status": resp.status_code,
+        "url_usada": url_usada,
     }
