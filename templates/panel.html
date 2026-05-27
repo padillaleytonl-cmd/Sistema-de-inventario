@@ -13887,12 +13887,18 @@ async function facAvanzarFolio(){
   const folio=parseInt(document.getElementById('facAvFolioNum').value,10);
   const msg=document.getElementById('facAvFolioMsg');
   if(!folio||folio<1){ msg.innerHTML='<span style="color:#dc2626;">Indica un folio válido</span>'; return; }
-  if(!confirm('Avanzar el contador de folios tipo '+tipo+' a '+folio+'?\\n\\nLa próxima boleta usará el folio '+folio+'.')) return;
+  if(!confirm('Avanzar el contador de folios tipo '+tipo+' a '+folio+'?\n\nLa próxima boleta usará el folio '+folio+'.')) return;
   msg.innerHTML='<span style="color:var(--muted);">Aplicando…</span>';
   try{
     const r=await fetch('/facturacion/caf/ajustar-folio',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({tipo_dte:tipo, nuevo_folio:folio})});
-    const d=await r.json();
+    const txt=await r.text();
+    let d;
+    try{ d=JSON.parse(txt); }
+    catch(_){
+      msg.innerHTML='<span style="color:#dc2626;">Respuesta no-JSON ('+r.status+'): '+txt.slice(0,200).replace(/</g,'&lt;')+'</span>';
+      return;
+    }
     if(d.ok){
       msg.innerHTML='<span style="color:#1D9E75;">✓ '+d.mensaje+' (antes: '+d.folio_anterior+')</span>';
     } else {

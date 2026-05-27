@@ -21699,44 +21699,49 @@ def facturacion_ajustar_folio():
     Útil cuando hay folios quemados (ej: tras certificación, saltar a folio 21).
     Body JSON: {tipo_dte, ambiente, nuevo_folio}.
     """
-    if not session.get("logged"):
-        return jsonify({"ok": False, "error": "no autenticado"}), 401
-    if session.get("rol") != "admin":
-        return jsonify({"ok": False, "error": "Solo un administrador puede ajustar folios"}), 403
-    tenant_id = session.get("tenant_id") or 1
-    data = request.get_json(silent=True) or {}
     try:
-        tipo_dte = int(data.get("tipo_dte", 39))
-        nuevo_folio = int(data.get("nuevo_folio"))
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "error": "tipo_dte y nuevo_folio deben ser números"}), 400
-    ambiente = normalizar_ambiente(data.get("ambiente") or "certificacion")
-    from inventario import get_conn, release_conn
-    conn = get_conn()
-    try:
-        with conn.cursor() as cur:
-            # Buscar el CAF activo que cubra ese folio
-            cur.execute("""SELECT id, folio_desde, folio_hasta, folio_actual
-                           FROM facturacion_cafs
-                           WHERE tenant_id=%s AND tipo_dte=%s AND ambiente=%s
-                             AND agotado=FALSE
-                           ORDER BY fecha_autorizacion ASC LIMIT 1""",
-                        (tenant_id, tipo_dte, ambiente))
-            caf = cur.fetchone()
-            if not caf:
-                return jsonify({"ok": False, "error": "No hay CAF activo para tipo %s en %s" % (tipo_dte, ambiente)}), 404
-            caf_id, f_desde, f_hasta, f_actual = caf
-            if nuevo_folio < f_desde or nuevo_folio > f_hasta:
-                return jsonify({"ok": False,
-                                "error": "El folio %s está fuera del rango del CAF (%s-%s)" % (
-                                    nuevo_folio, f_desde, f_hasta)}), 400
-            cur.execute("""UPDATE facturacion_cafs SET folio_actual=%s WHERE id=%s""",
-                        (nuevo_folio, caf_id))
-            conn.commit()
-    finally:
-        release_conn(conn)
-    return jsonify({"ok": True, "folio_anterior": f_actual, "folio_nuevo": nuevo_folio,
-                    "mensaje": "Próximo folio a emitir: %s" % nuevo_folio})
+        if not session.get("logged"):
+            return jsonify({"ok": False, "error": "no autenticado"}), 401
+        if session.get("rol") != "admin":
+            return jsonify({"ok": False, "error": "Solo un administrador puede ajustar folios"}), 403
+        tenant_id = session.get("tenant_id") or 1
+        data = request.get_json(silent=True) or {}
+        try:
+            tipo_dte = int(data.get("tipo_dte", 39))
+            nuevo_folio = int(data.get("nuevo_folio"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "tipo_dte y nuevo_folio deben ser números"}), 400
+        ambiente = normalizar_ambiente(data.get("ambiente") or "certificacion")
+        from inventario import get_conn, release_conn
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                # Buscar el CAF activo que cubra ese folio
+                cur.execute("""SELECT id, folio_desde, folio_hasta, folio_actual
+                               FROM facturacion_cafs
+                               WHERE tenant_id=%s AND tipo_dte=%s AND ambiente=%s
+                                 AND agotado=FALSE
+                               ORDER BY fecha_autorizacion ASC LIMIT 1""",
+                            (tenant_id, tipo_dte, ambiente))
+                caf = cur.fetchone()
+                if not caf:
+                    return jsonify({"ok": False, "error": "No hay CAF activo para tipo %s en %s" % (tipo_dte, ambiente)}), 404
+                caf_id, f_desde, f_hasta, f_actual = caf
+                if nuevo_folio < f_desde or nuevo_folio > f_hasta:
+                    return jsonify({"ok": False,
+                                    "error": "El folio %s está fuera del rango del CAF (%s-%s)" % (
+                                        nuevo_folio, f_desde, f_hasta)}), 400
+                cur.execute("""UPDATE facturacion_cafs SET folio_actual=%s WHERE id=%s""",
+                            (nuevo_folio, caf_id))
+                conn.commit()
+        finally:
+            release_conn(conn)
+        return jsonify({"ok": True, "folio_anterior": f_actual, "folio_nuevo": nuevo_folio,
+                        "mensaje": "Próximo folio a emitir: %s" % nuevo_folio})
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": "Error interno: " + str(e)[:300],
+                        "trace": traceback.format_exc()[:500]}), 500
 
 
 @app.route("/facturacion/boleta/<int:boleta_id>/diagnostico-sii", methods=["GET"])
