@@ -21711,7 +21711,9 @@ def facturacion_ajustar_folio():
             nuevo_folio = int(data.get("nuevo_folio"))
         except (TypeError, ValueError):
             return jsonify({"ok": False, "error": "tipo_dte y nuevo_folio deben ser números"}), 400
-        ambiente = normalizar_ambiente(data.get("ambiente") or "certificacion")
+        ambiente = data.get("ambiente") or "certificacion"
+        from facturacion.utils import normalizar_ambiente
+        ambiente = normalizar_ambiente(ambiente)
         from inventario import get_conn, release_conn
         conn = get_conn()
         try:
