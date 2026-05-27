@@ -421,59 +421,68 @@ DTEWS = {
         "seed":  "https://maullin.sii.cl/DTEWS/CrSeed.jws?WSDL",
         "token": "https://maullin.sii.cl/DTEWS/GetTokenFromSeed.jws?WSDL",
         "query": "https://maullin.sii.cl/DTEWS/QueryEstDte.jws",
+        "query_av": "https://maullin.sii.cl/DTEWS/services/QueryEstDteAv",
     },
     "produccion": {
         "seed":  "https://palena.sii.cl/DTEWS/CrSeed.jws?WSDL",
         "token": "https://palena.sii.cl/DTEWS/GetTokenFromSeed.jws?WSDL",
         "query": "https://palena.sii.cl/DTEWS/QueryEstDte.jws",
+        "query_av": "https://palena.sii.cl/DTEWS/services/QueryEstDteAv",
     },
 }
 
 
 def _dtews_obtener_semilla(ambiente: str = "certificacion") -> str:
-    """Pide una semilla al WS clásico CrSeed (SOAP)."""
+    """Pide una semilla al WS clásico CrSeed (SOAP).
+
+    La respuesta del SII trae el XML con la semilla DOBLEMENTE escapado dentro de
+    <getSeedReturn> (o similar). Hay que desescapar y luego extraer <SEMILLA>.
+    """
+    import html as _html
     url = DTEWS[ambiente]["seed"].replace("?WSDL", "")
     soap = (
         '<?xml version="1.0" encoding="UTF-8"?>'
-        '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">'
-        '<SOAP-ENV:Body><getSeed/></SOAP-ENV:Body></SOAP-ENV:Envelope>'
+        '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" '
+        'xmlns:def="http://DefaultNamespace">'
+        '<SOAP-ENV:Body><def:getSeed/></SOAP-ENV:Body></SOAP-ENV:Envelope>'
     )
-    r = requests.post(url, data=soap, headers={"Content-Type": "text/xml; charset=utf-8",
-                                               "User-Agent": USER_AGENT}, timeout=TIMEOUT)
-    # La semilla viene dentro de un XML escapado en el resultado
-    m = re.search(r"<SEMILLA>(\d+)</SEMILLA>", r.text)
-    if not m:
-        m = re.search(r"&lt;SEMILLA&gt;(\d+)&lt;/SEMILLA&gt;", r.text)
-    if not m:
-        raise SIIError(f"No se obtuvo semilla del WS clásico: {r.text[:300]}")
-    return m.group(1)
+    r = requests.post(url, data=soap.encode("utf-8"),
+                      headers={"Content-Type": "text/xml; charset=utf-8",
+                               "User-Agent": USER_AGENT, "SOAPAction": ""},
+                      timeout=TIMEOUT)
+    texto = r.text
+    # La respuesta del SII anida y escapa el XML hasta 3 niveles:
+    # SOAP > getSeedReturn(escapado) > SII:RESPUESTA(escapado) > SEMILLA
+    desesc = texto
+    for _ in range(3):
+        desesc = _html.unescape(desesc)
+    # Buscar la semilla con o sin prefijo de namespace (SII: o sin él)
+    for patron in (r"<SEMILLA>\s*([0-9]+)\s*</SEMILLA>",
+                   r"<SII:SEMILLA>\s*([0-9]+)\s*</SII:SEMILLA>",
+                   r"SEMILLA>\s*([0-9]+)\s*</",
+                   r"SEMILLA>\s*([0-9]+)"):
+        m = re.search(patron, desesc)
+        if m:
+            return m.group(1).strip()
+    raise SIIError("No se obtuvo semilla del WS clásico. Respuesta: " + texto[:1200])
 
 
 def _dtews_obtener_token(pfx_bytes: bytes, password: str,
                          ambiente: str = "certificacion") -> str:
-    """Obtiene el token del WS clásico (GetTokenFromSeed): semilla → firmar → token."""
-    from signxml import XMLSigner, methods
-    from cryptography.hazmat.primitives.serialization import pkcs12
-    from lxml import etree
+    """Obtiene el token del WS clásico (GetTokenFromSeed): semilla → firmar → token.
 
+    Reutiliza firmar_semilla() — la MISMA firma XMLDSig que ya está aprobada por el
+    SII para las boletas (PKCS8, namespace por defecto sin prefijo ds:, transform
+    C14N). Antes esta función tenía su propia firma que el SII rechazaba con
+    'ESTADO 10 - Error Interno'.
+    """
+    import html as _html
     semilla = _dtews_obtener_semilla(ambiente)
-    # Armar y firmar el getToken
-    key, cert, _ = pkcs12.load_key_and_certificates(pfx_bytes, password.encode())
-    root = etree.fromstring(
-        f'<getToken><item><Semilla>{semilla}</Semilla></item></getToken>'.encode())
-
-    class _S(XMLSigner):
-        def check_deprecated_methods(self):  # permitir SHA1 (lo exige el SII)
-            pass
-    from cryptography.hazmat.primitives import serialization
-    key_pem = key.private_bytes(serialization.Encoding.PEM,
-                                serialization.PrivateFormat.TraditionalOpenSSL,
-                                serialization.NoEncryption())
-    cert_pem = cert.public_bytes(serialization.Encoding.PEM)
-    signer = _S(method=methods.enveloped, signature_algorithm="rsa-sha1",
-                digest_algorithm="sha1", c14n_algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315")
-    signed = signer.sign(root, key=key_pem, cert=cert_pem)
-    signed_xml = etree.tostring(signed, encoding="ISO-8859-1").decode("ISO-8859-1")
+    # Firmar el getToken con la técnica aprobada (firmar_semilla devuelve bytes del XML firmado)
+    signed_bytes = firmar_semilla(semilla, pfx_bytes, password)
+    signed_xml = signed_bytes.decode("utf-8") if isinstance(signed_bytes, bytes) else signed_bytes
+    # Quitar la declaración <?xml...?> del documento firmado para anidarlo en el SOAP
+    signed_xml = re.sub(r'<\?xml[^>]*\?>', '', signed_xml).strip()
 
     url = DTEWS[ambiente]["token"].replace("?WSDL", "")
     soap = (
@@ -484,12 +493,14 @@ def _dtews_obtener_token(pfx_bytes: bytes, password: str,
     )
     r = requests.post(url, data=soap.encode("ISO-8859-1"),
                       headers={"Content-Type": "text/xml; charset=utf-8",
-                               "User-Agent": USER_AGENT}, timeout=TIMEOUT)
-    m = re.search(r"<TOKEN>([^<]+)</TOKEN>", r.text) or \
-        re.search(r"&lt;TOKEN&gt;([^&]+)&lt;/TOKEN&gt;", r.text)
+                               "User-Agent": USER_AGENT, "SOAPAction": ""}, timeout=TIMEOUT)
+    desesc = r.text
+    for _ in range(3):
+        desesc = _html.unescape(desesc)
+    m = re.search(r"<TOKEN>([^<]+)</TOKEN>", desesc) or re.search(r"<SII:TOKEN>([^<]+)</SII:TOKEN>", desesc)
     if not m:
-        raise SIIError(f"No se obtuvo token del WS clásico: {r.text[:300]}")
-    return m.group(1)
+        raise SIIError("No se obtuvo token del WS clásico. Respuesta: " + r.text[:1200])
+    return m.group(1).strip()
 
 
 def consultar_estado_dte(
@@ -533,18 +544,25 @@ def consultar_estado_dte(
     rc, dvc = _split(rut_consultante)
     re_, dvr_e = _split(rut_emisor)
     rr, dvr_r = _split(rut_receptor)
-    # El monto va sin separadores; la fecha en formato DD-MM-YYYY para getEstDte
+    # El monto va sin separadores. La fecha en formato DDMMAAAA SIN guiones
+    # (según manual oficial SII OI2004_CEDTE: FechaEmisionDte, formato DDMMAAAA).
     y, m, d = fecha_emision.split("-")
-    fecha_sii = f"{d}-{m}-{y}"
+    fecha_sii = f"{d}{m}{y}"
 
     url = DTEWS[ambiente]["query"]
+    # SOAP alineado EXACTAMENTE con el ejemplo del manual oficial SII (Figura 3-1):
+    # incluye SOAP-ENC, encodingStyle y el namespace del método del WSDL.
+    ns_metodo = DTEWS[ambiente]["query"].replace("https://", "http://")
     soap = (
         '<?xml version="1.0" encoding="UTF-8"?>'
-        '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" '
+        '<SOAP-ENV:Envelope '
+        'xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" '
+        'xmlns:SOAP-ENC="http://schemas.xmlsoap.org/soap/encoding/" '
         'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
-        'xmlns:xsd="http://www.w3.org/2001/XMLSchema">'
+        'xmlns:xsd="http://www.w3.org/2001/XMLSchema" '
+        'SOAP-ENV:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
         '<SOAP-ENV:Body>'
-        '<m:getEstDte xmlns:m="http://maullin.sii.cl/DTEWS/QueryEstDte.jws">'
+        f'<m:getEstDte xmlns:m="{ns_metodo}">'
         f'<RutConsultante xsi:type="xsd:string">{rc}</RutConsultante>'
         f'<DvConsultante xsi:type="xsd:string">{dvc}</DvConsultante>'
         f'<RutCompania xsi:type="xsd:string">{re_}</RutCompania>'
@@ -567,20 +585,129 @@ def consultar_estado_dte(
     except Exception as e:
         raise SIIError(f"No se pudo conectar a QueryEstDte: {e}")
 
+    import html as _html
     texto = r.text
-    # El estado viene como <ESTADO>XXX</ESTADO> (a veces escapado)
-    m_estado = (re.search(r"<ESTADO>([^<]+)</ESTADO>", texto) or
-                re.search(r"&lt;ESTADO&gt;([^&]+)&lt;/ESTADO&gt;", texto))
-    m_glosa = (re.search(r"<GLOSA(?:_ESTADO)?>([^<]+)</GLOSA(?:_ESTADO)?>", texto) or
-               re.search(r"&lt;GLOSA(?:_ESTADO)?&gt;([^&]+)&lt;/GLOSA", texto))
+    desesc = texto
+    for _ in range(3):
+        desesc = _html.unescape(desesc)
+    # El estado viene como <ESTADO>XXX</ESTADO> dentro del XML (a veces escapado, con/sin ns)
+    m_estado = re.search(r"<(?:SII:)?ESTADO>([^<]+)</(?:SII:)?ESTADO>", desesc)
+    m_glosa = (re.search(r"<GLOSA(?:_ESTADO|_ERR)?>([^<]+)</GLOSA(?:_ESTADO|_ERR)?>", desesc) or
+               re.search(r"<GLOSA>([^<]+)</GLOSA>", desesc))
     estado = m_estado.group(1).strip() if m_estado else None
     glosa = m_glosa.group(1).strip() if m_glosa else None
 
+    # "DTE Recibido" en la glosa confirma que el SII tiene el documento registrado,
+    # aunque el ESTADO sea DNK (datos no coinciden 100% en el ambiente de pruebas).
+    glosa_l = (glosa or "").lower() + " " + desesc.lower()
+    recibido_en_sii = ("dte recibido" in glosa_l) or (estado in ("DOK", "DNK"))
     return {
         "ok": r.status_code == 200 and estado is not None,
         "estado": estado,
         "glosa": glosa,
         "aceptado": estado == "DOK",
+        "recibido_en_sii": recibido_en_sii,
+        "status": r.status_code,
+        "respuesta_cruda": texto[:1500],
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# CONSULTA AVANZADA getEstDteAv — verifica con la FIRMA del documento.
+# Más precisa que getEstDte: devuelve RECIBIDO=SI/NO explícito + TRACKID.
+# Manual oficial SII: OIFE2006_QueryEstDteAv_MDE.
+#   Certificación: https://maullin.sii.cl/DTEWS/services/QueryEstDteAv
+#   Producción:    https://palena.sii.cl/DTEWS/services/QueryEstDteAv
+# Parámetros: RutEmpresa, DvEmpresa, RutReceptor, DvReceptor, TipoDte, FolioDte,
+#   FechaEmisionDte (DD-MM-AAAA), MontoDte, FirmaDte (SignatureValue del DTE), Token.
+# ──────────────────────────────────────────────────────────────────────────
+def consultar_estado_dte_av(
+    pfx_bytes: bytes, password: str,
+    rut_emisor: str, rut_receptor: str,
+    tipo_dte: int, folio: int, fecha_emision: str, monto_total: int,
+    firma_dte: str,
+    ambiente: str = "certificacion",
+    token: str = None,
+) -> dict:
+    """Consulta AVANZADA del estado de un DTE (getEstDteAv), verificando con la
+    firma del documento. Devuelve {ok, recibido, estado, glosa, aceptado, trackid}.
+
+    Args:
+        firma_dte: el contenido del tag DTE/Signature/SignatureValue del XML.
+        (resto igual que consultar_estado_dte)
+    """
+    import html as _html
+    def _split(rut):
+        rut = rut.replace(".", "").replace("-", "")
+        return rut[:-1], rut[-1]
+
+    if token is None:
+        token = _dtews_obtener_token(pfx_bytes, password, ambiente)
+
+    re_, dve = _split(rut_emisor)
+    rr, dvr = _split(rut_receptor)
+    # Fecha en formato DD-MM-AAAA (con guiones) para getEstDteAv
+    y, m, d = fecha_emision.split("-")
+    fecha_sii = f"{d}-{m}-{y}"
+    # La firma puede ser larga; el manual permite hasta 500 chars
+    firma = (firma_dte or "").strip()[:500]
+
+    url = DTEWS[ambiente]["query_av"]
+    soap = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<SOAP-ENV:Envelope '
+        'xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" '
+        'xmlns:SOAP-ENC="http://schemas.xmlsoap.org/soap/encoding/" '
+        'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+        'xmlns:xsd="http://www.w3.org/2001/XMLSchema">'
+        '<SOAP-ENV:Body>'
+        '<m:getEstDteAv xmlns:m="http://DefaultNamespace" '
+        'SOAP-ENV:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
+        f'<RutEmpresa xsi:type="xsd:string">{re_}</RutEmpresa>'
+        f'<DvEmpresa xsi:type="xsd:string">{dve}</DvEmpresa>'
+        f'<RutReceptor xsi:type="xsd:string">{rr}</RutReceptor>'
+        f'<DvReceptor xsi:type="xsd:string">{dvr}</DvReceptor>'
+        f'<TipoDte xsi:type="xsd:string">{tipo_dte}</TipoDte>'
+        f'<FolioDte xsi:type="xsd:string">{folio}</FolioDte>'
+        f'<FechaEmisionDte xsi:type="xsd:string">{fecha_sii}</FechaEmisionDte>'
+        f'<MontoDte xsi:type="xsd:string">{int(monto_total)}</MontoDte>'
+        f'<FirmaDte xsi:type="xsd:string">{firma}</FirmaDte>'
+        f'<Token xsi:type="xsd:string">{token}</Token>'
+        '</m:getEstDteAv>'
+        '</SOAP-ENV:Body></SOAP-ENV:Envelope>'
+    )
+    try:
+        r = requests.post(url, data=soap.encode("ISO-8859-1"),
+                          headers={"Content-Type": "text/xml; charset=utf-8",
+                                   "User-Agent": USER_AGENT, "SOAPAction": ""},
+                          timeout=TIMEOUT)
+    except Exception as e:
+        raise SIIError(f"No se pudo conectar a QueryEstDteAv: {e}")
+
+    texto = r.text
+    desesc = texto
+    for _ in range(3):
+        desesc = _html.unescape(desesc)
+    # RESP_BODY trae RECIBIDO (SI/NO) y ESTADO (DOK/DNK/...)
+    m_recibido = re.search(r"<RECIBIDO>([^<]+)</RECIBIDO>", desesc)
+    # El ESTADO del RESP_BODY (no el del HDR que es numérico)
+    m_estado = re.search(r"<RECIBIDO>[^<]*</RECIBIDO>\s*<ESTADO>([^<]+)</ESTADO>", desesc) \
+        or re.search(r"<ESTADO>(DOK|DNK|FAU|FNA|FAN|EMP|TMD|TMC|MMD|MMC|AND|ANC)</ESTADO>", desesc)
+    m_glosa = re.search(r"<GLOSA>([^<]+)</GLOSA>", desesc)
+    m_trackid = re.search(r"<TRACKID>([^<]+)</TRACKID>", desesc)
+    recibido = m_recibido.group(1).strip() if m_recibido else None
+    estado = m_estado.group(1).strip() if m_estado else None
+    glosa = m_glosa.group(1).strip() if m_glosa else None
+    trackid = m_trackid.group(1).strip() if m_trackid else None
+
+    return {
+        "ok": r.status_code == 200,
+        "recibido": recibido,       # "SI" / "NO"
+        "estado": estado,           # DOK / DNK / ...
+        "glosa": glosa,
+        "trackid": trackid,
+        "aceptado": estado == "DOK",
+        "esta_en_sii": (recibido == "SI") or (estado in ("DOK", "DNK")),
         "status": r.status_code,
         "respuesta_cruda": texto[:1500],
     }
