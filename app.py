@@ -21737,7 +21737,7 @@ def facturacion_consultar_estado(boleta_id):
             rut_receptor=rut_receptor, tipo_dte=tipo_dte, folio=folio,
             fecha_emision=fecha_str, monto_total=monto_total, ambiente=ambiente)
     except Exception as e:
-        return jsonify({"ok": False, "error": "No se pudo consultar: " + str(e)[:200]}), 502
+        return jsonify({"ok": False, "error": "No se pudo consultar: " + str(e)[:1500]}), 502
 
     estado_dte = (res.get("estado") or "").upper()
     # Mapear el estado getEstDte a estado interno

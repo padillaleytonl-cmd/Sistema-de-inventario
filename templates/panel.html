@@ -13583,9 +13583,6 @@ async function dtCargarDocs(){
       const eb=DT_ESTADO[doc.estado]||{bg:'#f1efe8',color:'#6b6880',label:doc.estado||'—'};
       // Acciones: Ver + menú 3 puntitos (PDF/XML/XML receptor) + consultar SII si enviado
       let accion=`<button onclick="dtVerDoc(${doc.id},'${doc.pdf_url}')" style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:7px;font-size:12px;cursor:pointer;font-weight:600;">👁 Ver</button>`;
-      if(doc.estado==='enviado'){
-        accion+=` <a onclick="dtConsultarEstado(${doc.id})" style="color:#2563eb;cursor:pointer;font-weight:600;font-size:12px;">Consultar SII</a>`;
-      }
       accion+=dtMenuPuntitos(doc);
       h+=`<tr style="border-top:1px solid var(--border);" id="dtdoc-${doc.id}">
         <td style="padding:9px 8px;color:var(--text);">${doc.tipo_nombre}</td>
@@ -13703,7 +13700,6 @@ function conRenderPagina(){
       <td style="padding:9px 8px;"><span style="font-size:11px;padding:3px 8px;border-radius:6px;background:${eb.bg};color:${eb.color};font-weight:600;">${eb.label}</span></td>
       <td style="padding:9px 8px;text-align:right;white-space:nowrap;">
         <button onclick="dtVerDoc(${doc.id},'${doc.pdf_url}')" style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:7px;font-size:12px;cursor:pointer;font-weight:600;">👁 Ver</button>
-        ${['enviado','en_proceso'].includes(doc.estado)?`<button onclick="dtConsultarEstado(${doc.id})" style="background:none;border:none;color:#2563eb;cursor:pointer;font-weight:600;font-size:12px;margin-left:4px;">Consultar SII</button>`:''}
         ${dtMenuPuntitos(doc)}
       </td></tr>`;
   });
@@ -13723,10 +13719,12 @@ function conPag(delta){ _conPag+=delta; conRenderPagina(); window.scrollTo({top:
 // ═══════════ MENÚ 3 PUNTITOS (descargas) ═══════════
 function dtMenuPuntitos(doc){
   // Solo habilitado cuando el documento ya fue enviado al SII
-  const habilitado = ['enviado','aceptado','rechazado'].includes(doc.estado);
+  const habilitado = ['enviado','en_proceso','aceptado','rechazado'].includes(doc.estado);
   if(!habilitado) return '';
   // Guardamos las URLs en data-attrs y dejamos el menú como elemento flotante global
   const datos = encodeURIComponent(JSON.stringify({
+    id: doc.id,
+    estado: doc.estado,
     pdf: (doc.pdf_url||'') + '?formato=carta',
     xml: doc.xml_url||'',
     xmlr: doc.xml_receptor_url||''
@@ -13746,13 +13744,19 @@ function dtToggleMenu(btn, datosEnc){
   const d=JSON.parse(decodeURIComponent(datosEnc));
   menu=document.createElement('div'); menu.id='dtFloatMenu';
   menu.style.cssText='position:fixed;background:var(--card);border:1px solid var(--border);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.22);z-index:100001;min-width:200px;overflow:hidden;';
-  const opt=(href,txt,target)=>{
-    const a=document.createElement('a'); a.href=href; if(target)a.target=target;
+  const opt=(href,txt,target,onclick)=>{
+    const a=document.createElement('a');
+    if(onclick){ a.href='#'; a.onclick=(e)=>{e.preventDefault(); menu.remove(); onclick();}; }
+    else { a.href=href; if(target)a.target=target; }
     a.textContent=txt;
-    a.style.cssText='display:block;padding:11px 15px;font-size:13px;color:var(--text);text-decoration:none;border-bottom:1px solid var(--border);';
+    a.style.cssText='display:block;padding:11px 15px;font-size:13px;color:var(--text);text-decoration:none;border-bottom:1px solid var(--border);cursor:pointer;';
     a.onmouseover=()=>a.style.background='var(--bg2)'; a.onmouseout=()=>a.style.background='transparent';
     return a;
   };
+  // Consultar SII: solo si el documento aún no tiene estado final
+  if(['enviado','en_proceso'].includes(d.estado)){
+    menu.appendChild(opt(null,'🔄 Consultar estado SII',null,()=>dtConsultarEstado(d.id)));
+  }
   menu.appendChild(opt(d.pdf,'📄 Descargar PDF','_blank'));
   menu.appendChild(opt(d.xml,'📥 Descargar XML',null));
   const last=opt(d.xmlr,'📥 XML Receptor',null); last.style.borderBottom='none';

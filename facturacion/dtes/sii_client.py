@@ -431,22 +431,38 @@ DTEWS = {
 
 
 def _dtews_obtener_semilla(ambiente: str = "certificacion") -> str:
-    """Pide una semilla al WS clásico CrSeed (SOAP)."""
+    """Pide una semilla al WS clásico CrSeed (SOAP).
+
+    La respuesta del SII trae el XML con la semilla DOBLEMENTE escapado dentro de
+    <getSeedReturn> (o similar). Hay que desescapar y luego extraer <SEMILLA>.
+    """
+    import html as _html
     url = DTEWS[ambiente]["seed"].replace("?WSDL", "")
     soap = (
         '<?xml version="1.0" encoding="UTF-8"?>'
-        '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">'
-        '<SOAP-ENV:Body><getSeed/></SOAP-ENV:Body></SOAP-ENV:Envelope>'
+        '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" '
+        'xmlns:def="http://DefaultNamespace">'
+        '<SOAP-ENV:Body><def:getSeed/></SOAP-ENV:Body></SOAP-ENV:Envelope>'
     )
-    r = requests.post(url, data=soap, headers={"Content-Type": "text/xml; charset=utf-8",
-                                               "User-Agent": USER_AGENT}, timeout=TIMEOUT)
-    # La semilla viene dentro de un XML escapado en el resultado
-    m = re.search(r"<SEMILLA>(\d+)</SEMILLA>", r.text)
-    if not m:
-        m = re.search(r"&lt;SEMILLA&gt;(\d+)&lt;/SEMILLA&gt;", r.text)
-    if not m:
-        raise SIIError(f"No se obtuvo semilla del WS clásico: {r.text[:300]}")
-    return m.group(1)
+    r = requests.post(url, data=soap.encode("utf-8"),
+                      headers={"Content-Type": "text/xml; charset=utf-8",
+                               "User-Agent": USER_AGENT, "SOAPAction": ""},
+                      timeout=TIMEOUT)
+    texto = r.text
+    # La respuesta del SII anida y escapa el XML hasta 3 niveles:
+    # SOAP > getSeedReturn(escapado) > SII:RESPUESTA(escapado) > SEMILLA
+    desesc = texto
+    for _ in range(3):
+        desesc = _html.unescape(desesc)
+    # Buscar la semilla con o sin prefijo de namespace (SII: o sin él)
+    for patron in (r"<SEMILLA>\s*([0-9]+)\s*</SEMILLA>",
+                   r"<SII:SEMILLA>\s*([0-9]+)\s*</SII:SEMILLA>",
+                   r"SEMILLA>\s*([0-9]+)\s*</",
+                   r"SEMILLA>\s*([0-9]+)"):
+        m = re.search(patron, desesc)
+        if m:
+            return m.group(1).strip()
+    raise SIIError("No se obtuvo semilla del WS clásico. Respuesta: " + texto[:1200])
 
 
 def _dtews_obtener_token(pfx_bytes: bytes, password: str,
@@ -484,12 +500,15 @@ def _dtews_obtener_token(pfx_bytes: bytes, password: str,
     )
     r = requests.post(url, data=soap.encode("ISO-8859-1"),
                       headers={"Content-Type": "text/xml; charset=utf-8",
-                               "User-Agent": USER_AGENT}, timeout=TIMEOUT)
-    m = re.search(r"<TOKEN>([^<]+)</TOKEN>", r.text) or \
-        re.search(r"&lt;TOKEN&gt;([^&]+)&lt;/TOKEN&gt;", r.text)
+                               "User-Agent": USER_AGENT, "SOAPAction": ""}, timeout=TIMEOUT)
+    import html as _html
+    desesc = r.text
+    for _ in range(3):
+        desesc = _html.unescape(desesc)
+    m = re.search(r"<TOKEN>([^<]+)</TOKEN>", desesc) or re.search(r"<SII:TOKEN>([^<]+)</SII:TOKEN>", desesc)
     if not m:
-        raise SIIError(f"No se obtuvo token del WS clásico: {r.text[:300]}")
-    return m.group(1)
+        raise SIIError("No se obtuvo token del WS clásico. Respuesta: " + r.text[:1200])
+    return m.group(1).strip()
 
 
 def consultar_estado_dte(
@@ -567,12 +586,15 @@ def consultar_estado_dte(
     except Exception as e:
         raise SIIError(f"No se pudo conectar a QueryEstDte: {e}")
 
+    import html as _html
     texto = r.text
-    # El estado viene como <ESTADO>XXX</ESTADO> (a veces escapado)
-    m_estado = (re.search(r"<ESTADO>([^<]+)</ESTADO>", texto) or
-                re.search(r"&lt;ESTADO&gt;([^&]+)&lt;/ESTADO&gt;", texto))
-    m_glosa = (re.search(r"<GLOSA(?:_ESTADO)?>([^<]+)</GLOSA(?:_ESTADO)?>", texto) or
-               re.search(r"&lt;GLOSA(?:_ESTADO)?&gt;([^&]+)&lt;/GLOSA", texto))
+    desesc = texto
+    for _ in range(3):
+        desesc = _html.unescape(desesc)
+    # El estado viene como <ESTADO>XXX</ESTADO> dentro del XML (a veces escapado, con/sin ns)
+    m_estado = re.search(r"<(?:SII:)?ESTADO>([^<]+)</(?:SII:)?ESTADO>", desesc)
+    m_glosa = (re.search(r"<GLOSA(?:_ESTADO|_ERR)?>([^<]+)</GLOSA(?:_ESTADO|_ERR)?>", desesc) or
+               re.search(r"<GLOSA>([^<]+)</GLOSA>", desesc))
     estado = m_estado.group(1).strip() if m_estado else None
     glosa = m_glosa.group(1).strip() if m_glosa else None
 
