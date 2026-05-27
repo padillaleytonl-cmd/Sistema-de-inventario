@@ -21808,26 +21808,42 @@ def facturacion_consultar_estado(boleta_id):
 
     # Consulta por DATOS del documento (getEstDte, SOAP, vía pública documentada).
     # No depende del track id ni del endpoint REST que daba 404.
+    # Extraer la firma (SignatureValue) del XML para la consulta AVANZADA.
+    m_firma = _re_cons.search(r"<SignatureValue[^>]*>([^<]+)</SignatureValue>", xml_firmado)
+    firma_dte = m_firma.group(1).strip() if m_firma else ""
     try:
-        res = consultar_estado_dte(
-            pfx_bytes=cert["pfx_bytes"], password=cert["password"],
-            rut_consultante=config["rut_emisor"], rut_emisor=config["rut_emisor"],
-            rut_receptor=rut_receptor, tipo_dte=tipo_dte, folio=folio,
-            fecha_emision=fecha_str, monto_total=monto_total, ambiente=ambiente)
+        from facturacion.dtes.sii_client import consultar_estado_dte_av
+        if firma_dte:
+            # Consulta AVANZADA (más precisa, verifica con la firma + dice RECIBIDO=SI/NO)
+            res = consultar_estado_dte_av(
+                pfx_bytes=cert["pfx_bytes"], password=cert["password"],
+                rut_emisor=config["rut_emisor"], rut_receptor=rut_receptor,
+                tipo_dte=tipo_dte, folio=folio, fecha_emision=fecha_str,
+                monto_total=monto_total, firma_dte=firma_dte, ambiente=ambiente)
+        else:
+            res = consultar_estado_dte(
+                pfx_bytes=cert["pfx_bytes"], password=cert["password"],
+                rut_consultante=config["rut_emisor"], rut_emisor=config["rut_emisor"],
+                rut_receptor=rut_receptor, tipo_dte=tipo_dte, folio=folio,
+                fecha_emision=fecha_str, monto_total=monto_total, ambiente=ambiente)
     except Exception as e:
         return jsonify({"ok": False, "error": "No se pudo consultar: " + str(e)[:1500]}), 502
 
     estado_dte = (res.get("estado") or "").upper()
-    # Mapear el estado getEstDte a estado interno
-    # DOK = recibido y datos OK (aceptado) | DNK = datos no coinciden
+    recibido = res.get("recibido")  # "SI"/"NO" en la consulta avanzada
+    # Mapear el estado a estado interno
+    # DOK = recibido y datos OK (aceptado) | DNK = recibido, datos no coinciden
     # FAU = no recibido | FAN/FNA = no autorizado | RCT/RCH = rechazado
     if estado_dte == "DOK":
         nuevo_estado, glosa = "aceptado", "Aceptado por el SII (datos verificados)"
     elif estado_dte in ("DNK",):
-        nuevo_estado, glosa = "en_proceso", ("Recibido por el SII, pero los datos consultados no coinciden con los registrados. "
-                                             "Consulté: tipo=%s, folio=%s, fecha=%s, monto=%s, receptor=%s. "
-                                             "Si la boleta es correcta, el receptor o el monto consultado difiere del timbrado." % (
-                                             tipo_dte, folio, fecha_str, monto_total, rut_receptor))
+        # En la avanzada, DNK con RECIBIDO=SI significa que SÍ está en el SII.
+        if recibido == "SI" or res.get("esta_en_sii"):
+            nuevo_estado, glosa = "aceptado", "Recibido y registrado por el SII"
+        else:
+            nuevo_estado, glosa = "en_proceso", ("Recibido por el SII, datos no coinciden del todo. "
+                                                 "Consulté: tipo=%s, folio=%s, fecha=%s, monto=%s, receptor=%s." % (
+                                                 tipo_dte, folio, fecha_str, monto_total, rut_receptor))
     elif estado_dte in ("FAU",):
         nuevo_estado, glosa = "en_proceso", "El SII aún no registra este documento (puede estar procesándose)"
     elif estado_dte in ("FAN", "FNA"):

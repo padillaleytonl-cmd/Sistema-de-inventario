@@ -421,11 +421,13 @@ DTEWS = {
         "seed":  "https://maullin.sii.cl/DTEWS/CrSeed.jws?WSDL",
         "token": "https://maullin.sii.cl/DTEWS/GetTokenFromSeed.jws?WSDL",
         "query": "https://maullin.sii.cl/DTEWS/QueryEstDte.jws",
+        "query_av": "https://maullin.sii.cl/DTEWS/services/QueryEstDteAv",
     },
     "produccion": {
         "seed":  "https://palena.sii.cl/DTEWS/CrSeed.jws?WSDL",
         "token": "https://palena.sii.cl/DTEWS/GetTokenFromSeed.jws?WSDL",
         "query": "https://palena.sii.cl/DTEWS/QueryEstDte.jws",
+        "query_av": "https://palena.sii.cl/DTEWS/services/QueryEstDteAv",
     },
 }
 
@@ -600,6 +602,107 @@ def consultar_estado_dte(
         "estado": estado,
         "glosa": glosa,
         "aceptado": estado == "DOK",
+        "status": r.status_code,
+        "respuesta_cruda": texto[:1500],
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# CONSULTA AVANZADA getEstDteAv — verifica con la FIRMA del documento.
+# Más precisa que getEstDte: devuelve RECIBIDO=SI/NO explícito + TRACKID.
+# Manual oficial SII: OIFE2006_QueryEstDteAv_MDE.
+#   Certificación: https://maullin.sii.cl/DTEWS/services/QueryEstDteAv
+#   Producción:    https://palena.sii.cl/DTEWS/services/QueryEstDteAv
+# Parámetros: RutEmpresa, DvEmpresa, RutReceptor, DvReceptor, TipoDte, FolioDte,
+#   FechaEmisionDte (DD-MM-AAAA), MontoDte, FirmaDte (SignatureValue del DTE), Token.
+# ──────────────────────────────────────────────────────────────────────────
+def consultar_estado_dte_av(
+    pfx_bytes: bytes, password: str,
+    rut_emisor: str, rut_receptor: str,
+    tipo_dte: int, folio: int, fecha_emision: str, monto_total: int,
+    firma_dte: str,
+    ambiente: str = "certificacion",
+    token: str = None,
+) -> dict:
+    """Consulta AVANZADA del estado de un DTE (getEstDteAv), verificando con la
+    firma del documento. Devuelve {ok, recibido, estado, glosa, aceptado, trackid}.
+
+    Args:
+        firma_dte: el contenido del tag DTE/Signature/SignatureValue del XML.
+        (resto igual que consultar_estado_dte)
+    """
+    import html as _html
+    def _split(rut):
+        rut = rut.replace(".", "").replace("-", "")
+        return rut[:-1], rut[-1]
+
+    if token is None:
+        token = _dtews_obtener_token(pfx_bytes, password, ambiente)
+
+    re_, dve = _split(rut_emisor)
+    rr, dvr = _split(rut_receptor)
+    # Fecha en formato DD-MM-AAAA (con guiones) para getEstDteAv
+    y, m, d = fecha_emision.split("-")
+    fecha_sii = f"{d}-{m}-{y}"
+    # La firma puede ser larga; el manual permite hasta 500 chars
+    firma = (firma_dte or "").strip()[:500]
+
+    url = DTEWS[ambiente]["query_av"]
+    soap = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<SOAP-ENV:Envelope '
+        'xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" '
+        'xmlns:SOAP-ENC="http://schemas.xmlsoap.org/soap/encoding/" '
+        'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+        'xmlns:xsd="http://www.w3.org/2001/XMLSchema">'
+        '<SOAP-ENV:Body>'
+        '<m:getEstDteAv xmlns:m="http://DefaultNamespace" '
+        'SOAP-ENV:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
+        f'<RutEmpresa xsi:type="xsd:string">{re_}</RutEmpresa>'
+        f'<DvEmpresa xsi:type="xsd:string">{dve}</DvEmpresa>'
+        f'<RutReceptor xsi:type="xsd:string">{rr}</RutReceptor>'
+        f'<DvReceptor xsi:type="xsd:string">{dvr}</DvReceptor>'
+        f'<TipoDte xsi:type="xsd:string">{tipo_dte}</TipoDte>'
+        f'<FolioDte xsi:type="xsd:string">{folio}</FolioDte>'
+        f'<FechaEmisionDte xsi:type="xsd:string">{fecha_sii}</FechaEmisionDte>'
+        f'<MontoDte xsi:type="xsd:string">{int(monto_total)}</MontoDte>'
+        f'<FirmaDte xsi:type="xsd:string">{firma}</FirmaDte>'
+        f'<Token xsi:type="xsd:string">{token}</Token>'
+        '</m:getEstDteAv>'
+        '</SOAP-ENV:Body></SOAP-ENV:Envelope>'
+    )
+    try:
+        r = requests.post(url, data=soap.encode("ISO-8859-1"),
+                          headers={"Content-Type": "text/xml; charset=utf-8",
+                                   "User-Agent": USER_AGENT, "SOAPAction": ""},
+                          timeout=TIMEOUT)
+    except Exception as e:
+        raise SIIError(f"No se pudo conectar a QueryEstDteAv: {e}")
+
+    texto = r.text
+    desesc = texto
+    for _ in range(3):
+        desesc = _html.unescape(desesc)
+    # RESP_BODY trae RECIBIDO (SI/NO) y ESTADO (DOK/DNK/...)
+    m_recibido = re.search(r"<RECIBIDO>([^<]+)</RECIBIDO>", desesc)
+    # El ESTADO del RESP_BODY (no el del HDR que es numérico)
+    m_estado = re.search(r"<RECIBIDO>[^<]*</RECIBIDO>\s*<ESTADO>([^<]+)</ESTADO>", desesc) \
+        or re.search(r"<ESTADO>(DOK|DNK|FAU|FNA|FAN|EMP|TMD|TMC|MMD|MMC|AND|ANC)</ESTADO>", desesc)
+    m_glosa = re.search(r"<GLOSA>([^<]+)</GLOSA>", desesc)
+    m_trackid = re.search(r"<TRACKID>([^<]+)</TRACKID>", desesc)
+    recibido = m_recibido.group(1).strip() if m_recibido else None
+    estado = m_estado.group(1).strip() if m_estado else None
+    glosa = m_glosa.group(1).strip() if m_glosa else None
+    trackid = m_trackid.group(1).strip() if m_trackid else None
+
+    return {
+        "ok": r.status_code == 200,
+        "recibido": recibido,       # "SI" / "NO"
+        "estado": estado,           # DOK / DNK / ...
+        "glosa": glosa,
+        "trackid": trackid,
+        "aceptado": estado == "DOK",
+        "esta_en_sii": (recibido == "SI") or (estado in ("DOK", "DNK")),
         "status": r.status_code,
         "respuesta_cruda": texto[:1500],
     }
