@@ -13624,27 +13624,102 @@ async function dtCargarDocs(){
     h+='</tbody></table>'; cont.innerHTML=h;
   }catch(e){cont.innerHTML='<div style="color:#dc2626;">Error cargando documentos: '+e.message+'</div>';}
 }
+// Modal global con texto seleccionable y botón Copiar — para mensajes del SII y
+// cualquier diagnóstico donde quieras leer/copiar el contenido sin pelearte con un alert().
+// Uso: lusyncModal({title:'...', body:'texto...', copyable:true, tone:'ok'|'warn'|'err'|'info'})
+function lusyncModal(opts){
+  opts=opts||{};
+  const titulo=opts.title||'Aviso';
+  const cuerpo=opts.body||'';
+  const tono=opts.tone||'info';
+  const colorBorde={ok:'#1D9E75',warn:'#a16207',err:'#dc2626',info:'#534AB7'}[tono]||'#534AB7';
+  // Quitar modal previo si existe
+  const prev=document.getElementById('lusync-modal'); if(prev) prev.remove();
+  const wrap=document.createElement('div');
+  wrap.id='lusync-modal';
+  wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;';
+  wrap.innerHTML=`
+    <div style="background:#fff;border-radius:14px;max-width:640px;width:100%;max-height:80vh;display:flex;flex-direction:column;border-top:4px solid ${colorBorde};box-shadow:0 20px 60px rgba(0,0,0,0.25);">
+      <div style="padding:16px 22px 8px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
+        <div style="font-weight:700;font-size:16px;color:#1a1a2e;">${titulo}</div>
+        <button id="lusync-modal-close" aria-label="Cerrar" style="background:none;border:none;font-size:22px;line-height:1;color:#9ca3af;cursor:pointer;padding:0;">×</button>
+      </div>
+      <div id="lusync-modal-body" style="padding:8px 22px 16px;font-size:13.5px;color:#374151;line-height:1.55;white-space:pre-wrap;user-select:text;overflow:auto;flex:1;font-family:inherit;"></div>
+      <div style="padding:12px 22px 18px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid #eee;">
+        <button id="lusync-modal-copy" style="background:#fff;border:1px solid #d1d5db;color:#374151;padding:8px 14px;border-radius:8px;cursor:pointer;font-weight:600;font-size:13px;">📋 Copiar</button>
+        <button id="lusync-modal-ok" style="background:#534AB7;border:none;color:#fff;padding:8px 18px;border-radius:8px;cursor:pointer;font-weight:600;font-size:13px;">Aceptar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+  document.getElementById('lusync-modal-body').textContent=cuerpo;
+  const cerrar=()=>wrap.remove();
+  document.getElementById('lusync-modal-close').onclick=cerrar;
+  document.getElementById('lusync-modal-ok').onclick=cerrar;
+  wrap.addEventListener('click',e=>{ if(e.target===wrap) cerrar(); });
+  document.getElementById('lusync-modal-copy').onclick=()=>{
+    const btn=document.getElementById('lusync-modal-copy');
+    const txt=document.getElementById('lusync-modal-body').textContent;
+    const ok=()=>{ btn.textContent='✓ Copiado'; setTimeout(()=>{btn.textContent='📋 Copiar';},1500); };
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(txt).then(ok).catch(()=>{
+        // fallback
+        const ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select();
+        try{ document.execCommand('copy'); ok(); }catch(_){ btn.textContent='No se pudo'; }
+        ta.remove();
+      });
+    } else {
+      const ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select();
+      try{ document.execCommand('copy'); ok(); }catch(_){ btn.textContent='No se pudo'; }
+      ta.remove();
+    }
+  };
+}
+
 async function dtConsultarEstado(id){
   try{
     const r=await fetch('/facturacion/boleta/'+id+'/consultar-estado',{method:'POST'});
-    const d=await r.json();
+    const txt=await r.text();
+    let d;
+    try{ d=JSON.parse(txt); }
+    catch(_){
+      lusyncModal({title:'Respuesta no-JSON del servidor', tone:'err',
+        body:'Status: '+r.status+'\n\n'+txt.slice(0,1200)});
+      return;
+    }
     if(d.ok){
-      let msg='Estado en el SII: '+(d.glosa||d.estado_sii||d.estado);
-      if(d.estado_sii){ msg+='\n(código SII: '+d.estado_sii+')'; }
-      if(d.estado==='aceptado'){ msg='✅ '+msg; }
-      else if(d.estado==='rechazado'){ msg='❌ '+msg; }
-      else if(d.estado==='en_proceso'){ msg+='\n\nEl SII aún está procesando. Vuelve a consultar en unos minutos.'; }
-      if(d.respuesta_sii && d.estado!=='aceptado'){
-        msg+='\n\n[Respuesta SII]: '+(d.respuesta_sii||'').replace(/<[^>]+>/g,' ').slice(0,300);
+      const lineas=[];
+      lineas.push('Estado: '+(d.glosa||d.estado_sii||d.estado));
+      if(d.estado_sii) lineas.push('Código SII: '+d.estado_sii);
+      if(d.track_id) lineas.push('Track ID: '+d.track_id);
+      if(d.datos_consultados){
+        const dc=d.datos_consultados;
+        lineas.push('');
+        lineas.push('Datos consultados:');
+        lineas.push('  • Tipo DTE: '+dc.tipo);
+        lineas.push('  • Folio: '+dc.folio);
+        lineas.push('  • Fecha (XML): '+dc.fecha_xml);
+        lineas.push('  • Monto (XML): '+dc.monto_xml);
+        lineas.push('  • Receptor (XML): '+dc.receptor_xml);
       }
-      alert(msg);
+      if(d.respuesta_sii){
+        lineas.push('');
+        lineas.push('Respuesta cruda del SII:');
+        lineas.push(d.respuesta_sii);
+      }
+      const tono = d.estado==='aceptado'?'ok' : d.estado==='rechazado'?'err' : 'warn';
+      const titulo = d.estado==='aceptado'?'✅ Aceptada por el SII'
+                  : d.estado==='rechazado'?'❌ Rechazada'
+                  : d.estado==='revisar'?'⚠ Revisar datos'
+                  : 'Estado en el SII';
+      lusyncModal({title:titulo, body:lineas.join('\n'), tone:tono});
       if(typeof conBuscar==='function' && document.getElementById('conResultados')) conBuscar();
     } else if(d.endpoint_no_disponible){
-      alert((d.error||'La consulta de estado no está disponible.')+'\n\nTrack ID: '+(d.track_id||'—'));
+      lusyncModal({title:'Consulta no disponible', tone:'warn',
+        body:(d.error||'La consulta de estado no está disponible.')+'\n\nTrack ID: '+(d.track_id||'—')});
     } else {
-      alert(d.error||'No se pudo consultar');
+      lusyncModal({title:'No se pudo consultar', tone:'err', body:d.error||'Error desconocido'});
     }
-  }catch(e){ alert('Error: '+e.message); }
+  }catch(e){ lusyncModal({title:'Error', tone:'err', body:e.message}); }
 }
 
 
