@@ -21684,6 +21684,52 @@ def _fact_mapear_estado_sii(estado_sii):
     return "en_proceso", "Estado SII: " + e
 
 
+@app.route("/facturacion/boleta/<int:boleta_id>/diagnostico-sii", methods=["GET"])
+def facturacion_diagnostico_sii(boleta_id):
+    """Extrae del XML timbrado los valores REALES (FchEmis, MntTotal, RUTRecep) y
+    los compara con lo que está guardado en la BD, para detectar qué dato difiere
+    y causa el DNK al consultar al SII."""
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    tenant_id = session.get("tenant_id") or 1
+    import re as _re
+    from inventario import get_conn, release_conn
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT tipo_dte, folio, rut_receptor, monto_total,
+                                  fecha_emision, xml_firmado
+                           FROM facturacion_dtes WHERE id=%s AND tenant_id=%s""",
+                        (boleta_id, tenant_id))
+            row = cur.fetchone()
+    finally:
+        release_conn(conn)
+    if not row:
+        return jsonify({"ok": False, "error": "Boleta no encontrada"}), 404
+    tipo_dte, folio, rut_recep_bd, monto_bd, fecha_bd, xml = row
+    xml = xml or ""
+    # Extraer valores REALES timbrados en el XML
+    def _x(tag):
+        m = _re.search(r"<%s>([^<]+)</%s>" % (tag, tag), xml)
+        return m.group(1) if m else None
+    fch_xml = _x("FchEmis")
+    mnt_xml = _x("MntTotal")
+    rut_xml = _x("RUTRecep")
+    # Lo que está en la BD
+    fecha_bd_str = fecha_bd.strftime("%Y-%m-%d") if hasattr(fecha_bd, "strftime") else str(fecha_bd)[:10]
+    return jsonify({
+        "ok": True,
+        "boleta_id": boleta_id,
+        "timbrado_en_xml": {"FchEmis": fch_xml, "MntTotal": mnt_xml, "RUTRecep": rut_xml},
+        "guardado_en_bd": {"fecha_emision": fecha_bd_str, "monto_total": monto_bd,
+                            "rut_receptor": rut_recep_bd, "tipo_dte": tipo_dte, "folio": folio},
+        "coincide_fecha": (fch_xml == fecha_bd_str),
+        "coincide_monto": (str(mnt_xml) == str(int(monto_bd or 0))),
+        "coincide_receptor": (rut_xml == rut_recep_bd),
+        "nota": "Si algún 'coincide_*' es false, ese dato es el que difiere entre el XML timbrado y la BD (causa del DNK)."
+    })
+
+
 @app.route("/facturacion/boleta/<int:boleta_id>/consultar-estado", methods=["POST", "GET"])
 def facturacion_consultar_estado(boleta_id):
     """LIMBO 3: consulta el estado REAL en el SII de una boleta enviada.

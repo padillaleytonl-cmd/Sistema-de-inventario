@@ -548,13 +548,19 @@ def consultar_estado_dte(
     fecha_sii = f"{d}{m}{y}"
 
     url = DTEWS[ambiente]["query"]
+    # SOAP alineado EXACTAMENTE con el ejemplo del manual oficial SII (Figura 3-1):
+    # incluye SOAP-ENC, encodingStyle y el namespace del método del WSDL.
+    ns_metodo = DTEWS[ambiente]["query"].replace("https://", "http://")
     soap = (
         '<?xml version="1.0" encoding="UTF-8"?>'
-        '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" '
+        '<SOAP-ENV:Envelope '
+        'xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" '
+        'xmlns:SOAP-ENC="http://schemas.xmlsoap.org/soap/encoding/" '
         'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
-        'xmlns:xsd="http://www.w3.org/2001/XMLSchema">'
+        'xmlns:xsd="http://www.w3.org/2001/XMLSchema" '
+        'SOAP-ENV:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
         '<SOAP-ENV:Body>'
-        '<m:getEstDte xmlns:m="http://maullin.sii.cl/DTEWS/QueryEstDte.jws">'
+        f'<m:getEstDte xmlns:m="{ns_metodo}">'
         f'<RutConsultante xsi:type="xsd:string">{rc}</RutConsultante>'
         f'<DvConsultante xsi:type="xsd:string">{dvc}</DvConsultante>'
         f'<RutCompania xsi:type="xsd:string">{re_}</RutCompania>'
