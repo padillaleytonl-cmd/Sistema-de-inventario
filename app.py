@@ -21916,7 +21916,7 @@ def facturacion_consultar_estado(boleta_id):
                     "datos_consultados": {"tipo": tipo_dte, "folio": folio,
                                           "fecha_xml": fecha_str, "monto_xml": monto_total,
                                           "receptor_xml": rut_receptor},
-                    "respuesta_sii": res.get("respuesta_cruda", "")[:800]})
+                    "respuesta_sii": res.get("respuesta_cruda", "")[:2500]})
 
 
 def _fact_job_consultar_estados():

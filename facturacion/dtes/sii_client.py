@@ -395,7 +395,7 @@ def consultar_estado_envio(
         "rechazados": rechazados,
         "reparos": reparos,
         "aceptado_sin_reparos": aceptado_final,
-        "respuesta_cruda": texto[:1500],
+        "respuesta_cruda": texto[:3000],
     }
 
 
@@ -608,7 +608,7 @@ def consultar_estado_dte(
         "aceptado": estado == "DOK",
         "recibido_en_sii": recibido_en_sii,
         "status": r.status_code,
-        "respuesta_cruda": texto[:1500],
+        "respuesta_cruda": texto[:3000],
     }
 
 
@@ -709,5 +709,5 @@ def consultar_estado_dte_av(
         "aceptado": estado == "DOK",
         "esta_en_sii": (recibido == "SI") or (estado in ("DOK", "DNK")),
         "status": r.status_code,
-        "respuesta_cruda": texto[:1500],
+        "respuesta_cruda": texto[:3000],
     }
