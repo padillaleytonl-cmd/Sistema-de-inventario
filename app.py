@@ -21696,12 +21696,14 @@ def facturacion_consultar_estado(boleta_id):
     from facturacion.certificados import obtener_certificado
     from facturacion.db import obtener_config_facturacion
     from facturacion.utils import normalizar_ambiente
-    from facturacion.dtes.sii_client import autenticar, consultar_estado_envio
+    from facturacion.dtes.sii_client import consultar_estado_dte
 
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("""SELECT track_id_sii, estado FROM facturacion_dtes
+            cur.execute("""SELECT track_id_sii, estado, tipo_dte, folio, rut_receptor,
+                                  monto_total, fecha_emision
+                           FROM facturacion_dtes
                            WHERE id=%s AND tenant_id=%s""", (boleta_id, tenant_id))
             row = cur.fetchone()
     finally:
@@ -21709,8 +21711,16 @@ def facturacion_consultar_estado(boleta_id):
     if not row:
         return jsonify({"ok": False, "error": "Boleta no encontrada"}), 404
     track_id = row[0]
-    if not track_id:
-        return jsonify({"ok": False, "error": "Esta boleta no tiene track ID (no fue enviada)"}), 400
+    tipo_dte = row[2]
+    folio = row[3]
+    rut_receptor = row[4] or "66666666-6"
+    monto_total = int(row[5] or 0)
+    fecha_emision = row[6]
+    # Fecha a YYYY-MM-DD (la función la convierte a DD-MM-YYYY para el SII)
+    if hasattr(fecha_emision, "strftime"):
+        fecha_str = fecha_emision.strftime("%Y-%m-%d")
+    else:
+        fecha_str = str(fecha_emision)[:10]
 
     config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
     ambiente = normalizar_ambiente(config.get("ambiente") or "certificacion")
@@ -21718,186 +21728,142 @@ def facturacion_consultar_estado(boleta_id):
     if not cert.get("ok"):
         return jsonify({"ok": False, "error": "Certificado no disponible"}), 400
 
+    # Consulta por DATOS del documento (getEstDte, SOAP, vía pública documentada).
+    # No depende del track id ni del endpoint REST que daba 404.
     try:
-        tok = autenticar(cert["pfx_bytes"], cert["password"], ambiente)
-        res = consultar_estado_envio(track_id, tok, config["rut_emisor"], ambiente)
+        res = consultar_estado_dte(
+            pfx_bytes=cert["pfx_bytes"], password=cert["password"],
+            rut_consultante=config["rut_emisor"], rut_emisor=config["rut_emisor"],
+            rut_receptor=rut_receptor, tipo_dte=tipo_dte, folio=folio,
+            fecha_emision=fecha_str, monto_total=monto_total, ambiente=ambiente)
     except Exception as e:
         return jsonify({"ok": False, "error": "No se pudo consultar: " + str(e)[:200]}), 502
 
-    # Si el endpoint de consulta no está disponible (404), mensaje limpio (no HTML)
-    if res.get("endpoint_no_disponible") or (res.get("status") == 404 and not res.get("estado_envio")):
-        return jsonify({"ok": False,
-                        "endpoint_no_disponible": True,
-                        "error": res.get("error", "El servicio de consulta de estado del SII no está disponible en esta URL. La boleta fue enviada (tiene track id); verifica su estado en el portal del SII."),
-                        "track_id": track_id}), 200
-
-    # Interpretar la respuesta del sii_client (estado_envio + estadísticas).
-    # estado_envio = código del sobre (REC, EPR, RPR, etc.)
-    # aceptado_sin_reparos = True cuando rechazados=0, reparos=0, aceptados>0
-    estado_envio = (res.get("estado_envio") or "").upper()
-    aceptados = res.get("aceptados")
-    rechazados = res.get("rechazados")
-    reparos = res.get("reparos")
-    aceptado_sin_reparos = res.get("aceptado_sin_reparos")
-
-    # Determinar el estado interno
-    if aceptado_sin_reparos is True:
-        nuevo_estado = "aceptado"
-        glosa = "Aceptado por el SII"
-    elif rechazados is not None and int(rechazados or 0) > 0:
-        nuevo_estado = "rechazado"
-        glosa = "Rechazado por el SII (%s rechazo/s)" % rechazados
-    elif reparos is not None and int(reparos or 0) > 0:
-        nuevo_estado = "aceptado_reparos"
-        glosa = "Aceptado con reparos (%s)" % reparos
+    estado_dte = (res.get("estado") or "").upper()
+    # Mapear el estado getEstDte a estado interno
+    # DOK = recibido y datos OK (aceptado) | DNK = datos no coinciden
+    # FAU = no recibido | FAN/FNA = no autorizado | RCT/RCH = rechazado
+    if estado_dte == "DOK":
+        nuevo_estado, glosa = "aceptado", "Aceptado por el SII (datos verificados)"
+    elif estado_dte in ("DNK",):
+        nuevo_estado, glosa = "en_proceso", "Recibido por el SII, pero los datos no coinciden — verifica monto/fecha"
+    elif estado_dte in ("FAU",):
+        nuevo_estado, glosa = "en_proceso", "El SII aún no registra este documento (puede estar procesándose)"
+    elif estado_dte in ("FAN", "FNA"):
+        nuevo_estado, glosa = "rechazado", "Documento no autorizado por el SII"
+    elif estado_dte in ("RCT", "RCH", "RFR", "RSC"):
+        nuevo_estado, glosa = "rechazado", res.get("glosa") or "Rechazado por el SII"
+    elif not estado_dte:
+        nuevo_estado, glosa = "en_proceso", "Sin respuesta de estado del SII todavía"
     else:
-        # Aún sin estadísticas finales: interpretar el código del sobre
-        nuevo_estado, glosa = _fact_mapear_estado_sii(estado_envio)
+        nuevo_estado, glosa = "en_proceso", res.get("glosa") or ("Estado SII: " + estado_dte)
 
-    es_aceptada = nuevo_estado in ("aceptado", "aceptado_reparos")
-    _fact_actualizar_estado_dte(boleta_id, nuevo_estado, estado_sii=estado_envio,
-                                glosa=glosa,
-                                set_fecha_aceptacion=es_aceptada)
-    return jsonify({"ok": True, "estado": nuevo_estado, "estado_sii": estado_envio,
-                    "glosa": glosa,
-                    "track_id": track_id,
-                    "aceptados": aceptados, "rechazados": rechazados, "reparos": reparos,
-                    "respuesta_sii": res.get("respuesta_cruda", "")[:1500],
-                    "status_http": res.get("status"),
-                    "respuesta": res.get("respuesta_cruda", "")[:400]})
+    es_aceptada = nuevo_estado == "aceptado"
+    _fact_actualizar_estado_dte(boleta_id, nuevo_estado, estado_sii=estado_dte,
+                                glosa=glosa, set_fecha_aceptacion=es_aceptada)
+    return jsonify({"ok": True, "estado": nuevo_estado, "estado_sii": estado_dte,
+                    "glosa": glosa, "track_id": track_id,
+                    "respuesta_sii": res.get("respuesta_cruda", "")[:800]})
 
 
 def _fact_job_consultar_estados():
-    """LIMBO 3 (automático): cada cierto tiempo, consulta el estado en el SII de las
-    boletas que están 'enviado' (aún sin confirmación de aceptación) y las actualiza.
-    Recorre todos los tenants con DTEs pendientes.
+    """LIMBO 3 (automático): cada cierto tiempo consulta el estado real en el SII
+    de las boletas que están 'enviado'/'en_proceso' y las actualiza usando getEstDte
+    (consulta por datos del documento, vía pública). Solo marca estados finales.
     """
+    from inventario import get_conn, release_conn
+    from facturacion.certificados import obtener_certificado
+    from facturacion.db import obtener_config_facturacion
+    from facturacion.utils import normalizar_ambiente
+    from facturacion.dtes.sii_client import consultar_estado_dte
     try:
-        from inventario import get_conn, release_conn
-        from facturacion.certificados import obtener_certificado
-        from facturacion.db import obtener_config_facturacion
-        from facturacion.utils import normalizar_ambiente
-        from facturacion.dtes.sii_client import autenticar, consultar_estado_envio
-
-        conn = get_conn(is_admin=True)
+        conn = get_conn()
         try:
             with conn.cursor() as cur:
-                # Boletas enviadas hace >2 min y <7 días, aún sin aceptar/rechazar
-                cur.execute("""
-                    SELECT id, tenant_id, track_id_sii FROM facturacion_dtes
-                    WHERE estado = 'enviado' AND track_id_sii IS NOT NULL
-                      AND fecha_envio_sii < NOW() - INTERVAL '2 minutes'
-                      AND fecha_envio_sii > NOW() - INTERVAL '7 days'
-                    ORDER BY tenant_id LIMIT 50
-                """)
+                cur.execute("""SELECT id, tenant_id, tipo_dte, folio, rut_receptor,
+                                      monto_total, fecha_emision
+                               FROM facturacion_dtes
+                               WHERE estado IN ('enviado','en_proceso')
+                                 AND fecha_emision > (NOW() - INTERVAL '7 days')
+                               ORDER BY tenant_id LIMIT 200""")
                 pendientes = cur.fetchall()
         finally:
             release_conn(conn)
-
         if not pendientes:
             return
-        print("[RCOF/Estado] Consultando %d boletas pendientes en el SII..." % len(pendientes))
-
-        # Agrupar por tenant para autenticar 1 vez por tenant
-        por_tenant = {}
-        for bid, tid, trk in pendientes:
-            por_tenant.setdefault(tid, []).append((bid, trk))
-
-        for tid, lista in por_tenant.items():
+        # Agrupar por tenant para reutilizar certificado/config
+        certs = {}
+        for row in pendientes:
+            bid, tid, tipo_dte, folio, rut_recep, monto, fch = row
             try:
-                config = obtener_config_facturacion(get_conn, release_conn, tid)
-                cert = obtener_certificado(get_conn, release_conn, tid)
-                if not config or not cert.get("ok"):
+                if tid not in certs:
+                    cfg = obtener_config_facturacion(get_conn, release_conn, tid)
+                    crt = obtener_certificado(get_conn, release_conn, tid)
+                    certs[tid] = (cfg, crt) if (cfg and crt.get("ok")) else None
+                if not certs[tid]:
                     continue
-                ambiente = normalizar_ambiente(config.get("ambiente") or "certificacion")
-                tok = autenticar(cert["pfx_bytes"], cert["password"], ambiente)
-                for bid, trk in lista:
-                    try:
-                        res = consultar_estado_envio(trk, tok, config["rut_emisor"], ambiente)
-                        estado_envio = (res.get("estado_envio") or "").upper()
-                        rechazados = res.get("rechazados")
-                        reparos = res.get("reparos")
-                        if res.get("aceptado_sin_reparos") is True:
-                            nuevo_est, glosa_est = "aceptado", "Aceptado por el SII"
-                        elif rechazados is not None and int(rechazados or 0) > 0:
-                            nuevo_est, glosa_est = "rechazado", "Rechazado por el SII"
-                        elif reparos is not None and int(reparos or 0) > 0:
-                            nuevo_est, glosa_est = "aceptado_reparos", "Aceptado con reparos"
-                        else:
-                            nuevo_est, glosa_est = _fact_mapear_estado_sii(estado_envio)
-                        # Solo actualizar si llegó a un estado final (no re-escribir 'en_proceso')
-                        if nuevo_est in ("aceptado", "aceptado_reparos", "rechazado"):
-                            _fact_actualizar_estado_dte(bid, nuevo_est, estado_sii=estado_envio, glosa=glosa_est,
-                                                        set_fecha_aceptacion=nuevo_est.startswith("aceptado"))
-                    except Exception as e:
-                        print("[Estado SII] Error boleta %s: %s" % (bid, str(e)[:120]))
+                cfg, crt = certs[tid]
+                amb = normalizar_ambiente(cfg.get("ambiente") or "certificacion")
+                fch_str = fch.strftime("%Y-%m-%d") if hasattr(fch, "strftime") else str(fch)[:10]
+                res = consultar_estado_dte(
+                    pfx_bytes=crt["pfx_bytes"], password=crt["password"],
+                    rut_consultante=cfg["rut_emisor"], rut_emisor=cfg["rut_emisor"],
+                    rut_receptor=rut_recep or "66666666-6", tipo_dte=tipo_dte,
+                    folio=folio, fecha_emision=fch_str, monto_total=int(monto or 0),
+                    ambiente=amb)
+                est = (res.get("estado") or "").upper()
+                if est == "DOK":
+                    _fact_actualizar_estado_dte(bid, "aceptado", estado_sii=est,
+                                                glosa="Aceptado por el SII", set_fecha_aceptacion=True)
+                elif est in ("FAN", "FNA", "RCT", "RCH", "RFR", "RSC"):
+                    _fact_actualizar_estado_dte(bid, "rechazado", estado_sii=est,
+                                                glosa=res.get("glosa") or "Rechazado por el SII")
+                # DNK/FAU: aún no final, se reintenta en la próxima corrida
             except Exception as e:
-                print("[RCOF/Estado] Error tenant %s: %s" % (tid, str(e)[:120]))
+                print("[Estado SII] Error boleta %s: %s" % (bid, str(e)[:120]))
     except Exception as e:
-        print("[RCOF/Estado] Error general: %s" % str(e)[:200])
-
-
-# ── Registro diferido del job de consulta de estados ──
-# Se registra aquí (no arriba) porque la función ya está definida en este punto.
-try:
-    scheduler.add_job(_fact_job_consultar_estados, "interval", minutes=15,
-                      id="fact_consultar_estados", replace_existing=True,
-                      misfire_grace_time=120,
-                      next_run_time=(datetime.now() + timedelta(minutes=3)))
-    print("[Facturación] Job de consulta de estados SII registrado (cada 15 min)")
-except Exception as _e:
-    print("[Facturación] No se pudo registrar el job de estados: %s" % _e)
+        print("[Estado SII] Error general: %s" % str(e)[:200])
 
 
 def _fact_job_rcof_diario():
-    """LIMBO 4: envía el RCOF (Reporte de Consumo de Folios) diario al SII por cada
-    tenant que emitió boletas el día anterior. Obligatorio en producción.
+    """Generador de RCOF/RVD diario (conservado por si el SII lo solicita).
+    Agrupa las boletas del día anterior por tenant y arma el resumen.
+    NOTA: el SII eliminó la obligación del RCOF diario (Res. Ex. N°53/2022);
+    se conserva como herramienta manual/respaldo.
     """
+    from inventario import get_conn, release_conn
+    from facturacion.certificados import obtener_certificado
+    from facturacion.db import obtener_config_facturacion
+    from facturacion.utils import normalizar_ambiente
+    from facturacion.dtes.sii_client import autenticar
+    from facturacion.dtes.rcof import construir_resumen, generar_rcof_xml
+    from facturacion.dtes.firma import firmar_envio_completo
+    from datetime import datetime, timedelta
+
     try:
-        from datetime import date, timedelta
-        from inventario import get_conn, release_conn
-        from facturacion.certificados import obtener_certificado
-        from facturacion.db import obtener_config_facturacion
-        from facturacion.utils import normalizar_ambiente
-        from facturacion.rcof import generar_rcof_xml, construir_resumen
-        from facturacion.dtes.firma import firmar_envio_completo
-        from facturacion.dtes.sii_client import autenticar
-        import requests as _rq
-
-        ayer = (date.today() - timedelta(days=1)).isoformat()
-
-        conn = get_conn(is_admin=True)
+        ayer = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        # Agrupar boletas del día anterior por tenant
+        conn = get_conn()
         try:
             with conn.cursor() as cur:
-                # Tenants que emitieron boletas ayer (estados válidos)
                 cur.execute("""
                     SELECT tenant_id, tipo_dte,
-                           COUNT(*) AS n,
-                           SUM(monto_neto) AS neto, SUM(monto_iva) AS iva,
-                           SUM(monto_total) AS total,
-                           MIN(folio) AS folio_min, MAX(folio) AS folio_max
+                           COUNT(*) AS n, MIN(folio) AS fmin, MAX(folio) AS fmax,
+                           COALESCE(SUM(monto_neto),0), COALESCE(SUM(monto_iva),0),
+                           COALESCE(SUM(monto_total),0)
                     FROM facturacion_dtes
-                    WHERE DATE(fecha_emision) = %s
-                      AND estado IN ('enviado','aceptado')
-                      AND tipo_dte IN (39, 41)
+                    WHERE DATE(fecha_emision) = %s AND estado IN ('enviado','aceptado')
                     GROUP BY tenant_id, tipo_dte
-                    ORDER BY tenant_id, tipo_dte
                 """, (ayer,))
                 filas = cur.fetchall()
         finally:
             release_conn(conn)
 
-        if not filas:
-            print("[RCOF] No hubo emisión de boletas el %s, nada que reportar." % ayer)
-            return
-
-        # Agrupar por tenant
         por_tenant = {}
-        for tid, tipo, n, neto, iva, total, fmin, fmax in filas:
-            por_tenant.setdefault(tid, []).append({
-                "tipo": int(tipo), "n": int(n), "neto": int(neto or 0),
-                "iva": int(iva or 0), "total": int(total or 0),
-                "fmin": int(fmin), "fmax": int(fmax),
+        for f in filas:
+            por_tenant.setdefault(f[0], []).append({
+                "tipo": f[1], "n": f[2], "fmin": f[3], "fmax": f[4],
+                "neto": int(f[5]), "iva": int(f[6]), "total": int(f[7]),
             })
 
         for tid, resumenes_data in por_tenant.items():
@@ -21944,6 +21910,17 @@ def _fact_job_rcof_diario():
                 print("[RCOF] Error tenant %s: %s" % (tid, str(e)[:150]))
     except Exception as e:
         print("[RCOF] Error general: %s" % str(e)[:200])
+
+
+# ── Registro del job de consulta de estados (la función ya está definida arriba) ──
+try:
+    scheduler.add_job(_fact_job_consultar_estados, "interval", minutes=15,
+                      id="fact_consultar_estados", replace_existing=True,
+                      misfire_grace_time=120,
+                      next_run_time=(datetime.now() + timedelta(minutes=3)))
+    print("[Facturación] Job de consulta de estados SII registrado (cada 15 min)")
+except Exception as _e:
+    print("[Facturación] No se pudo registrar el job de estados: %s" % _e)
 
 
 def _fact_registrar_rcof(tenant_id, fecha, ambiente, xml_firmado, resumenes):

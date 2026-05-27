@@ -44,11 +44,7 @@ ENDPOINTS = {
         "semilla": "https://apicert.sii.cl/recursos/v1/boleta.electronica.semilla",
         "token":   "https://apicert.sii.cl/recursos/v1/boleta.electronica.token",
         "envio":   "https://pangal.sii.cl/recursos/v1/boleta.electronica.envio",
-        # ⚠️ ENDPOINT DE CONSULTA DE ESTADO — PENDIENTE DE CONFIRMAR LA URL EXACTA
-        # El path correcto NO está documentado públicamente (la API Swagger del SII
-        # requiere login en www4c.sii.cl/bolcoreinternetui/api/). Las variantes
-        # probadas dan 404. Cuando se confirme la URL real (desde el acceso SII del
-        # contribuyente), reemplazar SOLO esta línea. Placeholders: {rut} {dv} {trackid}.
+        # Estado del envío: {rut}-{dv}-{trackid}/estado  (track id boletas = 15 díg)
         "estado_envio": "https://apicert.sii.cl/recursos/v1/boleta.electronica.envio/{rut}-{dv}-{trackid}/estado",
         "host_envio": "pangal.sii.cl",
     },
@@ -364,20 +360,6 @@ def consultar_estado_envio(
     if "NO ESTA AUTENTICADO" in texto.upper():
         return {"ok": False, "error": "Token vencido", "respuesta_cruda": texto[:500]}
 
-    # Si el SII devuelve una página de error HTML (404/500), no es un estado válido.
-    # Devolvemos un mensaje limpio en vez de volcar el HTML al usuario.
-    if resp.status_code == 404 or "JBWEB" in texto or "HTTP Status 404" in texto:
-        return {
-            "ok": False,
-            "status": resp.status_code,
-            "estado_envio": None,
-            "endpoint_no_disponible": True,
-            "error": ("El servicio de consulta de estado del SII no respondió en esta URL. "
-                      "La boleta fue enviada correctamente (tiene track id); puedes verificar "
-                      "su estado en el portal del SII mientras se ajusta la consulta automática."),
-            "respuesta_cruda": texto[:300],
-        }
-
     # Interpretar la respuesta JSON del SII
     estado_envio = None       # EPR, RCH, etc. (estado del sobre)
     aceptados = rechazados = reparos = informados = None
@@ -413,5 +395,192 @@ def consultar_estado_envio(
         "rechazados": rechazados,
         "reparos": reparos,
         "aceptado_sin_reparos": aceptado_final,
+        "respuesta_cruda": texto[:1500],
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CONSULTA DE ESTADO DE UN DTE POR SUS DATOS (getEstDte) — SOAP, vía PÚBLICA
+# ═══════════════════════════════════════════════════════════════════════════
+# Esta es la consulta DOCUMENTADA oficialmente por el SII (manual QueryEstDte,
+# OI2004_CEDTE_MDE). A diferencia de la consulta por track id (API REST, cuyo
+# path está en el Swagger autenticado), getEstDte usa una URL FIJA y conocida:
+#   Certificación: https://maullin.sii.cl/DTEWS/QueryEstDte.jws
+#   Producción:    https://palena.sii.cl/DTEWS/QueryEstDte.jws
+#
+# Resuelve dos necesidades:
+#   1. Que el emisor sepa si el SII tiene la boleta registrada y con datos OK.
+#   2. Que CUALQUIERA (incl. el cliente) verifique la boleta con los datos
+#      impresos: tipo, folio, fecha, monto, RUT emisor y receptor.
+#
+# Requiere un token del WS clásico (GetTokenFromSeed en .../DTEWS), distinto al
+# token de la API REST de boletas. Las funciones de abajo lo obtienen solas.
+
+DTEWS = {
+    "certificacion": {
+        "seed":  "https://maullin.sii.cl/DTEWS/CrSeed.jws?WSDL",
+        "token": "https://maullin.sii.cl/DTEWS/GetTokenFromSeed.jws?WSDL",
+        "query": "https://maullin.sii.cl/DTEWS/QueryEstDte.jws",
+    },
+    "produccion": {
+        "seed":  "https://palena.sii.cl/DTEWS/CrSeed.jws?WSDL",
+        "token": "https://palena.sii.cl/DTEWS/GetTokenFromSeed.jws?WSDL",
+        "query": "https://palena.sii.cl/DTEWS/QueryEstDte.jws",
+    },
+}
+
+
+def _dtews_obtener_semilla(ambiente: str = "certificacion") -> str:
+    """Pide una semilla al WS clásico CrSeed (SOAP)."""
+    url = DTEWS[ambiente]["seed"].replace("?WSDL", "")
+    soap = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">'
+        '<SOAP-ENV:Body><getSeed/></SOAP-ENV:Body></SOAP-ENV:Envelope>'
+    )
+    r = requests.post(url, data=soap, headers={"Content-Type": "text/xml; charset=utf-8",
+                                               "User-Agent": USER_AGENT}, timeout=TIMEOUT)
+    # La semilla viene dentro de un XML escapado en el resultado
+    m = re.search(r"<SEMILLA>(\d+)</SEMILLA>", r.text)
+    if not m:
+        m = re.search(r"&lt;SEMILLA&gt;(\d+)&lt;/SEMILLA&gt;", r.text)
+    if not m:
+        raise SIIError(f"No se obtuvo semilla del WS clásico: {r.text[:300]}")
+    return m.group(1)
+
+
+def _dtews_obtener_token(pfx_bytes: bytes, password: str,
+                         ambiente: str = "certificacion") -> str:
+    """Obtiene el token del WS clásico (GetTokenFromSeed): semilla → firmar → token."""
+    from signxml import XMLSigner, methods
+    from cryptography.hazmat.primitives.serialization import pkcs12
+    from lxml import etree
+
+    semilla = _dtews_obtener_semilla(ambiente)
+    # Armar y firmar el getToken
+    key, cert, _ = pkcs12.load_key_and_certificates(pfx_bytes, password.encode())
+    root = etree.fromstring(
+        f'<getToken><item><Semilla>{semilla}</Semilla></item></getToken>'.encode())
+
+    class _S(XMLSigner):
+        def check_deprecated_methods(self):  # permitir SHA1 (lo exige el SII)
+            pass
+    from cryptography.hazmat.primitives import serialization
+    key_pem = key.private_bytes(serialization.Encoding.PEM,
+                                serialization.PrivateFormat.TraditionalOpenSSL,
+                                serialization.NoEncryption())
+    cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+    signer = _S(method=methods.enveloped, signature_algorithm="rsa-sha1",
+                digest_algorithm="sha1", c14n_algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315")
+    signed = signer.sign(root, key=key_pem, cert=cert_pem)
+    signed_xml = etree.tostring(signed, encoding="ISO-8859-1").decode("ISO-8859-1")
+
+    url = DTEWS[ambiente]["token"].replace("?WSDL", "")
+    soap = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">'
+        '<SOAP-ENV:Body><getToken><pszXml><![CDATA[' + signed_xml +
+        ']]></pszXml></getToken></SOAP-ENV:Body></SOAP-ENV:Envelope>'
+    )
+    r = requests.post(url, data=soap.encode("ISO-8859-1"),
+                      headers={"Content-Type": "text/xml; charset=utf-8",
+                               "User-Agent": USER_AGENT}, timeout=TIMEOUT)
+    m = re.search(r"<TOKEN>([^<]+)</TOKEN>", r.text) or \
+        re.search(r"&lt;TOKEN&gt;([^&]+)&lt;/TOKEN&gt;", r.text)
+    if not m:
+        raise SIIError(f"No se obtuvo token del WS clásico: {r.text[:300]}")
+    return m.group(1)
+
+
+def consultar_estado_dte(
+    pfx_bytes: bytes, password: str,
+    rut_consultante: str, rut_emisor: str, rut_receptor: str,
+    tipo_dte: int, folio: int, fecha_emision: str, monto_total: int,
+    ambiente: str = "certificacion",
+    token: str = None,
+) -> dict:
+    """Consulta el estado de un DTE por sus DATOS (getEstDte, SOAP, vía pública).
+
+    Esta es la consulta robusta y documentada por el SII. Sirve tanto para que
+    el emisor confirme la aceptación como para que el cliente verifique su boleta.
+
+    Args:
+        pfx_bytes, password: certificado para autenticar (si no se pasa token).
+        rut_consultante: RUT de quien consulta (ej. el emisor) "12345678-9".
+        rut_emisor: RUT de la empresa emisora "76922862-4".
+        rut_receptor: RUT del receptor (boletas: "66666666-6" consumidor final).
+        tipo_dte: 39 (boleta) / 41 (exenta) / etc.
+        folio, fecha_emision (YYYY-MM-DD), monto_total.
+        ambiente: "certificacion" | "produccion".
+        token: opcional; si no se entrega, se obtiene automáticamente.
+
+    Returns:
+        dict {ok, estado, glosa, aceptado, respuesta_cruda} donde:
+          estado="DOK" → recibido y datos OK (✅ aceptado/registrado)
+          estado="DNK" → recibido pero datos NO coinciden
+          estado="FAU" → no recibido por el SII
+          estado="FAN" → no autorizado / "FNA"
+          estado="ANC"/"FAN" → anulado, etc.
+        aceptado=True solo si estado=="DOK".
+    """
+    def _split(rut):
+        rut = rut.replace(".", "").replace("-", "")
+        return rut[:-1], rut[-1]
+
+    if token is None:
+        token = _dtews_obtener_token(pfx_bytes, password, ambiente)
+
+    rc, dvc = _split(rut_consultante)
+    re_, dvr_e = _split(rut_emisor)
+    rr, dvr_r = _split(rut_receptor)
+    # El monto va sin separadores; la fecha en formato DD-MM-YYYY para getEstDte
+    y, m, d = fecha_emision.split("-")
+    fecha_sii = f"{d}-{m}-{y}"
+
+    url = DTEWS[ambiente]["query"]
+    soap = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" '
+        'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+        'xmlns:xsd="http://www.w3.org/2001/XMLSchema">'
+        '<SOAP-ENV:Body>'
+        '<m:getEstDte xmlns:m="http://maullin.sii.cl/DTEWS/QueryEstDte.jws">'
+        f'<RutConsultante xsi:type="xsd:string">{rc}</RutConsultante>'
+        f'<DvConsultante xsi:type="xsd:string">{dvc}</DvConsultante>'
+        f'<RutCompania xsi:type="xsd:string">{re_}</RutCompania>'
+        f'<DvCompania xsi:type="xsd:string">{dvr_e}</DvCompania>'
+        f'<RutReceptor xsi:type="xsd:string">{rr}</RutReceptor>'
+        f'<DvReceptor xsi:type="xsd:string">{dvr_r}</DvReceptor>'
+        f'<TipoDte xsi:type="xsd:string">{tipo_dte}</TipoDte>'
+        f'<FolioDte xsi:type="xsd:string">{folio}</FolioDte>'
+        f'<FechaEmisionDte xsi:type="xsd:string">{fecha_sii}</FechaEmisionDte>'
+        f'<MontoDte xsi:type="xsd:string">{int(monto_total)}</MontoDte>'
+        f'<Token xsi:type="xsd:string">{token}</Token>'
+        '</m:getEstDte>'
+        '</SOAP-ENV:Body></SOAP-ENV:Envelope>'
+    )
+    try:
+        r = requests.post(url, data=soap.encode("ISO-8859-1"),
+                          headers={"Content-Type": "text/xml; charset=utf-8",
+                                   "User-Agent": USER_AGENT, "SOAPAction": ""},
+                          timeout=TIMEOUT)
+    except Exception as e:
+        raise SIIError(f"No se pudo conectar a QueryEstDte: {e}")
+
+    texto = r.text
+    # El estado viene como <ESTADO>XXX</ESTADO> (a veces escapado)
+    m_estado = (re.search(r"<ESTADO>([^<]+)</ESTADO>", texto) or
+                re.search(r"&lt;ESTADO&gt;([^&]+)&lt;/ESTADO&gt;", texto))
+    m_glosa = (re.search(r"<GLOSA(?:_ESTADO)?>([^<]+)</GLOSA(?:_ESTADO)?>", texto) or
+               re.search(r"&lt;GLOSA(?:_ESTADO)?&gt;([^&]+)&lt;/GLOSA", texto))
+    estado = m_estado.group(1).strip() if m_estado else None
+    glosa = m_glosa.group(1).strip() if m_glosa else None
+
+    return {
+        "ok": r.status_code == 200 and estado is not None,
+        "estado": estado,
+        "glosa": glosa,
+        "aceptado": estado == "DOK",
+        "status": r.status_code,
         "respuesta_cruda": texto[:1500],
     }
