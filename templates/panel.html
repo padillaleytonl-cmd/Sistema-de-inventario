@@ -13606,6 +13606,9 @@ async function dtConsultarEstado(id){
       if(d.estado==='aceptado'){ msg='✅ '+msg; }
       else if(d.estado==='rechazado'){ msg='❌ '+msg; }
       else if(d.estado==='en_proceso'){ msg+='\n\nEl SII aún está procesando. Vuelve a consultar en unos minutos.'; }
+      if(d.respuesta_sii && d.estado!=='aceptado'){
+        msg+='\n\n[Respuesta SII]: '+(d.respuesta_sii||'').replace(/<[^>]+>/g,' ').slice(0,300);
+      }
       alert(msg);
       if(typeof conBuscar==='function' && document.getElementById('conResultados')) conBuscar();
     } else if(d.endpoint_no_disponible){

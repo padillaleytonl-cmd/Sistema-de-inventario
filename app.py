@@ -21030,7 +21030,16 @@ def facturacion_boleta_emitir():
         from facturacion.dtes.sii_client import autenticar, enviar_boletas
 
         caf = parsear_caf_xml(folio_res["xml_caf"])
-        fecha = datetime.now().strftime("%Y-%m-%d")
+        # Fecha de emisión en hora de CHILE (no UTC del servidor). Si el servidor
+        # corre en UTC, datetime.now() daría el día equivocado de noche, causando
+        # que el FchEmis no coincida al consultar al SII. Usamos zona Chile.
+        try:
+            from zoneinfo import ZoneInfo
+            fecha = datetime.now(ZoneInfo("America/Santiago")).strftime("%Y-%m-%d")
+        except Exception:
+            # Fallback: UTC - 4 horas (horario estándar de Chile)
+            from datetime import timezone as _tz, timedelta as _td
+            fecha = (datetime.now(_tz.utc) - _td(hours=4)).strftime("%Y-%m-%d")
 
         # 4. Generar la boleta
         res_bol = generar_boleta_xml(
@@ -21698,14 +21707,23 @@ def facturacion_diagnostico_sii(boleta_id):
     try:
         with conn.cursor() as cur:
             cur.execute("""SELECT tipo_dte, folio, rut_receptor, monto_total,
-                                  fecha_emision, xml_firmado
+                                  fecha_emision, xml_firmado, tenant_id
                            FROM facturacion_dtes WHERE id=%s AND tenant_id=%s""",
                         (boleta_id, tenant_id))
             row = cur.fetchone()
+            if not row:
+                # Buscar sin filtro de tenant para diagnosticar si es un problema de tenant_id
+                cur.execute("""SELECT tenant_id FROM facturacion_dtes WHERE id=%s""", (boleta_id,))
+                otra = cur.fetchone()
+                if otra:
+                    return jsonify({"ok": False,
+                                    "error": "Boleta %s existe pero pertenece al tenant %s, y tu sesión es tenant %s. "
+                                             "Por eso no la encuentra. Esto NO afecta la consulta desde el panel." % (
+                                             boleta_id, otra[0], tenant_id)}), 404
     finally:
         release_conn(conn)
     if not row:
-        return jsonify({"ok": False, "error": "Boleta no encontrada"}), 404
+        return jsonify({"ok": False, "error": "Boleta %s no existe en la BD" % boleta_id}), 404
     tipo_dte, folio, rut_recep_bd, monto_bd, fecha_bd, xml = row
     xml = xml or ""
     # Extraer valores REALES timbrados en el XML
@@ -21749,7 +21767,7 @@ def facturacion_consultar_estado(boleta_id):
     try:
         with conn.cursor() as cur:
             cur.execute("""SELECT track_id_sii, estado, tipo_dte, folio, rut_receptor,
-                                  monto_total, fecha_emision
+                                  monto_total, fecha_emision, xml_firmado
                            FROM facturacion_dtes
                            WHERE id=%s AND tenant_id=%s""", (boleta_id, tenant_id))
             row = cur.fetchone()
@@ -21760,14 +21778,27 @@ def facturacion_consultar_estado(boleta_id):
     track_id = row[0]
     tipo_dte = row[2]
     folio = row[3]
-    rut_receptor = row[4] or "66666666-6"
-    monto_total = int(row[5] or 0)
-    fecha_emision = row[6]
-    # Fecha a YYYY-MM-DD (la función la convierte a DD-MM-YYYY para el SII)
-    if hasattr(fecha_emision, "strftime"):
-        fecha_str = fecha_emision.strftime("%Y-%m-%d")
+    xml_firmado = row[7] or ""
+
+    # CRÍTICO: consultar con los datos EXACTOS que se timbraron en el XML enviado
+    # al SII (no recalculados desde la BD). Así no hay desfase de fecha/monto.
+    import re as _re_cons
+    def _del_xml(tag, fallback):
+        m = _re_cons.search(r"<%s>([^<]+)</%s>" % (tag, tag), xml_firmado)
+        return m.group(1).strip() if m else fallback
+
+    # RUT receptor: el del XML timbrado (RUTRecep)
+    rut_receptor = _del_xml("RUTRecep", row[4] or "66666666-6")
+    # Monto: el MntTotal timbrado en el XML
+    mnt_xml = _del_xml("MntTotal", None)
+    monto_total = int(mnt_xml) if (mnt_xml and mnt_xml.isdigit()) else int(row[5] or 0)
+    # Fecha: el FchEmis timbrado (formato YYYY-MM-DD en el XML)
+    fch_xml = _del_xml("FchEmis", None)
+    if fch_xml:
+        fecha_str = fch_xml[:10]
     else:
-        fecha_str = str(fecha_emision)[:10]
+        fecha_emision = row[6]
+        fecha_str = fecha_emision.strftime("%Y-%m-%d") if hasattr(fecha_emision, "strftime") else str(fecha_emision)[:10]
 
     config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
     ambiente = normalizar_ambiente(config.get("ambiente") or "certificacion")
@@ -21813,6 +21844,9 @@ def facturacion_consultar_estado(boleta_id):
                                 glosa=glosa, set_fecha_aceptacion=es_aceptada)
     return jsonify({"ok": True, "estado": nuevo_estado, "estado_sii": estado_dte,
                     "glosa": glosa, "track_id": track_id,
+                    "datos_consultados": {"tipo": tipo_dte, "folio": folio,
+                                          "fecha_xml": fecha_str, "monto_xml": monto_total,
+                                          "receptor_xml": rut_receptor},
                     "respuesta_sii": res.get("respuesta_cruda", "")[:800]})
 
 
