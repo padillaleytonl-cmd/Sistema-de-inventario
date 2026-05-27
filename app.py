@@ -21693,6 +21693,75 @@ def _fact_mapear_estado_sii(estado_sii):
     return "en_proceso", "Estado SII: " + e
 
 
+@app.route("/admin/lusync/sii/probar-urls-estado", methods=["GET"])
+def admin_probar_urls_estado():
+    """SOLO ADMIN. Prueba varias variantes de URL del SII para consultar estado
+    de un track id. Devuelve el status HTTP y los primeros chars de respuesta de
+    cada una. Sirve para descubrir cuál es la URL correcta cuando todas dan 404.
+
+    Uso: /admin/lusync/sii/probar-urls-estado?trackid=0249504588&tenant_id=3
+    """
+    try:
+        if not session.get("logged"):
+            return jsonify({"ok": False, "error": "no autenticado"}), 401
+        if session.get("rol") != "admin":
+            return jsonify({"ok": False, "error": "solo admin"}), 403
+        tenant_id = int(request.args.get("tenant_id", session.get("tenant_id") or 1))
+        trackid = (request.args.get("trackid") or "").strip()
+        if not trackid:
+            return jsonify({"ok": False, "error": "Pasa ?trackid=NUMERO"}), 400
+        from facturacion.certificados import obtener_certificado
+        from facturacion.db import obtener_config_facturacion
+        from facturacion.utils import normalizar_ambiente
+        from facturacion.dtes.sii_client import autenticar
+        from inventario import get_conn, release_conn
+        import requests as _req
+        config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+        cert = obtener_certificado(get_conn, release_conn, tenant_id)
+        if not cert.get("ok"):
+            return jsonify({"ok": False, "error": "Certificado no disponible"}), 400
+        ambiente = normalizar_ambiente(config.get("ambiente") or "certificacion")
+        # Autenticar (mismo token que se usa para enviar)
+        token = autenticar(cert["pfx_bytes"], cert["password"], ambiente)
+        rut = (config["rut_emisor"] or "").replace(".", "").replace("-", "")
+        rut_num, rut_dv = rut[:-1], rut[-1]
+        host = "apicert.sii.cl" if ambiente == "certificacion" else "api.sii.cl"
+
+        variantes = [
+            f"https://{host}/recursos/v1/boleta.electronica.envio/{rut_num}-{rut_dv}-{trackid}/estado",
+            f"https://{host}/recursos/v1/boleta.electronica.envio/{rut_num}-{rut_dv}/{trackid}/estado",
+            f"https://{host}/recursos/v1/boleta.electronica.envio/{trackid}/estado",
+            f"https://{host}/recursos/v1/boleta.electronica.envio/estado/{rut_num}/{rut_dv}/{trackid}",
+            f"https://{host}/recursos/v1/boleta.electronica.envio/{rut_num}{rut_dv}-{trackid}/estado",
+            f"https://{host}/recursos/v1/boleta.electronica.estado/{rut_num}-{rut_dv}/{trackid}",
+            f"https://{host}/recursos/v1/boleta.electronica/{trackid}/estado",
+        ]
+        headers_base = {
+            "Cookie": f"TOKEN={token}",
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/4.0 (compatible; PROG 1.0; Windows NT)",
+            "Host": host.split(".")[0],
+        }
+        resultados = []
+        for url in variantes:
+            try:
+                r = _req.get(url, headers=headers_base, timeout=15)
+                cuerpo = (r.text or "")[:400]
+                resultados.append({"url": url, "status": r.status_code,
+                                   "content_type": r.headers.get("Content-Type", "")[:80],
+                                   "respuesta": cuerpo})
+            except Exception as e:
+                resultados.append({"url": url, "status": "ERR", "error": str(e)[:200]})
+        return jsonify({"ok": True, "trackid": trackid, "ambiente": ambiente,
+                        "rut_emisor": config["rut_emisor"],
+                        "token_obtenido": bool(token),
+                        "resultados": resultados})
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": "Error interno: " + str(e)[:300],
+                        "trace": traceback.format_exc()[:800]}), 500
+
+
 @app.route("/facturacion/config/resolucion", methods=["POST"])
 def facturacion_actualizar_resolucion():
     """SOLO ADMIN. Actualiza FchResol y NroResol de la empresa.
