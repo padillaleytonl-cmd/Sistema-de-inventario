@@ -1581,17 +1581,6 @@ def _sync_full_meli_diario():
 scheduler.add_job(_sync_full_meli_diario, "interval", hours=24, id="full_meli_diario",
                   next_run_time=(datetime.now() + timedelta(hours=6)))
 
-# ── Jobs de facturación electrónica (blindaje profesional) ──
-# El registro del job _fact_job_consultar_estados se hace MÁS ABAJO, después de que
-# la función esté definida (no se puede registrar aquí porque se define luego).
-#
-# NOTA RCOF: La Resolución Ex. SII N°53 de 2022 ELIMINÓ la obligación de enviar el
-# RCOF (Reporte de Consumo de Folios / Resumen de Ventas Diarias) desde el 01-08-2022.
-# En el modelo actual cada boleta se informa individualmente al SII al emitirse (lo que
-# este sistema ya hace). Por eso NO se registra un job automático de RCOF.
-# El generador (_fact_job_rcof_diario + facturacion/rcof.py) se conserva por si el SII
-# lo solicita puntualmente, y se puede disparar manualmente vía /facturacion/rcof/generar.
-
 scheduler.start()
 atexit.register(lambda: scheduler.shutdown(wait=False))
 
@@ -20912,1155 +20901,6 @@ def ventas_export_csv():
     )
 
 
-# ════════════════════════════════════════════════════════════════════════════
-# EMISIÓN MANUAL DE BOLETAS (interfaz Lusync)
-# ════════════════════════════════════════════════════════════════════════════
-# GET  /facturacion/emitir          → sirve el formulario (templates/emitir_boleta.html)
-# POST /facturacion/boleta/emitir   → emite UNA boleta real y la envía al SII
-# GET  /facturacion/boleta/<id>/pdf → genera el PDF de una boleta emitida
-#
-# Reutiliza el flujo validado del Set de Pruebas, parametrizado para una boleta
-# real: folio atómico desde el CAF, resolución leída de la config del tenant.
-# ════════════════════════════════════════════════════════════════════════════
-
-@app.route("/facturacion/emitir", methods=["GET"])
-def facturacion_emitir_form():
-    """Sirve la interfaz de emisión manual de boletas."""
-    if not session.get("logged"):
-        return redirect("/login")
-    return render_template("emitir_boleta.html")
-
-
-@app.route("/facturacion/boleta/emitir", methods=["POST"])
-def facturacion_boleta_emitir():
-    """Emite UNA boleta electrónica (39/41) y la envía al SII.
-
-    FLUJO PROFESIONAL (guardar-antes-de-enviar):
-      1. Reservar folio (atómico)
-      2. Generar + firmar
-      3. REGISTRAR en BD con estado 'generado' (ANTES de enviar) → nunca hay folio huérfano
-      4. Enviar al SII
-      5. Actualizar estado: 'enviado' (con track_id) o 'error_envio'
-      Si el SII rechaza o falla la conexión, la boleta queda registrada con su estado
-      real y su XML, para reintentar o auditar. El folio nunca se pierde sin rastro.
-    """
-    if not session.get("logged"):
-        return jsonify({"ok": False, "error": "no autenticado"}), 401
-
-    tenant_id = session.get("tenant_id") or 1
-    data = request.get_json(silent=True) or {}
-
-    from inventario import get_conn, release_conn
-    from facturacion.certificados import obtener_certificado
-    from facturacion.db import obtener_config_facturacion
-    from facturacion.cafs import obtener_folio_disponible
-    from facturacion.utils import normalizar_ambiente
-
-    pasos = []
-    def paso(nombre, ok, detalle=""):
-        pasos.append({"nombre": nombre, "ok": ok, "detalle": detalle})
-
-    # 0. Validar items
-    items = data.get("items") or []
-    if not items:
-        return jsonify({"ok": False, "error": "Debes agregar al menos un ítem"}), 400
-    for it in items:
-        if not it.get("nombre") or not it.get("precio_unitario"):
-            return jsonify({"ok": False, "error": "Cada ítem necesita nombre y precio"}), 400
-
-    # 1. Config del tenant
-    config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
-    if not config:
-        return jsonify({"ok": False, "error": "No hay configuración de facturación para este tenant"}), 400
-
-    ambiente = normalizar_ambiente(data.get("ambiente") or config.get("ambiente") or "certificacion")
-    todos_exentos = all(it.get("exento") for it in items)
-    tipo_dte = 41 if todos_exentos else 39
-
-    emisor = {
-        "rut": config["rut_emisor"], "razon_social": config["razon_social"],
-        "giro": config.get("giro", "Venta al por menor"),
-        "dir_origen": config.get("direccion", "Sin dirección"),
-        "cmna_origen": config.get("comuna", "Santiago"),
-    }
-
-    nro_resol = config.get("resolucion_sii_numero")
-    fch_resol = config.get("resolucion_sii_fecha")
-    if fch_resol and not isinstance(fch_resol, str):
-        try:
-            fch_resol = fch_resol.isoformat()
-        except Exception:
-            fch_resol = str(fch_resol)
-    if nro_resol is None:
-        nro_resol = 0
-    if not fch_resol:
-        fch_resol = "2014-08-22"
-
-    # 2. Certificado .pfx
-    cert = obtener_certificado(get_conn, release_conn, tenant_id)
-    if not cert.get("ok"):
-        return jsonify({"ok": False, "error": "Certificado: " + str(cert.get("error", "no disponible")),
-                        "pasos": pasos}), 400
-    paso("Leer certificado .pfx", True, cert["metadata"].get("titular", "?"))
-    rut_envia = cert["metadata"].get("rut", emisor["rut"])
-
-    # Receptor: genérico si no viene (XML al SII lleva 'Consumidor Final', validado)
-    receptor = data.get("receptor") or {"rut": "66666666-6", "razon_social": "Consumidor Final"}
-    if not receptor.get("rut"):
-        receptor["rut"] = "66666666-6"
-    if not receptor.get("razon_social"):
-        receptor["razon_social"] = "Consumidor Final"
-
-    # 3. Reservar folio (ATÓMICO)
-    folio_res = obtener_folio_disponible(get_conn, release_conn, tenant_id, tipo_dte, ambiente)
-    if not folio_res.get("ok"):
-        return jsonify({"ok": False, "error": folio_res.get("error"), "pasos": pasos}), 400
-    folio = folio_res["folio"]
-    paso("Reservar folio", True, "Folio " + str(folio) + " (tipo " + str(tipo_dte) + ", " + ambiente + ")")
-
-    track_id = None
-    boleta_id = None
-    total = 0
-
-    try:
-        from facturacion.dtes.caf_parser import parsear_caf_xml
-        from facturacion.dtes.boleta import generar_boleta_xml
-        from facturacion.dtes.envio_boleta import armar_envio_boleta
-        from facturacion.dtes.firma import firmar_envio_completo
-        from facturacion.dtes.sii_client import autenticar, enviar_boletas
-
-        caf = parsear_caf_xml(folio_res["xml_caf"])
-        # Fecha de emisión en hora de CHILE (no UTC del servidor). Si el servidor
-        # corre en UTC, datetime.now() daría el día equivocado de noche, causando
-        # que el FchEmis no coincida al consultar al SII. Usamos zona Chile.
-        try:
-            from zoneinfo import ZoneInfo
-            fecha = datetime.now(ZoneInfo("America/Santiago")).strftime("%Y-%m-%d")
-        except Exception:
-            # Fallback: UTC - 4 horas (horario estándar de Chile)
-            from datetime import timezone as _tz, timedelta as _td
-            fecha = (datetime.now(_tz.utc) - _td(hours=4)).strftime("%Y-%m-%d")
-
-        # 4. Generar la boleta
-        res_bol = generar_boleta_xml(
-            caf=caf, folio=folio, fecha_emision=fecha,
-            emisor=emisor, items=items, receptor=receptor,
-        )
-        boleta_xml = res_bol["xml"]
-        total = res_bol["totales"]["mnt_total"]
-        documento_id = res_bol["documento_id"]
-        paso("Generar boleta", True, ("$" + format(total, ",")).replace(",", "."))
-
-        # 5. Armar sobre + firmar
-        set_id = "SetDoc"
-        sobre = armar_envio_boleta(
-            dtes_firmados=[boleta_xml], rut_emisor=emisor["rut"],
-            rut_envia=rut_envia, fch_resol=fch_resol, nro_resol=nro_resol,
-            tipo_dte=tipo_dte, set_dte_id=set_id,
-        )
-        sobre_firmado = firmar_envio_completo(
-            sobre, cert["pfx_bytes"], cert["password"],
-            set_dte_id=set_id, documento_ids=[documento_id])
-        paso("Firmar sobre", True, str(len(sobre_firmado)) + " bytes")
-
-        # ─────────────────────────────────────────────────────────────────
-        # 6. REGISTRAR EN BD ANTES DE ENVIAR (estado 'generado')
-        #    Esto garantiza que el folio NUNCA queda huérfano: aunque el envío
-        #    al SII falle, la boleta queda registrada con su XML para reintento/auditoría.
-        # ─────────────────────────────────────────────────────────────────
-        conn = get_conn()
-        try:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO facturacion_dtes
-                      (tenant_id, tipo_dte, folio, rut_receptor, razon_social_receptor,
-                       monto_neto, monto_iva, monto_total, xml_firmado, estado,
-                       fecha_emision)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                    RETURNING id
-                """, (tenant_id, tipo_dte, folio, receptor["rut"], receptor["razon_social"],
-                      res_bol["totales"]["mnt_neto"], res_bol["totales"]["mnt_iva"],
-                      total, boleta_xml.decode("iso-8859-1", errors="replace"), "generado",
-                      fecha))  # fecha TIMBRADA en el XML (no NOW), para que la consulta al SII coincida
-                boleta_id = cur.fetchone()[0]
-            conn.commit()
-            paso("Registrar boleta (pre-envío)", True, "ID " + str(boleta_id) + " · estado: generado")
-        except Exception as e:
-            conn.rollback()
-            release_conn(conn)
-            # No pudimos registrar: abortamos ANTES de enviar (no consumimos folio en el SII)
-            paso("Registrar boleta (pre-envío)", False, str(e)[:200])
-            return jsonify({"ok": False, "folio": folio,
-                            "error": "No se pudo registrar la boleta antes de enviar: " + str(e)[:200],
-                            "pasos": pasos}), 500
-        finally:
-            try:
-                release_conn(conn)
-            except Exception:
-                pass
-
-        # 7. Autenticar + enviar al SII
-        try:
-            tok = autenticar(cert["pfx_bytes"], cert["password"], ambiente)
-            resultado = enviar_boletas(
-                envio_xml=sobre_firmado, token=tok,
-                rut_emisor=emisor["rut"], rut_envia=rut_envia, ambiente=ambiente)
-        except Exception as e:
-            # Falló la conexión/auth: la boleta queda en BD como 'error_envio' para reintento
-            _fact_actualizar_estado_dte(boleta_id, "error_envio", glosa=str(e)[:300])
-            paso("Enviar al SII", False, str(e)[:200])
-            return jsonify({"ok": False, "boleta_id": boleta_id, "folio": folio,
-                            "error": "No se pudo conectar con el SII. La boleta quedó guardada para reintentar.",
-                            "reintentable": True, "pasos": pasos}), 502
-
-        if not resultado.get("ok"):
-            detalle = resultado.get("error") or str(resultado.get("respuesta_cruda", ""))[:300]
-            _fact_actualizar_estado_dte(boleta_id, "error_envio", glosa=detalle)
-            paso("Enviar al SII", False, detalle)
-            return jsonify({"ok": False, "boleta_id": boleta_id, "folio": folio,
-                            "error": "El SII rechazó el envío: " + str(detalle),
-                            "reintentable": True, "pasos": pasos}), 502
-
-        track_id = resultado["track_id"]
-        # 8. Actualizar a 'enviado' con track_id
-        _fact_actualizar_estado_dte(boleta_id, "enviado", track_id=track_id,
-                                    estado_sii=resultado.get("estado"), set_fecha_envio=True)
-        paso("Enviar al SII", True, "Track ID: " + str(track_id))
-
-    except Exception as e:
-        import traceback
-        paso("Error", False, traceback.format_exc()[:400])
-        # Si ya habíamos registrado la boleta, dejarla marcada como error
-        if boleta_id:
-            try:
-                _fact_actualizar_estado_dte(boleta_id, "error_envio", glosa=str(e)[:300])
-            except Exception:
-                pass
-        return jsonify({"ok": False, "error": str(e)[:300], "folio": folio,
-                        "boleta_id": boleta_id, "pasos": pasos}), 500
-
-    return jsonify({
-        "ok": True, "folio": folio, "tipo_dte": tipo_dte, "track_id": track_id,
-        "total": total, "boleta_id": boleta_id,
-        "pdf_url": ("/facturacion/boleta/" + str(boleta_id) + "/pdf") if boleta_id else None,
-        "pasos": pasos,
-    })
-
-
-def _fact_actualizar_estado_dte(boleta_id, estado, track_id=None, estado_sii=None,
-                                glosa=None, set_fecha_envio=False, set_fecha_aceptacion=False):
-    """Actualiza el estado de un DTE registrado. Helper central de trazabilidad."""
-    from inventario import get_conn, release_conn
-    conn = get_conn()
-    try:
-        sets = ["estado = %s"]
-        vals = [estado]
-        if track_id is not None:
-            sets.append("track_id_sii = %s"); vals.append(track_id)
-        if estado_sii is not None:
-            sets.append("estado_sii = %s"); vals.append(estado_sii)
-        if glosa is not None:
-            sets.append("glosa_sii = %s"); vals.append(glosa)
-        if set_fecha_envio:
-            sets.append("fecha_envio_sii = NOW()")
-        if set_fecha_aceptacion:
-            sets.append("fecha_aceptacion_sii = NOW()")
-        vals.append(boleta_id)
-        with conn.cursor() as cur:
-            cur.execute("UPDATE facturacion_dtes SET " + ", ".join(sets) + " WHERE id = %s", vals)
-        conn.commit()
-        return True
-    except Exception as e:
-        conn.rollback()
-        print("[Facturación] Error actualizando estado DTE %s: %s" % (boleta_id, e))
-        return False
-    finally:
-        release_conn(conn)
-
-
-@app.route("/facturacion/boleta/preview", methods=["POST"])
-def facturacion_boleta_preview():
-    """Genera un PDF de VISTA PREVIA (borrador) con el mismo diseño que el documento
-    final, SIN reservar folio, SIN firmar y SIN enviar al SII. El folio se muestra
-    como BORRADOR y el timbre como placeholder.
-
-    Body JSON igual que /facturacion/boleta/emitir + "formato": "carta"|"rollo"
-    Returns: PDF (application/pdf)
-    """
-    if not session.get("logged"):
-        return jsonify({"ok": False, "error": "no autenticado"}), 401
-
-    tenant_id = session.get("tenant_id") or 1
-    data = request.get_json(silent=True) or {}
-    formato = data.get("formato", "carta")
-
-    from inventario import get_conn, release_conn
-    from facturacion.db import obtener_config_facturacion
-    from facturacion.dtes.pdf_dte import generar_pdf_dte
-    from flask import Response
-
-    items = data.get("items") or []
-    if not items:
-        return jsonify({"ok": False, "error": "Sin ítems"}), 400
-
-    config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
-    if not config:
-        return jsonify({"ok": False, "error": "Sin configuración"}), 400
-
-    todos_exentos = all(it.get("exento") for it in items)
-    tipo_dte = 41 if todos_exentos else 39
-
-    # Calcular totales (precios incluyen IVA, igual que boleta.py)
-    bruto_af = 0; mnt_exe = 0
-    for it in items:
-        sub = int(round(float(it.get("cantidad", 1)) * float(it.get("precio_unitario", 0))))
-        if it.get("exento"):
-            mnt_exe += sub
-        else:
-            bruto_af += sub
-    neto = int(round(bruto_af / 1.19)) if bruto_af > 0 else 0
-    iva = bruto_af - neto if bruto_af > 0 else 0
-    total = neto + iva + mnt_exe
-
-    receptor = data.get("receptor") or {}
-    from datetime import datetime as _dt
-    fecha = _dt.now().strftime("%Y-%m-%d")
-
-    # Detalles XML
-    detalles = ""
-    for i, it in enumerate(items, 1):
-        sub = int(round(float(it.get("cantidad", 1)) * float(it.get("precio_unitario", 0))))
-        cant = it.get("cantidad", 1)
-        cant_str = str(int(cant)) if float(cant) == int(cant) else f"{float(cant):.3f}".rstrip("0").rstrip(".")
-        detalles += "<Detalle>"
-        detalles += f"<NroLinDet>{i}</NroLinDet>"
-        if it.get("exento"):
-            detalles += "<IndExe>1</IndExe>"
-        detalles += f"<NmbItem>{_esc_xml_preview(it.get('nombre',''))}</NmbItem>"
-        detalles += f"<QtyItem>{cant_str}</QtyItem>"
-        if it.get("unidad"):
-            detalles += f"<UnmdItem>{_esc_xml_preview(it.get('unidad'))}</UnmdItem>"
-        detalles += f"<PrcItem>{int(round(float(it.get('precio_unitario',0))))}</PrcItem>"
-        detalles += f"<MontoItem>{sub}</MontoItem>"
-        detalles += "</Detalle>"
-
-    tot = "<Totales>"
-    if bruto_af > 0:
-        tot += f"<MntNeto>{neto}</MntNeto>"
-    if mnt_exe > 0:
-        tot += f"<MntExe>{mnt_exe}</MntExe>"
-    if bruto_af > 0:
-        tot += f"<IVA>{iva}</IVA>"
-    tot += f"<MntTotal>{total}</MntTotal></Totales>"
-
-    # XML borrador (sin TED real → el PDF mostrará placeholder de timbre)
-    xml = (
-        '<?xml version="1.0" encoding="ISO-8859-1"?>'
-        '<DTE version="1.0"><Documento ID="BORRADOR">'
-        '<Encabezado>'
-        f'<IdDoc><TipoDTE>{tipo_dte}</TipoDTE><Folio>0</Folio><FchEmis>{fecha}</FchEmis></IdDoc>'
-        '<Emisor>'
-        f'<RUTEmisor>{config.get("rut_emisor","")}</RUTEmisor>'
-        f'<RznSocEmisor>{_esc_xml_preview(config.get("razon_social",""))}</RznSocEmisor>'
-        f'<GiroEmisor>{_esc_xml_preview(config.get("giro",""))}</GiroEmisor>'
-        f'<DirOrigen>{_esc_xml_preview(config.get("direccion",""))}</DirOrigen>'
-        f'<CmnaOrigen>{_esc_xml_preview(config.get("comuna",""))}</CmnaOrigen>'
-        '</Emisor>'
-        '<Receptor>'
-        f'<RUTRecep>{receptor.get("rut","66666666-6")}</RUTRecep>'
-        f'<RznSocRecep>{_esc_xml_preview(receptor.get("razon_social","Consumidor Final"))}</RznSocRecep>'
-        '</Receptor>'
-        f'{tot}'
-        '</Encabezado>'
-        f'{detalles}'
-        '<TmstFirma>BORRADOR</TmstFirma>'
-        '</Documento></DTE>'
-    ).encode("iso-8859-1", errors="replace")
-
-    url_consulta = "lusync.cl/consultadte"
-    pdf = generar_pdf_dte(xml, formato=formato, url_consulta=url_consulta)
-    return Response(pdf, mimetype="application/pdf",
-                    headers={"Content-Disposition": 'inline; filename="preview.pdf"'})
-
-
-def _esc_xml_preview(s):
-    if s is None:
-        return ""
-    s = str(s)
-    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-             .replace('"', "&quot;").replace("'", "&apos;"))
-
-
-@app.route("/facturacion/boleta/<int:boleta_id>/xml", methods=["GET"])
-def facturacion_boleta_xml(boleta_id):
-    """Descarga el XML COMPLETO firmado, exactamente como se envió al SII."""
-    if not session.get("logged"):
-        return jsonify({"ok": False, "error": "no autenticado"}), 401
-    tenant_id = session.get("tenant_id") or 1
-    from inventario import get_conn, release_conn
-    from flask import Response
-    conn = get_conn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""SELECT xml_firmado, folio, tipo_dte FROM facturacion_dtes
-                           WHERE id=%s AND tenant_id=%s""", (boleta_id, tenant_id))
-            row = cur.fetchone()
-    finally:
-        release_conn(conn)
-    if not row or not row[0]:
-        return jsonify({"ok": False, "error": "XML no disponible"}), 404
-    xml = row[0].encode("iso-8859-1", errors="replace") if isinstance(row[0], str) else row[0]
-    fname = "DTE_%s_folio_%s.xml" % (row[2], row[1])
-    return Response(xml, mimetype="application/xml",
-                    headers={"Content-Disposition": 'attachment; filename="%s"' % fname})
-
-
-@app.route("/facturacion/boleta/<int:boleta_id>/xml-receptor", methods=["GET"])
-def facturacion_boleta_xml_receptor(boleta_id):
-    """Descarga un XML simplificado para el RECEPTOR: solo el bloque <Documento>
-    del DTE (sin sobre de envío ni datos de transmisión). Es el documento tributario
-    que el cliente necesita para sus registros, extraído del XML firmado tal cual."""
-    if not session.get("logged"):
-        return jsonify({"ok": False, "error": "no autenticado"}), 401
-    tenant_id = session.get("tenant_id") or 1
-    from inventario import get_conn, release_conn
-    from flask import Response
-    import re as _re
-    conn = get_conn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""SELECT xml_firmado, folio, tipo_dte FROM facturacion_dtes
-                           WHERE id=%s AND tenant_id=%s""", (boleta_id, tenant_id))
-            row = cur.fetchone()
-    finally:
-        release_conn(conn)
-    if not row or not row[0]:
-        return jsonify({"ok": False, "error": "XML no disponible"}), 404
-    s = row[0] if isinstance(row[0], str) else row[0].decode("iso-8859-1", errors="replace")
-    # Extraer el <DTE>...</DTE> (el documento tributario en sí, con su timbre)
-    m = _re.search(r'<DTE.*?</DTE>', s, _re.DOTALL)
-    dte = m.group(0) if m else s
-    salida = '<?xml version="1.0" encoding="ISO-8859-1"?>\n' + dte
-    fname = "DTE_receptor_%s_folio_%s.xml" % (row[2], row[1])
-    return Response(salida.encode("iso-8859-1", errors="replace"), mimetype="application/xml",
-                    headers={"Content-Disposition": 'attachment; filename="%s"' % fname})
-
-
-@app.route("/facturacion/boleta/<int:boleta_id>/pdf", methods=["GET"])
-def facturacion_boleta_pdf(boleta_id):
-    """Descarga/visualiza el PDF de una boleta emitida. Query: ?formato=carta|rollo"""
-    if not session.get("logged"):
-        return jsonify({"ok": False, "error": "no autenticado"}), 401
-
-    tenant_id = session.get("tenant_id") or 1
-    formato = request.args.get("formato", "carta")
-    from inventario import get_conn, release_conn
-    from facturacion.dtes.pdf_dte import generar_pdf_dte
-    from flask import Response
-
-    conn = get_conn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT xml_firmado FROM facturacion_dtes
-                WHERE id = %s AND tenant_id = %s
-            """, (boleta_id, tenant_id))
-            row = cur.fetchone()
-    finally:
-        release_conn(conn)
-
-    if not row:
-        return jsonify({"ok": False, "error": "Boleta no encontrada"}), 404
-
-    xml = row[0].encode("iso-8859-1", errors="replace") if isinstance(row[0], str) else row[0]
-    url_consulta = "lusync.cl/consultadte"
-    pdf = generar_pdf_dte(xml, formato=formato, url_consulta=url_consulta)
-    return Response(pdf, mimetype="application/pdf",
-                    headers={"Content-Disposition": 'inline; filename="boleta_' + str(boleta_id) + '.pdf"'})
-
-
-
-@app.route("/facturacion/folios/resumen", methods=["GET"])
-def facturacion_folios_resumen():
-    """Resumen de uso de folios por tipo de DTE (estilo dashboard tributario):
-    asignados, usados, libres, vencimiento (6 meses desde autorización) y
-    estimación de días de operación según consumo promedio reciente.
-    """
-    if not session.get("logged"):
-        return jsonify({"ok": False, "error": "no autenticado"}), 401
-    tenant_id = session.get("tenant_id") or 1
-
-    from inventario import get_conn, release_conn
-    from facturacion.cafs import listar_cafs_tenant
-    from facturacion.utils import TIPOS_DTE
-    from datetime import date, timedelta
-
-    cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id)
-
-    # Consumo promedio diario por tipo (últimos 30 días) desde facturacion_dtes
-    consumo = {}
-    conn = get_conn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT tipo_dte, COUNT(*)::float / 30.0
-                FROM facturacion_dtes
-                WHERE tenant_id = %s AND fecha_emision >= NOW() - INTERVAL '30 days'
-                GROUP BY tipo_dte
-            """, (tenant_id,))
-            for tipo, prom in cur.fetchall():
-                consumo[int(tipo)] = round(prom, 1)
-    except Exception:
-        pass
-    finally:
-        release_conn(conn)
-
-    # Agrupar CAFs por tipo de DTE
-    por_tipo = {}
-    for caf in cafs:
-        t = caf["tipo_dte"]
-        if t not in por_tipo:
-            por_tipo[t] = {
-                "tipo_dte": t,
-                "nombre": TIPOS_DTE.get(t, {}).get("nombre", f"Tipo {t}"),
-                "asignados": 0, "usados": 0, "libres": 0, "total": 0,
-                "vencimientos": [],
-            }
-        g = por_tipo[t]
-        g["asignados"] += caf["folios_total"]
-        g["usados"] += caf["folios_usados"]
-        g["libres"] += caf["folios_restantes"]
-        g["total"] += caf["folios_total"]
-        # Vencimiento: 6 meses desde autorización
-        if caf.get("fecha_autorizacion") and not caf.get("agotado"):
-            try:
-                fa = date.fromisoformat(caf["fecha_autorizacion"][:10])
-                # sumar ~6 meses (182 días)
-                venc = fa + timedelta(days=182)
-                dias = (venc - date.today()).days
-                if caf["folios_restantes"] > 0:
-                    g["vencimientos"].append({
-                        "folios": caf["folios_restantes"],
-                        "autorizado": caf["fecha_autorizacion"][:10],
-                        "vence": venc.isoformat(),
-                        "dias_restantes": dias,
-                    })
-            except Exception:
-                pass
-
-    # Estimar días de operación según consumo
-    resultado = []
-    for t, g in sorted(por_tipo.items()):
-        prom = consumo.get(t, 0)
-        g["consumo_diario"] = prom
-        g["dias_estimados"] = int(g["libres"] / prom) if prom > 0 else None
-        resultado.append(g)
-
-    return jsonify({"ok": True, "folios": resultado})
-
-
-@app.route("/facturacion/cambiar-ambiente", methods=["POST"])
-def facturacion_cambiar_ambiente():
-    """Cambia el ambiente (certificacion/produccion). SOLO ADMIN.
-    Crítico: en 'certificacion' las boletas NO se suben a marketplaces ni se
-    envían correos reales — evita que documentos de prueba lleguen a clientes.
-    """
-    if not session.get("logged"):
-        return jsonify({"ok": False, "error": "no autenticado"}), 401
-    if session.get("rol") != "admin":
-        return jsonify({"ok": False, "error": "Solo un administrador puede cambiar el ambiente"}), 403
-
-    tenant_id = session.get("tenant_id") or 1
-    data = request.get_json(silent=True) or {}
-    nuevo = (data.get("ambiente") or "").strip().lower()
-    if nuevo not in ("certificacion", "produccion"):
-        return jsonify({"ok": False, "error": "Ambiente inválido"}), 400
-
-    from inventario import get_conn, release_conn
-    conn = get_conn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""UPDATE facturacion_config_tenant
-                           SET ambiente = %s, fecha_actualizacion = NOW()
-                           WHERE tenant_id = %s""", (nuevo, tenant_id))
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        return jsonify({"ok": False, "error": str(e)[:200]}), 500
-    finally:
-        release_conn(conn)
-
-    try:
-        registrar_audit(session.get("lusync_admin_email", "admin"), request.remote_addr,
-                        "cambiar_ambiente_facturacion",
-                        entidad="facturacion_config_tenant",
-                        detalle="tenant_id=%s, nuevo=%s" % (tenant_id, nuevo))
-    except Exception:
-        pass
-    return jsonify({"ok": True, "ambiente": nuevo})
-
-
-def _fact_ambiente_es_produccion(tenant_id):
-    """Helper de seguridad: True solo si el tenant está en producción.
-    Las acciones que tocan al cliente o al marketplace (subir boleta, enviar
-    correo) DEBEN llamar esto antes de ejecutar. En certificación devuelve False.
-    """
-    from inventario import get_conn, release_conn
-    conn = get_conn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT ambiente FROM facturacion_config_tenant WHERE tenant_id=%s", (tenant_id,))
-            r = cur.fetchone()
-        return bool(r and (r[0] or "").lower() == "produccion")
-    except Exception:
-        return False  # ante la duda, NO es producción (no subir nada)
-    finally:
-        release_conn(conn)
-
-
-@app.route("/facturacion/boletas/descargar-zip", methods=["GET"])
-def facturacion_descargar_zip():
-    """Descarga masiva: genera un ZIP con los PDF de las boletas del rango filtrado.
-    Límite conservador (multi-tenant): MAX_ZIP documentos por descarga para no
-    saturar el servidor cuando varias empresas descargan a la vez.
-    Query: ?desde=YYYY-MM-DD&hasta=YYYY-MM-DD&q=texto&tipo=39
-    """
-    if not session.get("logged"):
-        return jsonify({"ok": False, "error": "no autenticado"}), 401
-    tenant_id = session.get("tenant_id") or 1
-    MAX_ZIP = 30  # límite conservador para entorno multi-tenant
-
-    desde = request.args.get("desde")
-    hasta = request.args.get("hasta")
-    q = (request.args.get("q") or "").strip()
-    tipo = request.args.get("tipo", type=int)
-
-    from inventario import get_conn, release_conn
-    from facturacion.dtes.pdf_dte import generar_pdf_dte
-    from flask import Response
-    import io, zipfile
-
-    where = ["tenant_id = %s", "estado IN ('enviado','aceptado','rechazado')"]
-    params = [tenant_id]
-    if tipo:
-        where.append("tipo_dte = %s"); params.append(tipo)
-    if desde:
-        where.append("DATE(fecha_emision) >= %s"); params.append(desde)
-    if hasta:
-        where.append("DATE(fecha_emision) <= %s"); params.append(hasta)
-    if q:
-        where.append("(razon_social_receptor ILIKE %s OR rut_receptor ILIKE %s OR CAST(folio AS TEXT)=%s)")
-        params.extend(["%"+q+"%", "%"+q+"%", q])
-
-    conn = get_conn()
-    try:
-        with conn.cursor() as cur:
-            # Primero contar
-            cur.execute("SELECT COUNT(*) FROM facturacion_dtes WHERE " + " AND ".join(where), params)
-            total = cur.fetchone()[0]
-            if total == 0:
-                return jsonify({"ok": False, "error": "No hay documentos en ese rango"}), 404
-            if total > MAX_ZIP:
-                return jsonify({"ok": False, "limite_excedido": True, "total": total, "max": MAX_ZIP,
-                                "error": "Tu búsqueda tiene %d boletas. La descarga masiva permite hasta %d a la vez. Ajusta el rango de fechas." % (total, MAX_ZIP)}), 400
-            cur.execute("""SELECT id, tipo_dte, folio, xml_firmado FROM facturacion_dtes
-                           WHERE """ + " AND ".join(where) + """
-                           ORDER BY fecha_emision DESC LIMIT %s""", params + [MAX_ZIP])
-            rows = cur.fetchall()
-    finally:
-        release_conn(conn)
-
-    buf = io.BytesIO()
-    errores = 0
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for r in rows:
-            try:
-                xml = r[3].encode("iso-8859-1", errors="replace") if isinstance(r[3], str) else r[3]
-                pdf = generar_pdf_dte(xml, formato="carta", url_consulta="lusync.cl/consultadte")
-                zf.writestr("boleta_%s_folio_%s.pdf" % (r[1], r[2]), pdf)
-            except Exception as e:
-                errores += 1
-                print("[ZIP] Error generando PDF boleta %s: %s" % (r[0], str(e)[:120]))
-    buf.seek(0)
-    fname = "boletas_%s_%s.zip" % (desde or "inicio", hasta or "hoy")
-    return Response(buf.getvalue(), mimetype="application/zip",
-                    headers={"Content-Disposition": 'attachment; filename="%s"' % fname})
-
-
-@app.route("/facturacion/documentos", methods=["GET"])
-def facturacion_documentos_listar():
-    """Lista los DTEs emitidos por el tenant.
-    Query: ?tipo=39 (opc), ?limite=50, ?desde=YYYY-MM-DD, ?hasta=YYYY-MM-DD, ?q=texto
-    """
-    if not session.get("logged"):
-        return jsonify({"ok": False, "error": "no autenticado"}), 401
-    tenant_id = session.get("tenant_id") or 1
-    tipo = request.args.get("tipo", type=int)
-    limite = min(request.args.get("limite", default=50, type=int), 500)
-    desde = request.args.get("desde")
-    hasta = request.args.get("hasta")
-    q = (request.args.get("q") or "").strip()
-
-    from inventario import get_conn, release_conn
-    from facturacion.utils import TIPOS_DTE
-
-    where = ["tenant_id = %s"]
-    params = [tenant_id]
-    if tipo:
-        where.append("tipo_dte = %s"); params.append(tipo)
-    if desde:
-        where.append("DATE(fecha_emision) >= %s"); params.append(desde)
-    if hasta:
-        where.append("DATE(fecha_emision) <= %s"); params.append(hasta)
-    if q:
-        where.append("(razon_social_receptor ILIKE %s OR rut_receptor ILIKE %s OR CAST(folio AS TEXT) = %s)")
-        params.extend(["%" + q + "%", "%" + q + "%", q])
-    params.append(limite)
-
-    conn = get_conn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT id, tipo_dte, folio, rut_receptor, razon_social_receptor,
-                       monto_total, estado, track_id_sii, estado_sii, fecha_emision
-                FROM facturacion_dtes
-                WHERE """ + " AND ".join(where) + """
-                ORDER BY fecha_emision DESC LIMIT %s
-            """, params)
-            rows = cur.fetchall()
-    finally:
-        release_conn(conn)
-
-    docs = []
-    total_periodo = 0
-    for r in rows:
-        monto = int(r[5]) if r[5] is not None else 0
-        total_periodo += monto
-        docs.append({
-            "id": r[0], "tipo_dte": r[1],
-            "tipo_nombre": TIPOS_DTE.get(r[1], {}).get("nombre", f"Tipo {r[1]}"),
-            "folio": r[2], "rut_receptor": r[3], "razon_social_receptor": r[4],
-            "monto_total": monto,
-            "estado": r[6], "track_id": r[7], "estado_sii": r[8],
-            "fecha_emision": r[9].isoformat() if r[9] else None,
-            "pdf_url": f"/facturacion/boleta/{r[0]}/pdf",
-            "xml_url": f"/facturacion/boleta/{r[0]}/xml",
-            "xml_receptor_url": f"/facturacion/boleta/{r[0]}/xml-receptor",
-        })
-    return jsonify({"ok": True, "documentos": docs,
-                    "total_periodo": total_periodo, "cantidad": len(docs)})
-
-
-def _fact_mapear_estado_sii(estado_sii):
-    """Mapea el código de estado del SII (boletas) a estado interno + glosa legible.
-    Códigos oficiales (diagrama de estados de envíos de boleta del SII):
-      Intermedios (en proceso): REC, SOK, FOK, PRD, CRT, EPR
-      Final aceptado:           RPR (envío procesado/aceptado), EPR final, DOK
-      Final con reparos:        RLV, RPR con reparos
-      Final rechazado:          RCT, RFR, RPT, RSC, VOF, RCH
-    Devuelve: (estado_interno, glosa_legible)
-    """
-    e = (estado_sii or "").strip().upper()
-    intermedios = {"REC": "Envío recibido por el SII",
-                   "SOK": "Esquema validado",
-                   "FOK": "Firma validada",
-                   "PRD": "En proceso",
-                   "CRT": "Carátula OK",
-                   "EPR": "Envío en proceso"}
-    aceptados = {"RPR": "Aceptado por el SII",
-                 "DOK": "Aceptado por el SII",
-                 "ACEPTADO": "Aceptado por el SII"}
-    reparos = {"RLV": "Aceptado con reparos",
-               "RPRREP": "Aceptado con reparos"}
-    rechazados = {"RCT": "Rechazado por carátula",
-                  "RFR": "Rechazado por firma",
-                  "RPT": "Rechazado",
-                  "RSC": "Rechazado por esquema",
-                  "RCH": "Rechazado",
-                  "VOF": "Error interno en el SII",
-                  "RECHAZADO": "Rechazado"}
-    if e in aceptados:
-        return "aceptado", aceptados[e]
-    if e in reparos:
-        return "aceptado_reparos", reparos[e]
-    if e in rechazados:
-        return "rechazado", rechazados[e]
-    if e in intermedios:
-        return "en_proceso", intermedios[e]
-    if not e:
-        return "en_proceso", "En espera de respuesta del SII"
-    # Código desconocido: dejar en proceso pero guardar el código crudo para diagnóstico
-    return "en_proceso", "Estado SII: " + e
-
-
-@app.route("/facturacion/boleta/<int:boleta_id>/diagnostico-sii", methods=["GET"])
-def facturacion_diagnostico_sii(boleta_id):
-    """Extrae del XML timbrado los valores REALES (FchEmis, MntTotal, RUTRecep) y
-    los compara con lo que está guardado en la BD, para detectar qué dato difiere
-    y causa el DNK al consultar al SII."""
-    if not session.get("logged"):
-        return jsonify({"ok": False, "error": "no autenticado"}), 401
-    tenant_id = session.get("tenant_id") or 1
-    import re as _re
-    from inventario import get_conn, release_conn
-    conn = get_conn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""SELECT tipo_dte, folio, rut_receptor, monto_total,
-                                  fecha_emision, xml_firmado, tenant_id
-                           FROM facturacion_dtes WHERE id=%s AND tenant_id=%s""",
-                        (boleta_id, tenant_id))
-            row = cur.fetchone()
-            if not row:
-                # Buscar sin filtro de tenant para diagnosticar si es un problema de tenant_id
-                cur.execute("""SELECT tenant_id FROM facturacion_dtes WHERE id=%s""", (boleta_id,))
-                otra = cur.fetchone()
-                if otra:
-                    return jsonify({"ok": False,
-                                    "error": "Boleta %s existe pero pertenece al tenant %s, y tu sesión es tenant %s. "
-                                             "Por eso no la encuentra. Esto NO afecta la consulta desde el panel." % (
-                                             boleta_id, otra[0], tenant_id)}), 404
-    finally:
-        release_conn(conn)
-    if not row:
-        return jsonify({"ok": False, "error": "Boleta %s no existe en la BD" % boleta_id}), 404
-    tipo_dte, folio, rut_recep_bd, monto_bd, fecha_bd, xml = row
-    xml = xml or ""
-    # Extraer valores REALES timbrados en el XML
-    def _x(tag):
-        m = _re.search(r"<%s>([^<]+)</%s>" % (tag, tag), xml)
-        return m.group(1) if m else None
-    fch_xml = _x("FchEmis")
-    mnt_xml = _x("MntTotal")
-    rut_xml = _x("RUTRecep")
-    # Lo que está en la BD
-    fecha_bd_str = fecha_bd.strftime("%Y-%m-%d") if hasattr(fecha_bd, "strftime") else str(fecha_bd)[:10]
-    return jsonify({
-        "ok": True,
-        "boleta_id": boleta_id,
-        "timbrado_en_xml": {"FchEmis": fch_xml, "MntTotal": mnt_xml, "RUTRecep": rut_xml},
-        "guardado_en_bd": {"fecha_emision": fecha_bd_str, "monto_total": monto_bd,
-                            "rut_receptor": rut_recep_bd, "tipo_dte": tipo_dte, "folio": folio},
-        "coincide_fecha": (fch_xml == fecha_bd_str),
-        "coincide_monto": (str(mnt_xml) == str(int(monto_bd or 0))),
-        "coincide_receptor": (rut_xml == rut_recep_bd),
-        "nota": "Si algún 'coincide_*' es false, ese dato es el que difiere entre el XML timbrado y la BD (causa del DNK)."
-    })
-
-
-@app.route("/facturacion/boleta/<int:boleta_id>/consultar-estado", methods=["POST", "GET"])
-def facturacion_consultar_estado(boleta_id):
-    """LIMBO 3: consulta el estado REAL en el SII de una boleta enviada.
-    Actualiza estado_sii y, si fue aceptada, marca fecha_aceptacion_sii.
-    """
-    if not session.get("logged"):
-        return jsonify({"ok": False, "error": "no autenticado"}), 401
-    tenant_id = session.get("tenant_id") or 1
-
-    from inventario import get_conn, release_conn
-    from facturacion.certificados import obtener_certificado
-    from facturacion.db import obtener_config_facturacion
-    from facturacion.utils import normalizar_ambiente
-    from facturacion.dtes.sii_client import consultar_estado_dte
-
-    conn = get_conn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""SELECT track_id_sii, estado, tipo_dte, folio, rut_receptor,
-                                  monto_total, fecha_emision, xml_firmado
-                           FROM facturacion_dtes
-                           WHERE id=%s AND tenant_id=%s""", (boleta_id, tenant_id))
-            row = cur.fetchone()
-    finally:
-        release_conn(conn)
-    if not row:
-        return jsonify({"ok": False, "error": "Boleta no encontrada"}), 404
-    track_id = row[0]
-    tipo_dte = row[2]
-    folio = row[3]
-    xml_firmado = row[7] or ""
-
-    # CRÍTICO: consultar con los datos EXACTOS que se timbraron en el XML enviado
-    # al SII (no recalculados desde la BD). Así no hay desfase de fecha/monto.
-    import re as _re_cons
-    def _del_xml(tag, fallback):
-        m = _re_cons.search(r"<%s>([^<]+)</%s>" % (tag, tag), xml_firmado)
-        return m.group(1).strip() if m else fallback
-
-    # RUT receptor: el del XML timbrado (RUTRecep)
-    rut_receptor = _del_xml("RUTRecep", row[4] or "66666666-6")
-    # Monto: el MntTotal timbrado en el XML
-    mnt_xml = _del_xml("MntTotal", None)
-    monto_total = int(mnt_xml) if (mnt_xml and mnt_xml.isdigit()) else int(row[5] or 0)
-    # Fecha: el FchEmis timbrado (formato YYYY-MM-DD en el XML)
-    fch_xml = _del_xml("FchEmis", None)
-    if fch_xml:
-        fecha_str = fch_xml[:10]
-    else:
-        fecha_emision = row[6]
-        fecha_str = fecha_emision.strftime("%Y-%m-%d") if hasattr(fecha_emision, "strftime") else str(fecha_emision)[:10]
-
-    config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
-    ambiente = normalizar_ambiente(config.get("ambiente") or "certificacion")
-    cert = obtener_certificado(get_conn, release_conn, tenant_id)
-    if not cert.get("ok"):
-        return jsonify({"ok": False, "error": "Certificado no disponible"}), 400
-
-    # Consulta por DATOS del documento (getEstDte, SOAP, vía pública documentada).
-    # No depende del track id ni del endpoint REST que daba 404.
-    # Extraer la firma (SignatureValue) del XML para la consulta AVANZADA.
-    m_firma = _re_cons.search(r"<SignatureValue[^>]*>([^<]+)</SignatureValue>", xml_firmado)
-    firma_dte = m_firma.group(1).strip() if m_firma else ""
-    try:
-        from facturacion.dtes.sii_client import consultar_estado_dte_av
-        if firma_dte:
-            # Consulta AVANZADA (más precisa, verifica con la firma + dice RECIBIDO=SI/NO)
-            res = consultar_estado_dte_av(
-                pfx_bytes=cert["pfx_bytes"], password=cert["password"],
-                rut_emisor=config["rut_emisor"], rut_receptor=rut_receptor,
-                tipo_dte=tipo_dte, folio=folio, fecha_emision=fecha_str,
-                monto_total=monto_total, firma_dte=firma_dte, ambiente=ambiente)
-        else:
-            res = consultar_estado_dte(
-                pfx_bytes=cert["pfx_bytes"], password=cert["password"],
-                rut_consultante=config["rut_emisor"], rut_emisor=config["rut_emisor"],
-                rut_receptor=rut_receptor, tipo_dte=tipo_dte, folio=folio,
-                fecha_emision=fecha_str, monto_total=monto_total, ambiente=ambiente)
-    except Exception as e:
-        return jsonify({"ok": False, "error": "No se pudo consultar: " + str(e)[:1500]}), 502
-
-    estado_dte = (res.get("estado") or "").upper()
-    recibido = res.get("recibido")  # "SI"/"NO" en la consulta avanzada
-    # Mapear el estado a estado interno
-    # DOK = recibido y datos OK (aceptado) | DNK = recibido, datos no coinciden
-    # FAU = no recibido | FAN/FNA = no autorizado | RCT/RCH = rechazado
-    if estado_dte == "DOK":
-        nuevo_estado, glosa = "aceptado", "Aceptada por el SII"
-    elif estado_dte in ("DNK",):
-        # DNK pero el SII confirma recepción ("DTE Recibido" / RECIBIDO=SI):
-        # el documento ESTÁ en el SII. En el ambiente de certificación los datos
-        # pueden no sincronizarse al 100% (comportamiento conocido del SII), pero
-        # la recepción está confirmada. En producción esto devuelve DOK.
-        if recibido == "SI" or res.get("esta_en_sii") or res.get("recibido_en_sii"):
-            if ambiente == "produccion":
-                nuevo_estado, glosa = "aceptado", "Aceptada por el SII"
-            else:
-                nuevo_estado, glosa = "aceptado", "Aceptada por el SII (ambiente de certificación)"
-        else:
-            nuevo_estado, glosa = "en_proceso", ("Recibida por el SII, en validación. "
-                                                 "Folio %s, monto %s." % (folio, monto_total))
-    elif estado_dte in ("FAU",):
-        nuevo_estado, glosa = "en_proceso", "El SII aún no registra este documento (puede estar procesándose)"
-    elif estado_dte in ("FAN", "FNA"):
-        nuevo_estado, glosa = "rechazado", "Documento no autorizado por el SII"
-    elif estado_dte in ("RCT", "RCH", "RFR", "RSC"):
-        nuevo_estado, glosa = "rechazado", res.get("glosa") or "Rechazado por el SII"
-    elif not estado_dte:
-        nuevo_estado, glosa = "en_proceso", "Sin respuesta de estado del SII todavía"
-    else:
-        nuevo_estado, glosa = "en_proceso", res.get("glosa") or ("Estado SII: " + estado_dte)
-
-    es_aceptada = nuevo_estado == "aceptado"
-    _fact_actualizar_estado_dte(boleta_id, nuevo_estado, estado_sii=estado_dte,
-                                glosa=glosa, set_fecha_aceptacion=es_aceptada)
-    return jsonify({"ok": True, "estado": nuevo_estado, "estado_sii": estado_dte,
-                    "glosa": glosa, "track_id": track_id,
-                    "datos_consultados": {"tipo": tipo_dte, "folio": folio,
-                                          "fecha_xml": fecha_str, "monto_xml": monto_total,
-                                          "receptor_xml": rut_receptor},
-                    "respuesta_sii": res.get("respuesta_cruda", "")[:800]})
-
-
-def _fact_job_consultar_estados():
-    """LIMBO 3 (automático): cada cierto tiempo consulta el estado real en el SII
-    de las boletas que están 'enviado'/'en_proceso' y las actualiza usando getEstDte
-    (consulta por datos del documento, vía pública). Solo marca estados finales.
-    """
-    from inventario import get_conn, release_conn
-    from facturacion.certificados import obtener_certificado
-    from facturacion.db import obtener_config_facturacion
-    from facturacion.utils import normalizar_ambiente
-    from facturacion.dtes.sii_client import consultar_estado_dte
-    try:
-        conn = get_conn()
-        try:
-            with conn.cursor() as cur:
-                cur.execute("""SELECT id, tenant_id, tipo_dte, folio, rut_receptor,
-                                      monto_total, fecha_emision
-                               FROM facturacion_dtes
-                               WHERE estado IN ('enviado','en_proceso')
-                                 AND fecha_emision > (NOW() - INTERVAL '7 days')
-                               ORDER BY tenant_id LIMIT 200""")
-                pendientes = cur.fetchall()
-        finally:
-            release_conn(conn)
-        if not pendientes:
-            return
-        # Agrupar por tenant para reutilizar certificado/config
-        certs = {}
-        for row in pendientes:
-            bid, tid, tipo_dte, folio, rut_recep, monto, fch = row
-            try:
-                if tid not in certs:
-                    cfg = obtener_config_facturacion(get_conn, release_conn, tid)
-                    crt = obtener_certificado(get_conn, release_conn, tid)
-                    certs[tid] = (cfg, crt) if (cfg and crt.get("ok")) else None
-                if not certs[tid]:
-                    continue
-                cfg, crt = certs[tid]
-                amb = normalizar_ambiente(cfg.get("ambiente") or "certificacion")
-                fch_str = fch.strftime("%Y-%m-%d") if hasattr(fch, "strftime") else str(fch)[:10]
-                res = consultar_estado_dte(
-                    pfx_bytes=crt["pfx_bytes"], password=crt["password"],
-                    rut_consultante=cfg["rut_emisor"], rut_emisor=cfg["rut_emisor"],
-                    rut_receptor=rut_recep or "66666666-6", tipo_dte=tipo_dte,
-                    folio=folio, fecha_emision=fch_str, monto_total=int(monto or 0),
-                    ambiente=amb)
-                est = (res.get("estado") or "").upper()
-                if est == "DOK":
-                    _fact_actualizar_estado_dte(bid, "aceptado", estado_sii=est,
-                                                glosa="Aceptado por el SII", set_fecha_aceptacion=True)
-                elif est in ("FAN", "FNA", "RCT", "RCH", "RFR", "RSC"):
-                    _fact_actualizar_estado_dte(bid, "rechazado", estado_sii=est,
-                                                glosa=res.get("glosa") or "Rechazado por el SII")
-                # DNK/FAU: aún no final, se reintenta en la próxima corrida
-            except Exception as e:
-                print("[Estado SII] Error boleta %s: %s" % (bid, str(e)[:120]))
-    except Exception as e:
-        print("[Estado SII] Error general: %s" % str(e)[:200])
-
-
-def _fact_job_rcof_diario():
-    """Generador de RCOF/RVD diario (conservado por si el SII lo solicita).
-    Agrupa las boletas del día anterior por tenant y arma el resumen.
-    NOTA: el SII eliminó la obligación del RCOF diario (Res. Ex. N°53/2022);
-    se conserva como herramienta manual/respaldo.
-    """
-    from inventario import get_conn, release_conn
-    from facturacion.certificados import obtener_certificado
-    from facturacion.db import obtener_config_facturacion
-    from facturacion.utils import normalizar_ambiente
-    from facturacion.dtes.sii_client import autenticar
-    from facturacion.dtes.rcof import construir_resumen, generar_rcof_xml
-    from facturacion.dtes.firma import firmar_envio_completo
-    from datetime import datetime, timedelta
-
-    try:
-        ayer = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-        # Agrupar boletas del día anterior por tenant
-        conn = get_conn()
-        try:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT tenant_id, tipo_dte,
-                           COUNT(*) AS n, MIN(folio) AS fmin, MAX(folio) AS fmax,
-                           COALESCE(SUM(monto_neto),0), COALESCE(SUM(monto_iva),0),
-                           COALESCE(SUM(monto_total),0)
-                    FROM facturacion_dtes
-                    WHERE DATE(fecha_emision) = %s AND estado IN ('enviado','aceptado')
-                    GROUP BY tenant_id, tipo_dte
-                """, (ayer,))
-                filas = cur.fetchall()
-        finally:
-            release_conn(conn)
-
-        por_tenant = {}
-        for f in filas:
-            por_tenant.setdefault(f[0], []).append({
-                "tipo": f[1], "n": f[2], "fmin": f[3], "fmax": f[4],
-                "neto": int(f[5]), "iva": int(f[6]), "total": int(f[7]),
-            })
-
-        for tid, resumenes_data in por_tenant.items():
-            try:
-                config = obtener_config_facturacion(get_conn, release_conn, tid)
-                cert = obtener_certificado(get_conn, release_conn, tid)
-                if not config or not cert.get("ok"):
-                    continue
-                ambiente = normalizar_ambiente(config.get("ambiente") or "certificacion")
-                rut_envia = cert["metadata"].get("rut", config["rut_emisor"])
-                nro_resol = config.get("resolucion_sii_numero") or 0
-                fch_resol = config.get("resolucion_sii_fecha") or "2014-08-22"
-                if not isinstance(fch_resol, str):
-                    fch_resol = fch_resol.isoformat()
-
-                resumenes = []
-                for r in resumenes_data:
-                    resumenes.append(construir_resumen(
-                        tipo_documento=r["tipo"], mnt_neto=r["neto"], mnt_iva=r["iva"],
-                        mnt_total=r["total"], folios_emitidos=r["n"], folios_utilizados=r["n"],
-                        rangos_utilizados=[{"inicial": r["fmin"], "final": r["fmax"]}],
-                    ))
-
-                rcof = generar_rcof_xml(
-                    rut_emisor=config["rut_emisor"], rut_envia=rut_envia,
-                    fecha=ayer, resumenes=resumenes,
-                    fch_resol=fch_resol, nro_resol=nro_resol,
-                )
-                # Firmar el RCOF (sobre DocumentoConsumoFolios por su ID)
-                firmado = firmar_envio_completo(
-                    rcof["xml"], cert["pfx_bytes"], cert["password"],
-                    set_dte_id=rcof["documento_id"], documento_ids=[])
-
-                # Enviar al SII (endpoint de consumo de folios para boletas)
-                from facturacion.dtes.sii_client import ENDPOINTS
-                tok = autenticar(cert["pfx_bytes"], cert["password"], ambiente)
-                # nota: el endpoint de RCOF de boletas usa el mismo host de envío
-                url = ENDPOINTS[ambiente]["envio"].replace("boleta.electronica.envio",
-                                                            "boleta.electronica.consumo")
-                # registrar el envío del RCOF para auditoría
-                print("[RCOF] Tenant %s: enviando RCOF de %s (%d resúmenes)" % (tid, ayer, len(resumenes)))
-                _fact_registrar_rcof(tid, ayer, ambiente, firmado, resumenes_data)
-            except Exception as e:
-                print("[RCOF] Error tenant %s: %s" % (tid, str(e)[:150]))
-    except Exception as e:
-        print("[RCOF] Error general: %s" % str(e)[:200])
-
-
-# ── Registro del job de consulta de estados (la función ya está definida arriba) ──
-try:
-    scheduler.add_job(_fact_job_consultar_estados, "interval", minutes=15,
-                      id="fact_consultar_estados", replace_existing=True,
-                      misfire_grace_time=120,
-                      next_run_time=(datetime.now() + timedelta(minutes=3)))
-    print("[Facturación] Job de consulta de estados SII registrado (cada 15 min)")
-except Exception as _e:
-    print("[Facturación] No se pudo registrar el job de estados: %s" % _e)
-
-
-def _fact_registrar_rcof(tenant_id, fecha, ambiente, xml_firmado, resumenes):
-    """Guarda el RCOF generado para auditoría (tabla facturacion_rcof si existe)."""
-    from inventario import get_conn, release_conn
-    conn = get_conn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS facturacion_rcof (
-                    id SERIAL PRIMARY KEY, tenant_id INTEGER NOT NULL,
-                    fecha DATE NOT NULL, ambiente TEXT,
-                    xml_firmado TEXT, resumen JSONB, track_id TEXT,
-                    estado TEXT DEFAULT 'generado', creado_en TIMESTAMP DEFAULT NOW(),
-                    UNIQUE(tenant_id, fecha, ambiente)
-                )
-            """)
-            import json as _json
-            cur.execute("""
-                INSERT INTO facturacion_rcof (tenant_id, fecha, ambiente, xml_firmado, resumen)
-                VALUES (%s,%s,%s,%s,%s)
-                ON CONFLICT (tenant_id, fecha, ambiente) DO UPDATE SET
-                    xml_firmado = EXCLUDED.xml_firmado, resumen = EXCLUDED.resumen,
-                    creado_en = NOW()
-            """, (tenant_id, fecha, ambiente,
-                  xml_firmado.decode("iso-8859-1", errors="replace"),
-                  _json.dumps(resumenes)))
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        print("[RCOF] Error guardando: %s" % str(e)[:150])
-    finally:
-        release_conn(conn)
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # ENDPOINTS FACTURACIÓN ELECTRÓNICA SII (Fase 1 — Config)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -22070,76 +20910,6 @@ def _fact_registrar_rcof(tenant_id, fecha, ambiente, xml_firmado, resumenes):
 #
 # IMPORTANTE: estos endpoints leen tenant_id de la sesión, NO de URL params.
 # Esto previene que tenant A vea config de tenant B.
-
-
-
-@app.route("/facturacion/rcof/generar", methods=["POST"])
-def facturacion_rcof_generar_manual():
-    """Genera el RCOF de una fecha bajo demanda (solo si el SII lo solicita
-    puntualmente; ya no es obligatorio desde la Res.53/2022). Devuelve el XML
-    firmado para descargar y subir manualmente al portal del SII si hace falta.
-    Body: {"fecha": "YYYY-MM-DD"}
-    """
-    if not session.get("logged"):
-        return jsonify({"ok": False, "error": "no autenticado"}), 401
-    tenant_id = session.get("tenant_id") or 1
-    data = request.get_json(silent=True) or {}
-    fecha = data.get("fecha")
-    if not fecha:
-        from datetime import date, timedelta
-        fecha = (date.today() - timedelta(days=1)).isoformat()
-
-    from inventario import get_conn, release_conn
-    from facturacion.certificados import obtener_certificado
-    from facturacion.db import obtener_config_facturacion
-    from facturacion.utils import normalizar_ambiente
-    from facturacion.rcof import generar_rcof_xml, construir_resumen
-    from facturacion.dtes.firma import firmar_envio_completo
-    from flask import Response
-
-    config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
-    cert = obtener_certificado(get_conn, release_conn, tenant_id)
-    if not config or not cert.get("ok"):
-        return jsonify({"ok": False, "error": "Falta config o certificado"}), 400
-
-    conn = get_conn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT tipo_dte, COUNT(*), SUM(monto_neto), SUM(monto_iva),
-                       SUM(monto_total), MIN(folio), MAX(folio)
-                FROM facturacion_dtes
-                WHERE tenant_id=%s AND DATE(fecha_emision)=%s
-                  AND estado IN ('enviado','aceptado') AND tipo_dte IN (39,41)
-                GROUP BY tipo_dte ORDER BY tipo_dte
-            """, (tenant_id, fecha))
-            filas = cur.fetchall()
-    finally:
-        release_conn(conn)
-
-    if not filas:
-        return jsonify({"ok": False, "error": "No hubo boletas emitidas el " + str(fecha)}), 400
-
-    rut_envia = cert["metadata"].get("rut", config["rut_emisor"])
-    nro_resol = config.get("resolucion_sii_numero") or 0
-    fch_resol = config.get("resolucion_sii_fecha") or "2014-08-22"
-    if not isinstance(fch_resol, str):
-        fch_resol = fch_resol.isoformat()
-
-    resumenes = []
-    for tipo, n, neto, iva, total, fmin, fmax in filas:
-        resumenes.append(construir_resumen(
-            tipo_documento=int(tipo), mnt_neto=int(neto or 0), mnt_iva=int(iva or 0),
-            mnt_total=int(total or 0), folios_emitidos=int(n), folios_utilizados=int(n),
-            rangos_utilizados=[{"inicial": int(fmin), "final": int(fmax)}]))
-
-    rcof = generar_rcof_xml(rut_emisor=config["rut_emisor"], rut_envia=rut_envia,
-                            fecha=fecha, resumenes=resumenes,
-                            fch_resol=fch_resol, nro_resol=nro_resol)
-    firmado = firmar_envio_completo(rcof["xml"], cert["pfx_bytes"], cert["password"],
-                                    set_dte_id=rcof["documento_id"], documento_ids=[])
-    return Response(firmado, mimetype="application/xml",
-                    headers={"Content-Disposition": 'attachment; filename="RCOF_' + str(fecha) + '.xml"'})
 
 
 @app.route("/facturacion/config", methods=["GET"])
@@ -22618,7 +21388,6 @@ def facturacion_dashboard():
             "fase_actual": "Fase 1 — Configuración",
             "mrr_tributario": mrr,
             "dtes_activos": dtes_activos,
-            "es_admin": session.get("rol") == "admin",
         })
 
     except Exception as e:
@@ -24127,11 +22896,9 @@ def admin_lusync_sii_test_estado():
             res = consultar_estado_envio(
                 track_id=trackid, token=tok, rut_emisor=rut_emisor, ambiente=ambiente)
             if res.get("ok"):
-                estado = res.get("estado_envio") or "(sin estado)"
-                extra = "Aceptados:%s Rechazados:%s Reparos:%s" % (
-                    res.get("aceptados"), res.get("rechazados"), res.get("reparos"))
+                estado = res.get("estado") or "(sin campo estado)"
                 paso(f"Consultar estado (track {trackid})", True,
-                     f"Estado: {estado} · {extra}")
+                     f"Estado: {estado}")
                 paso("Respuesta del SII", True,
                      _html.escape(str(res.get("respuesta_cruda", ""))[:600]))
             else:
@@ -24467,6 +23234,111 @@ SET_NOTAS_CREDITO = [
         "referencia": {"folio_ref": 11, "cod_ref": 3, "razon_ref": "REBAJA 10%", "tipo_doc_ref": 39},
     },
 ]
+
+
+@app.route("/admin/lusync/sii/test-estado-dte", methods=["GET"])
+@requiere_lusync_admin
+def admin_lusync_sii_test_estado_dte():
+    """Consulta el estado de una boleta por sus DATOS (getEstDte, vía pública SOAP).
+
+    Esta es la consulta robusta y documentada del SII — sirve para confirmar que
+    el SII aceptó la boleta y es la base de la verificación pública del cliente.
+
+    Uso: /admin/lusync/sii/test-estado-dte?token=...&tenant_id=3
+         &tipo=39&folio=11&fecha=2026-05-26&monto=15000&receptor=66666666-6
+    """
+    from inventario import get_conn, release_conn
+    from facturacion.certificados import obtener_certificado
+    from facturacion import obtener_config_facturacion
+    from facturacion.dtes.sii_client import consultar_estado_dte
+    from flask import request, jsonify
+
+    tenant_id = int(request.args.get("tenant_id", "3"))
+    tipo = int(request.args.get("tipo", "39"))
+    folio = int(request.args.get("folio", "11"))
+    fecha = request.args.get("fecha", "")
+    monto = int(request.args.get("monto", "0"))
+    receptor = request.args.get("receptor", "66666666-6")
+    ambiente = request.args.get("ambiente", "certificacion")
+    # Si se pasa ?desde_boleta=si, se generan los datos desde una boleta real del
+    # Set, garantizando que monto/fecha/folio/receptor coincidan EXACTO con lo
+    # emitido. Es la forma correcta de obtener DOK (sin DNK por datos mal pasados).
+    desde_boleta = request.args.get("desde_boleta", "").strip().lower() == "si"
+
+    try:
+        cert = obtener_certificado(get_conn, release_conn, tenant_id)
+        config = obtener_config_facturacion(get_conn, release_conn, tenant_id) or {}
+        rut_emisor = (config.get("rut_emisor") or "76922862-4").replace(".", "")
+        rut_consultante = cert.get("metadata", {}).get("rut", rut_emisor)
+
+        if desde_boleta:
+            # Reconstruir la boleta tal cual se emite y extraer sus datos exactos
+            from facturacion.dtes.caf_parser import parsear_caf_xml
+            from facturacion.dtes.boleta import generar_boleta_xml
+            from facturacion.dtes.pdf_boleta import parsear_boleta_xml
+            conn = get_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""SELECT xml_caf FROM facturacion_cafs
+                                   WHERE tenant_id=%s AND tipo_dte=39
+                                   ORDER BY id DESC LIMIT 1""", (tenant_id,))
+                    row = cur.fetchone()
+            finally:
+                release_conn(conn)
+            caf = parsear_caf_xml(row[0])
+            emisor = {"rut": config.get("rut_emisor", "76.922.862-4"),
+                      "razon_social": config.get("razon_social", "GRUPO PH SPA"),
+                      "giro": config.get("giro", ""), "dir_origen": config.get("direccion", ""),
+                      "cmna_origen": config.get("comuna", "Santiago")}
+            bol = generar_boleta_xml(caf=caf, folio=folio, fecha_emision=fecha or "2026-05-26",
+                emisor=emisor,
+                items=[{"nombre":"Cambio de aceite","cantidad":1,"precio_unitario":19900,"exento":False},
+                       {"nombre":"Alineacion y balanceo","cantidad":1,"precio_unitario":9900,"exento":False}],
+                referencia={"cod_ref":"SET","razon_ref":"CASO-1"})
+            d = parsear_boleta_xml(bol["xml"])
+            folio = int(d["folio"]); fecha = d["fch_emis"]
+            monto = int(d["totales"]["total"]); receptor = d["receptor"]["rut"] or "66666666-6"
+
+        r = consultar_estado_dte(
+            pfx_bytes=cert["pfx_bytes"], password=cert["password"],
+            rut_consultante=rut_consultante, rut_emisor=rut_emisor,
+            rut_receptor=receptor, tipo_dte=tipo, folio=folio,
+            fecha_emision=fecha, monto_total=monto, ambiente=ambiente)
+        r["consulta"] = {"tipo": tipo, "folio": folio, "fecha": fecha,
+                         "monto": monto, "receptor": receptor}
+
+        # Glosa amigable según el estado
+        # Mapeo HONESTO de estados. NUNCA marcar DNK como aceptado: DNK significa
+        # que los datos de la consulta no coinciden con la boleta registrada, lo
+        # que casi siempre es un dato mal pasado a la consulta (monto/fecha/folio),
+        # no una boleta válida. Para un producto que se vende, el estado DEBE
+        # reflejar la verdad del SII; "Aceptada" solo con DOK.
+        glosas = {
+            "DOK": "✅ Aceptada por el SII (documento recibido y datos correctos)",
+            "DNK": "⚠️ Los datos de la consulta NO coinciden con la boleta registrada "
+                   "(revisar monto, fecha, folio o RUT receptor — deben ser EXACTOS)",
+            "FAU": "❌ El SII NO tiene registrada esta boleta (no recibida)",
+            "FAN": "❌ Documento no autorizado por el SII",
+            "FNA": "❌ Documento no autorizado por el SII",
+            "ANC": "🚫 Documento anulado",
+            "EMP": "❌ Empresa no autorizada como emisor",
+        }
+        # Badge para la UI: solo verde si DOK. DNK es ámbar (revisar), no verde.
+        badge = {
+            "DOK": {"texto": "Aceptada", "color": "verde"},
+            "DNK": {"texto": "Revisar datos", "color": "ambar"},
+            "FAU": {"texto": "No recibida", "color": "rojo"},
+            "FAN": {"texto": "No autorizada", "color": "rojo"},
+            "FNA": {"texto": "No autorizada", "color": "rojo"},
+            "ANC": {"texto": "Anulada", "color": "gris"},
+        }.get(r.get("estado"), {"texto": r.get("estado") or "Desconocido", "color": "gris"})
+        r["interpretacion"] = glosas.get(r.get("estado"), f"Estado: {r.get('estado')}")
+        r["badge"] = badge
+        return jsonify(r)
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e),
+                        "traceback": traceback.format_exc()[:1000]})
 
 
 @app.route("/admin/lusync/sii/test-pdf-boleta", methods=["GET"])
