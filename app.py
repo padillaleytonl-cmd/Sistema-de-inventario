@@ -25044,6 +25044,388 @@ SET_BOLETAS_BE = {
 }
 
 
+@app.route("/admin/lusync/sii/test-set-basico", methods=["GET"])
+@requiere_lusync_admin
+def admin_lusync_sii_test_set_basico():
+    """Emite los 8 casos del Set Básico SII (4829122) en UN solo sobre EnvioDTE:
+       4 Facturas Electrónicas (33) + 3 Notas de Crédito (61) + 1 Nota de Débito (56).
+
+    Modos:
+      • Sin params → muestra confirmación (preview de los casos)
+      • ?descargar=si → genera y firma el sobre, lo devuelve como .xml para subir
+                        manualmente al portal SII (no envía por SOAP, NO consume folios extra)
+      • ?confirmar=si → envía vía SOAP DTEUpload (requiere token SOAP funcionando)
+
+    Uso: /admin/lusync/sii/test-set-basico?tenant_id=3&descargar=si
+    """
+    from inventario import get_conn, release_conn
+    from facturacion.certificados import obtener_certificado
+    from facturacion.db import obtener_config_facturacion
+
+    tenant_id = request.args.get("tenant_id", default=3, type=int)
+    ambiente = request.args.get("ambiente", default="certificacion")
+    confirmar = request.args.get("confirmar", default="")
+    descargar = request.args.get("descargar", default="")
+
+    pasos = []
+    def paso(nombre, ok, detalle=""):
+        pasos.append({"nombre": nombre, "ok": ok, "detalle": detalle})
+
+    # Receptor de pruebas para el set (el SII acepta cualquier RUT válido en cert.)
+    RECEPTOR_SET = {
+        "rut": "55555555-5",
+        "razon_social": "CLIENTE DE PRUEBAS LUSYNC",
+        "giro": "Comercio al por menor",
+        "direccion": "Av. Providencia 1234",
+        "comuna": "Providencia",
+    }
+
+    # ─── Pantalla de confirmación ───
+    if confirmar != "si" and descargar != "si":
+        return """<!DOCTYPE html><html><head><meta charset="utf-8">
+        <title>Confirmar Set Básico SII</title>
+        <style>body{font-family:-apple-system,sans-serif;background:#f6f5f1;padding:40px;}
+        .card{max-width:680px;margin:0 auto;background:white;border-radius:14px;padding:28px;
+        box-shadow:0 4px 20px rgba(0,0,0,0.06);}
+        .warn{background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:14px;color:#92400e;font-size:13px;}
+        table{width:100%;border-collapse:collapse;margin:14px 0;font-size:12px;}
+        td{padding:6px 8px;border-bottom:1px solid #f0f0ee;}
+        a.btn{display:inline-block;margin-top:18px;background:#534AB7;color:white;padding:12px 20px;
+        border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;margin-right:10px;}
+        a.btn-warn{background:#dc2626;}</style></head><body>
+        <div class="card">
+        <h2 style="margin-top:0;">📋 Emitir SET BÁSICO SII (4829122)</h2>
+        <div class="warn">
+        Genera los 8 casos del set oficial del SII: 4 Facturas + 3 NC + 1 ND.<br><br>
+        • <b>Descargar</b>: genera el sobre EnvioDTE.xml para subir manualmente al portal SII (recomendado)<br>
+        • <b>Enviar SOAP</b>: requiere token SOAP funcionando (ESTADO 10 actual)<br>
+        • Consume: 4 folios CAF 33 + 3 folios CAF 61 + 1 folio CAF 56
+        </div>
+        <table>
+        <tr><td><b>CASO 1</b></td><td>Factura (33)</td><td>2 items afectos simples</td><td style="text-align:right;">$1.258.446</td></tr>
+        <tr><td><b>CASO 2</b></td><td>Factura (33)</td><td>2 items con descuento por línea</td><td style="text-align:right;">$8.561.437</td></tr>
+        <tr><td><b>CASO 3</b></td><td>Factura (33)</td><td>2 afectos + 1 exento mezclado</td><td style="text-align:right;">$1.777.296</td></tr>
+        <tr><td><b>CASO 4</b></td><td>Factura (33)</td><td>3 items + descuento global 23%</td><td style="text-align:right;">$3.719.165</td></tr>
+        <tr><td><b>CASO 5</b></td><td>NC (61)</td><td>Anula CASO 1 (CORRIGE GIRO)</td><td style="text-align:right;">$1.258.446</td></tr>
+        <tr><td><b>CASO 6</b></td><td>NC (61)</td><td>Devolución parcial CASO 2</td><td style="text-align:right;">~$4.200.337</td></tr>
+        <tr><td><b>CASO 7</b></td><td>NC (61)</td><td>Anula CASO 3 (ANULA FACTURA)</td><td style="text-align:right;">$1.777.296</td></tr>
+        <tr><td><b>CASO 8</b></td><td>ND (56)</td><td>Anula NC del CASO 5</td><td style="text-align:right;">$1.258.446</td></tr>
+        </table>
+        <a class="btn" href="?tenant_id=""" + str(tenant_id) + """&descargar=si">
+        📥 Generar y descargar sobre EnvioDTE</a>
+        <a class="btn btn-warn" href="?tenant_id=""" + str(tenant_id) + """&confirmar=si">
+        ⚡ Generar y enviar al SII vía SOAP</a>
+        </div></body></html>"""
+
+    error_fatal = False
+    track_id = None
+    import html as _html
+    detalles_casos = []
+    try:
+        # ─── 1. Certificado ───
+        cert = obtener_certificado(get_conn, release_conn, tenant_id)
+        if not cert.get("ok"):
+            paso("Leer certificado", False, cert.get("error", "?"))
+            error_fatal = True
+        else:
+            paso("Leer certificado", True, cert["metadata"].get("titular", "?"))
+
+        # ─── 2. Config emisor + 3 CAFs (33, 61, 56) ───
+        cafs_dict = {}
+        if not error_fatal:
+            config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+            emisor = {
+                "rut": config["rut_emisor"], "razon_social": config["razon_social"],
+                "giro": config.get("giro", "Venta al por menor"),
+                "dir_origen": config.get("direccion", "Sin dirección"),
+                "cmna_origen": config.get("comuna", "Santiago"),
+            }
+            if config.get("acteco"):
+                emisor["acteco"] = config["acteco"]
+            paso("Datos del emisor", True, f"{emisor['razon_social']} · {emisor['rut']}")
+
+            from facturacion.dtes.caf_parser import parsear_caf_xml
+            conn = get_conn()
+            try:
+                with conn.cursor() as cur:
+                    for tipo in (33, 61, 56):
+                        cur.execute("""
+                            SELECT xml_caf FROM facturacion_cafs
+                            WHERE tenant_id = %s AND tipo_dte = %s
+                            ORDER BY id DESC LIMIT 1
+                        """, (tenant_id, tipo))
+                        row = cur.fetchone()
+                        if not row:
+                            paso(f"CAF tipo {tipo}", False, f"No hay CAF tipo {tipo} cargado")
+                            error_fatal = True
+                        else:
+                            caf = parsear_caf_xml(row[0])
+                            cafs_dict[tipo] = caf
+                            paso(f"CAF tipo {tipo}", True,
+                                 f"Rango {caf.rango_desde}-{caf.rango_hasta}")
+            finally:
+                release_conn(conn)
+
+        # ─── 3. Generar los 8 documentos ───
+        documentos_sin_firma = []
+        documento_ids = []
+        if not error_fatal:
+            from facturacion.dtes.factura import generar_factura_xml
+            from facturacion.dtes.nota_credito import generar_nota_credito_xml
+            from facturacion.dtes.nota_debito import generar_nota_debito_xml
+            try:
+                from zoneinfo import ZoneInfo
+                fecha = datetime.now(ZoneInfo("America/Santiago")).strftime("%Y-%m-%d")
+            except Exception:
+                from datetime import timezone as _tz, timedelta as _td
+                fecha = (datetime.now(_tz.utc) - _td(hours=4)).strftime("%Y-%m-%d")
+
+            # Folios iniciales de cada CAF
+            folio_33 = cafs_dict[33].rango_desde
+            folio_61 = cafs_dict[61].rango_desde
+            folio_56 = cafs_dict[56].rango_desde
+
+            # CASO 1: Factura 33, 2 items afectos simples
+            r = generar_factura_xml(
+                caf=cafs_dict[33], folio=folio_33, fecha_emision=fecha,
+                emisor=emisor, receptor=RECEPTOR_SET,
+                items=[
+                    {'nombre': 'Cajón AFECTO', 'cantidad': 171, 'precio_unitario': 3634, 'exento': False},
+                    {'nombre': 'Relleno AFECTO', 'cantidad': 72, 'precio_unitario': 6057, 'exento': False},
+                ],
+                referencias=[{"tpo_doc_ref": "SET", "folio_ref": "4829122-1",
+                              "cod_ref": "SET", "razon_ref": "CASO-1"}],
+            )
+            caso1_folio = r["folio"]; caso1_total = r["totales"]["mnt_total"]
+            documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
+            detalles_casos.append(f"CASO-1 (F33 f{caso1_folio}): ${caso1_total:,}".replace(",", "."))
+            folio_33 += 1
+
+            # CASO 2: Factura 33, 2 items con descuento por línea
+            r = generar_factura_xml(
+                caf=cafs_dict[33], folio=folio_33, fecha_emision=fecha,
+                emisor=emisor, receptor=RECEPTOR_SET,
+                items=[
+                    {'nombre': 'Pañuelo AFECTO', 'cantidad': 788, 'precio_unitario': 6096, 'exento': False, 'descuento_pct': 10},
+                    {'nombre': 'ITEM 2 AFECTO', 'cantidad': 734, 'precio_unitario': 5147, 'exento': False, 'descuento_pct': 24},
+                ],
+                referencias=[{"tpo_doc_ref": "SET", "folio_ref": "4829122-2",
+                              "cod_ref": "SET", "razon_ref": "CASO-2"}],
+            )
+            caso2_folio = r["folio"]; caso2_total = r["totales"]["mnt_total"]
+            documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
+            detalles_casos.append(f"CASO-2 (F33 f{caso2_folio}): ${caso2_total:,}".replace(",", "."))
+            folio_33 += 1
+
+            # CASO 3: Factura 33, 2 afectos + 1 exento
+            r = generar_factura_xml(
+                caf=cafs_dict[33], folio=folio_33, fecha_emision=fecha,
+                emisor=emisor, receptor=RECEPTOR_SET,
+                items=[
+                    {'nombre': 'Pintura B&W AFECTO', 'cantidad': 67, 'precio_unitario': 7115, 'exento': False},
+                    {'nombre': 'ITEM 2 AFECTO', 'cantidad': 241, 'precio_unitario': 4096, 'exento': False},
+                    {'nombre': 'ITEM 3 SERVICIO EXENTO', 'cantidad': 1, 'precio_unitario': 35325, 'exento': True},
+                ],
+                referencias=[{"tpo_doc_ref": "SET", "folio_ref": "4829122-3",
+                              "cod_ref": "SET", "razon_ref": "CASO-3"}],
+            )
+            caso3_folio = r["folio"]; caso3_total = r["totales"]["mnt_total"]
+            documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
+            detalles_casos.append(f"CASO-3 (F33 f{caso3_folio}): ${caso3_total:,}".replace(",", "."))
+            folio_33 += 1
+
+            # CASO 4: Factura 33, 3 items + descuento global 23% solo afectos
+            r = generar_factura_xml(
+                caf=cafs_dict[33], folio=folio_33, fecha_emision=fecha,
+                emisor=emisor, receptor=RECEPTOR_SET,
+                items=[
+                    {'nombre': 'ITEM 1 AFECTO', 'cantidad': 433, 'precio_unitario': 6157, 'exento': False},
+                    {'nombre': 'ITEM 2 AFECTO', 'cantidad': 183, 'precio_unitario': 7530, 'exento': False},
+                    {'nombre': 'ITEM 3 SERVICIO EXENTO', 'cantidad': 2, 'precio_unitario': 6837, 'exento': True},
+                ],
+                descuento_global_pct=23,
+                descuento_global_glosa="DESCUENTO GLOBAL ITEMES AFECTOS",
+                referencias=[{"tpo_doc_ref": "SET", "folio_ref": "4829122-4",
+                              "cod_ref": "SET", "razon_ref": "CASO-4"}],
+            )
+            caso4_folio = r["folio"]; caso4_total = r["totales"]["mnt_total"]
+            documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
+            detalles_casos.append(f"CASO-4 (F33 f{caso4_folio}): ${caso4_total:,}".replace(",", "."))
+
+            # CASO 5: NC anula factura CASO-1 (CORRIGE GIRO, sin items, replica monto)
+            r = generar_nota_credito_xml(
+                caf=cafs_dict[61], folio=folio_61, fecha_emision=fecha,
+                emisor=emisor, receptor=RECEPTOR_SET,
+                referencia={"folio_ref": caso1_folio, "tipo_doc_ref": 33, "fecha_ref": fecha,
+                            "cod_ref": 2, "razon_ref": "CORRIGE GIRO DEL RECEPTOR"},
+                items=None, monto_anulacion=caso1_total,
+            )
+            caso5_folio = r["folio"]; caso5_total = r["totales"]["mnt_total"]
+            documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
+            detalles_casos.append(f"CASO-5 (NC61 f{caso5_folio}): ${caso5_total:,}".replace(",", "."))
+            folio_61 += 1
+
+            # CASO 6: NC devolución parcial factura CASO-2 (mismos items con cantidades menores)
+            r = generar_nota_credito_xml(
+                caf=cafs_dict[61], folio=folio_61, fecha_emision=fecha,
+                emisor=emisor, receptor=RECEPTOR_SET,
+                referencia={"folio_ref": caso2_folio, "tipo_doc_ref": 33, "fecha_ref": fecha,
+                            "cod_ref": 3, "razon_ref": "DEVOLUCION DE MERCADERIAS"},
+                items=[
+                    {'nombre': 'Pañuelo AFECTO', 'cantidad': 289, 'precio_unitario': 6096, 'exento': False, 'descuento_pct': 10},
+                    {'nombre': 'ITEM 2 AFECTO', 'cantidad': 497, 'precio_unitario': 5147, 'exento': False, 'descuento_pct': 24},
+                ],
+            )
+            caso6_folio = r["folio"]; caso6_total = r["totales"]["mnt_total"]
+            documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
+            detalles_casos.append(f"CASO-6 (NC61 f{caso6_folio}): ${caso6_total:,}".replace(",", "."))
+            folio_61 += 1
+
+            # CASO 7: NC anula factura CASO-3 (ANULA FACTURA, sin items, replica monto)
+            r = generar_nota_credito_xml(
+                caf=cafs_dict[61], folio=folio_61, fecha_emision=fecha,
+                emisor=emisor, receptor=RECEPTOR_SET,
+                referencia={"folio_ref": caso3_folio, "tipo_doc_ref": 33, "fecha_ref": fecha,
+                            "cod_ref": 1, "razon_ref": "ANULA FACTURA"},
+                items=None, monto_anulacion=caso3_total,
+            )
+            caso7_folio = r["folio"]; caso7_total = r["totales"]["mnt_total"]
+            documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
+            detalles_casos.append(f"CASO-7 (NC61 f{caso7_folio}): ${caso7_total:,}".replace(",", "."))
+
+            # CASO 8: ND anula NC del CASO-5 (replica monto de CASO-1 = $1.258.446)
+            r = generar_nota_debito_xml(
+                caf=cafs_dict[56], folio=folio_56, fecha_emision=fecha,
+                emisor=emisor, receptor=RECEPTOR_SET,
+                referencia={"folio_ref": caso5_folio, "tipo_doc_ref": 61, "fecha_ref": fecha,
+                            "cod_ref": 1, "razon_ref": "ANULA NOTA DE CREDITO ELECTRONICA"},
+                items=[
+                    {'nombre': 'Cajón AFECTO', 'cantidad': 171, 'precio_unitario': 3634, 'exento': False},
+                    {'nombre': 'Relleno AFECTO', 'cantidad': 72, 'precio_unitario': 6057, 'exento': False},
+                ],
+            )
+            caso8_folio = r["folio"]; caso8_total = r["totales"]["mnt_total"]
+            documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
+            detalles_casos.append(f"CASO-8 (ND56 f{caso8_folio}): ${caso8_total:,}".replace(",", "."))
+
+            paso("Generar 8 documentos", True, " · ".join(detalles_casos))
+
+        # ─── 4. Armar UN sobre EnvioDTE con todos ───
+        if not error_fatal:
+            from facturacion.dtes.envio_dte import armar_envio_dte
+            set_id = "SetDoc"
+            # Subtotales por tipo (lo exige el SII)
+            subtot = {33: 4, 61: 3, 56: 1}
+            sobre = armar_envio_dte(
+                dtes_firmados=documentos_sin_firma,
+                rut_emisor=emisor["rut"],
+                rut_envia=cert["metadata"].get("rut", "18849272-K"),
+                fch_resol="2026-05-15", nro_resol=0,
+                subtotales=subtot, set_dte_id=set_id,
+            )
+            paso("Armar sobre EnvioDTE (8 docs)", True, f"{len(sobre)} bytes")
+
+        # ─── 5. Firmar todo el sobre en contexto ───
+        if not error_fatal:
+            from facturacion.dtes.firma import firmar_envio_completo
+            sobre_firmado = firmar_envio_completo(
+                sobre, cert["pfx_bytes"], cert["password"],
+                set_dte_id=set_id, documento_ids=documento_ids)
+            paso("Firmar sobre completo", True, f"{len(sobre_firmado)} bytes")
+
+            # Modo descarga: devuelve el XML para subir manualmente al portal SII
+            if descargar == "si":
+                from flask import Response
+                return Response(
+                    sobre_firmado,
+                    mimetype="application/xml",
+                    headers={"Content-Disposition": 'attachment; filename="EnvioDTE_SetBasico4829122.xml"'},
+                )
+
+        # ─── 6. Envío SOAP (si confirmar=si) ───
+        if not error_fatal and confirmar == "si":
+            from facturacion.dtes.sii_client import obtener_token_dte, enviar_dte
+            try:
+                tok = obtener_token_dte(cert["pfx_bytes"], cert["password"], ambiente)
+                paso("Obtener token SOAP", True, f"Token: {tok[:18]}…")
+            except Exception as e:
+                paso("Obtener token SOAP", False, str(e)[:300])
+                error_fatal = True
+
+            if not error_fatal:
+                resultado = enviar_dte(
+                    envio_xml=sobre_firmado, token=tok,
+                    rut_emisor=emisor["rut"],
+                    rut_envia=cert["metadata"].get("rut", "18849272-K"),
+                    ambiente=ambiente,
+                )
+                if resultado.get("ok"):
+                    track_id = resultado["track_id"]
+                    paso("Enviar al SII (DTEUpload)", True,
+                         f"✓ Track ID: {track_id}")
+                else:
+                    detalle = resultado.get("error") or _html.escape(str(resultado.get("respuesta_cruda", ""))[:400])
+                    paso("Enviar al SII (DTEUpload)", False, detalle)
+                    error_fatal = True
+
+    except Exception as e:
+        import traceback
+        paso("Error", False, _html.escape(traceback.format_exc()[:600]))
+        error_fatal = True
+
+    todo_ok = all(p["ok"] for p in pasos) and (track_id is not None or confirmar != "si")
+    color = "#10b981" if todo_ok else "#dc2626"
+    emoji = "🎉" if todo_ok else "❌"
+    titulo = ("¡Set Básico enviado al SII!" if (todo_ok and track_id) else
+              ("Sobre EnvioDTE generado" if (todo_ok and not track_id) else
+               "Problema al procesar el Set"))
+
+    filas = ""
+    for p in pasos:
+        ic = "✅" if p["ok"] else "❌"
+        col = "#10b981" if p["ok"] else "#dc2626"
+        filas += f"""
+        <div style="display:flex;gap:10px;padding:12px 14px;border-bottom:1px solid #f0f0ee;align-items:flex-start;">
+          <div style="font-size:16px;">{ic}</div>
+          <div style="flex:1;">
+            <div style="font-weight:600;color:#1f1e1b;font-size:13px;">{p['nombre']}</div>
+            <div style="color:{col};font-size:12px;margin-top:2px;font-family:monospace;word-break:break-word;">{p['detalle']}</div>
+          </div>
+        </div>"""
+
+    if track_id:
+        nota = (f"🎉 Track ID {track_id}. Los 8 documentos del Set Básico están en el SII. "
+                f"Espera el correo de validación del SII.")
+    elif todo_ok:
+        nota = ("Sobre generado y firmado. Sube el archivo descargado al portal SII manualmente: "
+                "<a href='https://maullin.sii.cl/cgi_dte/UPL/DTEauth?1' target='_blank'>maullin.sii.cl/cgi_dte/UPL/DTEauth?1</a>")
+    else:
+        nota = "Revisa el paso en rojo y reintenta."
+
+    html = f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+    <title>Set Básico SII · Lusync</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      body {{ font-family:-apple-system,'Segoe UI',sans-serif; background:#f6f5f1; margin:0; padding:24px; color:#1f1e1b; }}
+      .card {{ max-width:720px; margin:0 auto; background:white; border-radius:14px; overflow:hidden; box-shadow:0 4px 20px rgba(0,0,0,0.06); }}
+      .header {{ background:{color}; color:white; padding:24px; }}
+      .header h1 {{ margin:0; font-size:18px; }}
+      .header p {{ margin:6px 0 0; opacity:0.9; font-size:13px; }}
+      .footer {{ padding:16px 24px; background:#fafaf9; font-size:12px; color:#6b7280; }}
+      .footer a {{ color:#534AB7; }}
+    </style></head><body>
+    <div class="card">
+      <div class="header">
+        <h1>{emoji} {titulo}</h1>
+        <p>Set Básico SII 4829122 · ambiente {ambiente} · tenant {tenant_id}</p>
+      </div>
+      <div>{filas}</div>
+      <div class="footer">{nota}</div>
+    </div>
+    </body></html>"""
+    return html
+
+
 @app.route("/admin/lusync/sii/test-set-boletas", methods=["GET"])
 @requiere_lusync_admin
 def admin_lusync_sii_test_set_boletas():
