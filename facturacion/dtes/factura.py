@@ -283,10 +283,11 @@ def generar_factura_xml(
 
     ted = construir_ted(
         caf=caf, folio=folio, fecha_emision=fecha_emision,
-        rut_emisor=emisor['rut'], rut_receptor=receptor['rut'],
+        rut_receptor=receptor['rut'],
         razon_social_receptor=receptor['razon_social'],
-        monto_total=mnt_total, primer_item_nombre=primer_item_nombre,
-        timestamp_firma=timestamp_firma, tipo_dte=tipo_dte,
+        monto_total=mnt_total,
+        detalle_primer_item=primer_item_nombre,
+        timestamp_emision=timestamp_firma,
     )
 
     # 9. DTE completo (sin XMLDSig todavía). Sin namespace declarado: lo hereda

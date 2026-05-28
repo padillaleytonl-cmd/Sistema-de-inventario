@@ -247,10 +247,11 @@ def generar_nota_debito_xml(
     primer_item_nombre = items_calc[0].get('nombre', 'Producto')[:40] if items_calc else 'Producto'
     ted = construir_ted(
         caf=caf, folio=folio, fecha_emision=fecha_emision,
-        rut_emisor=emisor['rut'], rut_receptor=receptor['rut'],
+        rut_receptor=receptor['rut'],
         razon_social_receptor=receptor['razon_social'],
-        monto_total=mnt_total, primer_item_nombre=primer_item_nombre,
-        timestamp_firma=timestamp_firma, tipo_dte=tipo_dte,
+        monto_total=mnt_total,
+        detalle_primer_item=primer_item_nombre,
+        timestamp_emision=timestamp_firma,
     )
 
     # 9. DTE completo (sin namespace, lo hereda del EnvioDTE)
