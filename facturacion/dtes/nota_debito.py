@@ -248,9 +248,9 @@ def generar_nota_debito_xml(
     ted = construir_ted(
         caf=caf, folio=folio, fecha_emision=fecha_emision,
         rut_receptor=receptor['rut'],
-        razon_social_receptor=receptor['razon_social'],
+        razon_social_receptor=_escape_xml(receptor['razon_social']),
         monto_total=mnt_total,
-        detalle_primer_item=primer_item_nombre,
+        detalle_primer_item=_escape_xml(primer_item_nombre),
         timestamp_emision=timestamp_firma,
     )
 
