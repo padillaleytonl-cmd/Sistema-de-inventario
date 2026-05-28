@@ -21296,6 +21296,208 @@ def _esc_xml_preview(s):
              .replace('"', "&quot;").replace("'", "&apos;"))
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# PÁGINA PÚBLICA DE CONSULTA DE BOLETAS
+# ═══════════════════════════════════════════════════════════════════════════
+# /consultadte → formulario simple (sin login) para que el receptor verifique
+#                su boleta con los datos impresos (RUT emisor, tipo, folio, fecha,
+#                monto). La URL aparece en el pie del PDF de la boleta.
+# Esto NO REEMPLAZA al SII pero sí confirma que el documento existe en el
+# sistema del emisor y los datos calzan (anti-fraude).
+# ═══════════════════════════════════════════════════════════════════════════
+
+_CONSULTADTE_HTML = """<!DOCTYPE html>
+<html lang="es"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Verificar documento tributario · Lusync</title>
+<style>
+:root{--brand:#534AB7;--ok:#1D9E75;--warn:#a16207;--err:#dc2626;--bg:#f6f5f1;--border:#e5e7eb;--muted:#6b7280;}
+*{box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:var(--bg);color:#1a1a2e;margin:0;padding:0;min-height:100vh;}
+.wrap{max-width:520px;margin:0 auto;padding:24px 16px 60px;}
+.brand{display:flex;align-items:center;gap:10px;margin-bottom:24px;}
+.brand-mark{width:36px;height:36px;background:var(--brand);border-radius:9px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:18px;}
+.brand-name{font-weight:700;font-size:18px;}
+.card{background:#fff;border:1px solid var(--border);border-radius:16px;padding:24px 22px;box-shadow:0 1px 3px rgba(0,0,0,0.04);}
+h1{font-size:22px;margin:0 0 6px;}
+.lead{color:var(--muted);font-size:14px;margin:0 0 22px;line-height:1.5;}
+label{display:block;font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;margin-top:14px;}
+input,select{width:100%;padding:11px 13px;border:1px solid var(--border);border-radius:10px;font-size:15px;font-family:inherit;background:#fff;}
+input:focus,select:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px rgba(83,74,183,0.12);}
+.row{display:flex;gap:10px;}
+.row > div{flex:1;}
+button{width:100%;background:var(--brand);color:#fff;border:none;padding:13px;border-radius:10px;font-size:15px;font-weight:600;margin-top:22px;cursor:pointer;font-family:inherit;}
+button:hover{background:#453d9b;}
+button:disabled{opacity:0.6;cursor:wait;}
+.result{margin-top:18px;padding:18px;border-radius:12px;display:none;}
+.result.ok{background:#eaf3ee;border:1px solid #bfe0cd;color:#0e6b4f;}
+.result.err{background:#fdf2f2;border:1px solid #fbcaca;color:#a01818;}
+.result h3{margin:0 0 8px;font-size:16px;}
+.result .row-dato{font-size:13.5px;margin:4px 0;}
+.result .row-dato b{display:inline-block;min-width:120px;color:#374151;}
+.foot{text-align:center;color:var(--muted);font-size:12px;margin-top:30px;}
+.foot a{color:var(--brand);text-decoration:none;}
+</style></head><body>
+<div class="wrap">
+  <div class="brand">
+    <div class="brand-mark">L</div>
+    <div class="brand-name">Lusync</div>
+  </div>
+  <div class="card">
+    <h1>Verificar documento tributario</h1>
+    <p class="lead">Ingresa los datos impresos en tu boleta o factura para validar que fue emitida correctamente.</p>
+    <form id="form">
+      <label>Tipo de documento</label>
+      <select id="tipo" required>
+        <option value="39">Boleta Electrónica (39)</option>
+        <option value="41">Boleta Exenta (41)</option>
+        <option value="33">Factura Electrónica (33)</option>
+        <option value="34">Factura Exenta (34)</option>
+        <option value="61">Nota de Crédito (61)</option>
+      </select>
+      <div class="row">
+        <div>
+          <label>Folio</label>
+          <input type="number" id="folio" placeholder="Ej: 22" required min="1">
+        </div>
+        <div>
+          <label>Fecha emisión</label>
+          <input type="date" id="fecha" required>
+        </div>
+      </div>
+      <label>RUT del emisor</label>
+      <input type="text" id="rut" placeholder="76.922.862-4" required>
+      <label>Monto total (sin puntos)</label>
+      <input type="number" id="monto" placeholder="Ej: 15000" required min="0">
+      <button id="btn" type="submit">Verificar</button>
+    </form>
+    <div id="resultado" class="result"></div>
+  </div>
+  <div class="foot">
+    Sistema operado por <a href="https://lusync.cl">Lusync</a> · La verificación oficial se realiza en <a href="https://www.sii.cl" target="_blank">www.sii.cl</a>
+  </div>
+</div>
+<script>
+document.getElementById('form').addEventListener('submit', async function(e){
+  e.preventDefault();
+  const btn = document.getElementById('btn');
+  const box = document.getElementById('resultado');
+  btn.disabled = true; btn.textContent = 'Verificando…';
+  box.style.display = 'none';
+  try {
+    const body = {
+      tipo: parseInt(document.getElementById('tipo').value, 10),
+      folio: parseInt(document.getElementById('folio').value, 10),
+      fecha: document.getElementById('fecha').value,
+      rut: document.getElementById('rut').value.replace(/\\./g,'').trim(),
+      monto: parseInt(document.getElementById('monto').value, 10),
+    };
+    const r = await fetch('/consultadte/verificar', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    const d = await r.json();
+    if (d.ok && d.encontrada) {
+      box.className = 'result ok';
+      box.innerHTML = '<h3>✓ Documento válido</h3>' +
+        '<div class="row-dato"><b>Emisor:</b> ' + (d.razon_social||'—') + '</div>' +
+        '<div class="row-dato"><b>Tipo:</b> ' + d.tipo_nombre + '</div>' +
+        '<div class="row-dato"><b>Folio:</b> ' + d.folio + '</div>' +
+        '<div class="row-dato"><b>Fecha:</b> ' + d.fecha + '</div>' +
+        '<div class="row-dato"><b>Monto:</b> $' + Number(d.monto).toLocaleString('es-CL') + '</div>' +
+        '<div class="row-dato"><b>Estado SII:</b> ' + d.estado_sii + '</div>' +
+        (d.track_id ? '<div class="row-dato"><b>Track ID SII:</b> ' + d.track_id + '</div>' : '') +
+        '<p style="margin:14px 0 0;font-size:12.5px;color:#0e6b4f;">Los datos coinciden con un documento registrado en el sistema y enviado al SII.</p>';
+    } else {
+      box.className = 'result err';
+      box.innerHTML = '<h3>No se encontró el documento</h3>' +
+        '<p style="margin:6px 0 0;font-size:13.5px;">Los datos ingresados no coinciden con ningún documento registrado en el sistema. Revisa que el RUT del emisor, tipo, folio, fecha y monto sean exactamente los que aparecen impresos.</p>';
+    }
+    box.style.display = 'block';
+  } catch (err) {
+    box.className = 'result err';
+    box.innerHTML = '<h3>Error de conexión</h3><p style="margin:6px 0 0;font-size:13.5px;">'+err.message+'</p>';
+    box.style.display = 'block';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Verificar';
+  }
+});
+</script>
+</body></html>"""
+
+
+@app.route("/consultadte", methods=["GET"])
+def consultadte_pagina():
+    """Página pública de verificación de DTE (sin login)."""
+    from flask import Response
+    return Response(_CONSULTADTE_HTML, mimetype="text/html; charset=utf-8")
+
+
+@app.route("/consultadte/verificar", methods=["POST"])
+def consultadte_verificar():
+    """Verifica los datos de un DTE contra la BD de Lusync (público, sin login).
+    Devuelve si el documento existe y los datos coinciden (anti-fraude).
+    Body: {tipo, folio, fecha (YYYY-MM-DD), rut (sin puntos), monto}
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        try:
+            tipo = int(data.get("tipo", 39))
+            folio = int(data.get("folio"))
+            monto = int(data.get("monto"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "Datos numéricos inválidos"}), 400
+        fecha = (data.get("fecha") or "").strip()
+        rut = (data.get("rut") or "").replace(".", "").replace(" ", "").strip()
+        if not (tipo and folio and fecha and rut and monto):
+            return jsonify({"ok": False, "error": "Faltan datos"}), 400
+        # Normalizar RUT (acepta '76922862-4' o '76.922.862-4')
+        rut_norm = rut.upper()
+        if "-" not in rut_norm and len(rut_norm) >= 2:
+            rut_norm = rut_norm[:-1] + "-" + rut_norm[-1]
+        from inventario import get_conn, release_conn
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                # Buscar la boleta: el rut_emisor en config puede tener puntos o no
+                cur.execute("""
+                    SELECT d.tipo_dte, d.folio, d.fecha_emision, d.monto_total,
+                           d.estado, d.track_id_sii, d.estado_sii,
+                           c.razon_social, c.rut_emisor
+                    FROM facturacion_dtes d
+                    JOIN facturacion_config_tenant c ON c.tenant_id = d.tenant_id
+                    WHERE d.tipo_dte = %s AND d.folio = %s
+                      AND d.fecha_emision = %s
+                      AND d.monto_total = %s
+                      AND REPLACE(REPLACE(c.rut_emisor, '.', ''), ' ', '') = %s
+                    LIMIT 1
+                """, (tipo, folio, fecha, monto, rut_norm))
+                row = cur.fetchone()
+        finally:
+            release_conn(conn)
+        if not row:
+            return jsonify({"ok": True, "encontrada": False})
+        tipos = {39:"Boleta Electrónica",41:"Boleta Exenta",33:"Factura Electrónica",
+                 34:"Factura Exenta",61:"Nota de Crédito",56:"Nota de Débito",52:"Guía de Despacho"}
+        estado_map = {"generado":"Generado", "enviado":"Enviado al SII",
+                      "en_proceso":"En proceso en SII", "aceptado":"Aceptado por el SII",
+                      "revisar":"Revisar datos", "rechazado":"Rechazado por el SII",
+                      "error_envio":"Error de envío"}
+        return jsonify({
+            "ok": True, "encontrada": True,
+            "tipo": row[0], "tipo_nombre": tipos.get(row[0], "DTE %s" % row[0]),
+            "folio": row[1],
+            "fecha": row[2].strftime("%Y-%m-%d") if hasattr(row[2], "strftime") else str(row[2]),
+            "monto": row[3],
+            "estado_sii": estado_map.get(row[4], row[4] or "—"),
+            "track_id": row[5],
+            "razon_social": row[7],
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": "Error interno: " + str(e)[:200]}), 500
+
+
 @app.route("/facturacion/boleta/<int:boleta_id>/xml", methods=["GET"])
 def facturacion_boleta_xml(boleta_id):
     """Descarga el XML COMPLETO firmado, exactamente como se envió al SII."""
