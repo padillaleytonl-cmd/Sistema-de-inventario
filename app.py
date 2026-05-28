@@ -21727,41 +21727,92 @@ def admin_probar_urls_estado():
         rut_num, rut_dv = rut[:-1], rut[-1]
         host = "apicert.sii.cl" if ambiente == "certificacion" else "api.sii.cl"
 
-        variantes = [
-            # La que respondió "Acceso Denegado" (existe, falta algo) — diferentes formatos
-            f"https://{host}/recursos/v1/boleta.electronica.estado/{rut_num}-{rut_dv}/{trackid}",
-            f"https://{host}/recursos/v1/boleta.electronica.estado/{rut_num}/{rut_dv}/{trackid}",
-            f"https://{host}/recursos/v1/boleta.electronica.estado/{rut_num}{rut_dv}/{trackid}",
-            f"https://{host}/recursos/v1/boleta.electronica.estado/{rut_num}-{rut_dv}-{trackid}",
-            # Con parámetros del consultante
-            f"https://{host}/recursos/v1/boleta.electronica.estado/{rut_num}-{rut_dv}/{trackid}?rutConsultante={rut_num}&dvConsultante={rut_dv}",
-            # Otros patrones según APIs similares del SII
-            f"https://{host}/recursos/v1/boleta.electronica.envio.estado/{rut_num}-{rut_dv}/{trackid}",
-            f"https://{host}/recursos/v1/boleta.electronica.envio/{rut_num}-{rut_dv}/{trackid}",
-        ]
-        # Probar con dos variantes de headers: la mínima (como envío) y la completa (con Host)
-        headers_min = {
-            "Cookie": f"TOKEN={token}",
-            "Accept": "application/json",
-            "User-Agent": "Mozilla/4.0 (compatible; PROG 1.0; Windows NT)",
-        }
-        headers_full = {
-            **headers_min,
-            "Host": host,
-        }
+        # La URL que respondió SOAP fault "Acceso Denegado" probablemente es SOAP/POST.
+        # Voy a probarla con POST SOAP en vez de GET.
+        url_existe = f"https://{host}/recursos/v1/boleta.electronica.estado/{rut_num}-{rut_dv}/{trackid}"
+        # Variantes de getEstUp con SOAP POST a la URL ganadora
+        soap_envelope = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" '
+            'xmlns:xsd="http://www.w3.org/2001/XMLSchema" '
+            'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+            '<soapenv:Body>'
+            f'<getEstUp xmlns="https://palena.sii.cl/DTEWS/services/wsDTECorreos">'
+            f'<RutEmpresa xsi:type="xsd:string">{rut_num}</RutEmpresa>'
+            f'<DvEmpresa xsi:type="xsd:string">{rut_dv}</DvEmpresa>'
+            f'<TrackId xsi:type="xsd:string">{trackid}</TrackId>'
+            f'<Token xsi:type="xsd:string">{token}</Token>'
+            '</getEstUp>'
+            '</soapenv:Body></soapenv:Envelope>'
+        )
         resultados = []
-        for url in variantes:
-            for nombre, hh in [("min", headers_min), ("full", headers_full)]:
-                try:
-                    r = _req.get(url, headers=hh, timeout=15, allow_redirects=False)
-                    cuerpo = (r.text or "")[:400]
-                    resultados.append({"url": url, "headers": nombre,
-                                       "status": r.status_code,
-                                       "content_type": r.headers.get("Content-Type", "")[:80],
-                                       "respuesta": cuerpo})
-                except Exception as e:
-                    resultados.append({"url": url, "headers": nombre,
-                                       "status": "ERR", "error": str(e)[:200]})
+        # PRUEBA A: POST SOAP a la URL que dijo "Acceso Denegado"
+        try:
+            r = _req.post(url_existe, data=soap_envelope.encode("utf-8"),
+                          headers={"Content-Type": "text/xml; charset=utf-8",
+                                   "SOAPAction": "", "Cookie": f"TOKEN={token}"},
+                          timeout=15, allow_redirects=False)
+            resultados.append({"prueba": "POST SOAP a URL ganadora", "url": url_existe,
+                               "status": r.status_code,
+                               "content_type": r.headers.get("Content-Type", "")[:80],
+                               "respuesta": (r.text or "")[:600]})
+        except Exception as e:
+            resultados.append({"prueba": "POST SOAP", "url": url_existe, "error": str(e)[:200]})
+
+        # PRUEBA B: GET con Accept=*/* (a veces el SII responde distinto)
+        try:
+            r = _req.get(url_existe,
+                         headers={"Cookie": f"TOKEN={token}", "Accept": "*/*",
+                                  "User-Agent": "Mozilla/4.0 (compatible; PROG 1.0; Windows NT)"},
+                         timeout=15, allow_redirects=False)
+            resultados.append({"prueba": "GET Accept */*", "url": url_existe,
+                               "status": r.status_code,
+                               "content_type": r.headers.get("Content-Type", "")[:80],
+                               "respuesta": (r.text or "")[:600]})
+        except Exception as e:
+            resultados.append({"prueba": "GET *", "url": url_existe, "error": str(e)[:200]})
+
+        # PRUEBA C: GET sin slash al RUT (todo junto: rutdv)
+        url_var = f"https://{host}/recursos/v1/boleta.electronica.estado/{rut_num}{rut_dv}/{trackid}"
+        try:
+            r = _req.get(url_var,
+                         headers={"Cookie": f"TOKEN={token}", "Accept": "application/json",
+                                  "User-Agent": "Mozilla/4.0 (compatible; PROG 1.0; Windows NT)"},
+                         timeout=15, allow_redirects=False)
+            resultados.append({"prueba": "GET rutdv junto", "url": url_var,
+                               "status": r.status_code,
+                               "content_type": r.headers.get("Content-Type", "")[:80],
+                               "respuesta": (r.text or "")[:600]})
+        except Exception as e:
+            resultados.append({"prueba": "GET rutdv", "url": url_var, "error": str(e)[:200]})
+
+        # PRUEBA D: ¿Y si es boleta.electronica.envio/{rut}/{dv}/{trackid}/estado?
+        url_d = f"https://{host}/recursos/v1/boleta.electronica.envio/{rut_num}/{rut_dv}/{trackid}/estado"
+        try:
+            r = _req.get(url_d,
+                         headers={"Cookie": f"TOKEN={token}", "Accept": "application/json",
+                                  "User-Agent": "Mozilla/4.0 (compatible; PROG 1.0; Windows NT)"},
+                         timeout=15, allow_redirects=False)
+            resultados.append({"prueba": "GET envio rut/dv/trackid/estado", "url": url_d,
+                               "status": r.status_code,
+                               "content_type": r.headers.get("Content-Type", "")[:80],
+                               "respuesta": (r.text or "")[:600]})
+        except Exception as e:
+            resultados.append({"prueba": "GET envio rut/dv", "url": url_d, "error": str(e)[:200]})
+
+        # PRUEBA E: El SII tiene otro path para boletas: ver si es /boleta/.../estado
+        url_e = f"https://{host}/recursos/v1/boleta/{rut_num}-{rut_dv}/{trackid}/estado"
+        try:
+            r = _req.get(url_e,
+                         headers={"Cookie": f"TOKEN={token}", "Accept": "application/json",
+                                  "User-Agent": "Mozilla/4.0 (compatible; PROG 1.0; Windows NT)"},
+                         timeout=15, allow_redirects=False)
+            resultados.append({"prueba": "GET /boleta/rut-dv/track/estado", "url": url_e,
+                               "status": r.status_code,
+                               "content_type": r.headers.get("Content-Type", "")[:80],
+                               "respuesta": (r.text or "")[:600]})
+        except Exception as e:
+            resultados.append({"prueba": "GET /boleta/", "url": url_e, "error": str(e)[:200]})
         return jsonify({"ok": True, "trackid": trackid, "ambiente": ambiente,
                         "rut_emisor": config["rut_emisor"],
                         "token_obtenido": bool(token),
