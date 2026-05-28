@@ -199,10 +199,14 @@ def generar_nota_credito_xml(
     encabezado_xml = f'<Encabezado>{iddoc_xml}{emisor_xml}{receptor_xml}{tot}</Encabezado>'
 
     # 10. DTE completo (sin XMLDSig todavía)
+    # IMPORTANTE: el <DTE> NO declara namespace (igual que boletas). Lo hereda del
+    # sobre EnvioDTE al insertarse. Con quitar_ns_heredado=True en la firma, el
+    # digest del <Documento> es idéntico aislado y dentro del sobre. Declarar el
+    # namespace aquí rompería la firma (mismo problema que DTE-3-505 en boletas).
     documento_id = f'F{folio}T61'
     dte_xml = (
         '<?xml version="1.0" encoding="ISO-8859-1"?>'
-        '<DTE version="1.0" xmlns="http://www.sii.cl/SiiDte">'
+        '<DTE version="1.0">'
         f'<Documento ID="{documento_id}">'
         f'{encabezado_xml}'
         f'{detalles_xml}'

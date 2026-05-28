@@ -13849,8 +13849,83 @@ async function dtConsultarEstado(id){
 }
 
 
-
-// ═══════════ NAVEGACIÓN SUB-SECCIONES FACTURACIÓN ═══════════
+// ═══════════ NOTA DE CRÉDITO (anular / rebajar documento) ═══════════
+function dtAbrirNotaCredito(d){
+  // d = {id, tipo, folio, fecha, monto, estado}
+  const tipoNombre = ({39:'Boleta',41:'Boleta exenta',33:'Factura',34:'Factura exenta'})[Number(d.tipo)] || ('DTE '+d.tipo);
+  const montoFmt = '$'+Number(d.monto||0).toLocaleString('es-CL');
+  const ov=document.createElement('div');
+  ov.id='ncModal';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(15,12,30,.65);backdrop-filter:blur(2px);z-index:100002;display:flex;align-items:center;justify-content:center;padding:20px;';
+  ov.onclick=(e)=>{ if(e.target===ov) ov.remove(); };
+  ov.innerHTML=`
+    <div onclick="event.stopPropagation()" style="background:var(--card);border:1px solid var(--border);border-radius:16px;width:100%;max-width:460px;box-shadow:0 24px 70px rgba(0,0,0,.45);overflow:hidden;">
+      <div style="padding:18px 22px;border-bottom:1px solid var(--border);">
+        <div style="font-weight:700;font-size:16px;color:var(--text);">🧾 Emitir Nota de Crédito</div>
+        <div style="font-size:13px;color:var(--muted);margin-top:4px;">Sobre ${tipoNombre} N° ${d.folio} · ${montoFmt}</div>
+      </div>
+      <div style="padding:20px 22px;">
+        <label style="display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px;">¿Qué deseas hacer?</label>
+        <select id="ncTipo" onchange="dtNcToggleMonto()" style="width:100%;padding:11px 13px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);margin-bottom:14px;">
+          <option value="1">Anular completamente el documento</option>
+          <option value="3">Rebajar un monto (corrección parcial)</option>
+        </select>
+        <div id="ncMontoWrap" style="display:none;margin-bottom:14px;">
+          <label style="display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px;">Monto a rebajar (con IVA)</label>
+          <input id="ncMonto" type="number" placeholder="Ej: 1000" style="width:100%;padding:11px 13px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+        </div>
+        <label style="display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px;">Motivo</label>
+        <input id="ncRazon" placeholder="Ej: Devolución de mercadería" maxlength="90" style="width:100%;padding:11px 13px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);margin-bottom:18px;">
+        <div id="ncResultado" style="margin-bottom:14px;"></div>
+        <div style="display:flex;gap:10px;">
+          <button onclick="document.getElementById('ncModal').remove()" style="flex:1;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:12px;border-radius:9px;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;">Cancelar</button>
+          <button id="ncBtnEmitir" onclick='dtEmitirNotaCredito(${JSON.stringify(d)})' style="flex:1;background:#dc2626;color:#fff;border:none;padding:12px;border-radius:9px;font-family:inherit;font-weight:700;font-size:14px;cursor:pointer;">Emitir NC</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(ov);
+}
+function dtNcToggleMonto(){
+  const tipo=document.getElementById('ncTipo').value;
+  document.getElementById('ncMontoWrap').style.display = tipo==='3' ? 'block' : 'none';
+}
+async function dtEmitirNotaCredito(d){
+  const cod=document.getElementById('ncTipo').value;
+  const razon=document.getElementById('ncRazon').value.trim() || (cod==='1'?'ANULA DOCUMENTO':'CORRIGE MONTO');
+  const btn=document.getElementById('ncBtnEmitir');
+  const res=document.getElementById('ncResultado');
+  // Items de la NC
+  let items;
+  if(cod==='1'){
+    // Anulación completa: replica el monto total del documento original
+    items=[{nombre:'Anulación '+(({39:'boleta',41:'boleta',33:'factura'})[Number(d.tipo)]||'documento')+' N° '+d.folio, cantidad:1, precio_unitario:Number(d.monto), exento:false}];
+  } else {
+    const monto=parseInt(document.getElementById('ncMonto').value,10);
+    if(!monto||monto<=0){ res.innerHTML='<span style="color:#dc2626;font-size:13px;">Indica el monto a rebajar</span>'; return; }
+    if(monto>Number(d.monto)){ res.innerHTML='<span style="color:#dc2626;font-size:13px;">El monto a rebajar no puede superar el total ('+'$'+Number(d.monto).toLocaleString('es-CL')+')</span>'; return; }
+    items=[{nombre:'Rebaja sobre documento N° '+d.folio, cantidad:1, precio_unitario:monto, exento:false}];
+  }
+  btn.disabled=true; btn.textContent='Emitiendo…';
+  res.innerHTML='<span style="color:var(--muted);font-size:13px;">Generando NC y enviando al SII…</span>';
+  try{
+    const body={
+      referencia:{ folio_ref:d.folio, tipo_doc_ref:Number(d.tipo), fecha_ref:(d.fecha||'').slice(0,10), cod_ref:parseInt(cod,10), razon_ref:razon },
+      items:items
+    };
+    const r=await fetch('/facturacion/nota-credito/emitir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const txt=await r.text(); let dd;
+    try{ dd=JSON.parse(txt); }catch(_){ res.innerHTML='<span style="color:#dc2626;font-size:13px;">Respuesta inválida ('+r.status+'): '+txt.slice(0,200).replace(/</g,'&lt;')+'</span>'; btn.disabled=false; btn.textContent='Emitir NC'; return; }
+    if(dd.ok){
+      res.innerHTML='<div style="background:#f0fbf6;border:1px solid #b8e6d2;border-radius:9px;padding:12px;font-size:13px;color:#047a56;">✓ Nota de Crédito N° '+dd.folio+' emitida. Track ID: '+(dd.track_id||'—')+'</div>';
+      btn.textContent='✓ Emitida'; 
+      if(typeof conBuscar==='function') setTimeout(conBuscar,500);
+      if(typeof dtCargarDocumentos==='function') setTimeout(dtCargarDocumentos,500);
+    } else {
+      res.innerHTML='<div style="background:#fdf2f2;border:1px solid #f3c2c2;border-radius:9px;padding:12px;font-size:13px;color:#dc2626;">✗ '+(dd.error||'Error')+(dd.folio?'<br>Folio NC reservado: '+dd.folio:'')+'</div>';
+      btn.disabled=false; btn.textContent='Reintentar';
+    }
+  }catch(e){ res.innerHTML='<span style="color:#dc2626;font-size:13px;">Error: '+e.message+'</span>'; btn.disabled=false; btn.textContent='Emitir NC'; }
+}
 function facNav(pane, btn){
   document.querySelectorAll('.fac-nav').forEach(b=>{b.style.color='var(--muted)';b.style.borderBottom='2px solid transparent';});
   if(btn){ btn.style.color='var(--text)'; btn.style.borderBottom='2px solid #534AB7'; }
@@ -13957,6 +14032,10 @@ function dtMenuPuntitos(doc){
   const datos = encodeURIComponent(JSON.stringify({
     id: doc.id,
     estado: doc.estado,
+    tipo: doc.tipo_dte || doc.tipo || 39,
+    folio: doc.folio,
+    fecha: doc.fecha_emision || doc.fecha || '',
+    monto: doc.monto_total || doc.monto || 0,
     pdf: (doc.pdf_url||'') + '?formato=carta',
     xml: doc.xml_url||'',
     xmlr: doc.xml_receptor_url||''
@@ -13991,8 +14070,19 @@ function dtToggleMenu(btn, datosEnc){
   }
   menu.appendChild(opt(d.pdf,'📄 Descargar PDF','_blank'));
   menu.appendChild(opt(d.xml,'📥 Descargar XML',null));
-  const last=opt(d.xmlr,'📥 XML Receptor',null); last.style.borderBottom='none';
+  const last=opt(d.xmlr,'📥 XML Receptor',null);
   menu.appendChild(last);
+  // Anular con Nota de Crédito: solo para boletas/facturas (no para NC tipo 61)
+  // y solo si fue aceptada o enviada (existe en el SII para referenciar)
+  if(![61,56].includes(Number(d.tipo)) && ['enviado','en_proceso','aceptado'].includes(d.estado)){
+    last.style.borderBottom='1px solid var(--border)';
+    const ncOpt=opt(null,'🧾 Anular con Nota de Crédito',null,()=>dtAbrirNotaCredito(d));
+    ncOpt.style.borderBottom='none';
+    ncOpt.style.color='#dc2626';
+    menu.appendChild(ncOpt);
+  } else {
+    last.style.borderBottom='none';
+  }
   document.body.appendChild(menu);
 
   // Posicionar bajo el botón, alineado a la derecha; si no cabe abajo, hacia arriba
