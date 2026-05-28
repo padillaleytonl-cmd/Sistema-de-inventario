@@ -22249,25 +22249,22 @@ def admin_probar_token_soap():
                             "conclusion": "Falla al obtener la semilla. Revisa el formato SOAP o si maullin está accesible desde Render."})
 
         # Paso 2: obtener token (semilla → firmar → GetTokenFromSeed)
-        # Antes de intentar, mostrar el XML firmado para verificar X509Certificate
-        try:
-            signed_xml_preview = sc._dtews_obtener_token(cert["pfx_bytes"], cert["password"],
-                                                         ambiente, return_signed_xml=True)
-            tiene_x509 = "X509Certificate" in signed_xml_preview
-            pasos.append({"paso": "2a. XML firmado (preview)", "ok": tiene_x509,
-                          "detalle": ("Incluye X509Certificate: " + ("SÍ ✓" if tiene_x509 else "NO ✗") +
-                                      "\nPrimeros 800 chars:\n" + signed_xml_preview[:800])})
-        except Exception as e:
-            pasos.append({"paso": "2a. Firmar semilla", "ok": False, "detalle": str(e)[:400]})
-
         try:
             token = sc._dtews_obtener_token(cert["pfx_bytes"], cert["password"], ambiente)
-            pasos.append({"paso": "2b. Obtener token (GetTokenFromSeed)", "ok": True,
-                          "detalle": "Token: " + str(token)[:20] + "…"})
+            pasos.append({"paso": "2. Obtener token (GetTokenFromSeed)", "ok": True,
+                          "detalle": "Token: " + str(token)[:30] + "…"})
         except Exception as e:
             import traceback
-            pasos.append({"paso": "2b. Obtener token (GetTokenFromSeed)", "ok": False,
-                          "detalle": str(e)[:1500], "trace": traceback.format_exc()[:600]})
+            # Si falló, generar un XML firmado de ejemplo para ver qué se está enviando
+            try:
+                signed_preview = sc._dtews_obtener_token(cert["pfx_bytes"], cert["password"],
+                                                          ambiente, return_signed_xml=True)
+                preview_info = "\n\nXML firmado generado (preview 1500 chars):\n" + signed_preview[:1500]
+            except Exception as e2:
+                preview_info = "\n\nNo se pudo generar preview del XML firmado: " + str(e2)[:200]
+            pasos.append({"paso": "2. Obtener token (GetTokenFromSeed)", "ok": False,
+                          "detalle": str(e)[:1500] + preview_info,
+                          "trace": traceback.format_exc()[:600]})
             return jsonify({"ok": False, "ambiente": ambiente, "pasos": pasos,
                             "conclusion": "La semilla se obtuvo OK pero falla al firmarla u obtener el token."})
 

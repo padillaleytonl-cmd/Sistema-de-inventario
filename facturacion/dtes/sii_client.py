@@ -471,64 +471,94 @@ def _dtews_obtener_token(pfx_bytes: bytes, password: str,
                          return_signed_xml: bool = False) -> str:
     """Obtiene el token del WS clásico (GetTokenFromSeed): semilla → firmar → token.
 
-    El SII exige:
+    El SII (Java/Axis, parser estricto) exige:
       1. Template: <getToken><item><Semilla>NNN</Semilla></item></getToken>
-      2. Firmado XMLDSig enveloped con SHA1, incluyendo <X509Certificate> en KeyInfo
-      3. Envelope SOAP con el método getToken en el namespace del .jws, y el XML
-         firmado dentro de <pszXml> (escapado o en CDATA)
+      2. Firmado XMLDSig enveloped, RSA-SHA1, **SIN prefijo "ds:"** en la Signature
+      3. KeyInfo con KeyValue (Modulus + Exponent) y X509Data (X509Certificate)
+      4. Envelope SOAP con método getToken en el namespace del .jws
+      5. La semilla firmada dentro de <pszXml xsi:type="xsd:string"> en CDATA
 
-    ESTADO 10 / Error Interno = falta <X509Certificate> en la firma.
+    ESTADO 10 / Error Interno = signxml puso prefijo "ds:" o falta cert.
+    Por eso usamos firma MANUAL idéntica a la de firma.py (que ya certificó).
     """
-    from signxml import XMLSigner, methods
-    from cryptography.hazmat.primitives.serialization import pkcs12
-    from cryptography.hazmat.primitives import serialization
+    from facturacion.dtes.firma import (
+        cargar_pfx, _c14n, _digest_sha1_b64, _b64_multilinea,
+        NS_DSIG, C14N_METHOD,
+    )
     from lxml import etree
+    from cryptography.hazmat.primitives.asymmetric import padding
+    from cryptography.hazmat.primitives import hashes
+    import base64
 
+    # 1. Pedir semilla nueva
     semilla = _dtews_obtener_semilla(ambiente)
-    key, cert, _ = pkcs12.load_key_and_certificates(pfx_bytes, password.encode())
 
-    # Template a firmar (orden y tags EXACTOS que exige el SII)
-    root = etree.fromstring(
-        f'<getToken><item><Semilla>{semilla}</Semilla></item></getToken>'.encode())
+    # 2. Cargar certificado
+    private_key, cert, cert_b64, mod_b64, exp_b64 = cargar_pfx(pfx_bytes, password)
+    cert_b64 = _b64_multilinea(cert_b64)
+    mod_b64 = _b64_multilinea(mod_b64)
 
-    class _S(XMLSigner):
-        def check_deprecated_methods(self):  # permitir SHA1 (lo exige el SII)
-            pass
-    key_pem = key.private_bytes(serialization.Encoding.PEM,
-                                serialization.PrivateFormat.TraditionalOpenSSL,
-                                serialization.NoEncryption())
-    cert_pem = cert.public_bytes(serialization.Encoding.PEM)
-    signer = _S(method=methods.enveloped, signature_algorithm="rsa-sha1",
-                digest_algorithm="sha1",
-                c14n_algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315")
-    # cert=cert_pem hace que signxml incluya <X509Certificate> en KeyInfo
-    # always_add_key_value=True asegura que también vaya KeyValue (lo prefiere el SII)
-    try:
-        signed = signer.sign(root, key=key_pem, cert=cert_pem, always_add_key_value=True)
-    except TypeError:
-        # Versión antigua de signxml que no acepta always_add_key_value
-        signed = signer.sign(root, key=key_pem, cert=cert_pem)
-    signed_xml = etree.tostring(signed, encoding="ISO-8859-1").decode("ISO-8859-1")
-    signed_xml = re.sub(r'^<\?xml[^>]*\?>\s*', '', signed_xml).strip()
+    # 3. Template del getToken (raíz a firmar)
+    template_xml = f'<getToken><item><Semilla>{semilla}</Semilla></item></getToken>'
+    root = etree.fromstring(template_xml.encode("utf-8"))
 
-    # VERIFICAR que el XML firmado contenga <X509Certificate> (lo exige el SII)
-    if "<X509Certificate>" not in signed_xml and "X509Certificate" not in signed_xml:
-        # Forzar inyección manual del cert si signxml no lo incluyó
-        cert_b64 = cert_pem.decode("ascii").replace("-----BEGIN CERTIFICATE-----", "")\
-            .replace("-----END CERTIFICATE-----", "").replace("\n", "").strip()
-        # Insertar X509Data dentro de KeyInfo
-        x509_block = f'<X509Data><X509Certificate>{cert_b64}</X509Certificate></X509Data>'
-        if "<KeyInfo>" in signed_xml:
-            signed_xml = signed_xml.replace("</KeyInfo>", x509_block + "</KeyInfo>", 1)
-        elif "</Signature>" in signed_xml:
-            signed_xml = signed_xml.replace("</Signature>",
-                "<KeyInfo>" + x509_block + "</KeyInfo></Signature>", 1)
+    # 4. Calcular digest del template completo (enveloped: el root sin la Signature)
+    root_c14n = _c14n(root, quitar_ns_heredado=False)
+    digest_value = _digest_sha1_b64(root_c14n)
+
+    # 5. Construir <Signature> SIN prefijo "ds:" (lo exige el SII estricto).
+    #    URI="" significa "el documento completo" (enveloped).
+    #    NECESITAMOS el Transform enveloped-signature para que se ignore la propia
+    #    Signature al verificar el digest del root.
+    signature_xml = (
+        f'<Signature xmlns="{NS_DSIG}">'
+        f'<SignedInfo>'
+        f'<CanonicalizationMethod Algorithm="{C14N_METHOD}"/>'
+        f'<SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"/>'
+        f'<Reference URI="">'
+        f'<Transforms>'
+        f'<Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/>'
+        f'</Transforms>'
+        f'<DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"/>'
+        f'<DigestValue>{digest_value}</DigestValue>'
+        f'</Reference>'
+        f'</SignedInfo>'
+        f'<SignatureValue></SignatureValue>'
+        f'<KeyInfo>'
+        f'<KeyValue><RSAKeyValue>'
+        f'<Modulus>{mod_b64}</Modulus>'
+        f'<Exponent>{exp_b64}</Exponent>'
+        f'</RSAKeyValue></KeyValue>'
+        f'<X509Data><X509Certificate>{cert_b64}</X509Certificate></X509Data>'
+        f'</KeyInfo>'
+        f'</Signature>'
+    )
+    signature_el = etree.fromstring(signature_xml.encode("utf-8"))
+    root.append(signature_el)
+
+    # 6. Canonicalizar SignedInfo YA en el árbol y firmar
+    signed_info_en_arbol = None
+    for e in signature_el.iter():
+        if e.tag.endswith("}SignedInfo"):
+            signed_info_en_arbol = e
+            break
+    signed_info_c14n = _c14n(signed_info_en_arbol, quitar_ns_heredado=False)
+    firma_bytes = private_key.sign(signed_info_c14n, padding.PKCS1v15(), hashes.SHA1())
+    signature_value = _b64_multilinea(base64.b64encode(firma_bytes).decode("ascii"))
+
+    # 7. Insertar el SignatureValue calculado
+    for e in signature_el.iter():
+        if e.tag.endswith("}SignatureValue"):
+            e.text = signature_value
+            break
+
+    signed_xml = etree.tostring(root, encoding="ISO-8859-1").decode("ISO-8859-1")
 
     if return_signed_xml:
         return signed_xml  # para diagnóstico
 
+    # 8. Enviar al SII con el envelope SOAP correcto
     url = DTEWS[ambiente]["token"].replace("?WSDL", "").replace("?wsdl", "")
-    # Envelope SOAP con el namespace del método (formato del manual oficial SII)
     soap = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" '
