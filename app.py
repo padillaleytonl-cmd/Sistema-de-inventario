@@ -25323,13 +25323,47 @@ def admin_lusync_sii_test_set_basico():
             )
             paso("Armar sobre EnvioDTE (8 docs)", True, f"{len(sobre)} bytes")
 
+            # Modo debug: devolver el sobre SIN firmar (para inspección)
+            if request.args.get("debug") == "sin-firma":
+                from flask import Response
+                return Response(
+                    sobre, mimetype="application/xml",
+                    headers={"Content-Disposition": 'attachment; filename="EnvioDTE_SinFirma_DEBUG.xml"'},
+                )
+
         # ─── 5. Firmar todo el sobre en contexto ───
         if not error_fatal:
             from facturacion.dtes.firma import firmar_envio_completo
-            sobre_firmado = firmar_envio_completo(
-                sobre, cert["pfx_bytes"], cert["password"],
-                set_dte_id=set_id, documento_ids=documento_ids)
-            paso("Firmar sobre completo", True, f"{len(sobre_firmado)} bytes")
+            try:
+                sobre_firmado = firmar_envio_completo(
+                    sobre, cert["pfx_bytes"], cert["password"],
+                    set_dte_id=set_id, documento_ids=documento_ids)
+                paso("Firmar sobre completo", True, f"{len(sobre_firmado)} bytes")
+            except Exception as e_firma:
+                # Diagnosticar: ver dónde está el problema en el XML
+                import traceback
+                err_msg = str(e_firma)
+                # Buscar el número de línea/columna del error de parseo
+                import re as _re_local
+                m_line = _re_local.search(r'line (\d+),?\s*column (\d+)', err_msg)
+                contexto_xml = ""
+                if m_line:
+                    linea = int(m_line.group(1))
+                    col = int(m_line.group(2))
+                    txt = sobre.decode("iso-8859-1", errors="replace")
+                    # Mostrar contexto: 200 chars antes y después de la posición
+                    # Las líneas vienen del split('\n'); convertir línea/col a offset
+                    lineas = txt.split('\n')
+                    if linea <= len(lineas):
+                        offset = sum(len(l)+1 for l in lineas[:linea-1]) + col
+                        ini = max(0, offset - 150)
+                        fin = min(len(txt), offset + 150)
+                        contexto_xml = f"... {txt[ini:offset]}[<<AQUÍ>>]{txt[offset:fin]} ..."
+                paso("Firmar sobre completo", False,
+                     f"{err_msg[:400]}\n\nContexto del XML:\n{contexto_xml[:600]}\n\nTrace: {traceback.format_exc()[:400]}")
+                error_fatal = True
+
+        if not error_fatal:
 
             # Modo descarga: devuelve el XML para subir manualmente al portal SII
             if descargar == "si":
