@@ -22040,23 +22040,36 @@ def facturacion_descargar_zip():
     hasta = request.args.get("hasta")
     q = (request.args.get("q") or "").strip()
     tipo = request.args.get("tipo", type=int)
+    ids_param = (request.args.get("ids") or "").strip()
 
     from inventario import get_conn, release_conn
     from facturacion.dtes.pdf_dte import generar_pdf_dte
     from flask import Response
     import io, zipfile
 
-    where = ["tenant_id = %s", "estado IN ('enviado','aceptado','rechazado')"]
+    where = ["tenant_id = %s", "estado IN ('enviado','en_proceso','aceptado','rechazado','revisar','error_envio')"]
     params = [tenant_id]
-    if tipo:
-        where.append("tipo_dte = %s"); params.append(tipo)
-    if desde:
-        where.append("DATE(fecha_emision) >= %s"); params.append(desde)
-    if hasta:
-        where.append("DATE(fecha_emision) <= %s"); params.append(hasta)
-    if q:
-        where.append("(razon_social_receptor ILIKE %s OR rut_receptor ILIKE %s OR CAST(folio AS TEXT)=%s)")
-        params.extend(["%"+q+"%", "%"+q+"%", q])
+    # Si vienen IDs específicos (selección manual), filtrar por ellos
+    if ids_param:
+        try:
+            id_list = [int(x) for x in ids_param.split(",") if x.strip().isdigit()][:MAX_ZIP]
+        except Exception:
+            id_list = []
+        if not id_list:
+            return jsonify({"ok": False, "error": "Selección inválida"}), 400
+        placeholders = ",".join(["%s"] * len(id_list))
+        where.append("id IN (" + placeholders + ")")
+        params.extend(id_list)
+    else:
+        if tipo:
+            where.append("tipo_dte = %s"); params.append(tipo)
+        if desde:
+            where.append("DATE(fecha_emision) >= %s"); params.append(desde)
+        if hasta:
+            where.append("DATE(fecha_emision) <= %s"); params.append(hasta)
+        if q:
+            where.append("(razon_social_receptor ILIKE %s OR rut_receptor ILIKE %s OR CAST(folio AS TEXT)=%s)")
+            params.extend(["%"+q+"%", "%"+q+"%", q])
 
     conn = get_conn()
     try:
@@ -22197,6 +22210,61 @@ def _fact_mapear_estado_sii(estado_sii):
         return "en_proceso", "En espera de respuesta del SII"
     # Código desconocido: dejar en proceso pero guardar el código crudo para diagnóstico
     return "en_proceso", "Estado SII: " + e
+
+
+@app.route("/admin/lusync/sii/probar-token-soap", methods=["GET"])
+def admin_probar_token_soap():
+    """SOLO ADMIN. Prueba la cadena de autenticación SOAP (CrSeed → firmar → token)
+    que usan las Notas de Crédito. Muestra exactamente en qué paso falla.
+    Uso: /admin/lusync/sii/probar-token-soap?tenant_id=3
+    """
+    try:
+        if not session.get("logged"):
+            return jsonify({"ok": False, "error": "no autenticado"}), 401
+        if session.get("rol") != "admin":
+            return jsonify({"ok": False, "error": "solo admin"}), 403
+        tenant_id = int(request.args.get("tenant_id", session.get("tenant_id") or 1))
+        from facturacion.certificados import obtener_certificado
+        from facturacion.db import obtener_config_facturacion
+        from facturacion.utils import normalizar_ambiente
+        from inventario import get_conn, release_conn
+        import facturacion.dtes.sii_client as sc
+
+        config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+        cert = obtener_certificado(get_conn, release_conn, tenant_id)
+        if not cert.get("ok"):
+            return jsonify({"ok": False, "error": "Certificado no disponible"}), 400
+        ambiente = normalizar_ambiente(config.get("ambiente") or "certificacion")
+        pasos = []
+
+        # Paso 1: obtener semilla
+        try:
+            semilla = sc._dtews_obtener_semilla(ambiente)
+            pasos.append({"paso": "1. Obtener semilla (CrSeed)", "ok": True, "detalle": "Semilla: " + str(semilla)})
+        except Exception as e:
+            import traceback
+            pasos.append({"paso": "1. Obtener semilla (CrSeed)", "ok": False,
+                          "detalle": str(e)[:400], "trace": traceback.format_exc()[:500]})
+            return jsonify({"ok": False, "ambiente": ambiente, "pasos": pasos,
+                            "conclusion": "Falla al obtener la semilla. Revisa el formato SOAP o si maullin está accesible desde Render."})
+
+        # Paso 2: obtener token (semilla → firmar → GetTokenFromSeed)
+        try:
+            token = sc._dtews_obtener_token(cert["pfx_bytes"], cert["password"], ambiente)
+            pasos.append({"paso": "2. Obtener token (GetTokenFromSeed)", "ok": True,
+                          "detalle": "Token: " + str(token)[:20] + "…"})
+        except Exception as e:
+            import traceback
+            pasos.append({"paso": "2. Obtener token (GetTokenFromSeed)", "ok": False,
+                          "detalle": str(e)[:400], "trace": traceback.format_exc()[:500]})
+            return jsonify({"ok": False, "ambiente": ambiente, "pasos": pasos,
+                            "conclusion": "La semilla se obtuvo OK pero falla al firmarla u obtener el token."})
+
+        return jsonify({"ok": True, "ambiente": ambiente, "pasos": pasos,
+                        "conclusion": "✓ Autenticación SOAP completa. El token para enviar NC funciona."})
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e)[:300], "trace": traceback.format_exc()[:600]}), 500
 
 
 @app.route("/admin/lusync/sii/probar-urls-estado", methods=["GET"])

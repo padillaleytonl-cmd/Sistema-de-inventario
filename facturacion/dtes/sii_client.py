@@ -435,20 +435,34 @@ DTEWS = {
 
 
 def _dtews_obtener_semilla(ambiente: str = "certificacion") -> str:
-    """Pide una semilla al WS clásico CrSeed (SOAP)."""
-    url = DTEWS[ambiente]["seed"].replace("?WSDL", "")
+    """Pide una semilla al WS clásico CrSeed (SOAP/xfire).
+
+    El servicio es xfire (Java). Espera un envelope SOAP con el método getSeed
+    en el namespace por defecto. Responde un XML escapado con la semilla en
+    /SII:RESPUESTA/SII:RESP_BODY/SEMILLA y ESTADO=00.
+    """
+    url = DTEWS[ambiente]["seed"].replace("?WSDL", "").replace("?wsdl", "")
     soap = (
         '<?xml version="1.0" encoding="UTF-8"?>'
-        '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">'
-        '<SOAP-ENV:Body><getSeed/></SOAP-ENV:Body></SOAP-ENV:Envelope>'
+        '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" '
+        'xmlns:def="http://DefaultNamespace">'
+        '<soapenv:Header/>'
+        '<soapenv:Body><def:getSeed/></soapenv:Body>'
+        '</soapenv:Envelope>'
     )
-    r = requests.post(url, data=soap, headers={"Content-Type": "text/xml; charset=utf-8",
-                                               "User-Agent": USER_AGENT}, timeout=TIMEOUT)
-    # La semilla viene dentro de un XML escapado en el resultado
-    m = re.search(r"<SEMILLA>(\d+)</SEMILLA>", r.text)
+    headers = {
+        "Content-Type": "text/xml; charset=utf-8",
+        "SOAPAction": "",
+        "User-Agent": USER_AGENT,
+    }
+    r = requests.post(url, data=soap.encode("utf-8"), headers=headers, timeout=TIMEOUT)
+    txt = r.text
+    # La semilla viene en XML escapado dentro del <getSeedReturn> (o sin escapar)
+    m = re.search(r"<SEMILLA>(\d+)</SEMILLA>", txt)
     if not m:
-        m = re.search(r"&lt;SEMILLA&gt;(\d+)&lt;/SEMILLA&gt;", r.text)
+        m = re.search(r"&lt;SEMILLA&gt;(\d+)&lt;/SEMILLA&gt;", txt)
     if not m:
+        raise SIIError(f"No se obtuvo semilla del WS clásico (status {r.status_code}): {txt[:400]}")
         raise SIIError(f"No se obtuvo semilla del WS clásico: {r.text[:300]}")
     return m.group(1)
 

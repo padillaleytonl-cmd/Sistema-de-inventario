@@ -13712,6 +13712,22 @@ const DT_ESTADO = {
   rechazado:       {bg:'#fdf2f2', color:'#dc2626', label:'Rechazada'},
   error_envio:     {bg:'#fef3e2', color:'#b45309', label:'Error de envío'},
 };
+// Abreviaturas de tipo de documento (código DTE → sigla + nombre completo)
+const DT_TIPO_ABREV = {
+  39: {sigla:'BEA', nombre:'Boleta Electrónica Afecta'},
+  41: {sigla:'BEE', nombre:'Boleta Electrónica Exenta'},
+  33: {sigla:'FEA', nombre:'Factura Electrónica Afecta'},
+  34: {sigla:'FEE', nombre:'Factura Electrónica Exenta'},
+  61: {sigla:'NC',  nombre:'Nota de Crédito'},
+  56: {sigla:'ND',  nombre:'Nota de Débito'},
+  52: {sigla:'GD',  nombre:'Guía de Despacho'},
+};
+function dtTipoAbrev(tipo){ return (DT_TIPO_ABREV[Number(tipo)]||{sigla:('T'+tipo),nombre:('Tipo '+tipo)}); }
+// Color de punto por estado (resumido a 4 grupos visuales)
+function dtEstadoPunto(estado){
+  const eb=DT_ESTADO[estado]||{color:'#6b6880',label:estado||'—'};
+  return {color:eb.color, label:eb.label};
+}
 async function dtCargarDocs(){
   const cont=document.getElementById('dtDocsCont');
   try{
@@ -13987,31 +14003,53 @@ async function conBuscar(){
 
 function conRenderPagina(){
   const cont=document.getElementById('conResultados');
+  // Orden por creación (id desc = más nuevo primero)
+  _conDocs.sort((a,b)=> (b.id||0)-(a.id||0));
   const total=_conDocs.length;
   const paginas=Math.ceil(total/_CON_POR_PAG);
   if(_conPag>paginas) _conPag=paginas;
   if(_conPag<1) _conPag=1;
   const ini=(_conPag-1)*_CON_POR_PAG;
   const pagina=_conDocs.slice(ini, ini+_CON_POR_PAG);
-  let h='<table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr style="text-align:left;color:var(--muted);font-size:11px;">'
+
+  // Leyenda de estados (puntos de color) + barra de acciones de selección
+  let h='<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-bottom:12px;font-size:11.5px;color:var(--muted);">';
+  h+='<span style="font-weight:600;">Estados:</span>';
+  [['aceptado','Aceptada'],['en_proceso','En proceso'],['revisar','Revisar'],['rechazado','Rechazada'],['error_envio','Error envío']].forEach(([k,lbl])=>{
+    const c=(DT_ESTADO[k]||{}).color||'#6b6880';
+    h+=`<span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:9px;height:9px;border-radius:50%;background:${c};display:inline-block;"></span>${lbl}</span>`;
+  });
+  h+='</div>';
+
+  // Barra de selección
+  h+=`<div id="conSelBar" style="display:none;align-items:center;gap:12px;margin-bottom:10px;padding:8px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:9px;">
+    <span id="conSelCount" style="font-size:13px;font-weight:600;color:var(--text);">0 seleccionados</span>
+    <button onclick="conDescargarSeleccion()" style="background:#534AB7;color:#fff;border:none;padding:8px 14px;border-radius:8px;font-family:inherit;font-weight:600;font-size:12.5px;cursor:pointer;">⬇ Descargar ZIP seleccionados</button>
+    <button onclick="conLimpiarSeleccion()" style="background:transparent;border:none;color:var(--muted);font-size:12.5px;cursor:pointer;text-decoration:underline;">Limpiar</button>
+  </div>`;
+
+  h+='<table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr style="text-align:left;color:var(--muted);font-size:11px;">'
+    +'<th style="padding:8px;width:30px;"><input type="checkbox" id="conSelAll" onchange="conToggleAll(this)" style="cursor:pointer;"></th>'
     +'<th style="padding:8px;">Tipo</th><th style="padding:8px;">Folio</th><th style="padding:8px;">Cliente</th><th style="padding:8px;text-align:right;">Total</th><th style="padding:8px;">Fecha</th><th style="padding:8px;">Estado</th><th style="padding:8px;text-align:right;">Acciones</th></tr></thead><tbody>';
   pagina.forEach(doc=>{
     const f=doc.fecha_emision?doc.fecha_emision.slice(0,10):'—';
-    const eb=(typeof DT_ESTADO!=='undefined'&&DT_ESTADO[doc.estado])||{bg:'#f1efe8',color:'#6b6880',label:doc.estado||'—'};
+    const ab=dtTipoAbrev(doc.tipo_dte);
+    const pt=dtEstadoPunto(doc.estado);
+    const checked = _conSel.has(doc.id) ? 'checked' : '';
     h+=`<tr style="border-top:1px solid var(--border);">
-      <td style="padding:9px 8px;color:var(--text);">${doc.tipo_nombre}</td>
+      <td style="padding:9px 8px;"><input type="checkbox" class="conSelChk" data-id="${doc.id}" ${checked} onchange="conToggleOne(${doc.id},this)" style="cursor:pointer;"></td>
+      <td style="padding:9px 8px;color:var(--text);font-weight:600;" title="${ab.nombre}">${ab.sigla}</td>
       <td style="padding:9px 8px;color:var(--text);font-weight:600;">${doc.folio}</td>
       <td style="padding:9px 8px;color:var(--muted);">${doc.razon_social_receptor||'Cliente General'}</td>
       <td style="padding:9px 8px;text-align:right;color:var(--text);font-weight:600;">${_dtCLP(doc.monto_total)}</td>
       <td style="padding:9px 8px;color:var(--muted);">${f}</td>
-      <td style="padding:9px 8px;"><span style="font-size:11px;padding:3px 8px;border-radius:6px;background:${eb.bg};color:${eb.color};font-weight:600;">${eb.label}</span></td>
+      <td style="padding:9px 8px;"><span title="${pt.label}" style="display:inline-flex;align-items:center;gap:6px;"><span style="width:10px;height:10px;border-radius:50%;background:${pt.color};display:inline-block;flex-shrink:0;"></span><span style="font-size:11.5px;color:var(--muted);">${pt.label}</span></span></td>
       <td style="padding:9px 8px;text-align:right;white-space:nowrap;">
         <button onclick="dtVerDoc(${doc.id},'${doc.pdf_url}')" style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:7px;font-size:12px;cursor:pointer;font-weight:600;">👁 Ver</button>
         ${dtMenuPuntitos(doc)}
       </td></tr>`;
   });
   h+='</tbody></table>';
-  // Controles de paginación (solo si hay más de una página)
   if(paginas>1){
     h+=`<div style="display:flex;justify-content:center;align-items:center;gap:12px;margin-top:16px;">
       <button onclick="conPag(-1)" ${_conPag<=1?'disabled':''} style="padding:7px 14px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;cursor:${_conPag<=1?'not-allowed':'pointer'};font-family:inherit;font-size:13px;opacity:${_conPag<=1?'.5':'1'};">← Anterior</button>
@@ -14020,6 +14058,41 @@ function conRenderPagina(){
     </div>`;
   }
   cont.innerHTML=h;
+  conActualizarSelBar();
+}
+
+// ── Selección múltiple para descarga ZIP ──
+let _conSel = new Set();
+function conToggleOne(id, chk){
+  if(chk.checked) _conSel.add(id); else _conSel.delete(id);
+  conActualizarSelBar();
+}
+function conToggleAll(chk){
+  document.querySelectorAll('.conSelChk').forEach(c=>{
+    c.checked=chk.checked;
+    const id=Number(c.getAttribute('data-id'));
+    if(chk.checked) _conSel.add(id); else _conSel.delete(id);
+  });
+  conActualizarSelBar();
+}
+function conLimpiarSeleccion(){
+  _conSel.clear();
+  document.querySelectorAll('.conSelChk').forEach(c=>c.checked=false);
+  const all=document.getElementById('conSelAll'); if(all) all.checked=false;
+  conActualizarSelBar();
+}
+function conActualizarSelBar(){
+  const bar=document.getElementById('conSelBar');
+  const cnt=document.getElementById('conSelCount');
+  if(!bar) return;
+  if(_conSel.size>0){ bar.style.display='flex'; if(cnt) cnt.textContent=_conSel.size+' seleccionado(s)'; }
+  else { bar.style.display='none'; }
+}
+function conDescargarSeleccion(){
+  if(_conSel.size===0){ alert('Selecciona al menos un documento.'); return; }
+  const ids=[..._conSel].join(',');
+  // Descargar ZIP solo de los seleccionados
+  window.open('/facturacion/boletas/descargar-zip?ids='+encodeURIComponent(ids), '_blank');
 }
 function conPag(delta){ _conPag+=delta; conRenderPagina(); window.scrollTo({top:document.getElementById('conResultados').offsetTop-120,behavior:'smooth'}); }
 
@@ -14054,14 +14127,14 @@ function dtToggleMenu(btn, datosEnc){
 
   const d=JSON.parse(decodeURIComponent(datosEnc));
   menu=document.createElement('div'); menu.id='dtFloatMenu';
-  menu.style.cssText='position:fixed;background:var(--card);border:1px solid var(--border);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.22);z-index:100001;min-width:200px;overflow:hidden;';
+  menu.style.cssText='position:fixed;background:#ffffff;border:1px solid #e3e1ee;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.28);z-index:100001;min-width:210px;overflow:hidden;';
   const opt=(href,txt,target,onclick)=>{
     const a=document.createElement('a');
     if(onclick){ a.href='#'; a.onclick=(e)=>{e.preventDefault(); menu.remove(); onclick();}; }
     else { a.href=href; if(target)a.target=target; }
     a.textContent=txt;
-    a.style.cssText='display:block;padding:11px 15px;font-size:13px;color:var(--text);text-decoration:none;border-bottom:1px solid var(--border);cursor:pointer;';
-    a.onmouseover=()=>a.style.background='var(--bg2)'; a.onmouseout=()=>a.style.background='transparent';
+    a.style.cssText='display:block;padding:11px 15px;font-size:13px;color:#1d1b2e;text-decoration:none;border-bottom:1px solid #eceaf5;cursor:pointer;background:#ffffff;';
+    a.onmouseover=()=>a.style.background='#f4f3fb'; a.onmouseout=()=>a.style.background='#ffffff';
     return a;
   };
   // Consultar SII: solo si el documento aún no tiene estado final
