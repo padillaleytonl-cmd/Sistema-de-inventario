@@ -21728,30 +21728,40 @@ def admin_probar_urls_estado():
         host = "apicert.sii.cl" if ambiente == "certificacion" else "api.sii.cl"
 
         variantes = [
-            f"https://{host}/recursos/v1/boleta.electronica.envio/{rut_num}-{rut_dv}-{trackid}/estado",
-            f"https://{host}/recursos/v1/boleta.electronica.envio/{rut_num}-{rut_dv}/{trackid}/estado",
-            f"https://{host}/recursos/v1/boleta.electronica.envio/{trackid}/estado",
-            f"https://{host}/recursos/v1/boleta.electronica.envio/estado/{rut_num}/{rut_dv}/{trackid}",
-            f"https://{host}/recursos/v1/boleta.electronica.envio/{rut_num}{rut_dv}-{trackid}/estado",
+            # La que respondió "Acceso Denegado" (existe, falta algo) — diferentes formatos
             f"https://{host}/recursos/v1/boleta.electronica.estado/{rut_num}-{rut_dv}/{trackid}",
-            f"https://{host}/recursos/v1/boleta.electronica/{trackid}/estado",
+            f"https://{host}/recursos/v1/boleta.electronica.estado/{rut_num}/{rut_dv}/{trackid}",
+            f"https://{host}/recursos/v1/boleta.electronica.estado/{rut_num}{rut_dv}/{trackid}",
+            f"https://{host}/recursos/v1/boleta.electronica.estado/{rut_num}-{rut_dv}-{trackid}",
+            # Con parámetros del consultante
+            f"https://{host}/recursos/v1/boleta.electronica.estado/{rut_num}-{rut_dv}/{trackid}?rutConsultante={rut_num}&dvConsultante={rut_dv}",
+            # Otros patrones según APIs similares del SII
+            f"https://{host}/recursos/v1/boleta.electronica.envio.estado/{rut_num}-{rut_dv}/{trackid}",
+            f"https://{host}/recursos/v1/boleta.electronica.envio/{rut_num}-{rut_dv}/{trackid}",
         ]
-        headers_base = {
+        # Probar con dos variantes de headers: la mínima (como envío) y la completa (con Host)
+        headers_min = {
             "Cookie": f"TOKEN={token}",
             "Accept": "application/json",
             "User-Agent": "Mozilla/4.0 (compatible; PROG 1.0; Windows NT)",
-            "Host": host.split(".")[0],
+        }
+        headers_full = {
+            **headers_min,
+            "Host": host,
         }
         resultados = []
         for url in variantes:
-            try:
-                r = _req.get(url, headers=headers_base, timeout=15)
-                cuerpo = (r.text or "")[:400]
-                resultados.append({"url": url, "status": r.status_code,
-                                   "content_type": r.headers.get("Content-Type", "")[:80],
-                                   "respuesta": cuerpo})
-            except Exception as e:
-                resultados.append({"url": url, "status": "ERR", "error": str(e)[:200]})
+            for nombre, hh in [("min", headers_min), ("full", headers_full)]:
+                try:
+                    r = _req.get(url, headers=hh, timeout=15, allow_redirects=False)
+                    cuerpo = (r.text or "")[:400]
+                    resultados.append({"url": url, "headers": nombre,
+                                       "status": r.status_code,
+                                       "content_type": r.headers.get("Content-Type", "")[:80],
+                                       "respuesta": cuerpo})
+                except Exception as e:
+                    resultados.append({"url": url, "headers": nombre,
+                                       "status": "ERR", "error": str(e)[:200]})
         return jsonify({"ok": True, "trackid": trackid, "ambiente": ambiente,
                         "rut_emisor": config["rut_emisor"],
                         "token_obtenido": bool(token),
