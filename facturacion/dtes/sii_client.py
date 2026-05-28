@@ -467,7 +467,8 @@ def _dtews_obtener_semilla(ambiente: str = "certificacion") -> str:
 
 
 def _dtews_obtener_token(pfx_bytes: bytes, password: str,
-                         ambiente: str = "certificacion") -> str:
+                         ambiente: str = "certificacion",
+                         return_signed_xml: bool = False) -> str:
     """Obtiene el token del WS clásico (GetTokenFromSeed): semilla → firmar → token.
 
     El SII exige:
@@ -475,6 +476,8 @@ def _dtews_obtener_token(pfx_bytes: bytes, password: str,
       2. Firmado XMLDSig enveloped con SHA1, incluyendo <X509Certificate> en KeyInfo
       3. Envelope SOAP con el método getToken en el namespace del .jws, y el XML
          firmado dentro de <pszXml> (escapado o en CDATA)
+
+    ESTADO 10 / Error Interno = falta <X509Certificate> en la firma.
     """
     from signxml import XMLSigner, methods
     from cryptography.hazmat.primitives.serialization import pkcs12
@@ -498,11 +501,31 @@ def _dtews_obtener_token(pfx_bytes: bytes, password: str,
     signer = _S(method=methods.enveloped, signature_algorithm="rsa-sha1",
                 digest_algorithm="sha1",
                 c14n_algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315")
-    # cert=cert_pem hace que signxml incluya <X509Certificate> en KeyInfo (lo exige el SII)
-    signed = signer.sign(root, key=key_pem, cert=cert_pem)
+    # cert=cert_pem hace que signxml incluya <X509Certificate> en KeyInfo
+    # always_add_key_value=True asegura que también vaya KeyValue (lo prefiere el SII)
+    try:
+        signed = signer.sign(root, key=key_pem, cert=cert_pem, always_add_key_value=True)
+    except TypeError:
+        # Versión antigua de signxml que no acepta always_add_key_value
+        signed = signer.sign(root, key=key_pem, cert=cert_pem)
     signed_xml = etree.tostring(signed, encoding="ISO-8859-1").decode("ISO-8859-1")
-    # Quitar la declaración <?xml ...?> si la trae (el SII la rechaza dentro de pszXml)
     signed_xml = re.sub(r'^<\?xml[^>]*\?>\s*', '', signed_xml).strip()
+
+    # VERIFICAR que el XML firmado contenga <X509Certificate> (lo exige el SII)
+    if "<X509Certificate>" not in signed_xml and "X509Certificate" not in signed_xml:
+        # Forzar inyección manual del cert si signxml no lo incluyó
+        cert_b64 = cert_pem.decode("ascii").replace("-----BEGIN CERTIFICATE-----", "")\
+            .replace("-----END CERTIFICATE-----", "").replace("\n", "").strip()
+        # Insertar X509Data dentro de KeyInfo
+        x509_block = f'<X509Data><X509Certificate>{cert_b64}</X509Certificate></X509Data>'
+        if "<KeyInfo>" in signed_xml:
+            signed_xml = signed_xml.replace("</KeyInfo>", x509_block + "</KeyInfo>", 1)
+        elif "</Signature>" in signed_xml:
+            signed_xml = signed_xml.replace("</Signature>",
+                "<KeyInfo>" + x509_block + "</KeyInfo></Signature>", 1)
+
+    if return_signed_xml:
+        return signed_xml  # para diagnóstico
 
     url = DTEWS[ambiente]["token"].replace("?WSDL", "").replace("?wsdl", "")
     # Envelope SOAP con el namespace del método (formato del manual oficial SII)
@@ -522,15 +545,10 @@ def _dtews_obtener_token(pfx_bytes: bytes, password: str,
                                "SOAPAction": "",
                                "User-Agent": USER_AGENT}, timeout=TIMEOUT)
     txt = r.text
-    # La respuesta viene en XML escapado dentro de <getTokenReturn>...</getTokenReturn>
-    # con estructura: <SII:RESPUESTA><SII:RESP_HDR><ESTADO>00</ESTADO></...><SII:RESP_BODY><TOKEN>XXX</TOKEN>
-    # Estado 00 = OK. Otros estados = error (ej. 03 = certificado no autorizado).
-    # Buscar TOKEN tanto escapado como no escapado
     m = re.search(r"<TOKEN>([^<]+)</TOKEN>", txt) or \
         re.search(r"&lt;TOKEN&gt;([^&]+)&lt;/TOKEN&gt;", txt)
     if m:
         return m.group(1)
-    # Si no hay token, ver si hay ESTADO de error para reportar bien
     m_estado = re.search(r"<ESTADO>([^<]+)</ESTADO>", txt) or \
                re.search(r"&lt;ESTADO&gt;([^&]+)&lt;/ESTADO&gt;", txt)
     m_glosa = re.search(r"<GLOSA>([^<]+)</GLOSA>", txt) or \
