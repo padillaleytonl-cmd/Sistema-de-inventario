@@ -22256,7 +22256,7 @@ def admin_probar_token_soap():
         except Exception as e:
             import traceback
             pasos.append({"paso": "2. Obtener token (GetTokenFromSeed)", "ok": False,
-                          "detalle": str(e)[:400], "trace": traceback.format_exc()[:500]})
+                          "detalle": str(e)[:1500], "trace": traceback.format_exc()[:600]})
             return jsonify({"ok": False, "ambiente": ambiente, "pasos": pasos,
                             "conclusion": "La semilla se obtuvo OK pero falla al firmarla u obtener el token."})
 

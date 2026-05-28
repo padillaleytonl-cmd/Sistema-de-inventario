@@ -521,11 +521,23 @@ def _dtews_obtener_token(pfx_bytes: bytes, password: str,
                       headers={"Content-Type": "text/xml; charset=utf-8",
                                "SOAPAction": "",
                                "User-Agent": USER_AGENT}, timeout=TIMEOUT)
-    m = re.search(r"<TOKEN>([^<]+)</TOKEN>", r.text) or \
-        re.search(r"&lt;TOKEN&gt;([^&]+)&lt;/TOKEN&gt;", r.text)
-    if not m:
-        raise SIIError(f"No se obtuvo token del WS clásico: {r.text[:400]}")
-    return m.group(1)
+    txt = r.text
+    # La respuesta viene en XML escapado dentro de <getTokenReturn>...</getTokenReturn>
+    # con estructura: <SII:RESPUESTA><SII:RESP_HDR><ESTADO>00</ESTADO></...><SII:RESP_BODY><TOKEN>XXX</TOKEN>
+    # Estado 00 = OK. Otros estados = error (ej. 03 = certificado no autorizado).
+    # Buscar TOKEN tanto escapado como no escapado
+    m = re.search(r"<TOKEN>([^<]+)</TOKEN>", txt) or \
+        re.search(r"&lt;TOKEN&gt;([^&]+)&lt;/TOKEN&gt;", txt)
+    if m:
+        return m.group(1)
+    # Si no hay token, ver si hay ESTADO de error para reportar bien
+    m_estado = re.search(r"<ESTADO>([^<]+)</ESTADO>", txt) or \
+               re.search(r"&lt;ESTADO&gt;([^&]+)&lt;/ESTADO&gt;", txt)
+    m_glosa = re.search(r"<GLOSA>([^<]+)</GLOSA>", txt) or \
+              re.search(r"&lt;GLOSA&gt;([^&]+)&lt;/GLOSA&gt;", txt)
+    estado = m_estado.group(1) if m_estado else "?"
+    glosa = m_glosa.group(1) if m_glosa else "(sin glosa)"
+    raise SIIError(f"GetToken falló (ESTADO={estado}, GLOSA={glosa}). Respuesta: {txt[:800]}")
 
 
 def obtener_token_dte(pfx_bytes: bytes, password: str,
