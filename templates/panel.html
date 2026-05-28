@@ -13859,26 +13859,26 @@ function dtAbrirNotaCredito(d){
   ov.style.cssText='position:fixed;inset:0;background:rgba(15,12,30,.65);backdrop-filter:blur(2px);z-index:100002;display:flex;align-items:center;justify-content:center;padding:20px;';
   ov.onclick=(e)=>{ if(e.target===ov) ov.remove(); };
   ov.innerHTML=`
-    <div onclick="event.stopPropagation()" style="background:var(--card);border:1px solid var(--border);border-radius:16px;width:100%;max-width:460px;box-shadow:0 24px 70px rgba(0,0,0,.45);overflow:hidden;">
-      <div style="padding:18px 22px;border-bottom:1px solid var(--border);">
-        <div style="font-weight:700;font-size:16px;color:var(--text);">🧾 Emitir Nota de Crédito</div>
-        <div style="font-size:13px;color:var(--muted);margin-top:4px;">Sobre ${tipoNombre} N° ${d.folio} · ${montoFmt}</div>
+    <div onclick="event.stopPropagation()" style="background:#ffffff;border:1px solid #e3e1ee;border-radius:16px;width:100%;max-width:460px;box-shadow:0 24px 70px rgba(0,0,0,.45);overflow:hidden;">
+      <div style="padding:18px 22px;border-bottom:1px solid #e3e1ee;background:#f7f6fb;">
+        <div style="font-weight:700;font-size:16px;color:#1d1b2e;">🧾 Emitir Nota de Crédito</div>
+        <div style="font-size:13px;color:#6b6880;margin-top:4px;">Sobre ${tipoNombre} N° ${d.folio} · ${montoFmt}</div>
       </div>
-      <div style="padding:20px 22px;">
-        <label style="display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px;">¿Qué deseas hacer?</label>
-        <select id="ncTipo" onchange="dtNcToggleMonto()" style="width:100%;padding:11px 13px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);margin-bottom:14px;">
+      <div style="padding:20px 22px;background:#ffffff;">
+        <label style="display:block;font-size:12px;font-weight:600;color:#6b6880;margin-bottom:6px;">¿Qué deseas hacer?</label>
+        <select id="ncTipo" onchange="dtNcToggleMonto()" style="width:100%;padding:11px 13px;border:1px solid #d9d6ea;border-radius:9px;font-family:inherit;font-size:14px;background:#fff;color:#1d1b2e;margin-bottom:14px;">
           <option value="1">Anular completamente el documento</option>
           <option value="3">Rebajar un monto (corrección parcial)</option>
         </select>
         <div id="ncMontoWrap" style="display:none;margin-bottom:14px;">
-          <label style="display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px;">Monto a rebajar (con IVA)</label>
-          <input id="ncMonto" type="number" placeholder="Ej: 1000" style="width:100%;padding:11px 13px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+          <label style="display:block;font-size:12px;font-weight:600;color:#6b6880;margin-bottom:6px;">Monto a rebajar (con IVA)</label>
+          <input id="ncMonto" type="number" placeholder="Ej: 1000" style="width:100%;padding:11px 13px;border:1px solid #d9d6ea;border-radius:9px;font-family:inherit;font-size:14px;background:#fff;color:#1d1b2e;">
         </div>
-        <label style="display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px;">Motivo</label>
-        <input id="ncRazon" placeholder="Ej: Devolución de mercadería" maxlength="90" style="width:100%;padding:11px 13px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);margin-bottom:18px;">
+        <label style="display:block;font-size:12px;font-weight:600;color:#6b6880;margin-bottom:6px;">Motivo</label>
+        <input id="ncRazon" placeholder="Ej: Devolución de mercadería" maxlength="90" style="width:100%;padding:11px 13px;border:1px solid #d9d6ea;border-radius:9px;font-family:inherit;font-size:14px;background:#fff;color:#1d1b2e;margin-bottom:18px;">
         <div id="ncResultado" style="margin-bottom:14px;"></div>
         <div style="display:flex;gap:10px;">
-          <button onclick="document.getElementById('ncModal').remove()" style="flex:1;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:12px;border-radius:9px;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;">Cancelar</button>
+          <button onclick="document.getElementById('ncModal').remove()" style="flex:1;background:#eceaf5;border:1px solid #d9d6ea;color:#1d1b2e;padding:12px;border-radius:9px;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;">Cancelar</button>
           <button id="ncBtnEmitir" onclick='dtEmitirNotaCredito(${JSON.stringify(d)})' style="flex:1;background:#dc2626;color:#fff;border:none;padding:12px;border-radius:9px;font-family:inherit;font-weight:700;font-size:14px;cursor:pointer;">Emitir NC</button>
         </div>
       </div>

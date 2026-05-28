@@ -21324,15 +21324,29 @@ def facturacion_nota_credito_emitir():
         # 7. Token SOAP + enviar a DTEUpload
         try:
             tok = obtener_token_dte(cert["pfx_bytes"], cert["password"], ambiente)
+            paso("Obtener token SOAP", True, "token " + str(tok)[:10] + "…")
+        except Exception as e:
+            import traceback
+            detalle_tok = str(e)[:250]
+            _fact_actualizar_estado_dte(nc_id, "error_envio", glosa="Token SOAP: " + detalle_tok)
+            paso("Obtener token SOAP", False, detalle_tok)
+            return jsonify({"ok": False, "nc_id": nc_id, "folio": folio,
+                            "error": "Error al autenticar con el SII (token SOAP): " + detalle_tok,
+                            "reintentable": True, "pasos": pasos,
+                            "trace": traceback.format_exc()[:500]}), 502
+        try:
             resultado = enviar_dte(
                 envio_xml=sobre_firmado, token=tok,
                 rut_emisor=emisor["rut"], rut_envia=rut_envia, ambiente=ambiente)
         except Exception as e:
-            _fact_actualizar_estado_dte(nc_id, "error_envio", glosa=str(e)[:300])
-            paso("Enviar al SII", False, str(e)[:200])
+            import traceback
+            detalle_env = str(e)[:250]
+            _fact_actualizar_estado_dte(nc_id, "error_envio", glosa="Envío DTE: " + detalle_env)
+            paso("Enviar al SII", False, detalle_env)
             return jsonify({"ok": False, "nc_id": nc_id, "folio": folio,
-                            "error": "No se pudo conectar con el SII. La NC quedó guardada para reintentar.",
-                            "reintentable": True, "pasos": pasos}), 502
+                            "error": "Error al enviar al SII (DTEUpload): " + detalle_env,
+                            "reintentable": True, "pasos": pasos,
+                            "trace": traceback.format_exc()[:500]}), 502
 
         if not resultado.get("ok"):
             detalle = resultado.get("error") or ("; ".join(resultado.get("errores", []))) or str(resultado.get("respuesta_cruda", ""))[:300]
