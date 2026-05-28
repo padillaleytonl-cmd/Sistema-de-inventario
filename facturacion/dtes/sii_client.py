@@ -463,50 +463,68 @@ def _dtews_obtener_semilla(ambiente: str = "certificacion") -> str:
         m = re.search(r"&lt;SEMILLA&gt;(\d+)&lt;/SEMILLA&gt;", txt)
     if not m:
         raise SIIError(f"No se obtuvo semilla del WS clásico (status {r.status_code}): {txt[:400]}")
-        raise SIIError(f"No se obtuvo semilla del WS clásico: {r.text[:300]}")
     return m.group(1)
 
 
 def _dtews_obtener_token(pfx_bytes: bytes, password: str,
                          ambiente: str = "certificacion") -> str:
-    """Obtiene el token del WS clásico (GetTokenFromSeed): semilla → firmar → token."""
+    """Obtiene el token del WS clásico (GetTokenFromSeed): semilla → firmar → token.
+
+    El SII exige:
+      1. Template: <getToken><item><Semilla>NNN</Semilla></item></getToken>
+      2. Firmado XMLDSig enveloped con SHA1, incluyendo <X509Certificate> en KeyInfo
+      3. Envelope SOAP con el método getToken en el namespace del .jws, y el XML
+         firmado dentro de <pszXml> (escapado o en CDATA)
+    """
     from signxml import XMLSigner, methods
     from cryptography.hazmat.primitives.serialization import pkcs12
+    from cryptography.hazmat.primitives import serialization
     from lxml import etree
 
     semilla = _dtews_obtener_semilla(ambiente)
-    # Armar y firmar el getToken
     key, cert, _ = pkcs12.load_key_and_certificates(pfx_bytes, password.encode())
+
+    # Template a firmar (orden y tags EXACTOS que exige el SII)
     root = etree.fromstring(
         f'<getToken><item><Semilla>{semilla}</Semilla></item></getToken>'.encode())
 
     class _S(XMLSigner):
         def check_deprecated_methods(self):  # permitir SHA1 (lo exige el SII)
             pass
-    from cryptography.hazmat.primitives import serialization
     key_pem = key.private_bytes(serialization.Encoding.PEM,
                                 serialization.PrivateFormat.TraditionalOpenSSL,
                                 serialization.NoEncryption())
     cert_pem = cert.public_bytes(serialization.Encoding.PEM)
     signer = _S(method=methods.enveloped, signature_algorithm="rsa-sha1",
-                digest_algorithm="sha1", c14n_algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315")
+                digest_algorithm="sha1",
+                c14n_algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315")
+    # cert=cert_pem hace que signxml incluya <X509Certificate> en KeyInfo (lo exige el SII)
     signed = signer.sign(root, key=key_pem, cert=cert_pem)
     signed_xml = etree.tostring(signed, encoding="ISO-8859-1").decode("ISO-8859-1")
+    # Quitar la declaración <?xml ...?> si la trae (el SII la rechaza dentro de pszXml)
+    signed_xml = re.sub(r'^<\?xml[^>]*\?>\s*', '', signed_xml).strip()
 
-    url = DTEWS[ambiente]["token"].replace("?WSDL", "")
+    url = DTEWS[ambiente]["token"].replace("?WSDL", "").replace("?wsdl", "")
+    # Envelope SOAP con el namespace del método (formato del manual oficial SII)
     soap = (
         '<?xml version="1.0" encoding="UTF-8"?>'
-        '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">'
-        '<SOAP-ENV:Body><getToken><pszXml><![CDATA[' + signed_xml +
-        ']]></pszXml></getToken></SOAP-ENV:Body></SOAP-ENV:Envelope>'
+        '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" '
+        'xmlns:xsd="http://www.w3.org/2001/XMLSchema" '
+        'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+        '<SOAP-ENV:Body>'
+        f'<m:getToken xmlns:m="{url}">'
+        '<pszXml xsi:type="xsd:string"><![CDATA[' + signed_xml + ']]></pszXml>'
+        '</m:getToken>'
+        '</SOAP-ENV:Body></SOAP-ENV:Envelope>'
     )
     r = requests.post(url, data=soap.encode("ISO-8859-1"),
                       headers={"Content-Type": "text/xml; charset=utf-8",
+                               "SOAPAction": "",
                                "User-Agent": USER_AGENT}, timeout=TIMEOUT)
     m = re.search(r"<TOKEN>([^<]+)</TOKEN>", r.text) or \
         re.search(r"&lt;TOKEN&gt;([^&]+)&lt;/TOKEN&gt;", r.text)
     if not m:
-        raise SIIError(f"No se obtuvo token del WS clásico: {r.text[:300]}")
+        raise SIIError(f"No se obtuvo token del WS clásico: {r.text[:400]}")
     return m.group(1)
 
 
