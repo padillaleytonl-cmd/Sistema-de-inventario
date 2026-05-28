@@ -13711,20 +13711,33 @@ async function dtConsultarEstado(id){
       const lineas=[];
       lineas.push('Estado: '+(d.glosa||d.estado_sii||d.estado));
       if(d.estado_sii) lineas.push('Código SII: '+d.estado_sii);
-      if(d.track_id) lineas.push('Track ID: '+d.track_id);
+      if(d.track_id){
+        lineas.push('Track ID: '+d.track_id+'  (copia este número para validar en el portal SII)');
+      }
       if(d.datos_consultados){
         const dc=d.datos_consultados;
         lineas.push('');
-        lineas.push('Datos consultados:');
+        lineas.push('Datos del documento (extraídos del XML timbrado):');
         lineas.push('  • Tipo DTE: '+dc.tipo);
         lineas.push('  • Folio: '+dc.folio);
-        lineas.push('  • Fecha (XML): '+dc.fecha_xml);
-        lineas.push('  • Monto (XML): '+dc.monto_xml);
-        lineas.push('  • Receptor (XML): '+dc.receptor_xml);
+        lineas.push('  • Fecha: '+dc.fecha_xml);
+        lineas.push('  • Monto: $'+Number(dc.monto_xml).toLocaleString('es-CL'));
+        lineas.push('  • Receptor: '+dc.receptor_xml);
       }
+      lineas.push('');
+      lineas.push('────────────────────────────');
+      lineas.push('PARA VALIDAR MANUALMENTE EN EL SII:');
+      lineas.push('');
+      lineas.push('1) Descargar el sobre EnvioBOLETA (link más abajo)');
+      lineas.push('2) Subirlo a: https://maullin.sii.cl/cgi_dte/UPL/DTEauth?1');
+      lineas.push('   (en producción será: https://palena.sii.cl/cgi_dte/UPL/DTEauth?1)');
+      lineas.push('3) El SII te mostrará si lo acepta, rechaza, o tiene reparos.');
+      lineas.push('');
+      lineas.push('Descargar el sobre del envío:');
+      lineas.push('  '+location.origin+'/facturacion/boleta/'+id+'/envio-sii');
       if(d.respuesta_sii){
         lineas.push('');
-        lineas.push('Respuesta cruda del SII:');
+        lineas.push('Respuesta cruda del SII (consulta automática):');
         lineas.push(d.respuesta_sii);
       }
       const tono = d.estado==='aceptado'?'ok' : d.estado==='rechazado'?'err' : 'warn';

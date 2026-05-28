@@ -112,10 +112,23 @@ def generar_boleta_xml(
     emisor: Dict,                       # {rut, razon_social, giro, dir_origen, cmna_origen}
     items: List[Dict],                  # [{nombre, cantidad, precio_unitario, exento?, unidad?}, ...]
     receptor: Optional[Dict] = None,
-    referencia: Optional[Dict] = None, # {cod_ref, razon_ref}
+    referencia: Optional[Dict] = None,  # {cod_ref, razon_ref} — modo legacy (Set certificación)
+    referencias: Optional[List[Dict]] = None,  # NUEVO: lista de referencias reales del negocio
     timestamp_firma: Optional[str] = None,
 ) -> Dict:
     """Genera el XML de una Boleta Electrónica (tipo 39), sin firma XMLDSig.
+
+    Args:
+        referencia: modo legacy. Genera UNA referencia con TpoDocRef=SET (certificación).
+        referencias: lista de referencias para operación real. Cada elemento es un dict:
+            {
+                'tpo_doc_ref': '52' (guía despacho) | '39' (boleta) | '801' (orden compra) |
+                               '802' (nota pedido) | 'SET' | otros válidos del SII,
+                'folio_ref':   'número del documento referenciado',
+                'cod_ref':     '1' (anula) | '2' (corrige texto) | '3' (corrige monto) | opcional,
+                'razon_ref':   'descripción libre' (opcional, máx 90 chars)
+            }
+            El schema EnvioBOLETA_v11 acepta hasta 40 referencias por documento.
 
     Returns:
         dict con xml(bytes), folio, totales, ted(bytes), documento_id
@@ -158,12 +171,37 @@ def generar_boleta_xml(
         linea += f'</Detalle>'
         detalles_xml += linea
 
-    # 4. Referencia (Set de Pruebas)
-    # IMPORTANTE: el schema de BOLETAS (EnvioBOLETA_v11.xsd) NO permite <FchRef>
-    # (a diferencia del schema de facturas). Tras FolioRef solo acepta CodRef,
-    # RazonRef, CodVndor o CodCaja. El Set de boletas pide CodRef=SET, RazonRef=CASO-N.
+    # 4. Referencias
+    # Schema EnvioBOLETA_v11.xsd:
+    #   - Hasta 40 referencias por documento.
+    #   - Tras FolioRef solo acepta CodRef, RazonRef, CodVndor o CodCaja.
+    #   - NO permite <FchRef> (a diferencia del schema de facturas).
+    # TpoDocRef válidos comunes en boletas:
+    #   '39' boleta, '52' guía despacho, '801' orden compra, '802' nota pedido,
+    #   '803' contrato, 'SET' (solo certificación), etc.
+    # CodRef opcional: '1'=anula, '2'=corrige texto, '3'=corrige monto.
     referencia_xml = ''
-    if referencia:
+
+    # Modo 1: lista de referencias reales del negocio (nuevo, soporta múltiples)
+    if referencias and isinstance(referencias, list):
+        for i, ref in enumerate(referencias[:40], start=1):
+            tpo = str(ref.get('tpo_doc_ref') or ref.get('tpo') or '52').strip()
+            folio_ref = str(ref.get('folio_ref') or ref.get('folio') or '').strip()
+            cod_ref = str(ref.get('cod_ref') or '').strip()
+            razon = str(ref.get('razon_ref') or ref.get('razon') or '').strip()[:90]
+            partes = [
+                f'<NroLinRef>{i}</NroLinRef>',
+                f'<TpoDocRef>{_escape_xml(tpo)}</TpoDocRef>',
+                f'<FolioRef>{_escape_xml(folio_ref)}</FolioRef>',
+            ]
+            if cod_ref:
+                partes.append(f'<CodRef>{_escape_xml(cod_ref)}</CodRef>')
+            if razon:
+                partes.append(f'<RazonRef>{_escape_xml(razon)}</RazonRef>')
+            referencia_xml += '<Referencia>' + ''.join(partes) + '</Referencia>'
+
+    # Modo 2 (legacy): una sola referencia tipo SET (mantiene compatibilidad)
+    elif referencia:
         cod_ref = referencia.get('cod_ref', 'SET')
         razon_ref = referencia.get('razon_ref', '')
         referencia_xml = (

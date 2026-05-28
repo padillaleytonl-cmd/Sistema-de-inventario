@@ -21042,9 +21042,14 @@ def facturacion_boleta_emitir():
             fecha = (datetime.now(_tz.utc) - _td(hours=4)).strftime("%Y-%m-%d")
 
         # 4. Generar la boleta
+        # Referencias opcionales del request (guía despacho, OC, etc.)
+        referencias = data.get("referencias") or []
+        if not isinstance(referencias, list):
+            referencias = []
         res_bol = generar_boleta_xml(
             caf=caf, folio=folio, fecha_emision=fecha,
             emisor=emisor, items=items, receptor=receptor,
+            referencias=referencias if referencias else None,
         )
         boleta_xml = res_bol["xml"]
         total = res_bol["totales"]["mnt_total"]
@@ -21313,6 +21318,81 @@ def facturacion_boleta_xml(boleta_id):
     fname = "DTE_%s_folio_%s.xml" % (row[2], row[1])
     return Response(xml, mimetype="application/xml",
                     headers={"Content-Disposition": 'attachment; filename="%s"' % fname})
+
+
+@app.route("/facturacion/boleta/<int:boleta_id>/envio-sii", methods=["GET"])
+def facturacion_boleta_envio_sii(boleta_id):
+    """Descarga el SOBRE EnvioBOLETA completo (con carátula + 2 firmas) tal cual
+    se sube al SII. Sirve para que el admin valide manualmente subiendo el XML
+    al portal del SII: https://maullin.sii.cl/cgi_dte/UPL/DTEauth?1 (certificación)
+    o https://palena.sii.cl/cgi_dte/UPL/DTEauth?1 (producción).
+    """
+    try:
+        if not session.get("logged"):
+            return jsonify({"ok": False, "error": "no autenticado"}), 401
+        tenant_id = session.get("tenant_id") or 1
+        from inventario import get_conn, release_conn
+        from flask import Response
+        from facturacion.db import obtener_config_facturacion
+        from facturacion.certificados import obtener_certificado
+        from facturacion.utils import normalizar_ambiente
+
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT xml_firmado, folio, tipo_dte FROM facturacion_dtes
+                               WHERE id=%s AND tenant_id=%s""", (boleta_id, tenant_id))
+                row = cur.fetchone()
+        finally:
+            release_conn(conn)
+        if not row or not row[0]:
+            return jsonify({"ok": False, "error": "XML no disponible para esa boleta"}), 404
+        dte_xml = row[0]
+        folio = row[1]
+        tipo_dte = row[2]
+        # Si xml_firmado es string lo pasamos a bytes
+        if isinstance(dte_xml, str):
+            dte_xml = dte_xml.encode("iso-8859-1", errors="replace")
+
+        config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+        cert = obtener_certificado(get_conn, release_conn, tenant_id)
+        if not cert.get("ok"):
+            return jsonify({"ok": False, "error": "Certificado no disponible"}), 400
+        rut_envia = cert["metadata"].get("rut", "")
+        nro_resol = config.get("resolucion_sii_numero")
+        fch_resol = config.get("resolucion_sii_fecha")
+        if fch_resol and not isinstance(fch_resol, str):
+            try: fch_resol = fch_resol.isoformat()
+            except Exception: fch_resol = str(fch_resol)
+        if nro_resol is None: nro_resol = 0
+        if not fch_resol: fch_resol = "2026-05-15"
+        ambiente = normalizar_ambiente(config.get("ambiente") or "certificacion")
+
+        from facturacion.dtes.envio_boleta import armar_envio_boleta
+        from facturacion.dtes.firma import firmar_envio_completo
+
+        set_id = "SetDoc"
+        # Extraer el ID del Documento (ej F22T39) para firmar la referencia
+        import re as _re
+        m = _re.search(r'<Documento\s+ID="([^"]+)"', dte_xml.decode("iso-8859-1", errors="ignore"))
+        documento_id = m.group(1) if m else "F%sT%s" % (folio, tipo_dte)
+
+        sobre = armar_envio_boleta(
+            dtes_firmados=[dte_xml],
+            rut_emisor=config["rut_emisor"], rut_envia=rut_envia,
+            fch_resol=fch_resol, nro_resol=nro_resol,
+            tipo_dte=tipo_dte, set_dte_id=set_id,
+        )
+        sobre_firmado = firmar_envio_completo(
+            sobre, cert["pfx_bytes"], cert["password"],
+            set_dte_id=set_id, documento_ids=[documento_id])
+        fname = "EnvioBOLETA_T%s_F%s_%s.xml" % (tipo_dte, folio, ambiente)
+        return Response(sobre_firmado, mimetype="application/xml",
+                        headers={"Content-Disposition": 'attachment; filename="%s"' % fname})
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": "No se pudo reconstruir el sobre: " + str(e)[:300],
+                        "trace": traceback.format_exc()[:600]}), 500
 
 
 @app.route("/facturacion/boleta/<int:boleta_id>/xml-receptor", methods=["GET"])
@@ -21800,19 +21880,37 @@ def admin_probar_urls_estado():
         except Exception as e:
             resultados.append({"prueba": "GET envio rut/dv", "url": url_d, "error": str(e)[:200]})
 
-        # PRUEBA E: El SII tiene otro path para boletas: ver si es /boleta/.../estado
-        url_e = f"https://{host}/recursos/v1/boleta/{rut_num}-{rut_dv}/{trackid}/estado"
+        # PRUEBA F: La GRAN HIPÓTESIS — usar el certificado del emisor como TLS cliente (mTLS)
+        # "Acceso Denegado (from client)" puede significar que el SII exige TLS mutuo
+        # para consultar estado de boletas, no solo el token cookie.
+        import tempfile, ssl
+        from cryptography.hazmat.primitives.serialization import pkcs12, Encoding, PrivateFormat, NoEncryption, BestAvailableEncryption
         try:
-            r = _req.get(url_e,
-                         headers={"Cookie": f"TOKEN={token}", "Accept": "application/json",
-                                  "User-Agent": "Mozilla/4.0 (compatible; PROG 1.0; Windows NT)"},
-                         timeout=15, allow_redirects=False)
-            resultados.append({"prueba": "GET /boleta/rut-dv/track/estado", "url": url_e,
-                               "status": r.status_code,
-                               "content_type": r.headers.get("Content-Type", "")[:80],
-                               "respuesta": (r.text or "")[:600]})
+            # Extraer cert + key del PFX a archivos PEM temporales
+            pk, cert_obj, _addn = pkcs12.load_key_and_certificates(
+                cert["pfx_bytes"], cert["password"].encode() if cert["password"] else None)
+            cert_pem = cert_obj.public_bytes(Encoding.PEM)
+            key_pem = pk.private_bytes(Encoding.PEM, PrivateFormat.TraditionalOpenSSL, NoEncryption())
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pem") as fc:
+                fc.write(cert_pem); fc.write(key_pem); cert_file = fc.name
+            url_mtls = f"https://{host}/recursos/v1/boleta.electronica.estado/{rut_num}-{rut_dv}/{trackid}"
+            try:
+                r = _req.get(url_mtls,
+                             headers={"Cookie": f"TOKEN={token}", "Accept": "application/json",
+                                      "User-Agent": "Mozilla/4.0 (compatible; PROG 1.0; Windows NT)"},
+                             cert=cert_file,
+                             timeout=20, allow_redirects=False)
+                resultados.append({"prueba": "GET con mTLS (cert cliente)", "url": url_mtls,
+                                   "status": r.status_code,
+                                   "content_type": r.headers.get("Content-Type", "")[:80],
+                                   "respuesta": (r.text or "")[:800]})
+            except Exception as e:
+                resultados.append({"prueba": "GET con mTLS", "url": url_mtls, "error": str(e)[:300]})
+            import os as _os
+            try: _os.unlink(cert_file)
+            except Exception: pass
         except Exception as e:
-            resultados.append({"prueba": "GET /boleta/", "url": url_e, "error": str(e)[:200]})
+            resultados.append({"prueba": "mTLS setup", "error": "No se pudo extraer cert: "+str(e)[:200]})
         return jsonify({"ok": True, "trackid": trackid, "ambiente": ambiente,
                         "rut_emisor": config["rut_emisor"],
                         "token_obtenido": bool(token),
