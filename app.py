@@ -25045,19 +25045,17 @@ SET_BOLETAS_BE = {
 
 
 @app.route("/admin/lusync/sii/test-set-basico", methods=["GET"])
-@requiere_lusync_admin
 def admin_lusync_sii_test_set_basico():
     """Emite los 8 casos del Set Básico SII (4829122) en UN solo sobre EnvioDTE:
        4 Facturas Electrónicas (33) + 3 Notas de Crédito (61) + 1 Nota de Débito (56).
 
-    Modos:
-      • Sin params → muestra confirmación (preview de los casos)
-      • ?descargar=si → genera y firma el sobre, lo devuelve como .xml para subir
-                        manualmente al portal SII (no envía por SOAP, NO consume folios extra)
-      • ?confirmar=si → envía vía SOAP DTEUpload (requiere token SOAP funcionando)
-
-    Uso: /admin/lusync/sii/test-set-basico?tenant_id=3&descargar=si
+    Auth: sesión normal de admin de tenant (no requiere super-admin lusync).
     """
+    # Auth permisivo: sesión normal de admin (igual que probar-token-soap)
+    if not session.get("logged"):
+        return redirect("/login")
+    if session.get("rol") != "admin" and not session.get("is_lusync_admin"):
+        return jsonify({"ok": False, "error": "solo admin del tenant"}), 403
     from inventario import get_conn, release_conn
     from facturacion.certificados import obtener_certificado
     from facturacion.db import obtener_config_facturacion
