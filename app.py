@@ -25044,6 +25044,69 @@ SET_BOLETAS_BE = {
 }
 
 
+@app.route("/admin/lusync/sii/diag-folios", methods=["GET"])
+def admin_lusync_sii_diag_folios():
+    """Diagnóstico simple: muestra qué folios usaría el endpoint test-set-basico
+    según los parámetros recibidos en la URL. NO genera ni envía nada.
+    Uso: /admin/lusync/sii/diag-folios?tenant_id=3&f33=105&f61=104&f56=102
+    """
+    if not session.get("logged"):
+        return redirect("/login")
+    if session.get("rol") != "admin" and not session.get("is_lusync_admin"):
+        return jsonify({"ok": False, "error": "solo admin del tenant"}), 403
+    tenant_id = request.args.get("tenant_id", default=3, type=int)
+    f33 = (request.args.get("f33") or "").strip()
+    f61 = (request.args.get("f61") or "").strip()
+    f56 = (request.args.get("f56") or "").strip()
+
+    from inventario import get_conn, release_conn
+    from facturacion.dtes.caf_parser import parsear_caf_xml
+    rangos = {}
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            for tipo in (33, 61, 56):
+                cur.execute("""
+                    SELECT xml_caf FROM facturacion_cafs
+                    WHERE tenant_id = %s AND tipo_dte = %s
+                    ORDER BY id DESC LIMIT 1
+                """, (tenant_id, tipo))
+                row = cur.fetchone()
+                if row:
+                    caf = parsear_caf_xml(row[0])
+                    rangos[tipo] = f"{caf.rango_desde}-{caf.rango_hasta}"
+                else:
+                    rangos[tipo] = "(sin CAF)"
+    finally:
+        release_conn(conn)
+
+    folio_33 = int(f33) if f33.isdigit() else 0
+    folio_61 = int(f61) if f61.isdigit() else 0
+    folio_56 = int(f56) if f56.isdigit() else 0
+
+    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+    <title>Diagnóstico Folios</title>
+    <style>body{{font-family:monospace;background:#f6f5f1;padding:30px;}}
+    .ok{{color:#10b981;font-weight:bold;}} .bad{{color:#dc2626;font-weight:bold;}}
+    table{{border-collapse:collapse;background:white;padding:10px;}}
+    td{{padding:8px 14px;border-bottom:1px solid #eee;}}</style></head><body>
+    <h2>Diagnóstico de Folios</h2>
+    <p><b>URL recibida:</b> {request.url}</p>
+    <p><b>Parámetros raw:</b> {dict(request.args)}</p>
+    <table>
+    <tr><td>Param f33 recibido</td><td>{'<span class="ok">' if f33 else '<span class="bad">'}{f33 or '(vacío)'}</span></td></tr>
+    <tr><td>Param f61 recibido</td><td>{'<span class="ok">' if f61 else '<span class="bad">'}{f61 or '(vacío)'}</span></td></tr>
+    <tr><td>Param f56 recibido</td><td>{'<span class="ok">' if f56 else '<span class="bad">'}{f56 or '(vacío)'}</span></td></tr>
+    <tr><td>Rango CAF 33</td><td>{rangos.get(33, '?')}</td></tr>
+    <tr><td>Rango CAF 61</td><td>{rangos.get(61, '?')}</td></tr>
+    <tr><td>Rango CAF 56</td><td>{rangos.get(56, '?')}</td></tr>
+    <tr><td>Folios que SE USARÍAN</td><td>33: <b>{folio_33 if folio_33 else '101 (default)'}</b> · 61: <b>{folio_61 if folio_61 else '101 (default)'}</b> · 56: <b>{folio_56 if folio_56 else '101 (default)'}</b></td></tr>
+    </table>
+    <p style="margin-top:20px;">Si los parámetros llegan correctamente y el código está deployado, deberías ver los folios que pasaste por URL en la fila inferior.</p>
+    </body></html>"""
+    return html
+
+
 @app.route("/admin/lusync/sii/test-set-basico", methods=["GET"])
 def admin_lusync_sii_test_set_basico():
     """Emite los 8 casos del Set Básico SII (4829122) en UN solo sobre EnvioDTE:
@@ -25298,16 +25361,17 @@ def admin_lusync_sii_test_set_basico():
             documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
             detalles_casos.append(f"CASO-7 (NC61 f{caso7_folio}): ${caso7_total:,}".replace(",", "."))
 
-            # CASO 8: ND anula NC del CASO-5 (replica monto de CASO-1 = $1.258.446)
+            # CASO 8: ND anula NC del CASO-5 (CodRef=1). Como la NC CASO-5
+            # tiene MntTotal=0 (CodRef=2 con item simbólico), la ND también
+            # debe tener MntTotal=0. Se pasa mnt_anulacion=0 para activar
+            # el item simbólico (precio=1, descuento=100%) — mismo truco que NC.
             r = generar_nota_debito_xml(
                 caf=cafs_dict[56], folio=folio_56, fecha_emision=fecha,
                 emisor=emisor, receptor=RECEPTOR_SET,
                 referencia={"folio_ref": caso5_folio, "tipo_doc_ref": 61, "fecha_ref": fecha,
-                            "cod_ref": 1, "razon_ref": "ANULA NOTA DE CREDITO ELECTRONICA"},
-                items=[
-                    {'nombre': 'Cajón AFECTO', 'cantidad': 171, 'precio_unitario': 3634, 'exento': False},
-                    {'nombre': 'Relleno AFECTO', 'cantidad': 72, 'precio_unitario': 6057, 'exento': False},
-                ],
+                            "cod_ref": 1, "razon_ref": "ANULA NOTA DE CREDITO ELECTRONICA",
+                            "mnt_anulacion": 0},
+                items=[],  # ignorado; el código genera item simbólico
             )
             caso8_folio = r["folio"]; caso8_total = r["totales"]["mnt_total"]
             documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])

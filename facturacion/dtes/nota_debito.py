@@ -119,13 +119,28 @@ def generar_nota_debito_xml(
       - TipoDTE = 56
       - <Referencia> OBLIGATORIA al documento modificado
 
-    Para CASO 8 del set (anula NC): items deben replicar los items de la NC
-    para que el monto de la ND iguale al de la NC anulada.
+    Para CASO 8 del set (anula NC simbólica): cuando la NC referenciada
+    tiene MntTotal=0 (CodRef=2 con item simbólico), la ND también debe tener
+    MntTotal=0. Para esto, pasar `referencia['mnt_anulacion'] = 0` y el
+    código generará automáticamente el item simbólico (precio=1, descuento=100%).
     """
     tipo_dte = 56
 
     if not referencia or not referencia.get('folio_ref'):
         raise ValueError("Nota de Débito requiere referencia obligatoria al documento que modifica")
+
+    # CASO 8 fix: si referencia['mnt_anulacion'] == 0, generar item simbólico
+    # con MntTotal=0 (igual técnica que NC CodRef=2 — manual SII pág 37).
+    # Esto evita REF-2-780 cuando la ND anula una NC que ya tiene MntTotal=0.
+    mnt_anulacion_arg = referencia.get('mnt_anulacion')
+    if mnt_anulacion_arg == 0:
+        items = [{
+            'nombre': 'Anula Nota de Credito referenciada',
+            'cantidad': 1,
+            'precio_unitario': 1,
+            'exento': False,
+            'descuento_pct': 100,
+        }]
 
     # 0. Calcular totales
     tot = _calcular_totales_neto(items, descuento_global_pct)
@@ -182,11 +197,15 @@ def generar_nota_debito_xml(
     receptor_xml = '<Receptor>' + ''.join(rec_parts) + '</Receptor>'
 
     # 4. Totales (precios netos, igual que factura)
-    tot_parts = [f'<MntNeto>{mnt_neto}</MntNeto>']
-    if mnt_exe > 0:
-        tot_parts.append(f'<MntExe>{mnt_exe}</MntExe>')
-    tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
-    tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
+    # Cuando MntTotal=0 (ND anula NC simbólica), omitir MntNeto/IVA/TasaIVA
+    # para evitar errores de validación (el SII espera estos campos solo si > 0)
+    tot_parts = []
+    if mnt_total > 0:
+        tot_parts.append(f'<MntNeto>{mnt_neto}</MntNeto>')
+        if mnt_exe > 0:
+            tot_parts.append(f'<MntExe>{mnt_exe}</MntExe>')
+        tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
+        tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
     tot_parts.append(f'<MntTotal>{mnt_total}</MntTotal>')
     totales_xml = '<Totales>' + ''.join(tot_parts) + '</Totales>'
 

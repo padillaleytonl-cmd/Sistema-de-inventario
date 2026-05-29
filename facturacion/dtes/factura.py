@@ -103,17 +103,18 @@ def _calcular_totales_factura(items: List[Dict], descuento_global_pct: float = 0
         else:
             bruto_af += monto_item
 
-    # SII Regla HED-2-210: MntNeto = SUMA de MontoItem afectos (SIN restar
-    # el descuento global). El descuento global se resta DESPUÉS para calcular
-    # el IVA y el MntTotal, pero NO se refleja en MntNeto del encabezado.
+    # Manual oficial SII (formato_dte 2026-02 pág 23, campo 107):
+    #   MntNeto = Suma items afectos - descuentos globales + recargos globales
+    #             (asignados a items afectos)
+    # IMPORTANTE: el tag <IndExeDR> se OMITE cuando el descuento aplica
+    # solo a afectos (manual pág 37 sección D). Cuando se omite, el SII
+    # aplica el descuento al neto correctamente.
     desc_global_monto = _redondear_clp(bruto_af * (descuento_global_pct / 100.0)) if descuento_global_pct else 0
-    mnt_neto = bruto_af  # SIN restar desc_global_monto (el SII valida vs suma del detalle)
-    # IVA se calcula sobre (neto - descuento global), porque el descuento sí reduce la base imponible
-    base_iva = mnt_neto - desc_global_monto
-    mnt_iva = _redondear_clp(base_iva * IVA_PORCENTAJE / 100.0)
+    mnt_neto = bruto_af - desc_global_monto  # Neto con descuento global aplicado
+    mnt_iva = _redondear_clp(mnt_neto * IVA_PORCENTAJE / 100.0)
     mnt_exe = bruto_ex
-    # MntTotal = neto + IVA + exento - descuento global
-    mnt_total = mnt_neto + mnt_iva + mnt_exe - desc_global_monto
+    # MntTotal = MntNeto + IVA + Exento (manual pág 26, campo 120)
+    mnt_total = mnt_neto + mnt_iva + mnt_exe
     return {
         'mnt_neto': mnt_neto, 'mnt_iva': mnt_iva,
         'mnt_exe': mnt_exe, 'mnt_total': mnt_total,
@@ -263,7 +264,9 @@ def generar_factura_xml(
             f'<GlosaDR>{_escape_xml(descuento_global_glosa or "DESCUENTO GLOBAL")}</GlosaDR>'
             '<TpoValor>%</TpoValor>'
             f'<ValorDR>{descuento_global_pct:g}</ValorDR>'
-            '<IndExeDR>2</IndExeDR>'  # 2 = aplica solo a afectos (regla SII)
+            # SII manual pág 37 sección D: cuando el descuento aplica solo
+            # a items afectos, NO se debe llevar el <IndExeDR>. Solo se
+            # incluye con valor 1 (exentos) o 2 (no facturables).
             '</DscRcgGlobal>'
         )
 
