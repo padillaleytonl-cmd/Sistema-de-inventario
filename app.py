@@ -25709,12 +25709,16 @@ def admin_lusync_sii_test_set_guias():
                  f"52: {folio_52}-{folio_52+2} (param f52={f52_param!r})")
 
             # CASO 1: Traslado interno entre bodegas
-            # IndTraslado=5, TipoDespacho=1 (cuenta del receptor=emisor)
+            # IndTraslado=5 (traslado interno)
+            # TipoDespacho=3 (emisor a otras instalaciones del emisor)
+            #   - El traslado lo hace el emisor entre sus propias bodegas
+            #   - NO es TipoDespacho=1 (eso es cuando el receptor/cliente retira)
+            #   - NO es TipoDespacho=2 (eso es a local del cliente, no aplica aquí)
             # 3 items sin precio (solo nombre + cantidad)
             r = generar_guia_despacho_xml(
                 caf=cafs_dict[52], folio=folio_52, fecha_emision=fecha,
                 emisor=emisor, receptor=RECEPTOR_SET,  # ignorado, se reemplaza por emisor
-                ind_traslado=5, tipo_despacho=1,
+                ind_traslado=5, tipo_despacho=3,
                 items=[
                     {'nombre': 'ITEM 1', 'cantidad': 81, 'precio_unitario': 0, 'exento': False},
                     {'nombre': 'ITEM 2', 'cantidad': 132, 'precio_unitario': 0, 'exento': False},
