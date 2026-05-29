@@ -25181,9 +25181,16 @@ def admin_lusync_sii_test_set_basico():
             # Folios iniciales de cada CAF (override opcional vía query param para
             # reintentar con folios nuevos cuando los anteriores fueron rechazados).
             # ?f33=105&f61=104&f56=102 → empieza desde esos folios
-            folio_33 = int(request.args.get("f33") or cafs_dict[33].rango_desde)
-            folio_61 = int(request.args.get("f61") or cafs_dict[61].rango_desde)
-            folio_56 = int(request.args.get("f56") or cafs_dict[56].rango_desde)
+            f33_param = (request.args.get("f33") or "").strip()
+            f61_param = (request.args.get("f61") or "").strip()
+            f56_param = (request.args.get("f56") or "").strip()
+            folio_33 = int(f33_param) if f33_param.isdigit() else cafs_dict[33].rango_desde
+            folio_61 = int(f61_param) if f61_param.isdigit() else cafs_dict[61].rango_desde
+            folio_56 = int(f56_param) if f56_param.isdigit() else cafs_dict[56].rango_desde
+            paso(f"Folios a usar", True,
+                 f"33: {folio_33}-{folio_33+3} (param f33={f33_param!r}) · "
+                 f"61: {folio_61}-{folio_61+2} (param f61={f61_param!r}) · "
+                 f"56: {folio_56} (param f56={f56_param!r})")
 
             # CASO 1: Factura 33, 2 items afectos simples
             r = generar_factura_xml(
