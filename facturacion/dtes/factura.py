@@ -103,12 +103,17 @@ def _calcular_totales_factura(items: List[Dict], descuento_global_pct: float = 0
         else:
             bruto_af += monto_item
 
-    # Descuento global SOLO sobre afectos (regla SII)
+    # SII Regla HED-2-210: MntNeto = SUMA de MontoItem afectos (SIN restar
+    # el descuento global). El descuento global se resta DESPUÉS para calcular
+    # el IVA y el MntTotal, pero NO se refleja en MntNeto del encabezado.
     desc_global_monto = _redondear_clp(bruto_af * (descuento_global_pct / 100.0)) if descuento_global_pct else 0
-    mnt_neto = bruto_af - desc_global_monto
-    mnt_iva = _redondear_clp(mnt_neto * IVA_PORCENTAJE / 100.0)
+    mnt_neto = bruto_af  # SIN restar desc_global_monto (el SII valida vs suma del detalle)
+    # IVA se calcula sobre (neto - descuento global), porque el descuento sí reduce la base imponible
+    base_iva = mnt_neto - desc_global_monto
+    mnt_iva = _redondear_clp(base_iva * IVA_PORCENTAJE / 100.0)
     mnt_exe = bruto_ex
-    mnt_total = mnt_neto + mnt_iva + mnt_exe
+    # MntTotal = neto + IVA + exento - descuento global
+    mnt_total = mnt_neto + mnt_iva + mnt_exe - desc_global_monto
     return {
         'mnt_neto': mnt_neto, 'mnt_iva': mnt_iva,
         'mnt_exe': mnt_exe, 'mnt_total': mnt_total,

@@ -178,27 +178,56 @@ def generar_nota_credito_xml(
     tpo_ref = int(referencia.get('tpo_doc_ref') or referencia.get('tipo_doc_ref') or 33)
     es_modo_bruto = tpo_ref in (39, 41)  # boletas
 
-    # 2. Si no hay items y se da monto_anulacion (CASO 5, 7: anula por texto/giro)
-    if not items:
-        if not monto_anulacion or monto_anulacion <= 0:
-            raise ValueError("Si la NC no lleva items, debes pasar monto_anulacion>0 (= MntTotal del doc referenciado)")
-        # Crear un item ficticio cuyo MontoItem haga que MntTotal = monto_anulacion
-        if es_modo_bruto:
-            # modo bruto: precio incluye IVA → precio = monto_anulacion (es el total)
-            precio_item = monto_anulacion
-        else:
-            # modo neto: precio es sin IVA. Necesitamos que neto + IVA = monto_anulacion
-            # neto = monto_anulacion / 1.19; pero por redondeo, mejor:
-            #   neto = round(monto_anulacion / 1.19)
-            #   Luego IVA será round(neto * 0.19) — pueden no cuadrar exactos
-            # Para que el TOTAL sea exacto = monto_anulacion, calculamos al revés
-            precio_item = _redondear_clp(monto_anulacion / (1 + IVA_PORCENTAJE / 100.0))
+    # Detectar CodRef antes para validar requisitos especiales
+    cod_ref_int = int(str(referencia.get('cod_ref') or '1').strip())
+
+    # REGLA SII (REF-2-781): CodRef=2 "Corrige Texto" NO debe tener montos.
+    # El SII rechaza si una NC con CodRef=2 trae monto != 0.
+    # Solución: forzar MntTotal=0 con un item de monto 0.
+    if cod_ref_int == 2:
         items = [{
-            'nombre': 'Anulación documento referenciado',
+            'nombre': 'Corrige información del documento referenciado',
             'cantidad': 1,
-            'precio_unitario': precio_item,
+            'precio_unitario': 0,
             'exento': False,
         }]
+        monto_anulacion = None
+
+    # 2. Si no hay items y se da monto_anulacion (CASO 7: anula completa por monto)
+    elif not items:
+        if not monto_anulacion or monto_anulacion <= 0:
+            raise ValueError("Si la NC no lleva items, debes pasar monto_anulacion>0 (= MntTotal del doc referenciado)")
+        # REGLA SII (REF-2-780): CodRef=1 "Anula" debe coincidir TOTAL del referenciado.
+        # Si hay mnt_exe_anulacion separado (factura con items exentos mezclados),
+        # replicar estructura: items afecto + item exento.
+        mnt_exe_anulacion = referencia.get('mnt_exe_anulacion', 0) or 0
+        mnt_neto_anulacion = monto_anulacion - mnt_exe_anulacion  # parte afecta
+        items = []
+        if mnt_neto_anulacion > 0:
+            if es_modo_bruto:
+                # modo bruto: precio incluye IVA. Mantenemos el monto neto+IVA tal cual.
+                items.append({
+                    'nombre': 'Anulación documento referenciado',
+                    'cantidad': 1,
+                    'precio_unitario': mnt_neto_anulacion,
+                    'exento': False,
+                })
+            else:
+                # modo neto: precio sin IVA. Calculamos hacia atrás.
+                precio_neto = _redondear_clp(mnt_neto_anulacion / (1 + IVA_PORCENTAJE / 100.0))
+                items.append({
+                    'nombre': 'Anulación documento referenciado',
+                    'cantidad': 1,
+                    'precio_unitario': precio_neto,
+                    'exento': False,
+                })
+        if mnt_exe_anulacion > 0:
+            items.append({
+                'nombre': 'Anulación monto exento',
+                'cantidad': 1,
+                'precio_unitario': mnt_exe_anulacion,
+                'exento': True,
+            })
 
     # 3. Calcular totales según modo
     if es_modo_bruto:

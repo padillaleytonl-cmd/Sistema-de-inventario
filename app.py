@@ -25274,11 +25274,15 @@ def admin_lusync_sii_test_set_basico():
             folio_61 += 1
 
             # CASO 7: NC anula factura CASO-3 (ANULA FACTURA, sin items, replica monto)
+            # Importante: la factura CASO-3 tiene parte exenta ($35.325) — debemos
+            # replicar la estructura completa para evitar REF-2-780.
+            # caso3_total = 1.777.296 = Neto 1.463.841 + IVA 278.130 + Exento 35.325
             r = generar_nota_credito_xml(
                 caf=cafs_dict[61], folio=folio_61, fecha_emision=fecha,
                 emisor=emisor, receptor=RECEPTOR_SET,
                 referencia={"folio_ref": caso3_folio, "tipo_doc_ref": 33, "fecha_ref": fecha,
-                            "cod_ref": 1, "razon_ref": "ANULA FACTURA"},
+                            "cod_ref": 1, "razon_ref": "ANULA FACTURA",
+                            "mnt_exe_anulacion": 35325},  # parte exenta de CASO-3
                 items=None, monto_anulacion=caso3_total,
             )
             caso7_folio = r["folio"]; caso7_total = r["totales"]["mnt_total"]
