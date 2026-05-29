@@ -25178,10 +25178,12 @@ def admin_lusync_sii_test_set_basico():
                 from datetime import timezone as _tz, timedelta as _td
                 fecha = (datetime.now(_tz.utc) - _td(hours=4)).strftime("%Y-%m-%d")
 
-            # Folios iniciales de cada CAF
-            folio_33 = cafs_dict[33].rango_desde
-            folio_61 = cafs_dict[61].rango_desde
-            folio_56 = cafs_dict[56].rango_desde
+            # Folios iniciales de cada CAF (override opcional vía query param para
+            # reintentar con folios nuevos cuando los anteriores fueron rechazados).
+            # ?f33=105&f61=104&f56=102 → empieza desde esos folios
+            folio_33 = int(request.args.get("f33") or cafs_dict[33].rango_desde)
+            folio_61 = int(request.args.get("f61") or cafs_dict[61].rango_desde)
+            folio_56 = int(request.args.get("f56") or cafs_dict[56].rango_desde)
 
             # CASO 1: Factura 33, 2 items afectos simples
             r = generar_factura_xml(
