@@ -25380,17 +25380,20 @@ def admin_lusync_sii_test_set_basico():
             detalles_casos.append(f"CASO-6 (NC61 f{caso6_folio}): ${caso6_total:,}".replace(",", "."))
             folio_61 += 1
 
-            # CASO 7: NC anula factura CASO-3 (ANULA FACTURA, sin items, replica monto)
-            # Importante: la factura CASO-3 tiene parte exenta ($35.325) — debemos
-            # replicar la estructura completa para evitar REF-2-780.
-            # caso3_total = 1.777.296 = Neto 1.463.841 + IVA 278.130 + Exento 35.325
+            # CASO 7: NC anula factura CASO-3 (ANULA FACTURA).
+            # El SII exige que la NC tenga EXACTAMENTE LAS MISMAS LÍNEAS de
+            # detalle que la factura original (no agregados afecto + exento).
+            # Por eso pasamos los 3 items completos, NO usar monto_anulacion.
             r = generar_nota_credito_xml(
                 caf=cafs_dict[61], folio=folio_61, fecha_emision=fecha,
                 emisor=emisor, receptor=RECEPTOR_SET,
                 referencia={"folio_ref": caso3_folio, "tipo_doc_ref": 33, "fecha_ref": fecha,
-                            "cod_ref": 1, "razon_ref": "ANULA FACTURA",
-                            "mnt_exe_anulacion": 35325},  # parte exenta de CASO-3
-                items=None, monto_anulacion=caso3_total,
+                            "cod_ref": 1, "razon_ref": "ANULA FACTURA"},
+                items=[
+                    {'nombre': 'Pintura B&W AFECTO', 'cantidad': 67, 'precio_unitario': 7115, 'exento': False},
+                    {'nombre': 'ITEM 2 AFECTO', 'cantidad': 241, 'precio_unitario': 4096, 'exento': False},
+                    {'nombre': 'ITEM 3 SERVICIO EXENTO', 'cantidad': 1, 'precio_unitario': 35325, 'exento': True},
+                ],
                 set_referencia={"folio_ref": "4829122", "fecha_ref": fecha,
                                 "razon_ref": "CASO 4829122-7"},
             )

@@ -57,11 +57,17 @@ def _calcular_totales_neto(items: List[Dict], descuento_global_pct: float = 0) -
     """Calcula totales con precios NETOS (igual que factura).
 
     Cada item: {nombre, cantidad, precio_unitario, exento?(bool), descuento_pct?, unidad?(str)}
+    Items con sin_valor=True: MontoItem=0 sin qty/precio (CASO 8).
     """
     bruto_af = 0
     bruto_ex = 0
     items_calc = []
     for it in items:
+        # Items 'sin_valor' (CASO 8 ND anula NC simbólica): MontoItem=0
+        if it.get('sin_valor'):
+            items_calc.append({**it, '_monto_item': 0, '_base': 0,
+                              '_desc_aplicado': 0, '_desc_pct': 0})
+            continue
         qty = float(it.get('cantidad', 1))
         prc = float(it.get('precio_unitario', 0))
         es_exento = bool(it.get('exento', False))
@@ -130,17 +136,18 @@ def generar_nota_debito_xml(
     if not referencia or not referencia.get('folio_ref'):
         raise ValueError("Nota de Débito requiere referencia obligatoria al documento que modifica")
 
-    # CASO 8 fix: si referencia['mnt_anulacion'] == 0, generar item simbólico
-    # con MntTotal=0 (igual técnica que NC CodRef=2 — manual SII pág 37).
-    # Esto evita REF-2-780 cuando la ND anula una NC que ya tiene MntTotal=0.
+    # CASO 8 fix: si referencia['mnt_anulacion'] == 0, generar item SIN VALOR
+    # (solo NmbItem + MontoItem=0, sin QtyItem ni PrcItem).
+    # El nombre del item DEBE coincidir con la razon_ref del set de pruebas.
+    # Manual SII y ejemplos SimpleAPI validados: la ND/NC anula NC simbólica
+    # con detalle minimalista para evitar "valores no cuadran".
     mnt_anulacion_arg = referencia.get('mnt_anulacion')
     if mnt_anulacion_arg == 0:
+        razon_anular = str(referencia.get('razon_ref') or 'ANULA NOTA DE CREDITO ELECTRONICA').strip()[:80]
         items = [{
-            'nombre': 'Anula Nota de Credito referenciada',
-            'cantidad': 1,
-            'precio_unitario': 1,
+            'nombre': razon_anular,
+            'sin_valor': True,  # flag especial: solo NmbItem + MontoItem=0
             'exento': False,
-            'descuento_pct': 100,
         }]
 
     # 0. Calcular totales
@@ -198,8 +205,9 @@ def generar_nota_debito_xml(
     receptor_xml = '<Receptor>' + ''.join(rec_parts) + '</Receptor>'
 
     # 4. Totales (precios netos, igual que factura)
-    # Cuando MntTotal=0 (ND anula NC simbólica), omitir MntNeto/IVA/TasaIVA
-    # para evitar errores de validación (el SII espera estos campos solo si > 0)
+    # Cuando MntTotal=0 (ND anula NC simbólica), omitir MntNeto/IVA
+    # pero según ejemplos SimpleAPI validados, sí lleva TasaIVA.
+    es_item_sin_valor = bool(items and items[0].get('sin_valor'))
     tot_parts = []
     if mnt_total > 0:
         tot_parts.append(f'<MntNeto>{mnt_neto}</MntNeto>')
@@ -207,6 +215,9 @@ def generar_nota_debito_xml(
             tot_parts.append(f'<MntExe>{mnt_exe}</MntExe>')
         tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
         tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
+    elif es_item_sin_valor:
+        # CASO 8: ND con item sin valor lleva TasaIVA pero sin MntNeto/IVA
+        tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
     tot_parts.append(f'<MntTotal>{mnt_total}</MntTotal>')
     totales_xml = '<Totales>' + ''.join(tot_parts) + '</Totales>'
 
@@ -215,13 +226,19 @@ def generar_nota_debito_xml(
     # 5. Detalles (precios NETOS, igual que factura)
     detalles_xml = ''
     for i, it in enumerate(items_calc, start=1):
+        nombre = it.get('nombre', 'Producto')[:80]
+        linea_parts = [f'<NroLinDet>{i}</NroLinDet>']
+        # Items sin_valor (CASO 8 ND anula NC simbólica): SOLO NmbItem + MontoItem=0
+        if it.get('sin_valor'):
+            linea_parts.append(f'<NmbItem>{_escape_xml(nombre)}</NmbItem>')
+            linea_parts.append('<MontoItem>0</MontoItem>')
+            detalles_xml += '<Detalle>' + ''.join(linea_parts) + '</Detalle>'
+            continue
         qty = float(it.get('cantidad', 1))
         prc = float(it.get('precio_unitario', 0))
         unidad = it.get('unidad', 'Un')
         es_exe = bool(it.get('exento', False))
-        nombre = it.get('nombre', 'Producto')[:80]
 
-        linea_parts = [f'<NroLinDet>{i}</NroLinDet>']
         if es_exe:
             linea_parts.append('<IndExe>1</IndExe>')
         linea_parts.append(f'<NmbItem>{_escape_xml(nombre)}</NmbItem>')

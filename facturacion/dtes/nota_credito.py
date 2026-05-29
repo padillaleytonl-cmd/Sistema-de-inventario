@@ -63,6 +63,11 @@ def _calcular_totales_neto(items: List[Dict], descuento_global_pct: float = 0) -
     bruto_ex = 0
     items_calc = []
     for it in items:
+        # Items 'sin_valor' (CASO 5 CORRIGE TEXTO): MontoItem=0, sin qty/precio
+        if it.get('sin_valor'):
+            items_calc.append({**it, '_monto_item': 0, '_base': 0,
+                              '_desc_aplicado': 0, '_desc_pct': 0})
+            continue
         qty = float(it.get('cantidad', 1))
         prc = float(it.get('precio_unitario', 0))
         es_exento = bool(it.get('exento', False))
@@ -183,17 +188,20 @@ def generar_nota_credito_xml(
     cod_ref_int = int(str(referencia.get('cod_ref') or '1').strip())
 
     # REGLA SII (REF-2-781): CodRef=2 "Corrige Texto" NO debe tener montos.
-    # El esquema exige PrcItem >= 0.000001 (no acepta 0), pero el reparo
-    # REF-2-781 exige MntTotal=0. Solución: item con precio mínimo (1) Y
-    # DescuentoPct=100, así MontoItem queda en 0 → MntNeto=0 → MntTotal=0.
-    # Esto cumple AMBAS validaciones (schema + reparo REF-2-781).
+    # Formato oficial del SII (validado contra ejemplos SimpleAPI aprobados):
+    #   <Detalle>
+    #     <NroLinDet>1</NroLinDet>
+    #     <NmbItem>CORRIGE GIRO DEL RECEPTOR</NmbItem>  ← la razon
+    #     <MontoItem>0</MontoItem>
+    #   </Detalle>
+    # SIN QtyItem, SIN PrcItem (esos son los que el SII dice "valores no cuadran").
+    # El nombre del item DEBE coincidir con la razon_ref del set de pruebas.
     if cod_ref_int == 2:
+        razon_corregir = str(referencia.get('razon_ref') or 'CORRIGE TEXTO').strip()[:80]
         items = [{
-            'nombre': 'Corrige información del documento referenciado',
-            'cantidad': 1,
-            'precio_unitario': 1,
+            'nombre': razon_corregir,
+            'sin_valor': True,  # flag especial: no lleva qty ni precio en XML
             'exento': False,
-            'descuento_pct': 100,
         }]
         monto_anulacion = None
 
@@ -295,6 +303,9 @@ def generar_nota_credito_xml(
     receptor_xml = '<Receptor>' + ''.join(rec_parts) + '</Receptor>'
 
     # 7. Totales
+    # Ejemplo SimpleAPI validado por SII para NC CodRef=2 (item sin_valor):
+    # solo <TasaIVA>19</TasaIVA><MntTotal>0</MntTotal>, sin MntNeto ni IVA.
+    es_item_sin_valor = bool(items and items[0].get('sin_valor'))
     tot_parts = []
     if mnt_neto > 0:
         tot_parts.append(f'<MntNeto>{mnt_neto}</MntNeto>')
@@ -303,6 +314,9 @@ def generar_nota_credito_xml(
     if mnt_neto > 0:
         tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
         tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
+    elif es_item_sin_valor:
+        # CASO 5: NC con item sin valor lleva TasaIVA pero sin MntNeto/IVA
+        tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
     tot_parts.append(f'<MntTotal>{mnt_total}</MntTotal>')
     totales_xml = '<Totales>' + ''.join(tot_parts) + '</Totales>'
 
@@ -311,13 +325,20 @@ def generar_nota_credito_xml(
     # 8. Detalles
     detalles_xml = ''
     for i, it in enumerate(items_calc, start=1):
+        nombre = it.get('nombre', 'Producto')[:80]
+        linea_parts = [f'<NroLinDet>{i}</NroLinDet>']
+        # Items sin_valor (CASO 5 CORRIGE TEXTO): SOLO NmbItem + MontoItem=0
+        # Sin QtyItem, sin PrcItem, sin UnmdItem, sin Descuento*
+        if it.get('sin_valor'):
+            linea_parts.append(f'<NmbItem>{_escape_xml(nombre)}</NmbItem>')
+            linea_parts.append('<MontoItem>0</MontoItem>')
+            detalles_xml += '<Detalle>' + ''.join(linea_parts) + '</Detalle>'
+            continue
         qty = float(it.get('cantidad', 1))
         prc = float(it.get('precio_unitario', 0))
         unidad = it.get('unidad', 'Un')
         es_exe = bool(it.get('exento', False))
-        nombre = it.get('nombre', 'Producto')[:80]
 
-        linea_parts = [f'<NroLinDet>{i}</NroLinDet>']
         if es_exe:
             linea_parts.append('<IndExe>1</IndExe>')
         linea_parts.append(f'<NmbItem>{_escape_xml(nombre)}</NmbItem>')
