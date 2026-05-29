@@ -25143,12 +25143,27 @@ def admin_lusync_sii_test_set_basico():
 
     # ─── Pantalla de confirmación ───
     if confirmar != "si" and descargar != "si":
+        # Capturar params para propagarlos en los botones (folios, debug, etc)
+        f33_q = request.args.get("f33", "")
+        f61_q = request.args.get("f61", "")
+        f56_q = request.args.get("f56", "")
+        debug_q = request.args.get("debug", "")
+        # Construir query string adicional con los params que vinieron
+        extra_q = ""
+        if f33_q: extra_q += f"&f33={f33_q}"
+        if f61_q: extra_q += f"&f61={f61_q}"
+        if f56_q: extra_q += f"&f56={f56_q}"
+        if debug_q: extra_q += f"&debug={debug_q}"
+        # Mostrar folios actuales que se usarían
+        folios_msg = ""
+        if f33_q or f61_q or f56_q:
+            folios_msg = f'<div class="warn" style="background:#dbeafe;border-color:#3b82f6;color:#1e40af;">Folios forzados por URL: f33={f33_q or "(default)"} · f61={f61_q or "(default)"} · f56={f56_q or "(default)"}</div>'
         return """<!DOCTYPE html><html><head><meta charset="utf-8">
         <title>Confirmar Set Básico SII</title>
         <style>body{font-family:-apple-system,sans-serif;background:#f6f5f1;padding:40px;}
         .card{max-width:680px;margin:0 auto;background:white;border-radius:14px;padding:28px;
         box-shadow:0 4px 20px rgba(0,0,0,0.06);}
-        .warn{background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:14px;color:#92400e;font-size:13px;}
+        .warn{background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:14px;color:#92400e;font-size:13px;margin-bottom:10px;}
         table{width:100%;border-collapse:collapse;margin:14px 0;font-size:12px;}
         td{padding:6px 8px;border-bottom:1px solid #f0f0ee;}
         a.btn{display:inline-block;margin-top:18px;background:#534AB7;color:white;padding:12px 20px;
@@ -25156,6 +25171,7 @@ def admin_lusync_sii_test_set_basico():
         a.btn-warn{background:#dc2626;}</style></head><body>
         <div class="card">
         <h2 style="margin-top:0;">📋 Emitir SET BÁSICO SII (4829122)</h2>
+        """ + folios_msg + """
         <div class="warn">
         Genera los 8 casos del set oficial del SII: 4 Facturas + 3 NC + 1 ND.<br><br>
         • <b>Descargar</b>: genera el sobre EnvioDTE.xml para subir manualmente al portal SII (recomendado)<br>
@@ -25172,9 +25188,9 @@ def admin_lusync_sii_test_set_basico():
         <tr><td><b>CASO 7</b></td><td>NC (61)</td><td>Anula CASO 3 (ANULA FACTURA)</td><td style="text-align:right;">$1.777.296</td></tr>
         <tr><td><b>CASO 8</b></td><td>ND (56)</td><td>Anula NC del CASO 5</td><td style="text-align:right;">$1.258.446</td></tr>
         </table>
-        <a class="btn" href="?tenant_id=""" + str(tenant_id) + """&descargar=si">
+        <a class="btn" href="?tenant_id=""" + str(tenant_id) + """&descargar=si""" + extra_q + """">
         📥 Generar y descargar sobre EnvioDTE</a>
-        <a class="btn btn-warn" href="?tenant_id=""" + str(tenant_id) + """&confirmar=si">
+        <a class="btn btn-warn" href="?tenant_id=""" + str(tenant_id) + """&confirmar=si""" + extra_q + """">
         ⚡ Generar y enviar al SII vía SOAP</a>
         </div></body></html>"""
 
