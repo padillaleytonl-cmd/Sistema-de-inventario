@@ -25191,8 +25191,8 @@ def admin_lusync_sii_test_set_basico():
                     {'nombre': 'Cajón AFECTO', 'cantidad': 171, 'precio_unitario': 3634, 'exento': False},
                     {'nombre': 'Relleno AFECTO', 'cantidad': 72, 'precio_unitario': 6057, 'exento': False},
                 ],
-                referencias=[{"tpo_doc_ref": "SET", "folio_ref": "4829122-1",
-                              "cod_ref": "SET", "razon_ref": "CASO-1"}],
+                # Set certificación: no se incluye referencia (las facturas del set no
+                # tienen documento referenciado real; el SII las identifica por contenido)
             )
             caso1_folio = r["folio"]; caso1_total = r["totales"]["mnt_total"]
             documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
@@ -25207,8 +25207,6 @@ def admin_lusync_sii_test_set_basico():
                     {'nombre': 'Pañuelo AFECTO', 'cantidad': 788, 'precio_unitario': 6096, 'exento': False, 'descuento_pct': 10},
                     {'nombre': 'ITEM 2 AFECTO', 'cantidad': 734, 'precio_unitario': 5147, 'exento': False, 'descuento_pct': 24},
                 ],
-                referencias=[{"tpo_doc_ref": "SET", "folio_ref": "4829122-2",
-                              "cod_ref": "SET", "razon_ref": "CASO-2"}],
             )
             caso2_folio = r["folio"]; caso2_total = r["totales"]["mnt_total"]
             documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
@@ -25224,8 +25222,6 @@ def admin_lusync_sii_test_set_basico():
                     {'nombre': 'ITEM 2 AFECTO', 'cantidad': 241, 'precio_unitario': 4096, 'exento': False},
                     {'nombre': 'ITEM 3 SERVICIO EXENTO', 'cantidad': 1, 'precio_unitario': 35325, 'exento': True},
                 ],
-                referencias=[{"tpo_doc_ref": "SET", "folio_ref": "4829122-3",
-                              "cod_ref": "SET", "razon_ref": "CASO-3"}],
             )
             caso3_folio = r["folio"]; caso3_total = r["totales"]["mnt_total"]
             documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
@@ -25243,8 +25239,6 @@ def admin_lusync_sii_test_set_basico():
                 ],
                 descuento_global_pct=23,
                 descuento_global_glosa="DESCUENTO GLOBAL ITEMES AFECTOS",
-                referencias=[{"tpo_doc_ref": "SET", "folio_ref": "4829122-4",
-                              "cod_ref": "SET", "razon_ref": "CASO-4"}],
             )
             caso4_folio = r["folio"]; caso4_total = r["totales"]["mnt_total"]
             documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
