@@ -25571,6 +25571,272 @@ def admin_lusync_sii_test_set_basico():
     return html
 
 
+@app.route("/admin/lusync/sii/test-set-guias", methods=["GET"])
+def admin_lusync_sii_test_set_guias():
+    """Emite los 3 casos del Set Guía de Despacho SII (4829125) en UN sobre EnvioDTE.
+
+    CASO 1: Traslado interno entre bodegas (IndTraslado=5, sin precios)
+    CASO 2: Venta, despacho por emisor al cliente (IndTraslado=1, TipoDespacho=2)
+    CASO 3: Venta, despacho por cliente (IndTraslado=1, TipoDespacho=1)
+
+    Uso: /admin/lusync/sii/test-set-guias?tenant_id=3&f52=51&descargar=si
+    """
+    if not session.get("logged"):
+        return redirect("/login")
+    if session.get("rol") != "admin" and not session.get("is_lusync_admin"):
+        return jsonify({"ok": False, "error": "solo admin del tenant"}), 403
+    from inventario import get_conn, release_conn
+    from facturacion.certificados import obtener_certificado
+    from facturacion.db import obtener_config_facturacion
+
+    tenant_id = request.args.get("tenant_id", default=3, type=int)
+    ambiente = request.args.get("ambiente", default="certificacion")
+    confirmar = request.args.get("confirmar", default="")
+    descargar = request.args.get("descargar", default="")
+
+    pasos = []
+    def paso(nombre, ok, detalle=""):
+        pasos.append({"nombre": nombre, "ok": ok, "detalle": detalle})
+
+    # Receptor de pruebas (para CASOS 2 y 3)
+    RECEPTOR_SET = {
+        "rut": "55555555-5",
+        "razon_social": "CLIENTE DE PRUEBAS LUSYNC",
+        "giro": "Comercio al por menor",
+        "direccion": "Av. Providencia 1234",
+        "comuna": "Providencia",
+    }
+
+    # Pantalla de confirmación
+    if confirmar != "si" and descargar != "si":
+        f52_q = request.args.get("f52", "")
+        debug_q = request.args.get("debug", "")
+        extra_q = ""
+        if f52_q: extra_q += f"&f52={f52_q}"
+        if debug_q: extra_q += f"&debug={debug_q}"
+        folios_msg = ""
+        if f52_q:
+            folios_msg = f'<div class="warn" style="background:#dbeafe;border-color:#3b82f6;color:#1e40af;">Folio forzado por URL: f52={f52_q}</div>'
+        return """<!DOCTYPE html><html><head><meta charset="utf-8">
+        <title>Confirmar Set Guía de Despacho SII</title>
+        <style>body{font-family:-apple-system,sans-serif;background:#f6f5f1;padding:40px;}
+        .card{max-width:680px;margin:0 auto;background:white;border-radius:14px;padding:28px;
+        box-shadow:0 4px 20px rgba(0,0,0,0.06);}
+        .warn{background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:14px;color:#92400e;font-size:13px;margin-bottom:10px;}
+        table{width:100%;border-collapse:collapse;margin:14px 0;font-size:12px;}
+        td{padding:6px 8px;border-bottom:1px solid #f0f0ee;}
+        a.btn{display:inline-block;margin-top:18px;background:#534AB7;color:white;padding:12px 20px;
+        border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;margin-right:10px;}
+        a.btn-warn{background:#dc2626;}</style></head><body>
+        <div class="card">
+        <h2 style="margin-top:0;">📦 Emitir SET GUÍA DE DESPACHO SII (4829125)</h2>
+        """ + folios_msg + """
+        <div class="warn">
+        Genera los 3 casos del set oficial del SII de Guías de Despacho.<br><br>
+        • <b>Descargar</b>: genera EnvioDTE.xml para subir manual al SII (recomendado)<br>
+        • Consume: 3 folios CAF 52
+        </div>
+        <table>
+        <tr><td><b>CASO 1</b></td><td>Guía (52)</td><td>Traslado interno entre bodegas (sin precios)</td><td style="text-align:right;">$0</td></tr>
+        <tr><td><b>CASO 2</b></td><td>Guía (52)</td><td>Venta, despacho por emisor</td><td style="text-align:right;">$5.018.814</td></tr>
+        <tr><td><b>CASO 3</b></td><td>Guía (52)</td><td>Venta, despacho por cliente</td><td style="text-align:right;">$3.708.307</td></tr>
+        </table>
+        <a class="btn" href="?tenant_id=""" + str(tenant_id) + """&descargar=si""" + extra_q + """">
+        📥 Generar y descargar sobre EnvioDTE</a>
+        </div></body></html>"""
+
+    error_fatal = False
+    detalles_casos = []
+    documentos_sin_firma = []
+    documento_ids = []
+    try:
+        # 1. Certificado
+        cert = obtener_certificado(get_conn, release_conn, tenant_id)
+        if not cert.get("ok"):
+            paso("Leer certificado", False, cert.get("error", "?"))
+            error_fatal = True
+        else:
+            paso("Leer certificado", True, cert["metadata"].get("titular", "?"))
+
+        # 2. Config emisor + CAF 52
+        cafs_dict = {}
+        if not error_fatal:
+            config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+            emisor = {
+                "rut": config["rut_emisor"], "razon_social": config["razon_social"],
+                "giro": config.get("giro", "Venta al por menor"),
+                "dir_origen": config.get("direccion", "Sin dirección"),
+                "cmna_origen": config.get("comuna", "Santiago"),
+            }
+            if config.get("acteco"):
+                emisor["acteco"] = config["acteco"]
+            paso("Datos del emisor", True, f"{emisor['razon_social']} · {emisor['rut']}")
+
+            from facturacion.dtes.caf_parser import parsear_caf_xml
+            conn = get_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT xml_caf FROM facturacion_cafs
+                        WHERE tenant_id = %s AND tipo_dte = 52
+                        ORDER BY id DESC LIMIT 1
+                    """, (tenant_id,))
+                    row = cur.fetchone()
+                    if not row:
+                        paso("CAF tipo 52", False, "No hay CAF tipo 52 cargado")
+                        error_fatal = True
+                    else:
+                        caf = parsear_caf_xml(row[0])
+                        cafs_dict[52] = caf
+                        paso("CAF tipo 52", True,
+                             f"Rango {caf.rango_desde}-{caf.rango_hasta}")
+            finally:
+                release_conn(conn)
+
+        # 3. Generar 3 documentos
+        if not error_fatal:
+            from facturacion.dtes.guia_despacho import generar_guia_despacho_xml
+            try:
+                from zoneinfo import ZoneInfo
+                fecha = datetime.now(ZoneInfo("America/Santiago")).strftime("%Y-%m-%d")
+            except Exception:
+                from datetime import timezone as _tz, timedelta as _td
+                fecha = (datetime.now(_tz.utc) - _td(hours=4)).strftime("%Y-%m-%d")
+
+            f52_param = (request.args.get("f52") or "").strip()
+            folio_52 = int(f52_param) if f52_param.isdigit() else cafs_dict[52].rango_desde
+            paso(f"Folios a usar", True,
+                 f"52: {folio_52}-{folio_52+2} (param f52={f52_param!r})")
+
+            # CASO 1: Traslado interno entre bodegas
+            # IndTraslado=5, TipoDespacho=1 (cuenta del receptor=emisor)
+            # 3 items sin precio (solo nombre + cantidad)
+            r = generar_guia_despacho_xml(
+                caf=cafs_dict[52], folio=folio_52, fecha_emision=fecha,
+                emisor=emisor, receptor=RECEPTOR_SET,  # ignorado, se reemplaza por emisor
+                ind_traslado=5, tipo_despacho=1,
+                items=[
+                    {'nombre': 'ITEM 1', 'cantidad': 81, 'precio_unitario': 0, 'exento': False},
+                    {'nombre': 'ITEM 2', 'cantidad': 132, 'precio_unitario': 0, 'exento': False},
+                    {'nombre': 'ITEM 3', 'cantidad': 91, 'precio_unitario': 0, 'exento': False},
+                ],
+                referencias=[{
+                    "tpo_doc_ref": "SET", "folio_ref": "4829125",
+                    "fecha_ref": fecha, "razon_ref": "CASO 4829125-1",
+                }],
+            )
+            caso1_folio = r["folio"]; caso1_total = r["totales"]["mnt_total"]
+            documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
+            detalles_casos.append(f"CASO-1 (Guía f{caso1_folio}): ${caso1_total:,}".replace(",", "."))
+            folio_52 += 1
+
+            # CASO 2: Venta, despacho por emisor al local del cliente
+            # IndTraslado=1 (venta), TipoDespacho=2 (emisor al cliente)
+            r = generar_guia_despacho_xml(
+                caf=cafs_dict[52], folio=folio_52, fecha_emision=fecha,
+                emisor=emisor, receptor=RECEPTOR_SET,
+                ind_traslado=1, tipo_despacho=2,
+                items=[
+                    {'nombre': 'ITEM 1', 'cantidad': 381, 'precio_unitario': 7745, 'exento': False},
+                    {'nombre': 'ITEM 2', 'cantidad': 739, 'precio_unitario': 1714, 'exento': False},
+                ],
+                referencias=[{
+                    "tpo_doc_ref": "SET", "folio_ref": "4829125",
+                    "fecha_ref": fecha, "razon_ref": "CASO 4829125-2",
+                }],
+            )
+            caso2_folio = r["folio"]; caso2_total = r["totales"]["mnt_total"]
+            documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
+            detalles_casos.append(f"CASO-2 (Guía f{caso2_folio}): ${caso2_total:,}".replace(",", "."))
+            folio_52 += 1
+
+            # CASO 3: Venta, despacho por cliente
+            # IndTraslado=1 (venta), TipoDespacho=1 (cuenta del receptor/cliente)
+            r = generar_guia_despacho_xml(
+                caf=cafs_dict[52], folio=folio_52, fecha_emision=fecha,
+                emisor=emisor, receptor=RECEPTOR_SET,
+                ind_traslado=1, tipo_despacho=1,
+                items=[
+                    {'nombre': 'ITEM 1', 'cantidad': 180, 'precio_unitario': 2063, 'exento': False},
+                    {'nombre': 'ITEM 2', 'cantidad': 454, 'precio_unitario': 6046, 'exento': False},
+                ],
+                referencias=[{
+                    "tpo_doc_ref": "SET", "folio_ref": "4829125",
+                    "fecha_ref": fecha, "razon_ref": "CASO 4829125-3",
+                }],
+            )
+            caso3_folio = r["folio"]; caso3_total = r["totales"]["mnt_total"]
+            documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
+            detalles_casos.append(f"CASO-3 (Guía f{caso3_folio}): ${caso3_total:,}".replace(",", "."))
+
+            paso("Generar 3 guías", True, " · ".join(detalles_casos))
+
+        # 4. Armar sobre EnvioDTE
+        if not error_fatal:
+            from facturacion.dtes.envio_dte import armar_envio_dte
+            set_id = "SetGuiasDoc"
+            subtot = {52: 3}
+            sobre = armar_envio_dte(
+                dtes_firmados=documentos_sin_firma,
+                rut_emisor=emisor["rut"],
+                rut_envia=cert["metadata"].get("rut", "18849272-K"),
+                fch_resol="2026-05-15", nro_resol=0,
+                subtotales=subtot, set_dte_id=set_id,
+            )
+            paso("Armar sobre EnvioDTE (3 guías)", True, f"{len(sobre)} bytes")
+
+            if request.args.get("debug") == "sin-firma":
+                from flask import Response
+                return Response(
+                    sobre, mimetype="application/xml",
+                    headers={"Content-Disposition": 'attachment; filename="EnvioDTE_Guias_DEBUG.xml"'},
+                )
+
+        # 5. Firmar
+        if not error_fatal:
+            from facturacion.dtes.firma import firmar_envio_completo
+            try:
+                sobre_firmado = firmar_envio_completo(
+                    sobre, cert["pfx_bytes"], cert["password"],
+                    set_dte_id=set_id, documento_ids=documento_ids)
+                paso("Firmar sobre completo", True, f"{len(sobre_firmado)} bytes")
+            except Exception as e_firma:
+                import traceback
+                paso("Firmar sobre completo", False, f"{e_firma}<br><pre style='font-size:10px;'>{traceback.format_exc()[:500]}</pre>")
+                error_fatal = True
+
+        # 6. Descargar o enviar
+        if not error_fatal and descargar == "si":
+            from flask import Response
+            return Response(
+                sobre_firmado, mimetype="application/xml",
+                headers={"Content-Disposition": 'attachment; filename="EnvioDTE_Guias_Firmado.xml"'},
+            )
+
+    except Exception as e:
+        import traceback
+        paso("ERROR", False, f"{e}<br><pre style='font-size:10px;'>{traceback.format_exc()[:1000]}</pre>")
+
+    # HTML resultado
+    filas = ''
+    for p in pasos:
+        icon = '✅' if p['ok'] else '❌'
+        color = '#16a34a' if p['ok'] else '#dc2626'
+        filas += f'<div style="border-left:3px solid {color};padding:10px 16px;margin:8px 0;background:white;border-radius:6px;"><b>{icon} {p["nombre"]}</b><div style="font-size:13px;color:#666;margin-top:4px;">{p["detalle"]}</div></div>'
+
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+    <title>Test Set Guías SII</title>
+    <style>body{{font-family:-apple-system,sans-serif;background:#f6f5f1;padding:40px;}}
+    .card{{max-width:780px;margin:0 auto;background:#f9f9f7;border-radius:14px;padding:28px;box-shadow:0 4px 20px rgba(0,0,0,0.06);}}
+    h2{{margin-top:0;}}</style></head><body>
+    <div class="card">
+      <h2>📦 Set Guía de Despacho SII (4829125)</h2>
+      <p>Tenant {tenant_id} · ambiente {ambiente}</p>
+      <div>{filas}</div>
+    </div>
+    </body></html>"""
+
+
 @app.route("/admin/lusync/sii/test-set-boletas", methods=["GET"])
 @requiere_lusync_admin
 def admin_lusync_sii_test_set_boletas():
