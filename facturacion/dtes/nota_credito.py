@@ -151,6 +151,7 @@ def generar_nota_credito_xml(
     forma_pago: int = 2,                 # 1=Contado, 2=Crédito, 3=Sin costo (solo aplica modo neto)
     fecha_vencimiento: Optional[str] = None,
     timestamp_firma: Optional[str] = None,
+    set_referencia: Optional[Dict] = None,  # certif SII: {folio_ref:'4829122', razon_ref:'CASO 4829122-5'}
 ) -> Dict:
     """Genera XML de Nota de Crédito Electrónica (DTE 61).
 
@@ -342,24 +343,47 @@ def generar_nota_credito_xml(
             f'<GlosaDR>{_escape_xml(descuento_global_glosa or "DESCUENTO GLOBAL")}</GlosaDR>'
             '<TpoValor>%</TpoValor>'
             f'<ValorDR>{descuento_global_pct:g}</ValorDR>'
-            '<IndExeDR>2</IndExeDR>'
+            # SII manual pág 37: si aplica solo a afectos NO debe llevar IndExeDR
             '</DscRcgGlobal>'
         )
 
-    # 10. Referencia OBLIGATORIA
+    # 10. Referencias: si hay set_referencia (certif SII), va como PRIMERA línea
+    # con TpoDocRef="SET" (string), luego la referencia obligatoria del documento.
     folio_ref = str(referencia.get('folio_ref') or '').strip()
     fch_ref = str(referencia.get('fecha_ref') or fecha_emision).strip()
     cod_ref = str(referencia.get('cod_ref') or '1').strip()
     razon = str(referencia.get('razon_ref') or 'ANULA DOCUMENTO').strip()[:90]
-    ref_partes = [
-        '<NroLinRef>1</NroLinRef>',
+
+    referencias_partes = []
+    nro_lin = 1
+
+    # Si hay set_referencia, va PRIMERO (manual SII inst_set_pruebas pág 1 punto 6)
+    if set_referencia:
+        sr_folio = str(set_referencia.get('folio_ref') or '').strip()
+        sr_fch = str(set_referencia.get('fecha_ref') or fecha_emision).strip()
+        sr_razon = str(set_referencia.get('razon_ref') or '').strip()[:90]
+        sr_partes = [
+            f'<NroLinRef>{nro_lin}</NroLinRef>',
+            '<TpoDocRef>SET</TpoDocRef>',  # texto literal "SET" como exige el manual SII
+            f'<FolioRef>{_escape_xml(sr_folio)}</FolioRef>',
+            f'<FchRef>{sr_fch}</FchRef>',
+            f'<RazonRef>{_escape_xml(sr_razon)}</RazonRef>',
+        ]
+        referencias_partes.append('<Referencia>' + ''.join(sr_partes) + '</Referencia>')
+        nro_lin += 1
+
+    # Referencia obligatoria al documento que modifica (siempre presente)
+    ref_doc_partes = [
+        f'<NroLinRef>{nro_lin}</NroLinRef>',
         f'<TpoDocRef>{tpo_ref}</TpoDocRef>',
         f'<FolioRef>{_escape_xml(folio_ref)}</FolioRef>',
         f'<FchRef>{fch_ref}</FchRef>',
         f'<CodRef>{_escape_xml(cod_ref)}</CodRef>',
         f'<RazonRef>{_escape_xml(razon)}</RazonRef>',
     ]
-    referencia_xml = '<Referencia>' + ''.join(ref_partes) + '</Referencia>'
+    referencias_partes.append('<Referencia>' + ''.join(ref_doc_partes) + '</Referencia>')
+
+    referencia_xml = ''.join(referencias_partes)
 
     # 11. TED
     if timestamp_firma is None:
