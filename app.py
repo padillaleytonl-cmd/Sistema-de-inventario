@@ -25243,7 +25243,7 @@ def admin_lusync_sii_test_set_basico():
 
             # Folios iniciales de cada CAF (override opcional vía query param para
             # reintentar con folios nuevos cuando los anteriores fueron rechazados).
-            # ?f33=105&f61=104&f56=102 → empieza desde esos folios
+            # ?f33=109&f61=107&f56=103 → empieza desde esos folios
             f33_param = (request.args.get("f33") or "").strip()
             f61_param = (request.args.get("f61") or "").strip()
             f56_param = (request.args.get("f56") or "").strip()
