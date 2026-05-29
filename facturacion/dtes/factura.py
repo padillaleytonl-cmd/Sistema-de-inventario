@@ -167,14 +167,22 @@ def generar_factura_xml(
     iddoc_xml = '<IdDoc>' + ''.join(iddoc_parts) + '</IdDoc>'
 
     # 2. Emisor (más completo que en boleta)
+    # Schema SII para factura/NC/ND exige <Acteco> ANTES de <DirOrigen>
     rut_e = str(emisor['rut']).replace('.', '').strip()
     emisor_parts = [
         f'<RUTEmisor>{rut_e}</RUTEmisor>',
         f'<RznSoc>{_escape_xml(emisor["razon_social"])}</RznSoc>',
         f'<GiroEmis>{_escape_xml(emisor.get("giro", "")[:80])}</GiroEmis>',
     ]
-    if emisor.get('acteco'):
-        emisor_parts.append(f'<Acteco>{emisor["acteco"]}</Acteco>')
+    # Acteco OBLIGATORIO en facturas/NC/ND. Si no se pasa, usar 620100
+    # (Actividades de programación informática). Puede pasarse uno o varios.
+    actecos = emisor.get('acteco') or emisor.get('actecos') or [620100]
+    if not isinstance(actecos, (list, tuple)):
+        actecos = [actecos]
+    for ac in actecos:
+        ac_clean = str(ac).replace('.', '').strip()
+        if ac_clean:
+            emisor_parts.append(f'<Acteco>{ac_clean}</Acteco>')
     emisor_parts.extend([
         f'<DirOrigen>{_escape_xml(emisor["dir_origen"])}</DirOrigen>',
         f'<CmnaOrigen>{_escape_xml(emisor["cmna_origen"])}</CmnaOrigen>',

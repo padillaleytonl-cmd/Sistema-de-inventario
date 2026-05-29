@@ -104,13 +104,17 @@ def armar_envio_dte(
     # Concatenar los DTE internos sin modificar
     dtes_xml = ''.join(_extraer_dte_interno(d) for d in dtes_firmados)
 
-    # Sobre completo (sin Signature todavía) — tag raíz EnvioDTE, schema v10
+    # Sobre completo (sin Signature todavía) — tag raíz EnvioDTE, schema v10.
+    # CRÍTICO: orden de atributos EXACTO como lo exige el SII:
+    #   xmlns → xmlns:xsi → xsi:schemaLocation → version
+    # Si "version" va antes de "xsi:schemaLocation", el SII devuelve SCH-00001.
     envio = (
         '<?xml version="1.0" encoding="ISO-8859-1"?>'
-        '<EnvioDTE version="1.0" '
+        '<EnvioDTE '
         'xmlns="http://www.sii.cl/SiiDte" '
         'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
-        'xsi:schemaLocation="http://www.sii.cl/SiiDte EnvioDTE_v10.xsd">'
+        'xsi:schemaLocation="http://www.sii.cl/SiiDte EnvioDTE_v10.xsd" '
+        'version="1.0">'
         f'<SetDTE ID="{set_dte_id}">'
         f'{caratula}'
         f'{dtes_xml}'
