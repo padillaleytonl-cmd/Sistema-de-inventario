@@ -303,6 +303,8 @@ def generar_guia_despacho_xml(
     )
 
     # 8. DTE
+    # IMPORTANTE: construir_ted ya retorna <TED version="1.0">...</TED> COMPLETO
+    # NO envolver de nuevo (sería <TED><TED>...</TED></TED> = inválido)
     documento_id = f'F{folio}T{tipo_dte}'
     dte_xml = (
         '<?xml version="1.0" encoding="ISO-8859-1"?>'
@@ -311,7 +313,7 @@ def generar_guia_despacho_xml(
         f'{encabezado_xml}'
         f'{detalles_xml}'
         f'{referencia_xml}'
-        f'<TED version="1.0">{ted.decode("iso-8859-1") if isinstance(ted, bytes) else ted}</TED>'
+        f'{ted.decode("iso-8859-1") if isinstance(ted, bytes) else ted}'
         f'<TmstFirma>{timestamp_firma}</TmstFirma>'
         f'</Documento>'
         f'</DTE>'
