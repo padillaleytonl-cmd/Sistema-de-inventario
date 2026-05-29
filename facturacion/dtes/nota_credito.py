@@ -182,14 +182,17 @@ def generar_nota_credito_xml(
     cod_ref_int = int(str(referencia.get('cod_ref') or '1').strip())
 
     # REGLA SII (REF-2-781): CodRef=2 "Corrige Texto" NO debe tener montos.
-    # El SII rechaza si una NC con CodRef=2 trae monto != 0.
-    # Solución: forzar MntTotal=0 con un item de monto 0.
+    # El esquema exige PrcItem >= 0.000001 (no acepta 0), pero el reparo
+    # REF-2-781 exige MntTotal=0. Solución: item con precio mínimo (1) Y
+    # DescuentoPct=100, así MontoItem queda en 0 → MntNeto=0 → MntTotal=0.
+    # Esto cumple AMBAS validaciones (schema + reparo REF-2-781).
     if cod_ref_int == 2:
         items = [{
             'nombre': 'Corrige información del documento referenciado',
             'cantidad': 1,
-            'precio_unitario': 0,
+            'precio_unitario': 1,
             'exento': False,
+            'descuento_pct': 100,
         }]
         monto_anulacion = None
 
