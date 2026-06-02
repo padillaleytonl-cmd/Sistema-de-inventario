@@ -26532,6 +26532,258 @@ def admin_lusync_sii_test_set_exenta_ncnd():
       <div class="footer">{nota}</div>
     </div>
     </body></html>"""
+# ════════════════════════════════════════════════════════════════════════════
+# LIBROS IECV (Ventas 4829123, Compras 4829124, Guías 4829126) — pegar en app.py
+# ════════════════════════════════════════════════════════════════════════════
+# Genera y firma los Libros Electrónicos de Compra/Venta del set de certificación.
+#
+#   ?tipo=ventas   → Libro de Ventas: Carátula VENTA + ResumenPeriodo (SIN detalle,
+#                    porque GRUPO PH solo emite DTE electrónicos). Montos tomados de
+#                    los DTE del Set Básico ya aceptados (33, 61, 56).
+#   ?tipo=guias    → Libro de Guías: Carátula VENTA + ResumenPeriodo del tipo 52.
+#   ?tipo=compras  → Libro de Compras: Carátula COMPRA + Detalle (7 docs del set) +
+#                    ResumenPeriodo con factor de proporcionalidad 0.60.
+#
+# Uso:
+#   Debug (ver XML sin firmar, no envía):
+#     /admin/lusync/sii/test-libro?tenant_id=3&tipo=ventas&debug=sin-firma
+#   Verificar firma propia (firma y valida el XMLDSig, no envía):
+#     /admin/lusync/sii/test-libro?tenant_id=3&tipo=ventas&debug=verifica-firma
+#   Descargar libro firmado para subir manual al SII:
+#     /admin/lusync/sii/test-libro?tenant_id=3&tipo=ventas&descargar=si
+#   Período tributario (default 2026-05, el de los DTE del set):
+#     ...&periodo=2026-05
+#
+# El libro se sube al SII en la sección "Envío de Libros" (no en DTEauth de DTEs).
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/lusync/sii/test-libro", methods=["GET"])
+def admin_lusync_sii_test_libro():
+    """Genera y firma un Libro IECV (ventas/compras/guias) para certificación."""
+    if not session.get("logged"):
+        return redirect("/login")
+    if session.get("rol") != "admin" and not session.get("is_lusync_admin"):
+        return jsonify({"ok": False, "error": "solo admin del tenant"}), 403
+    from inventario import get_conn, release_conn
+    from facturacion.certificados import obtener_certificado
+    from facturacion.db import obtener_config_facturacion
+    from facturacion.dtes import libro_cv as lcv
+    from facturacion.dtes.firma import firmar_envio_completo, verificar_firma_propia
+
+    tenant_id = request.args.get("tenant_id", default=3, type=int)
+    tipo = (request.args.get("tipo") or "ventas").strip().lower()
+    periodo = (request.args.get("periodo") or "2026-05").strip()
+    descargar = request.args.get("descargar", default="")
+    debug = request.args.get("debug", default="")
+
+    pasos = []
+    def paso(nombre, ok, detalle=""):
+        pasos.append({"nombre": nombre, "ok": ok, "detalle": detalle})
+
+    import html as _html
+    error_fatal = False
+    try:
+        # ─── Certificado + config ───
+        cert = obtener_certificado(get_conn, release_conn, tenant_id)
+        if not cert.get("ok"):
+            paso("Leer certificado", False, cert.get("error", "?"))
+            error_fatal = True
+        else:
+            paso("Leer certificado", True, cert["metadata"].get("titular", "?"))
+
+        if not error_fatal:
+            config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+            rut_emisor = config["rut_emisor"]
+            rut_envia = cert["metadata"].get("rut", "18849272-K")
+            fch_resol = config.get("resolucion_sii_fecha") or "2026-05-15"
+            if not isinstance(fch_resol, str):
+                fch_resol = fch_resol.isoformat()
+            nro_resol = config.get("resolucion_sii_numero") or 0
+            paso("Config emisor", True, f"{rut_emisor} · resol {fch_resol} N°{nro_resol}")
+
+        # ─── Construir el libro según tipo ───
+        if not error_fatal:
+            libro_id = f"LIBRO_{tipo.upper()}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+            if tipo == "ventas":
+                # Montos REALES del Set Básico (33, 61, 56) ya aceptados por el SII.
+                totales = [
+                    lcv.construir_totales_periodo_venta(
+                        33, 4, tot_mnt_exe=48999, tot_mnt_neto=12829702,
+                        tot_mnt_iva=2437643, tot_mnt_total=15316344),
+                    lcv.construir_totales_periodo_venta(
+                        61, 3, tot_mnt_exe=35325, tot_mnt_neto=4993536,
+                        tot_mnt_iva=948772, tot_mnt_total=5977633),
+                    lcv.construir_totales_periodo_venta(
+                        56, 1, tot_mnt_exe=0, tot_mnt_neto=0,
+                        tot_mnt_iva=0, tot_mnt_total=0),
+                ]
+                r = lcv.generar_libro_xml(
+                    rut_emisor=rut_emisor, rut_envia=rut_envia,
+                    periodo_tributario=periodo, tipo_operacion="VENTA",
+                    totales_periodo=totales, fch_resol=fch_resol, nro_resol=nro_resol,
+                    libro_id=libro_id)
+                paso("Construir Libro de Ventas", True,
+                     "3 tipos (33:4, 61:3, 56:1) · Total ventas 15.316.344 · sin detalle (DTE electrónicos)")
+
+            elif tipo == "guias":
+                # Montos REALES del Set Guías (tipo 52). 3 guías.
+                # Total guías = suma de las 3 (incluye la interna en 0 y las 2 de venta).
+                totales = [
+                    lcv.construir_totales_periodo_venta(
+                        52, 3, tot_mnt_exe=0, tot_mnt_neto=7333715,
+                        tot_mnt_iva=1393406, tot_mnt_total=8727121),
+                ]
+                r = lcv.generar_libro_xml(
+                    rut_emisor=rut_emisor, rut_envia=rut_envia,
+                    periodo_tributario=periodo, tipo_operacion="VENTA",
+                    totales_periodo=totales, fch_resol=fch_resol, nro_resol=nro_resol,
+                    libro_id=libro_id)
+                paso("Construir Libro de Guías", True,
+                     "52: 3 guías · Neto 7.333.715 · IVA 1.393.406 · Total 8.727.121")
+
+            elif tipo == "compras":
+                # Datos del SET LIBRO DE COMPRAS (4829124). 7 documentos.
+                # Factor de proporcionalidad IVA uso común = 0.60.
+                # Tasa IVA 19%. Los montos "afecto" del set son NETO; el IVA se calcula.
+                FCT = 0.60
+                def iva(neto):
+                    return round(neto * 0.19)
+                # Documentos del set (rut proveedor de prueba 55555555-5)
+                # 1. FACTURA folio 234, giro con derecho a crédito, neto 6730
+                # 2. FACTURA ELEC folio 32, exento 8028 + neto 4273
+                # 3. FACTURA folio 781, IVA uso común, neto 29610
+                # 4. NOTA CRÉDITO folio 451, NC por descuento factura 234, neto 2623
+                # 5. FACTURA ELEC folio 67, entrega gratuita (IVA no recuperable cod 4), neto 9064
+                # 6. FACTURA COMPRA ELEC folio 9, retención total IVA, neto 9093
+                # 7. NOTA CRÉDITO folio 211, NC descuento factura elec 32, neto 2374
+                RUTP = "55555555-5"
+                detalles = [
+                    lcv.construir_detalle_compra(30, 234, periodo + "-10", RUTP,
+                        mnt_neto=6730, mnt_iva=iva(6730), mnt_total=6730 + iva(6730),
+                        rzn_soc="PROVEEDOR PRUEBA"),
+                    lcv.construir_detalle_compra(33, 32, periodo + "-10", RUTP,
+                        mnt_exe=8028, mnt_neto=4273, mnt_iva=iva(4273),
+                        mnt_total=8028 + 4273 + iva(4273), rzn_soc="PROVEEDOR PRUEBA"),
+                    lcv.construir_detalle_compra(30, 781, periodo + "-11", RUTP,
+                        mnt_neto=29610, mnt_iva=0, iva_uso_comun=iva(29610),
+                        mnt_total=29610 + iva(29610), rzn_soc="PROVEEDOR PRUEBA"),
+                    lcv.construir_detalle_compra(60, 451, periodo + "-12", RUTP,
+                        mnt_neto=2623, mnt_iva=iva(2623), mnt_total=2623 + iva(2623),
+                        rzn_soc="PROVEEDOR PRUEBA"),
+                    lcv.construir_detalle_compra(33, 67, periodo + "-12", RUTP,
+                        mnt_neto=9064, mnt_iva=0, cod_iva_no_rec=4, mnt_iva_no_rec=iva(9064),
+                        mnt_total=9064 + iva(9064), rzn_soc="PROVEEDOR PRUEBA"),
+                    lcv.construir_detalle_compra(46, 9, periodo + "-13", RUTP,
+                        mnt_neto=9093, mnt_iva=iva(9093), iva_ret_total=iva(9093),
+                        mnt_total=9093, rzn_soc="PROVEEDOR PRUEBA"),
+                    lcv.construir_detalle_compra(60, 211, periodo + "-14", RUTP,
+                        mnt_neto=2374, mnt_iva=iva(2374), mnt_total=2374 + iva(2374),
+                        rzn_soc="PROVEEDOR PRUEBA"),
+                ]
+                # Resumen por tipo de documento
+                totales = [
+                    # Tipo 30 (Factura papel): folios 234 + 781
+                    lcv.construir_totales_periodo_compra(
+                        30, 2, tot_mnt_neto=6730 + 29610, tot_mnt_iva=iva(6730),
+                        tot_op_iva_uso_comun=1, tot_iva_uso_comun=iva(29610),
+                        fct_prop=FCT, tot_cred_iva_uso_comun=round(iva(29610) * FCT),
+                        tot_mnt_total=(6730 + iva(6730)) + (29610 + iva(29610))),
+                    # Tipo 33 (Factura elec): folios 32 + 67
+                    lcv.construir_totales_periodo_compra(
+                        33, 2, tot_mnt_exe=8028, tot_mnt_neto=4273 + 9064, tot_mnt_iva=iva(4273),
+                        cod_iva_no_rec=4, tot_mnt_iva_no_rec=iva(9064),
+                        tot_mnt_total=(8028 + 4273 + iva(4273)) + (9064 + iva(9064))),
+                    # Tipo 46 (Factura compra elec): folio 9, retención total
+                    lcv.construir_totales_periodo_compra(
+                        46, 1, tot_mnt_neto=9093, tot_mnt_iva=iva(9093),
+                        tot_iva_ret_total=iva(9093), tot_mnt_total=9093),
+                    # Tipo 60 (Nota crédito): folios 451 + 211
+                    lcv.construir_totales_periodo_compra(
+                        60, 2, tot_mnt_neto=2623 + 2374, tot_mnt_iva=iva(2623) + iva(2374),
+                        tot_mnt_total=(2623 + iva(2623)) + (2374 + iva(2374))),
+                ]
+                r = lcv.generar_libro_xml(
+                    rut_emisor=rut_emisor, rut_envia=rut_envia,
+                    periodo_tributario=periodo, tipo_operacion="COMPRA",
+                    totales_periodo=totales, detalles=detalles,
+                    fch_resol=fch_resol, nro_resol=nro_resol, libro_id=libro_id)
+                paso("Construir Libro de Compras", True,
+                     "7 docs con detalle · factor proporcionalidad 0.60")
+            else:
+                paso("Tipo de libro", False, f"tipo '{tipo}' no válido (usa ventas|compras|guias)")
+                error_fatal = True
+
+        # ─── Debug sin firma ───
+        if not error_fatal and debug == "sin-firma":
+            from flask import Response
+            return Response(r["xml"], mimetype="application/xml",
+                headers={"Content-Disposition": f'attachment; filename="Libro_{tipo}_SinFirma_DEBUG.xml"'})
+
+        # ─── Firmar ───
+        if not error_fatal:
+            try:
+                firmado = firmar_envio_completo(
+                    r["xml"], cert["pfx_bytes"], cert["password"],
+                    set_dte_id=r["libro_id"], documento_ids=[])
+                paso("Firmar libro (EnvioLibro por ID)", True, f"{len(firmado)} bytes")
+            except Exception as e_f:
+                import traceback
+                paso("Firmar libro", False, f"{str(e_f)[:300]}\n{traceback.format_exc()[:300]}")
+                error_fatal = True
+
+        # ─── Verificar firma propia ───
+        if not error_fatal and debug == "verifica-firma":
+            res = verificar_firma_propia(firmado)
+            color = "#10b981" if res.get("ok") else "#dc2626"
+            return f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+            <title>Verificar firma libro</title>
+            <style>body{{font-family:-apple-system,sans-serif;background:#f6f5f1;padding:40px;}}
+            .card{{max-width:640px;margin:0 auto;background:white;border-radius:14px;padding:28px;
+            box-shadow:0 4px 20px rgba(0,0,0,0.06);}}</style></head><body>
+            <div class="card">
+            <h2 style="color:{color};">{'✅ Firma válida' if res.get('ok') else '❌ Firma inválida'}</h2>
+            <p>Libro de {tipo} · período {periodo}</p>
+            <p style="font-family:monospace;font-size:13px;">{_html.escape(res.get('mensaje',''))}</p>
+            <p style="color:#666;font-size:12px;">Si la firma es válida, vuelve sin <code>&debug=verifica-firma</code>
+            y usa <code>&descargar=si</code> para bajar el libro y subirlo al SII.</p>
+            </div></body></html>"""
+
+        # ─── Descargar firmado ───
+        if not error_fatal and descargar == "si":
+            from flask import Response
+            return Response(firmado, mimetype="application/xml",
+                headers={"Content-Disposition": f'attachment; filename="Libro_{tipo}_{periodo}.xml"'})
+
+    except Exception as e:
+        import traceback
+        paso("Error", False, _html.escape(traceback.format_exc()[:600]))
+        error_fatal = True
+
+    # ─── Resumen de pasos ───
+    todo_ok = all(p["ok"] for p in pasos)
+    color = "#10b981" if todo_ok else "#dc2626"
+    filas = ""
+    for p in pasos:
+        ic = "✅" if p["ok"] else "❌"
+        col = "#10b981" if p["ok"] else "#dc2626"
+        filas += f"""<div style="display:flex;gap:10px;padding:12px 14px;border-bottom:1px solid #f0f0ee;">
+          <div>{ic}</div><div style="flex:1;">
+          <div style="font-weight:600;font-size:13px;">{p['nombre']}</div>
+          <div style="color:{col};font-size:12px;font-family:monospace;word-break:break-word;">{p['detalle']}</div>
+          </div></div>"""
+    nota = ("Libro generado y firmado. Descárgalo con <code>&descargar=si</code> y súbelo en la "
+            "sección de Envío de Libros del SII." if todo_ok else "Revisa el paso en rojo.")
+    return f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+    <title>Libro IECV · Lusync</title><meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>body{{font-family:-apple-system,sans-serif;background:#f6f5f1;margin:0;padding:24px;}}
+    .card{{max-width:680px;margin:0 auto;background:white;border-radius:14px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.06);}}
+    .hd{{background:{color};color:white;padding:20px;}}.hd h1{{margin:0;font-size:17px;}}
+    .ft{{padding:16px 20px;background:#fafaf9;font-size:12px;color:#666;}}</style></head><body>
+    <div class="card"><div class="hd"><h1>{'✅' if todo_ok else '❌'} Libro de {tipo} · {periodo}</h1></div>
+    <div>{filas}</div><div class="ft">{nota}</div></div></body></html>"""
+
+
 
 
 
