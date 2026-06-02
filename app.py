@@ -25579,7 +25579,7 @@ def admin_lusync_sii_test_set_basico():
 #
 # Mapa de casos (set 4829127):
 #   C1 FE34  : HORAS PROGRAMADOR 4 x 3.288 (unidad Hora)          → MntExe 13.152
-#   C2 NC61  : modifica monto C1, HORAS PROGRAMADOR valor 411     → MntExe 411   (CodRef 3)
+#   C2 NC61  : modifica monto C1, HORAS PROGRAMADOR 4 x valor 411   → MntExe 1644  (CodRef 3)
 #   C3 FE34  : 2 servicios consultoría (209.458 + 206.961)        → MntExe 416.419
 #   C4 NC61  : corrige giro C3 (simbólica, sin items)             → MntTotal 0   (CodRef 2)
 #   C5 ND56  : anula NC del C4 (simbólica)                        → MntTotal 0   (CodRef 1)
@@ -25780,13 +25780,17 @@ def admin_lusync_sii_test_set_fact_exenta():
             folio_34 += 1
 
             # CASO 2: NC (61) modifica monto de la FE C1 — HORAS PROGRAMADOR valor 411
+            # IMPORTANTE: el instructivo del set (inst_set_pruebas) exige que en una NC
+            # por diferencia de precio, la CANTIDAD coincida con la del ítem en la factura
+            # original ("la diferencia se aplica a todas las unidades"). La FE del caso 1
+            # tenía 4 horas, así que la NC va con cantidad=4 (no 1). MntExe = 4 × 411 = 1644.
             r = generar_nota_credito_xml(
                 caf=cafs_dict[61], folio=folio_61, fecha_emision=fecha,
                 emisor=emisor, receptor=RECEPTOR_SET,
                 referencia={"folio_ref": c1_folio, "tipo_doc_ref": 34, "fecha_ref": fecha,
                             "cod_ref": 3, "razon_ref": "MODIFICA MONTO"},
                 items=[
-                    {'nombre': 'HORAS PROGRAMADOR', 'cantidad': 1, 'precio_unitario': 411, 'unidad': 'Hora'},
+                    {'nombre': 'HORAS PROGRAMADOR', 'cantidad': 4, 'precio_unitario': 411, 'unidad': 'Hora'},
                 ],
                 set_referencia={"folio_ref": SET, "fecha_ref": fecha,
                                 "razon_ref": "CASO 4829127-2"},
@@ -26132,10 +26136,6 @@ def admin_lusync_sii_test_set_fact_exenta():
     return html
 
 
-
-
-
-
 # ════════════════════════════════════════════════════════════════════════════
 # REENVÍO SOLO NC/ND DEL SET FACTURA EXENTA (4829127) — pegar en app.py
 # ════════════════════════════════════════════════════════════════════════════
@@ -26334,12 +26334,14 @@ def admin_lusync_sii_test_set_exenta_ncnd():
 
         if not error_fatal:
             # CASO 2: NC modifica monto FE c1 (ref folio fe1) — HORAS PROGRAMADOR 411
+            # cantidad=4 (igual a la factura original): la diferencia se aplica a todas
+            # las unidades (instructivo set). MntExe = 4 × 411 = 1644.
             r = generar_nota_credito_xml(
                 caf=cafs_dict[61], folio=folio_61, fecha_emision=fecha,
                 emisor=emisor, receptor=RECEPTOR_SET,
                 referencia={"folio_ref": fe1, "tipo_doc_ref": 34, "fecha_ref": fecha,
                             "cod_ref": 3, "razon_ref": "MODIFICA MONTO"},
-                items=[{'nombre': 'HORAS PROGRAMADOR', 'cantidad': 1, 'precio_unitario': 411, 'unidad': 'Hora'}],
+                items=[{'nombre': 'HORAS PROGRAMADOR', 'cantidad': 4, 'precio_unitario': 411, 'unidad': 'Hora'}],
                 set_referencia={"folio_ref": SET, "fecha_ref": fecha, "razon_ref": "CASO 4829127-2"},
                 es_exenta=True,
             )
@@ -26530,6 +26532,8 @@ def admin_lusync_sii_test_set_exenta_ncnd():
       <div class="footer">{nota}</div>
     </div>
     </body></html>"""
+
+
 
 
 @app.route("/admin/lusync/sii/test-set-guias", methods=["GET"])
