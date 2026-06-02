@@ -191,6 +191,7 @@ def generar_libro_xml(
     folio_notificacion: int = 1,
     cod_aut_rec: Optional[str] = None,
     libro_id: Optional[str] = None,
+    tmst_firma: Optional[str] = None,
 ) -> Dict:
     """Genera el XML de un Libro de Compra/Venta (IECV) SIN firma todavía.
 
@@ -201,6 +202,8 @@ def generar_libro_xml(
     rut_envia = _normalizar_rut(rut_envia)
     if libro_id is None:
         libro_id = "LIBRO_" + datetime.now().strftime("%Y%m%d%H%M%S")
+    if tmst_firma is None:
+        tmst_firma = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
     # Carátula — el orden de tags es CRÍTICO para el schema
     car_partes = [
@@ -232,6 +235,7 @@ def generar_libro_xml(
         + caratula
         + resumen
         + detalle_xml
+        + f"<TmstFirma>{tmst_firma}</TmstFirma>"
         + "</EnvioLibro>"
     )
 
