@@ -282,7 +282,7 @@ def generar_nota_debito_xml(
 
     # 7. Referencias: si hay set_referencia (certif SII), va como PRIMERA línea
     # con TpoDocRef="SET" (string), luego la referencia obligatoria del documento.
-    tpo = str(referencia.get('tpo_doc_ref') or '61').strip()  # default: 61 (NC)
+    tpo = str(referencia.get('tpo_doc_ref') or referencia.get('tipo_doc_ref') or '61').strip()  # default: 61 (NC)
     folio_ref = str(referencia.get('folio_ref') or '').strip()
     fch_ref = str(referencia.get('fecha_ref') or fecha_emision).strip()
     cod_ref = str(referencia.get('cod_ref') or '1').strip()
