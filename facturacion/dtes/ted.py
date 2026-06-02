@@ -89,12 +89,41 @@ def construir_dd(
     
     rut_emisor = _formatear_rut_sin_puntos(caf.rut_emisor)
     rut_receptor = _formatear_rut_sin_puntos(rut_receptor) if rut_receptor else '66666666-6'
-    
-    # El detalle del primer item va truncado a 40 chars y sin caracteres especiales
+
+    # El detalle del primer item va truncado a 40 chars.
     item_safe = _truncar(detalle_primer_item or 'Item', 40)
-    
+
     # Razón social: máx 40 chars
     rsr_safe = _truncar(razon_social_receptor or 'Consumidor Final', 40)
+
+    # CRÍTICO (fix TED-2-510): normalización de escape XML en IT1 y RSR.
+    # El SII valida el timbre parseando el XML (desescapando entidades) y
+    # verificando la firma sobre el texto resultante re-serializado. Un parser
+    # estándar deja ' y " CRUDOS al re-serializar, y solo escapa & < >.
+    # Si el generador nos pasa el texto ya escapado (ej. "PLC&apos;s"), firmamos
+    # sobre "&apos;" pero el SII reconstruye "'" → digest distinto → TED-2-510.
+    # Solución: desescapar TODO lo que venga, y re-escapar SOLO lo obligatorio
+    # (& < >), dejando ' y " crudos. Para textos sin caracteres especiales esto
+    # es byte-idéntico al comportamiento anterior (no afecta DTEs ya certificados).
+    def _canonizar_ted(s: str) -> str:
+        if not s:
+            return ''
+        # 1. Desescapar entidades que pudieran venir de los generadores.
+        #    Primero las nombradas; & va al final para no romper las demás.
+        s = (s.replace('&apos;', "'")
+              .replace('&quot;', '"')
+              .replace('&lt;', '<')
+              .replace('&gt;', '>')
+              .replace('&amp;', '&'))
+        # 2. Re-escapar SOLO lo obligatorio en contenido XML: & < >
+        #    (NO se escapan ' ni " — un parser los deja crudos al re-serializar)
+        s = (s.replace('&', '&amp;')
+              .replace('<', '&lt;')
+              .replace('>', '&gt;'))
+        return s
+
+    item_safe = _canonizar_ted(item_safe)
+    rsr_safe = _canonizar_ted(rsr_safe)
     
     # Bloque DD: el orden y formato es CRÍTICO para que el SII valide.
     # El SII, al validar el timbre (FRMT), reconstruye el DD eliminando los

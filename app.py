@@ -25569,8 +25569,6 @@ def admin_lusync_sii_test_set_basico():
     </div>
     </body></html>"""
     return html
-
-
 # ════════════════════════════════════════════════════════════════════════════
 # SET FACTURA EXENTA (4829127) — pegar en app.py
 # ════════════════════════════════════════════════════════════════════════════
@@ -25921,6 +25919,88 @@ def admin_lusync_sii_test_set_fact_exenta():
             )
             paso("Armar sobre EnvioDTE (8 docs)", True, f"{len(sobre)} bytes")
 
+            # ─── DEBUG: verificar firma de cada TED (como lo hace el SII) ───
+            # Detecta TED-2-510 ANTES de gastar folios: parsea el <DD> de cada
+            # documento y verifica la firma <FRMT> contra la clave pública del CAF.
+            # El SII valida así (parseando el XML, no sobre los bytes literales).
+            if request.args.get("debug") == "verifica-ted":
+                import re as _re_ted, base64 as _b64
+                from lxml import etree as _et
+                from cryptography.hazmat.primitives import hashes as _hashes
+                from cryptography.hazmat.primitives.asymmetric import padding as _pad
+                from cryptography.hazmat.primitives.serialization import load_pem_public_key as _loadpub
+
+                # Clave pública por tipo de CAF (para verificar la firma del TED)
+                pubs = {}
+                for tipo, caf_obj in cafs_dict.items():
+                    try:
+                        pubs[tipo] = _loadpub(caf_obj.rsa_publica_pem.encode())
+                    except Exception:
+                        pubs[tipo] = None
+
+                reporte = []
+                todos_ok = True
+                for xml_doc, doc_id in zip(documentos_sin_firma, documento_ids):
+                    s_doc = xml_doc.decode("iso-8859-1")
+                    tipo_m = _re_ted.search(r'<TipoDTE>(\d+)</TipoDTE>', s_doc)
+                    folio_m = _re_ted.search(r'<Folio>(\d+)</Folio>', s_doc)
+                    it1_m = _re_ted.search(r'<IT1>(.*?)</IT1>', s_doc, _re_ted.DOTALL)
+                    tipo_doc = int(tipo_m.group(1)) if tipo_m else 0
+                    folio_doc = folio_m.group(1) if folio_m else "?"
+                    it1_txt = it1_m.group(1) if it1_m else "(sin IT1)"
+                    tiene_apos = "&apos;" in it1_txt  # NO debe estar (indicaría el bug)
+
+                    dd_m = _re_ted.search(r'<DD>.*?</DD>', s_doc, _re_ted.DOTALL)
+                    frmt_m = _re_ted.search(r'<FRMT[^>]*>(.*?)</FRMT>', s_doc, _re_ted.DOTALL)
+                    estado = "?"
+                    if dd_m and frmt_m and pubs.get(tipo_doc):
+                        try:
+                            dd_reser = _et.tostring(_et.fromstring(dd_m.group(0).encode("iso-8859-1")))
+                            pubs[tipo_doc].verify(_b64.b64decode(frmt_m.group(1)),
+                                                  dd_reser, _pad.PKCS1v15(), _hashes.SHA1())
+                            estado = "FIRMA OK"
+                        except Exception as ev:
+                            estado = f"FIRMA INVÁLIDA: {str(ev)[:40]}"
+                            todos_ok = False
+                    else:
+                        estado = "no verificable (CAF sin clave pública)"
+                    if tiene_apos:
+                        todos_ok = False
+                    reporte.append((doc_id, tipo_doc, folio_doc, estado, tiene_apos, it1_txt[:45]))
+
+                filas_v = ""
+                for doc_id, tp, fo, est, apos, it1 in reporte:
+                    ok_fila = ("FIRMA OK" in est) and not apos
+                    col = "#10b981" if ok_fila else "#dc2626"
+                    apos_txt = "⚠️ tiene &apos;" if apos else "crudo ✓"
+                    filas_v += f"""<tr>
+                        <td style="padding:6px 10px;font-family:monospace;">{doc_id}</td>
+                        <td style="padding:6px 10px;">{tp}</td>
+                        <td style="padding:6px 10px;">{fo}</td>
+                        <td style="padding:6px 10px;color:{col};font-weight:600;">{est}</td>
+                        <td style="padding:6px 10px;">{apos_txt}</td>
+                        <td style="padding:6px 10px;font-family:monospace;font-size:11px;">{_html.escape(it1)}</td>
+                    </tr>"""
+                head_color = "#10b981" if todos_ok else "#dc2626"
+                head_txt = ("✅ Todos los TED firman OK — seguro para enviar"
+                            if todos_ok else "❌ Hay TED con problema — NO enviar")
+                return f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+                <title>Verificación TED · Set Exenta</title>
+                <style>body{{font-family:-apple-system,sans-serif;background:#f6f5f1;padding:30px;}}
+                .card{{max-width:860px;margin:0 auto;background:white;border-radius:14px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.06);}}
+                .hd{{background:{head_color};color:white;padding:20px;font-size:16px;font-weight:600;}}
+                table{{width:100%;border-collapse:collapse;font-size:13px;}}
+                th{{text-align:left;padding:8px 10px;background:#fafaf9;border-bottom:2px solid #eee;font-size:11px;color:#666;}}
+                tr{{border-bottom:1px solid #f3f3f1;}}
+                .ft{{padding:14px 20px;font-size:12px;color:#666;background:#fafaf9;}}</style></head><body>
+                <div class="card"><div class="hd">{head_txt}</div>
+                <table><tr><th>Documento</th><th>Tipo</th><th>Folio</th><th>Firma TED</th><th>IT1 apóstrofo</th><th>IT1 (texto)</th></tr>
+                {filas_v}</table>
+                <div class="ft">Verifica la firma de cada timbre como lo hace el SII (parseando el DD).
+                Si todo está OK, vuelve a la URL sin <code>&debug=verifica-ted</code> y usa
+                <code>&descargar=si</code> para bajar el sobre firmado.</div>
+                </div></body></html>"""
+
             if request.args.get("debug") == "sin-firma":
                 from flask import Response
                 return Response(
@@ -26045,6 +26125,8 @@ def admin_lusync_sii_test_set_fact_exenta():
     </div>
     </body></html>"""
     return html
+
+
 
 
 # ════════════════════════════════════════════════════════════════════════════
