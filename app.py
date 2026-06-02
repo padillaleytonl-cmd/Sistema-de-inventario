@@ -25955,9 +25955,14 @@ def admin_lusync_sii_test_set_fact_exenta():
                     estado = "?"
                     if dd_m and frmt_m and pubs.get(tipo_doc):
                         try:
-                            dd_reser = _et.tostring(_et.fromstring(dd_m.group(0).encode("iso-8859-1")))
+                            # El TED se firma sobre los bytes ISO-8859-1 del <DD> tal como
+                            # van en el XML. Verificamos sobre esos mismos bytes (que es lo
+                            # correcto). NOTA: el DD puede tener Ñ/tildes (bytes altos válidos
+                            # en ISO-8859-1); por eso NO se re-parsea sin declarar encoding,
+                            # o lxml falla con "Invalid bytes in character encoding".
+                            dd_bytes = dd_m.group(0).encode("iso-8859-1")
                             pubs[tipo_doc].verify(_b64.b64decode(frmt_m.group(1)),
-                                                  dd_reser, _pad.PKCS1v15(), _hashes.SHA1())
+                                                  dd_bytes, _pad.PKCS1v15(), _hashes.SHA1())
                             estado = "FIRMA OK"
                         except Exception as ev:
                             estado = f"FIRMA INVÁLIDA: {str(ev)[:40]}"
@@ -26125,6 +26130,8 @@ def admin_lusync_sii_test_set_fact_exenta():
     </div>
     </body></html>"""
     return html
+
+
 
 
 
