@@ -119,6 +119,7 @@ def generar_nota_debito_xml(
     fecha_vencimiento: Optional[str] = None,
     timestamp_firma: Optional[str] = None,
     set_referencia: Optional[Dict] = None,  # certif SII: {folio_ref:'4829122', razon_ref:'CASO 4829122-8'}
+    es_exenta: bool = False,             # True → ND sobre doc Exento (34/61-exenta): sin IVA, solo MntExe+MntTotal
 ) -> Dict:
     """Genera XML de Nota de Débito Electrónica (DTE 56).
 
@@ -151,6 +152,11 @@ def generar_nota_debito_xml(
         }]
 
     # 0. Calcular totales
+    # En modo exento, marcar items reales como exento=True para que vayan a MntExe.
+    if es_exenta:
+        for _it in items:
+            if not _it.get('sin_valor'):
+                _it['exento'] = True
     tot = _calcular_totales_neto(items, descuento_global_pct)
     items_calc = tot['items_calculados']
     mnt_neto = tot['mnt_neto']
@@ -209,16 +215,23 @@ def generar_nota_debito_xml(
     # pero según ejemplos SimpleAPI validados, sí lleva TasaIVA.
     es_item_sin_valor = bool(items and items[0].get('sin_valor'))
     tot_parts = []
-    if mnt_total > 0:
-        tot_parts.append(f'<MntNeto>{mnt_neto}</MntNeto>')
+    if es_exenta:
+        # ND sobre documento Exento: NUNCA lleva MntNeto/TasaIVA/IVA.
+        # Solo MntExe (si hay monto) y MntTotal. Simbólica → solo MntTotal=0.
         if mnt_exe > 0:
             tot_parts.append(f'<MntExe>{mnt_exe}</MntExe>')
-        tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
-        tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
-    elif es_item_sin_valor:
-        # CASO 8: ND con item sin valor lleva TasaIVA pero sin MntNeto/IVA
-        tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
-    tot_parts.append(f'<MntTotal>{mnt_total}</MntTotal>')
+        tot_parts.append(f'<MntTotal>{mnt_total}</MntTotal>')
+    else:
+        if mnt_total > 0:
+            tot_parts.append(f'<MntNeto>{mnt_neto}</MntNeto>')
+            if mnt_exe > 0:
+                tot_parts.append(f'<MntExe>{mnt_exe}</MntExe>')
+            tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
+            tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
+        elif es_item_sin_valor:
+            # CASO 8: ND con item sin valor lleva TasaIVA pero sin MntNeto/IVA
+            tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
+        tot_parts.append(f'<MntTotal>{mnt_total}</MntTotal>')
     totales_xml = '<Totales>' + ''.join(tot_parts) + '</Totales>'
 
     encabezado_xml = f'<Encabezado>{iddoc_xml}{emisor_xml}{receptor_xml}{totales_xml}</Encabezado>'

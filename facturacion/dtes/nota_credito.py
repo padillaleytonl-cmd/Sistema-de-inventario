@@ -28,6 +28,16 @@ Para certificación (set 4829122):
   CASO 5: NC anula Factura del CASO 1 — modo NETO, sin items, replica monto
   CASO 6: NC rebaja Factura del CASO 2 — modo NETO, con items y cantidades
   CASO 7: NC anula Factura del CASO 3 — modo NETO, sin items, replica monto
+
+MODO EXENTO (es_exenta=True):
+  Para NC que modifican una Factura Exenta (34). El SII exige que la NC NO
+  lleve IVA: solo <MntExe> y <MntTotal> (ni MntNeto ni TasaIVA ni IVA), igual
+  que el DTE 34. El TipoDTE sigue siendo 61 (no existe "NC exenta" como tipo
+  propio; lo exento se refleja en los montos). Los ítems van con <IndExe>1</IndExe>.
+  Para certificación (set 4829127):
+    CASO 2: NC modifica monto de Factura Exenta CASO 1 (CodRef 3, con item)
+    CASO 4: NC corrige giro de Factura Exenta CASO 3 (CodRef 2, simbólica)
+    CASO 7: NC modifica monto de Factura Exenta CASO 6 (CodRef 3, con item)
 """
 from __future__ import annotations
 from datetime import datetime
@@ -157,6 +167,7 @@ def generar_nota_credito_xml(
     fecha_vencimiento: Optional[str] = None,
     timestamp_firma: Optional[str] = None,
     set_referencia: Optional[Dict] = None,  # certif SII: {folio_ref:'4829122', razon_ref:'CASO 4829122-5'}
+    es_exenta: bool = False,             # True → NC sobre Factura Exenta (34): sin IVA, solo MntExe+MntTotal
 ) -> Dict:
     """Genera XML de Nota de Crédito Electrónica (DTE 61).
 
@@ -183,6 +194,10 @@ def generar_nota_credito_xml(
     # Aceptar tanto 'tpo_doc_ref' como 'tipo_doc_ref' (alias) para robustez
     tpo_ref = int(referencia.get('tpo_doc_ref') or referencia.get('tipo_doc_ref') or 33)
     es_modo_bruto = tpo_ref in (39, 41)  # boletas
+    # Modo exento (NC sobre Factura Exenta 34) es incompatible con modo bruto:
+    # una factura exenta nunca es bruta (no hay IVA que incluir). Forzar neto.
+    if es_exenta:
+        es_modo_bruto = False
 
     # Detectar CodRef antes para validar requisitos especiales
     cod_ref_int = int(str(referencia.get('cod_ref') or '1').strip())
@@ -242,6 +257,14 @@ def generar_nota_credito_xml(
             })
 
     # 3. Calcular totales según modo
+    # En modo exento, todos los items reales se marcan exento=True para que
+    # caigan en MntExe (no en la base afecta). Los items sin_valor (CodRef=2)
+    # no llevan monto, así que el flag no los afecta.
+    if es_exenta:
+        for _it in items:
+            if not _it.get('sin_valor'):
+                _it['exento'] = True
+
     if es_modo_bruto:
         tot = _calcular_totales_bruto(items)
     else:
@@ -307,17 +330,25 @@ def generar_nota_credito_xml(
     # solo <TasaIVA>19</TasaIVA><MntTotal>0</MntTotal>, sin MntNeto ni IVA.
     es_item_sin_valor = bool(items and items[0].get('sin_valor'))
     tot_parts = []
-    if mnt_neto > 0:
-        tot_parts.append(f'<MntNeto>{mnt_neto}</MntNeto>')
-    if mnt_exe > 0:
-        tot_parts.append(f'<MntExe>{mnt_exe}</MntExe>')
-    if mnt_neto > 0:
-        tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
-        tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
-    elif es_item_sin_valor:
-        # CASO 5: NC con item sin valor lleva TasaIVA pero sin MntNeto/IVA
-        tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
-    tot_parts.append(f'<MntTotal>{mnt_total}</MntTotal>')
+    if es_exenta:
+        # NC sobre Factura Exenta (34): NUNCA lleva MntNeto/TasaIVA/IVA.
+        # Solo MntExe (si hay monto) y MntTotal. Para item simbólico (CodRef=2)
+        # va solo MntTotal=0 sin TasaIVA (a diferencia del caso afecto).
+        if mnt_exe > 0:
+            tot_parts.append(f'<MntExe>{mnt_exe}</MntExe>')
+        tot_parts.append(f'<MntTotal>{mnt_total}</MntTotal>')
+    else:
+        if mnt_neto > 0:
+            tot_parts.append(f'<MntNeto>{mnt_neto}</MntNeto>')
+        if mnt_exe > 0:
+            tot_parts.append(f'<MntExe>{mnt_exe}</MntExe>')
+        if mnt_neto > 0:
+            tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
+            tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
+        elif es_item_sin_valor:
+            # CASO 5: NC con item sin valor lleva TasaIVA pero sin MntNeto/IVA
+            tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
+        tot_parts.append(f'<MntTotal>{mnt_total}</MntTotal>')
     totales_xml = '<Totales>' + ''.join(tot_parts) + '</Totales>'
 
     encabezado_xml = f'<Encabezado>{iddoc_xml}{emisor_xml}{receptor_xml}{totales_xml}</Encabezado>'
