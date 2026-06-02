@@ -36,6 +36,33 @@ Casos oficiales del Set Guía de Despacho SII (4829125):
           → IndTraslado=1, TipoDespacho=2, Receptor=Cliente, CON precios
   CASO 3: Venta, despacho por cliente
           → IndTraslado=1, TipoDespacho=1, Receptor=Cliente, CON precios
+
+─────────────────────────────────────────────────────────────
+RESOLUCIÓN EXENTA SII N°154/2025 + ANEXO TÉCNICO 2.5 (Transporte)
+─────────────────────────────────────────────────────────────
+La Res.154 (postergada al 1-nov-2026 por Res.52/2026) exige nuevos
+campos de transporte en guías/facturas que trasladan bienes físicos.
+El esquema XSD 2.5 (vigente desde 20-feb-2026) YA los acepta, por lo
+que pueden enviarse de forma voluntaria desde ya sin riesgo de rechazo.
+
+El área <Transporte> va DENTRO de <Encabezado>, DESPUÉS de </Receptor>
+y ANTES de <Totales>. Orden EXACTO de sub-campos según manual 2.5:
+  <Patente>       (67) placa patente vehículo
+  <PatenteCarro>  (nuevo) placa carro/remolque (opcional)
+  <RUTTrans>      (68) RUT transportista (si ≠ emisor)
+  <RUTChofer>     (69) RUT chofer
+  <NombreChofer>  (70) nombre chofer
+  <DirDest>       (71) dirección destino
+  <CmnaDest>      (72) comuna destino
+  <CiudadDest>    (73) ciudad destino (opcional)
+  <FchSalida>     (nuevo) fecha salida AAAA-MM-DD
+  <HraSalida>     (nuevo) hora salida HH:MM:SS
+  <FchLlegada>    (nuevo) fecha llegada (oblig. si traslado > 1 día)
+
+IMPORTANTE: el bloque <Transporte> SOLO se incluye cuando hay traslado
+físico de bienes (guías y facturas con traslado). NUNCA en servicios.
+Si no se conoce un dato (ej. patente), la Res.154 permite indicarlo
+expresamente; aquí se omite el sub-campo si viene vacío.
 """
 from __future__ import annotations
 from datetime import datetime
@@ -131,6 +158,91 @@ def _calcular_totales_guia(items: List[Dict], es_venta: bool) -> Dict:
     }
 
 
+def _construir_transporte_xml(transporte: Optional[Dict]) -> str:
+    """Construye el bloque <Transporte> según Anexo Técnico 2.5 (Res.154/2025).
+
+    El orden de los sub-campos es ESTRICTO según el schema XSD 2.5.
+    Cada sub-campo se omite si viene vacío/None (la Res.154 permite
+    indicar expresamente la ausencia de un dato como la patente).
+
+    Args:
+        transporte: dict opcional con claves:
+            patente, patente_carro, rut_transportista,
+            rut_chofer, nombre_chofer, dir_dest, cmna_dest, ciudad_dest,
+            fch_salida (AAAA-MM-DD), hra_salida (HH:MM:SS), fch_llegada
+
+    Returns:
+        '' si transporte es None/vacío, sino '<Transporte>...</Transporte>'
+    """
+    if not transporte or not isinstance(transporte, dict):
+        return ''
+
+    # Normaliza: limpia espacios, descarta vacíos
+    def _v(clave, maxlen=None):
+        val = transporte.get(clave)
+        if val is None:
+            return None
+        val = str(val).strip()
+        if not val:
+            return None
+        return val[:maxlen] if maxlen else val
+
+    partes = []
+
+    # Orden EXACTO del schema 2.5
+    patente = _v('patente', 8)
+    if patente:
+        partes.append(f'<Patente>{_escape_xml(patente)}</Patente>')
+
+    patente_carro = _v('patente_carro', 8)
+    if patente_carro:
+        partes.append(f'<PatenteCarro>{_escape_xml(patente_carro)}</PatenteCarro>')
+
+    rut_trans = _v('rut_transportista')
+    if rut_trans:
+        rut_trans = rut_trans.replace('.', '')
+        partes.append(f'<RUTTrans>{_escape_xml(rut_trans)}</RUTTrans>')
+
+    rut_chofer = _v('rut_chofer')
+    if rut_chofer:
+        rut_chofer = rut_chofer.replace('.', '')
+        partes.append(f'<RUTChofer>{_escape_xml(rut_chofer)}</RUTChofer>')
+
+    nombre_chofer = _v('nombre_chofer', 30)
+    if nombre_chofer:
+        partes.append(f'<NombreChofer>{_escape_xml(nombre_chofer)}</NombreChofer>')
+
+    dir_dest = _v('dir_dest', 70)
+    if dir_dest:
+        partes.append(f'<DirDest>{_escape_xml(dir_dest)}</DirDest>')
+
+    cmna_dest = _v('cmna_dest', 20)
+    if cmna_dest:
+        partes.append(f'<CmnaDest>{_escape_xml(cmna_dest)}</CmnaDest>')
+
+    ciudad_dest = _v('ciudad_dest', 20)
+    if ciudad_dest:
+        partes.append(f'<CiudadDest>{_escape_xml(ciudad_dest)}</CiudadDest>')
+
+    # Campos nuevos Res.154 / Anexo 2.5
+    fch_salida = _v('fch_salida')
+    if fch_salida:
+        partes.append(f'<FchSalida>{_escape_xml(fch_salida)}</FchSalida>')
+
+    hra_salida = _v('hra_salida')
+    if hra_salida:
+        partes.append(f'<HraSalida>{_escape_xml(hra_salida)}</HraSalida>')
+
+    fch_llegada = _v('fch_llegada')
+    if fch_llegada:
+        partes.append(f'<FchLlegada>{_escape_xml(fch_llegada)}</FchLlegada>')
+
+    if not partes:
+        return ''
+
+    return '<Transporte>' + ''.join(partes) + '</Transporte>'
+
+
 def generar_guia_despacho_xml(
     caf: CAFParsed,
     folio: int,
@@ -140,6 +252,7 @@ def generar_guia_despacho_xml(
     items: List[Dict],
     ind_traslado: int = 5,              # OBLIGATORIO: 1=venta, 5=interno, etc.
     tipo_despacho: int = 0,             # 0=no aplica, 1=receptor, 2=emisor a cliente, 3=emisor a otra
+    transporte: Optional[Dict] = None,  # bloque <Transporte> Res.154 (patente, chofer, fechas...)
     referencias: Optional[List[Dict]] = None,  # set certificación, factura previa, etc.
     timestamp_firma: Optional[str] = None,
 ) -> Dict:
@@ -220,6 +333,11 @@ def generar_guia_despacho_xml(
     ])
     receptor_xml = '<Receptor>' + ''.join(rec_parts) + '</Receptor>'
 
+    # 3.5 Transporte (Res.154 / Anexo 2.5) — va DESPUÉS de Receptor, ANTES de Totales
+    # Solo se incluye si se entregó info de transporte. Para traslado interno (5)
+    # también aplica porque mueve bienes físicos.
+    transporte_xml = _construir_transporte_xml(transporte)
+
     # 4. Totales — varía según si es venta o solo movimiento
     tot_parts = []
     if es_venta and mnt_total > 0:
@@ -237,7 +355,7 @@ def generar_guia_despacho_xml(
         tot_parts.append(f'<MntTotal>0</MntTotal>')
     totales_xml = '<Totales>' + ''.join(tot_parts) + '</Totales>'
 
-    encabezado_xml = f'<Encabezado>{iddoc_xml}{emisor_xml}{receptor_xml}{totales_xml}</Encabezado>'
+    encabezado_xml = f'<Encabezado>{iddoc_xml}{emisor_xml}{receptor_xml}{transporte_xml}{totales_xml}</Encabezado>'
 
     # 5. Detalles
     detalles_xml = ''
