@@ -168,6 +168,14 @@ def generar_liquidacion_xml(
         tot_parts.append(f'<MntExe>{mnt_exe}</MntExe>')
     tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
     tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
+    # En liquidación-factura, el IVA se separa en IVA Propio (el de las comisiones
+    # del liquidador) e IVA de Terceros (el del mandante = IVA total − IVA propio).
+    # Orden XSD: IVA → IVAProp → IVATerc → ... → Comisiones.
+    if com_norm:
+        iva_prop = val_com_iva
+        iva_terc = mnt_iva - iva_prop
+        tot_parts.append(f'<IVAProp>{iva_prop}</IVAProp>')
+        tot_parts.append(f'<IVATerc>{iva_terc}</IVATerc>')
     # Comisiones resumen (después de IVA/ImptoReten, antes de MntTotal)
     if com_norm:
         com_tot = ['<Comisiones>']
