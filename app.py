@@ -26627,20 +26627,33 @@ def admin_lusync_sii_test_libro():
                      "3 tipos (33:4, 61:3, 56:1) · Total ventas 15.316.344 · sin detalle (DTE electrónicos)")
 
             elif tipo == "guias":
-                # Montos REALES del Set Guías (tipo 52). 3 guías.
-                # Total guías = suma de las 3 (incluye la interna en 0 y las 2 de venta).
-                totales = [
-                    lcv.construir_totales_periodo_venta(
-                        52, 3, tot_mnt_exe=0, tot_mnt_neto=7333715,
-                        tot_mnt_iva=1393406, tot_mnt_total=8727121),
+                # Libro de Guías (4829126) — schema PROPIO (LibroGuia), distinto al CV.
+                # Las 3 guías del Set Guías (tipo 52), con sus consideraciones:
+                #   Caso 1 (f60): traslado interno (TpoOper=5), no venta
+                #   Caso 2 (f61): venta facturada en el período (referencia a factura)
+                #   Caso 3 (f62): venta anulada (Anulado=2)
+                from facturacion.dtes import libro_guia as lg
+                fch_g = periodo + "-29"  # fecha de las guías del set
+                detalles = [
+                    lg.construir_detalle_guia(folio=60, tpo_oper=5, fch_doc=fch_g),
+                    lg.construir_detalle_guia(folio=61, tpo_oper=1, fch_doc=fch_g,
+                        rut_doc="55555555-5", rzn_soc="CLIENTE PRUEBA",
+                        mnt_neto=4217491, iva=801323, mnt_total=5018814,
+                        tpo_doc_ref=33, folio_doc_ref=117, fch_doc_ref=fch_g),
+                    lg.construir_detalle_guia(folio=62, tpo_oper=1, fch_doc=fch_g,
+                        rut_doc="55555555-5", rzn_soc="CLIENTE PRUEBA",
+                        mnt_neto=3116224, iva=592083, mnt_total=3708307, anulado=2),
                 ]
-                r = lcv.generar_libro_xml(
+                resumen_g = lg.construir_resumen_guia(
+                    tot_guias_anuladas=1, tot_guias_venta=1,
+                    tot_mnt_guias_venta=5018814,
+                    guias_no_venta=[{"cod_traslado": 5, "cantidad": 1}])
+                r = lg.generar_libro_guia_xml(
                     rut_emisor=rut_emisor, rut_envia=rut_envia,
-                    periodo_tributario=periodo, tipo_operacion="VENTA",
-                    totales_periodo=totales, fch_resol=fch_resol, nro_resol=nro_resol,
-                    libro_id=libro_id)
+                    periodo_tributario=periodo, detalles=detalles, resumen=resumen_g,
+                    fch_resol=fch_resol, nro_resol=nro_resol, libro_id=libro_id)
                 paso("Construir Libro de Guías", True,
-                     "52: 3 guías · Neto 7.333.715 · IVA 1.393.406 · Total 8.727.121")
+                     "52: 3 guías (f60 interno, f61 venta facturada, f62 anulada)")
 
             elif tipo == "compras":
                 # Datos del SET LIBRO DE COMPRAS (4829124). 7 documentos.
