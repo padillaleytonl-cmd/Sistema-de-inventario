@@ -104,7 +104,7 @@ def construir_resumen_guia(
     if tot_guias_anuladas:
         partes.append(f"<TotGuiaAnulada>{tot_guias_anuladas}</TotGuiaAnulada>")
     partes.append(f"<TotGuiaVenta>{tot_guias_venta}</TotGuiaVenta>")
-    partes.append(f"<TotMntGuiaVenta>{tot_mnt_guias_venta}</TotMntGuiaVenta>")
+    partes.append(f"<TotMntGuiaVta>{tot_mnt_guias_venta}</TotMntGuiaVta>")
     if tot_mnt_modificado:
         partes.append(f"<TotMntModificado>{tot_mnt_modificado}</TotMntModificado>")
     # Tabla de guías no venta (hasta 6 ocurrencias por código de traslado)
