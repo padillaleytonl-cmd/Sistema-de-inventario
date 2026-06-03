@@ -60,6 +60,7 @@ def generar_liquidacion_xml(
     items_norm = []
     for it in items:
         es_exe = bool(it.get('exento'))
+        es_bruto = bool(it.get('bruto'))  # monto del set incluye IVA (boletas)
         if 'monto' in it and it['monto'] is not None:
             monto = int(round(float(it['monto'])))
             qty = it.get('cantidad')
@@ -68,6 +69,11 @@ def generar_liquidacion_xml(
             qty = float(it.get('cantidad', 1))
             prc = float(it.get('precio_unitario', 0))
             monto = int(round(qty * prc))
+        # Boletas afectas: el monto del set es BRUTO (con IVA). En el detalle el
+        # MontoItem debe ser el NETO (bruto/1.19); el IVA se acumula al encabezado.
+        if es_bruto and not es_exe:
+            neto_linea = int(round(monto / (1 + IVA_PORCENTAJE / 100.0)))
+            monto = neto_linea
         items_norm.append({
             'nombre': it.get('nombre', 'Item')[:80],
             'cantidad': qty, 'precio_unitario': prc,
