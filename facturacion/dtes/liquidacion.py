@@ -177,27 +177,24 @@ def generar_liquidacion_xml(
     encabezado_xml = f'<Encabezado>{iddoc_xml}{emisor_xml}{receptor_xml}{totales_xml}</Encabezado>'
 
     # ── 5. Detalle ──
-    # El DTE 43 exige <TpoDocLiq> (tipo de documento que se liquida) tras NroLinDet,
-    # antes de IndExe. En liquidación, la "cantidad" del set es un CONTADOR de
-    # documentos, NO una cantidad de producto con precio unitario. Si se envía
-    # QtyItem sin PrcItem, el SII no puede validar qty×prc y repara la línea.
-    # Por eso el detalle lleva solo MontoItem (el total de la línea), salvo que
-    # explícitamente se entregue precio_unitario real.
+    # El SII valida QtyItem × PrcItem = MontoItem ("Los Valores de la Linea No
+    # Cuadran" si no). PERO PrcItem (Dec12_6Type) NO admite valores <= 0. Por eso:
+    #  • Líneas con monto POSITIVO: QtyItem=1 y PrcItem=MontoItem (1×monto=monto ✓).
+    #  • Líneas con monto NEGATIVO (NC, liquidaciones previas): solo MontoItem
+    #    (ValorType sí admite negativos), sin QtyItem/PrcItem.
+    # TpoDocLiq va tras NroLinDet, antes de IndExe.
     detalles_xml = ''
     for i, it in enumerate(items_norm, start=1):
+        monto = it["monto"]
         linea_parts = [f'<NroLinDet>{i}</NroLinDet>']
         linea_parts.append(f'<TpoDocLiq>{it.get("tpo_doc_liq", 33)}</TpoDocLiq>')
         if it['exento']:
             linea_parts.append('<IndExe>1</IndExe>')
         linea_parts.append(f'<NmbItem>{_escape_xml(it["nombre"])}</NmbItem>')
-        # Solo incluir QtyItem/PrcItem si hay un precio unitario real entregado.
-        if it.get('precio_unitario') not in (None, 0):
-            if it['cantidad'] is not None:
-                linea_parts.append(f'<QtyItem>{_fmt_cantidad(float(it["cantidad"]))}</QtyItem>')
-            if it['unidad']:
-                linea_parts.append(f'<UnmdItem>{_escape_xml(it["unidad"])}</UnmdItem>')
-            linea_parts.append(f'<PrcItem>{_fmt_cantidad(float(it["precio_unitario"]))}</PrcItem>')
-        linea_parts.append(f'<MontoItem>{it["monto"]}</MontoItem>')
+        if monto > 0:
+            linea_parts.append('<QtyItem>1</QtyItem>')
+            linea_parts.append(f'<PrcItem>{_fmt_cantidad(float(monto))}</PrcItem>')
+        linea_parts.append(f'<MontoItem>{monto}</MontoItem>')
         detalles_xml += '\n<Detalle>' + ''.join(linea_parts) + '</Detalle>'
 
     # ── 6. Referencias ──
