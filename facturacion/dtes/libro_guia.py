@@ -100,20 +100,20 @@ def construir_resumen_guia(
     """
     partes = []
     if tot_folios_anulados:
-        partes.append(f"<TotFoliosAnulados>{tot_folios_anulados}</TotFoliosAnulados>")
+        partes.append(f"<TotFolAnulado>{tot_folios_anulados}</TotFolAnulado>")
     if tot_guias_anuladas:
-        partes.append(f"<TotGuiasAnuladas>{tot_guias_anuladas}</TotGuiasAnuladas>")
-    partes.append(f"<TotGuiasVenta>{tot_guias_venta}</TotGuiasVenta>")
-    partes.append(f"<TotMntGuiasVenta>{tot_mnt_guias_venta}</TotMntGuiasVenta>")
+        partes.append(f"<TotGuiaAnulada>{tot_guias_anuladas}</TotGuiaAnulada>")
+    partes.append(f"<TotGuiaVenta>{tot_guias_venta}</TotGuiaVenta>")
+    partes.append(f"<TotMntGuiaVenta>{tot_mnt_guias_venta}</TotMntGuiaVenta>")
     if tot_mnt_modificado:
         partes.append(f"<TotMntModificado>{tot_mnt_modificado}</TotMntModificado>")
     # Tabla de guías no venta (hasta 6 ocurrencias por código de traslado)
     if guias_no_venta:
         for g in guias_no_venta:
             sub = f"<TpoTraslado>{g['cod_traslado']}</TpoTraslado>"
-            sub += f"<CantGuias>{g['cantidad']}</CantGuias>"
+            sub += f"<CantGuia>{g['cantidad']}</CantGuia>"
             if g.get("monto"):
-                sub += f"<MntGuias>{g['monto']}</MntGuias>"
+                sub += f"<MntGuia>{g['monto']}</MntGuia>"
             partes.append("<TotGuiaNoVenta>" + sub + "</TotGuiaNoVenta>")
     return "<ResumenPeriodo>" + "".join(partes) + "</ResumenPeriodo>"
 
@@ -128,7 +128,7 @@ def generar_libro_guia_xml(
     nro_resol: int = 0,
     tipo_libro: str = "ESPECIAL",
     tipo_envio: str = "TOTAL",
-    nro_notificacion: int = 1,
+    folio_notificacion: int = 1,
     libro_id: Optional[str] = None,
     tmst_firma: Optional[str] = None,
 ) -> Dict:
@@ -151,18 +151,20 @@ def generar_libro_guia_xml(
         f"<NroResol>{nro_resol}</NroResol>",
         f"<TipoLibro>{tipo_libro}</TipoLibro>",
         f"<TipoEnvio>{tipo_envio}</TipoEnvio>",
-        f"<NroNotificacion>{nro_notificacion}</NroNotificacion>",
+        f"<FolioNotificacion>{folio_notificacion}</FolioNotificacion>",
     ]
     caratula = "<Caratula>" + "".join(car_partes) + "</Caratula>"
 
-    # Saltos de línea entre secciones (evitar líneas > 4096 chars, error CHR-00002)
+    # Orden del schema LibroGuia: Caratula → ResumenPeriodo → Detalle(s) → TmstFirma
+    # (el error de schema indicó que tras los Detalle solo va TmstFirma, así que el
+    # ResumenPeriodo debe ir ANTES de los Detalle).
     detalle_xml = "\n" + "\n".join(detalles)
 
     envio_libro = (
         f'<EnvioLibro ID="{libro_id}">\n'
         + caratula + "\n"
+        + resumen + "\n"
         + detalle_xml + "\n"
-        + resumen
         + f"<TmstFirma>{tmst_firma}</TmstFirma>"
         + "</EnvioLibro>"
     )
