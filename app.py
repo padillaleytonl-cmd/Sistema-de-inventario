@@ -26676,7 +26676,7 @@ def admin_lusync_sii_test_libro():
                         mnt_total=9064 + iva(9064), rzn_soc="PROVEEDOR PRUEBA"),
                     lcv.construir_detalle_compra(46, 9, periodo + "-13", RUTP,
                         mnt_neto=9093, mnt_iva=iva(9093), iva_ret_total=iva(9093),
-                        mnt_total=9093, rzn_soc="PROVEEDOR PRUEBA"),
+                        mnt_total=9093 + iva(9093), rzn_soc="PROVEEDOR PRUEBA"),
                     lcv.construir_detalle_compra(60, 211, periodo + "-14", RUTP,
                         mnt_neto=2374, mnt_iva=iva(2374), mnt_total=2374 + iva(2374),
                         rzn_soc="PROVEEDOR PRUEBA"),
@@ -26697,7 +26697,7 @@ def admin_lusync_sii_test_libro():
                     # Tipo 46 (Factura compra elec): folio 9, retención total
                     lcv.construir_totales_periodo_compra(
                         46, 1, tot_mnt_neto=9093, tot_mnt_iva=iva(9093),
-                        tot_iva_ret_total=iva(9093), tot_mnt_total=9093),
+                        tot_iva_ret_total=iva(9093), tot_mnt_total=9093 + iva(9093)),
                     # Tipo 60 (Nota crédito): folios 451 + 211
                     lcv.construir_totales_periodo_compra(
                         60, 2, tot_mnt_neto=2623 + 2374, tot_mnt_iva=iva(2623) + iva(2374),
