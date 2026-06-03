@@ -143,8 +143,8 @@ def generar_factura_compra_xml(
             f'<QtyItem>{_fmt_cantidad(qty)}</QtyItem>',
             f'<UnmdItem>{_escape_xml(unidad)}</UnmdItem>',
             f'<PrcItem>{_fmt_cantidad(prc)}</PrcItem>',
-            f'<MontoItem>{it["_monto_item"]}</MontoItem>',
             f'<CodImpAdic>{cod_imp_reten}</CodImpAdic>',
+            f'<MontoItem>{it["_monto_item"]}</MontoItem>',
         ]
         detalles_xml += '<Detalle>' + ''.join(linea_parts) + '</Detalle>'
 
