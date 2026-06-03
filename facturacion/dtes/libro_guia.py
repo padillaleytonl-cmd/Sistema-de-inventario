@@ -107,14 +107,15 @@ def construir_resumen_guia(
     partes.append(f"<TotMntGuiaVta>{tot_mnt_guias_venta}</TotMntGuiaVta>")
     if tot_mnt_modificado:
         partes.append(f"<TotMntModificado>{tot_mnt_modificado}</TotMntModificado>")
-    # Tabla de guías no venta (hasta 6 ocurrencias por código de traslado)
+    # Tabla de guías no venta (hasta 6 ocurrencias por código de traslado).
+    # El elemento contenedor en el schema se llama <TotTraslado>.
     if guias_no_venta:
         for g in guias_no_venta:
             sub = f"<TpoTraslado>{g['cod_traslado']}</TpoTraslado>"
             sub += f"<CantGuia>{g['cantidad']}</CantGuia>"
             if g.get("monto"):
                 sub += f"<MntGuia>{g['monto']}</MntGuia>"
-            partes.append("<TotGuiaNoVenta>" + sub + "</TotGuiaNoVenta>")
+            partes.append("<TotTraslado>" + sub + "</TotTraslado>")
     return "<ResumenPeriodo>" + "".join(partes) + "</ResumenPeriodo>"
 
 
