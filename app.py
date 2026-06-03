@@ -26928,8 +26928,8 @@ def admin_lusync_sii_test_set_liquidacion():
             casos = [
                 # CASO 1
                 dict(items=[
-                    {'nombre': 'NETO FACTURAS', 'cantidad': 11, 'monto': 670860, 'exento': False, 'tpo_doc_liq': 33},
-                    {'nombre': 'EXENTO FACTURAS', 'cantidad': 8, 'monto': 168607, 'exento': True, 'tpo_doc_liq': 33},
+                    {'nombre': 'NETO FACTURAS', 'cantidad': 11, 'monto': 670860, 'exento': False, 'tpo_doc_liq': 30},
+                    {'nombre': 'EXENTO FACTURAS', 'cantidad': 8, 'monto': 168607, 'exento': True, 'tpo_doc_liq': 30},
                     {'nombre': 'NETO FACTURAS ELECTRONICAS', 'cantidad': 51, 'monto': 109129, 'exento': False, 'tpo_doc_liq': 33},
                     {'nombre': 'EXENTO FACTURAS ELECTRONICAS', 'cantidad': 37, 'monto': 102520, 'exento': True, 'tpo_doc_liq': 33},
                 ], comisiones=None),
@@ -26939,9 +26939,9 @@ def admin_lusync_sii_test_set_liquidacion():
                     {'nombre': 'EXENTO FACTURA ELECTRONICA 4254', 'cantidad': 1, 'monto': 23845, 'exento': True, 'tpo_doc_liq': 33},
                     {'nombre': 'NETO FACTURA ELECTRONICA 4768', 'cantidad': 1, 'monto': 624461, 'exento': False, 'tpo_doc_liq': 33},
                     {'nombre': 'EXENTO FACTURA ELECTRONICA 4768', 'cantidad': 1, 'monto': 365464, 'exento': True, 'tpo_doc_liq': 33},
-                    {'nombre': 'NETO NOTA DE CREDITO 328', 'cantidad': 1, 'monto': -50894, 'exento': False, 'tpo_doc_liq': 61},
-                    {'nombre': 'EXENTO NOTA DE CREDITO 328', 'cantidad': 1, 'monto': -18006, 'exento': True, 'tpo_doc_liq': 61},
-                    {'nombre': 'BOLETAS', 'cantidad': 8262, 'monto': 6228679, 'exento': True, 'tpo_doc_liq': 39},
+                    {'nombre': 'NETO NOTA DE CREDITO 328', 'cantidad': 1, 'monto': -50894, 'exento': False, 'tpo_doc_liq': 60},
+                    {'nombre': 'EXENTO NOTA DE CREDITO 328', 'cantidad': 1, 'monto': -18006, 'exento': True, 'tpo_doc_liq': 60},
+                    {'nombre': 'BOLETAS', 'cantidad': 8262, 'monto': 6228679, 'exento': True, 'tpo_doc_liq': 35},
                 ], comisiones=None),
                 # CASO 3
                 dict(items=[
@@ -26954,12 +26954,12 @@ def admin_lusync_sii_test_set_liquidacion():
                 ]),
                 # CASO 4
                 dict(items=[
-                    {'nombre': 'NETO ANTICIPO FACTURACION', 'cantidad': 299, 'monto': 550000, 'exento': False, 'tpo_doc_liq': 33},
-                    {'nombre': 'NETO FACTURAS', 'cantidad': 51, 'monto': 353979, 'exento': False, 'tpo_doc_liq': 33},
-                    {'nombre': 'EXENTO FACTURAS', 'cantidad': 57, 'monto': 208950, 'exento': True, 'tpo_doc_liq': 33},
+                    {'nombre': 'NETO ANTICIPO FACTURACION', 'cantidad': 299, 'monto': 550000, 'exento': False, 'tpo_doc_liq': 30},
+                    {'nombre': 'NETO FACTURAS', 'cantidad': 51, 'monto': 353979, 'exento': False, 'tpo_doc_liq': 30},
+                    {'nombre': 'EXENTO FACTURAS', 'cantidad': 57, 'monto': 208950, 'exento': True, 'tpo_doc_liq': 30},
                     {'nombre': 'NETO FACTURAS ELECTRONICAS', 'cantidad': 44, 'monto': 106363, 'exento': False, 'tpo_doc_liq': 33},
                     {'nombre': 'EXENTO FACTURAS ELECTRONICAS', 'cantidad': 9, 'monto': 1531568, 'exento': True, 'tpo_doc_liq': 33},
-                    {'nombre': 'NETO NOTA DE CREDITO 1981', 'cantidad': 1, 'monto': -92616, 'exento': False, 'tpo_doc_liq': 61},
+                    {'nombre': 'NETO NOTA DE CREDITO 1981', 'cantidad': 1, 'monto': -92616, 'exento': False, 'tpo_doc_liq': 60},
                     {'nombre': 'NETO LIQUIDACION FACTURA ELECTRONICA 4554', 'cantidad': 1, 'monto': -141710, 'exento': False, 'tpo_doc_liq': 43},
                     {'nombre': 'EXENTO LIQUIDACION FACTURA ELECTRONICA 4554', 'cantidad': 1, 'monto': -142840, 'exento': True, 'tpo_doc_liq': 43},
                 ], comisiones=[
