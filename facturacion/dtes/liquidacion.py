@@ -81,7 +81,10 @@ def generar_liquidacion_xml(
             mnt_neto += monto
 
     mnt_iva = int(round(mnt_neto * IVA_PORCENTAJE / 100.0))
-    mnt_total = mnt_neto + mnt_exe + mnt_iva
+    # El MntTotal del DTE 43 DESCUENTA la comisión del liquidador (neto + IVA),
+    # porque es lo que el liquidador retiene; al mandante se le paga el resto.
+    # MntTotal = MntNeto + MntExe + IVA - ValComNeto - ValComIVA  (validación HED-2-260).
+    # Se calcula más abajo, tras totalizar las comisiones.
 
     # ── Comisiones: totales para el resumen en <Totales> ──
     com_norm = []
@@ -105,6 +108,9 @@ def generar_liquidacion_xml(
             val_com_neto += c_neto
             val_com_exe += c_exe
             val_com_iva += c_iva
+
+    # MntTotal del DTE 43 descuenta la comisión del liquidador (neto + IVA).
+    mnt_total = mnt_neto + mnt_exe + mnt_iva - val_com_neto - val_com_iva
 
     # ── 1. IdDoc ──
     # TpoTranVenta=1 (ventas del giro): LibreDTE lo agrega siempre a los DTE que
