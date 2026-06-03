@@ -239,11 +239,13 @@ def generar_nota_debito_xml(
             tot_parts.append(
                 '<ImptoReten>'
                 f'<TipoImp>{_ti}</TipoImp>'
-                f'<TasaImp>{IVA_PORCENTAJE}.00</TasaImp>'
+                f'<TasaImp>{IVA_PORCENTAJE}</TasaImp>'
                 f'<MontoImp>{_mi}</MontoImp>'
                 '</ImptoReten>'
             )
-            tot_parts.append(f'<IVANoRet>{mnt_iva - _mi}</IVANoRet>')
+            _ivanoret = mnt_iva - _mi
+            if _ivanoret > 0:
+                tot_parts.append(f'<IVANoRet>{_ivanoret}</IVANoRet>')
             mnt_total = mnt_neto + mnt_exe + mnt_iva - _mi
         tot_parts.append(f'<MntTotal>{mnt_total}</MntTotal>')
     totales_xml = '<Totales>' + ''.join(tot_parts) + '</Totales>'
@@ -278,6 +280,10 @@ def generar_nota_debito_xml(
         elif it.get('descuento_monto'):
             linea_parts.append(f'<DescuentoMonto>{it["_desc_aplicado"]}</DescuentoMonto>')
         linea_parts.append(f'<MontoItem>{it["_monto_item"]}</MontoItem>')
+        # ND asociada a factura de compra: CodImpAdic vincula el ítem con la
+        # retención del encabezado (igual que LibreDTE). Solo en líneas afectas.
+        if impto_reten and not es_exe:
+            linea_parts.append(f'<CodImpAdic>{impto_reten.get("tipo_imp", 15)}</CodImpAdic>')
         detalles_xml += '<Detalle>' + ''.join(linea_parts) + '</Detalle>'
 
     # 6. Descuento global

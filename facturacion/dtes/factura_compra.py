@@ -102,33 +102,35 @@ def generar_factura_compra_xml(
     ])
     receptor_xml = '<Receptor>' + ''.join(rec_parts) + '</Receptor>'
 
-    # 4. Totales con ImptoReten (orden EXACTO del schema DTE_v10):
-    #    MntNeto, [MntExe], TasaIVA, IVA, ImptoReten, MntTotal
+    # 4. Totales con ImptoReten — alineado con LibreDTE (DTE 46 certificado):
+    #    orden: MntNeto, [MntExe], TasaIVA, IVA, ImptoReten, MntTotal.
+    #    TasaIVA y TasaImp van como ENTERO (19), no "19.00".
+    #    En retención TOTAL (MontoImp == IVA) NO se incluye IVANoRet.
     tot_parts = [f'<MntNeto>{mnt_neto}</MntNeto>']
     if mnt_exe > 0:
         tot_parts.append(f'<MntExe>{mnt_exe}</MntExe>')
-    tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
+    tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}</TasaIVA>')
     tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
     tot_parts.append(
         '<ImptoReten>'
         f'<TipoImp>{cod_imp_reten}</TipoImp>'
-        f'<TasaImp>{IVA_PORCENTAJE}.00</TasaImp>'
+        f'<TasaImp>{IVA_PORCENTAJE}</TasaImp>'
         f'<MontoImp>{mnt_reten}</MontoImp>'
         '</ImptoReten>'
     )
-    # Validación SII N°37: IVA = IVANoRet + IVARetParcial + IVARetTotal.
-    # En retención TOTAL, IVANoRet = IVA - retención total = 0. El campo debe ir
-    # presente para que el SII complete la validación (si no, HED-2-300).
+    # IVANoRet solo en retención PARCIAL (MontoImp != IVA). En total, se omite.
     iva_no_ret = mnt_iva - mnt_reten
-    tot_parts.append(f'<IVANoRet>{iva_no_ret}</IVANoRet>')
+    if iva_no_ret > 0:
+        tot_parts.append(f'<IVANoRet>{iva_no_ret}</IVANoRet>')
     tot_parts.append(f'<MntTotal>{mnt_total}</MntTotal>')
     totales_xml = '<Totales>' + ''.join(tot_parts) + '</Totales>'
 
     encabezado_xml = f'<Encabezado>{iddoc_xml}{emisor_xml}{receptor_xml}{totales_xml}</Encabezado>'
 
-    # 5. Detalles (precios netos). El ejemplo oficial de FC46 NO lleva CodImpAdic
-    #    en el detalle: la retención se valida solo por el ImptoReten + IVANoRet
-    #    del encabezado (validación N°37 del SII).
+    # 5. Detalles (precios netos). Cada línea afecta a la retención lleva
+    #    <CodImpAdic> con el código de retención (15) DESPUÉS de MontoItem.
+    #    LibreDTE usa CodImpAdic en el detalle para calcular el ImptoReten;
+    #    es lo que vincula el detalle con la retención del encabezado.
     detalles_xml = ''
     for i, it in enumerate(items_calc, start=1):
         qty = float(it.get('cantidad', 1))
@@ -142,6 +144,7 @@ def generar_factura_compra_xml(
             f'<UnmdItem>{_escape_xml(unidad)}</UnmdItem>',
             f'<PrcItem>{_fmt_cantidad(prc)}</PrcItem>',
             f'<MontoItem>{it["_monto_item"]}</MontoItem>',
+            f'<CodImpAdic>{cod_imp_reten}</CodImpAdic>',
         ]
         detalles_xml += '<Detalle>' + ''.join(linea_parts) + '</Detalle>'
 
