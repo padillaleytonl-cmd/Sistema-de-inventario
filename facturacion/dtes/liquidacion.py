@@ -177,11 +177,12 @@ def generar_liquidacion_xml(
     encabezado_xml = f'<Encabezado>{iddoc_xml}{emisor_xml}{receptor_xml}{totales_xml}</Encabezado>'
 
     # ── 5. Detalle ──
-    # Estructura verificada empíricamente contra la certificación: cada línea lleva
-    # QtyItem con la CANTIDAD real (contador de documentos del set) y NO lleva
-    # PrcItem (que además no admite negativos). Con esta forma, las líneas cuyo
-    # TpoDocLiq coincide con el documento real cuadran en la revisión del set.
-    # TpoDocLiq va tras NroLinDet, antes de IndExe.
+    # Estructura alineada con el ejemplo oficial del DTE 43 (facturacion.cl):
+    # NroLinDet, TpoDocLiq, [IndExe], NmbItem, QtyItem, UnmdItem, PrcItem, MontoItem.
+    # El SII valida QtyItem × PrcItem = MontoItem. Para que cuadre exacto se usa
+    # QtyItem=1 y PrcItem=MontoItem (1×monto=monto). PrcItem (Dec12_6Type) NO admite
+    # valores <= 0, así que las líneas con monto NEGATIVO (NC, liquidaciones previas)
+    # se informan solo con MontoItem (ValorType sí admite negativos).
     detalles_xml = ''
     for i, it in enumerate(items_norm, start=1):
         monto = it["monto"]
@@ -190,8 +191,10 @@ def generar_liquidacion_xml(
         if it['exento']:
             linea_parts.append('<IndExe>1</IndExe>')
         linea_parts.append(f'<NmbItem>{_escape_xml(it["nombre"])}</NmbItem>')
-        if it['cantidad'] is not None:
-            linea_parts.append(f'<QtyItem>{_fmt_cantidad(float(it["cantidad"]))}</QtyItem>')
+        if monto > 0:
+            linea_parts.append('<QtyItem>1</QtyItem>')
+            linea_parts.append('<UnmdItem>UN</UnmdItem>')
+            linea_parts.append(f'<PrcItem>{monto}</PrcItem>')
         linea_parts.append(f'<MontoItem>{monto}</MontoItem>')
         detalles_xml += '\n<Detalle>' + ''.join(linea_parts) + '</Detalle>'
 
