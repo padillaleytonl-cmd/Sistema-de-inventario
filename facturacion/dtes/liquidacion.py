@@ -73,6 +73,7 @@ def generar_liquidacion_xml(
             'cantidad': qty, 'precio_unitario': prc,
             'monto': monto, 'exento': es_exe,
             'unidad': it.get('unidad'),
+            'tpo_doc_liq': it.get('tpo_doc_liq', 33),
         })
         if es_exe:
             mnt_exe += monto
@@ -170,9 +171,13 @@ def generar_liquidacion_xml(
     encabezado_xml = f'<Encabezado>{iddoc_xml}{emisor_xml}{receptor_xml}{totales_xml}</Encabezado>'
 
     # ── 5. Detalle ──
+    # El DTE 43 exige <TpoDocLiq> (tipo de documento que se liquida) tras NroLinDet,
+    # antes de IndExe. Es un código de tipo DTE (33=factura, 39=boleta, 61=NC,
+    # 43=liquidación previa). Se toma de it['tpo_doc_liq'] o default 33.
     detalles_xml = ''
     for i, it in enumerate(items_norm, start=1):
         linea_parts = [f'<NroLinDet>{i}</NroLinDet>']
+        linea_parts.append(f'<TpoDocLiq>{it.get("tpo_doc_liq", 33)}</TpoDocLiq>')
         if it['exento']:
             linea_parts.append('<IndExe>1</IndExe>')
         linea_parts.append(f'<NmbItem>{_escape_xml(it["nombre"])}</NmbItem>')
