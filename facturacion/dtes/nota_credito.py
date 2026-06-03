@@ -168,6 +168,7 @@ def generar_nota_credito_xml(
     timestamp_firma: Optional[str] = None,
     set_referencia: Optional[Dict] = None,  # certif SII: {folio_ref:'4829122', razon_ref:'CASO 4829122-5'}
     es_exenta: bool = False,             # True → NC sobre Factura Exenta (34): sin IVA, solo MntExe+MntTotal
+    impto_reten: Optional[Dict] = None,  # NC asociada a factura compra (46): {tipo_imp:15, monto_imp:N}
 ) -> Dict:
     """Genera XML de Nota de Crédito Electrónica (DTE 61).
 
@@ -348,6 +349,19 @@ def generar_nota_credito_xml(
         elif es_item_sin_valor:
             # CASO 5: NC con item sin valor lleva TasaIVA pero sin MntNeto/IVA
             tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
+        # NC asociada a factura de compra (46): retención de IVA en ImptoReten.
+        # El MntTotal resta la retención (igual que la factura de compra).
+        if impto_reten and mnt_neto > 0:
+            _ti = impto_reten.get('tipo_imp', 15)
+            _mi = int(impto_reten.get('monto_imp', mnt_iva))
+            tot_parts.append(
+                '<ImptoReten>'
+                f'<TipoImp>{_ti}</TipoImp>'
+                f'<TasaImp>{IVA_PORCENTAJE}.00</TasaImp>'
+                f'<MontoImp>{_mi}</MontoImp>'
+                '</ImptoReten>'
+            )
+            mnt_total = mnt_neto + mnt_exe + mnt_iva - _mi
         tot_parts.append(f'<MntTotal>{mnt_total}</MntTotal>')
     totales_xml = '<Totales>' + ''.join(tot_parts) + '</Totales>'
 
