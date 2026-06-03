@@ -83,6 +83,8 @@ def construir_totales_periodo_compra(
     tot_cred_iva_uso_comun: int = 0,
     tot_iva_no_rec: Optional[List[Dict]] = None,
     tot_iva_ret_total: int = 0,
+    cod_otro_imp_ret: int = 15,
+    tasa_otro_imp_ret: float = 19.0,
     tot_mnt_iva_no_rec: int = 0,
     cod_iva_no_rec: Optional[int] = None,
 ) -> str:
@@ -114,9 +116,11 @@ def construir_totales_periodo_compra(
         partes.append(f"<FctProp>{fct_prop}</FctProp>")
     if tot_cred_iva_uso_comun:
         partes.append(f"<TotCredIVAUsoComun>{tot_cred_iva_uso_comun}</TotCredIVAUsoComun>")
-    # IVA retenido total (facturas de compra)
+    # IVA retenido total (facturas de compra): se informa en TotOtrosImp con
+    # CodImp 15, consistente con el OtrosImp del detalle (NO TotIVARetTotal).
     if tot_iva_ret_total:
-        partes.append(f"<TotIVARetTotal>{tot_iva_ret_total}</TotIVARetTotal>")
+        partes.append(f"<TotOtrosImp><CodImp>{cod_otro_imp_ret}</CodImp>"
+                      f"<TotMntImp>{tot_iva_ret_total}</TotMntImp></TotOtrosImp>")
     partes.append(f"<TotMntTotal>{tot_mnt_total}</TotMntTotal>")
     return "<TotalesPeriodo>" + "".join(partes) + "</TotalesPeriodo>"
 
@@ -136,6 +140,7 @@ def construir_detalle_compra(
     cod_iva_no_rec: Optional[int] = None,
     mnt_iva_no_rec: int = 0,
     iva_ret_total: int = 0,
+    cod_otro_imp_ret: int = 15,
     emisor_nc_nd_fc: Optional[int] = None,
 ) -> str:
     """Construye un bloque <Detalle> para el Libro de COMPRAS.
@@ -169,11 +174,14 @@ def construir_detalle_compra(
     # IVA uso común
     if iva_uso_comun:
         partes.append(f"<IVAUsoComun>{iva_uso_comun}</IVAUsoComun>")
-    # IVA retenido total (facturas de compra 45/46 y NC/ND asociadas).
-    # Se informa en el campo dedicado <IVARetTotal>, NO como <OtrosImp> con CodImp=15.
-    # Mezclar ambos mecanismos causa descuadre resumen/detalle (LBR-3).
+    # Retención de IVA en factura de compra (45/46) y NC/ND asociadas.
+    # En el LIBRO DE COMPRAS la retención se informa en la tabla OtrosImp
+    # (CodImp 15 = IVA Retenido Total), NO en el campo IVARetTotal (que es del
+    # libro de ventas). El MntTotal RESTA esta retención (Neto + IVA - retención).
     if iva_ret_total:
-        partes.append(f"<IVARetTotal>{iva_ret_total}</IVARetTotal>")
+        partes.append(f"<OtrosImp><CodImp>{cod_otro_imp_ret}</CodImp>"
+                      f"<TasaImp>{tasa_imp}</TasaImp>"
+                      f"<MntImp>{iva_ret_total}</MntImp></OtrosImp>")
     partes.append(f"<MntTotal>{mnt_total}</MntTotal>")
     return "<Detalle>" + "".join(partes) + "</Detalle>"
 
