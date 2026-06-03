@@ -169,10 +169,11 @@ def construir_detalle_compra(
     # IVA uso común
     if iva_uso_comun:
         partes.append(f"<IVAUsoComun>{iva_uso_comun}</IVAUsoComun>")
-    # IVA retenido total (facturas de compra)
+    # IVA retenido total (facturas de compra 45/46 y NC/ND asociadas).
+    # Se informa en el campo dedicado <IVARetTotal>, NO como <OtrosImp> con CodImp=15.
+    # Mezclar ambos mecanismos causa descuadre resumen/detalle (LBR-3).
     if iva_ret_total:
-        partes.append(f"<OtrosImp><CodImp>15</CodImp><TasaImp>{tasa_imp}</TasaImp>"
-                      f"<MntImp>{iva_ret_total}</MntImp></OtrosImp>")
+        partes.append(f"<IVARetTotal>{iva_ret_total}</IVARetTotal>")
     partes.append(f"<MntTotal>{mnt_total}</MntTotal>")
     return "<Detalle>" + "".join(partes) + "</Detalle>"
 
