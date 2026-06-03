@@ -188,7 +188,7 @@ def generar_liquidacion_xml(
         if it['precio_unitario'] is not None and it['precio_unitario'] != 0:
             linea_parts.append(f'<PrcItem>{_fmt_cantidad(float(it["precio_unitario"]))}</PrcItem>')
         linea_parts.append(f'<MontoItem>{it["monto"]}</MontoItem>')
-        detalles_xml += '<Detalle>' + ''.join(linea_parts) + '</Detalle>'
+        detalles_xml += '\n<Detalle>' + ''.join(linea_parts) + '</Detalle>'
 
     # ── 6. Referencias ──
     referencia_xml = ''
@@ -224,7 +224,7 @@ def generar_liquidacion_xml(
         c_parts.append(f'<ValComNeto>{c["neto"]}</ValComNeto>')
         c_parts.append(f'<ValComExe>{c["exento"]}</ValComExe>')
         c_parts.append(f'<ValComIVA>{c["iva"]}</ValComIVA>')
-        comisiones_xml += '<Comisiones>' + ''.join(c_parts) + '</Comisiones>'
+        comisiones_xml += '\n<Comisiones>' + ''.join(c_parts) + '</Comisiones>'
 
     # ── 8. TED ──
     if timestamp_firma is None:
@@ -245,12 +245,12 @@ def generar_liquidacion_xml(
         '<?xml version="1.0" encoding="ISO-8859-1"?>'
         '<DTE version="1.0">'
         f'<Liquidacion ID="{documento_id}">'
-        f'{encabezado_xml}'
+        f'\n{encabezado_xml}'
         f'{detalles_xml}'
-        f'{referencia_xml}'
+        f'\n{referencia_xml}'
         f'{comisiones_xml}'
-        f'{ted.decode("iso-8859-1")}'
-        f'<TmstFirma>{timestamp_firma}</TmstFirma>'
+        f'\n{ted.decode("iso-8859-1")}'
+        f'\n<TmstFirma>{timestamp_firma}</TmstFirma>'
         f'</Liquidacion>'
         '</DTE>'
     )
