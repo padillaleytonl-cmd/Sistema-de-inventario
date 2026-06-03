@@ -225,16 +225,22 @@ def generar_libro_xml(
     # ResumenPeriodo (obligatorio en TOTAL)
     resumen = "<ResumenPeriodo>" + "".join(totales_periodo) + "</ResumenPeriodo>"
 
-    # Detalle (solo si hay; en ventas electrónicas NO va)
+    # Detalle (solo si hay; en ventas electrónicas NO va).
+    # CRÍTICO (error CHR-00002 "Line too long"): el SII rechaza líneas > 4096 chars.
+    # Un libro de compras con varios <Detalle> en una sola línea supera ese límite,
+    # sobre todo al sumar la firma. Solución: separar cada <Detalle> con salto de
+    # línea ANTES de firmar (así el digest se calcula con los saltos incluidos y la
+    # firma cuadra). La canonicalización C14N los preserva de forma consistente.
     detalle_xml = ""
     if detalles:
-        detalle_xml = "".join(detalles)
+        detalle_xml = "\n" + "\n".join(detalles)
 
+    # Saltos de línea entre las secciones mayores del EnvioLibro (mismo motivo).
     envio_libro = (
-        f'<EnvioLibro ID="{libro_id}">'
-        + caratula
+        f'<EnvioLibro ID="{libro_id}">\n'
+        + caratula + "\n"
         + resumen
-        + detalle_xml
+        + detalle_xml + "\n"
         + f"<TmstFirma>{tmst_firma}</TmstFirma>"
         + "</EnvioLibro>"
     )
