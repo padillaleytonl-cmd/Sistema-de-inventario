@@ -178,8 +178,11 @@ def generar_liquidacion_xml(
 
     # ── 5. Detalle ──
     # El DTE 43 exige <TpoDocLiq> (tipo de documento que se liquida) tras NroLinDet,
-    # antes de IndExe. Es un código de tipo DTE (33=factura, 39=boleta, 61=NC,
-    # 43=liquidación previa). Se toma de it['tpo_doc_liq'] o default 33.
+    # antes de IndExe. En liquidación, la "cantidad" del set es un CONTADOR de
+    # documentos, NO una cantidad de producto con precio unitario. Si se envía
+    # QtyItem sin PrcItem, el SII no puede validar qty×prc y repara la línea.
+    # Por eso el detalle lleva solo MontoItem (el total de la línea), salvo que
+    # explícitamente se entregue precio_unitario real.
     detalles_xml = ''
     for i, it in enumerate(items_norm, start=1):
         linea_parts = [f'<NroLinDet>{i}</NroLinDet>']
@@ -187,11 +190,12 @@ def generar_liquidacion_xml(
         if it['exento']:
             linea_parts.append('<IndExe>1</IndExe>')
         linea_parts.append(f'<NmbItem>{_escape_xml(it["nombre"])}</NmbItem>')
-        if it['cantidad'] is not None:
-            linea_parts.append(f'<QtyItem>{_fmt_cantidad(float(it["cantidad"]))}</QtyItem>')
-        if it['unidad']:
-            linea_parts.append(f'<UnmdItem>{_escape_xml(it["unidad"])}</UnmdItem>')
-        if it['precio_unitario'] is not None and it['precio_unitario'] != 0:
+        # Solo incluir QtyItem/PrcItem si hay un precio unitario real entregado.
+        if it.get('precio_unitario') not in (None, 0):
+            if it['cantidad'] is not None:
+                linea_parts.append(f'<QtyItem>{_fmt_cantidad(float(it["cantidad"]))}</QtyItem>')
+            if it['unidad']:
+                linea_parts.append(f'<UnmdItem>{_escape_xml(it["unidad"])}</UnmdItem>')
             linea_parts.append(f'<PrcItem>{_fmt_cantidad(float(it["precio_unitario"]))}</PrcItem>')
         linea_parts.append(f'<MontoItem>{it["monto"]}</MontoItem>')
         detalles_xml += '\n<Detalle>' + ''.join(linea_parts) + '</Detalle>'
