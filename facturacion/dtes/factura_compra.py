@@ -116,12 +116,19 @@ def generar_factura_compra_xml(
         f'<MontoImp>{mnt_reten}</MontoImp>'
         '</ImptoReten>'
     )
+    # Validación SII N°37: IVA = IVANoRet + IVARetParcial + IVARetTotal.
+    # En retención TOTAL, IVANoRet = IVA - retención total = 0. El campo debe ir
+    # presente para que el SII complete la validación (si no, HED-2-300).
+    iva_no_ret = mnt_iva - mnt_reten
+    tot_parts.append(f'<IVANoRet>{iva_no_ret}</IVANoRet>')
     tot_parts.append(f'<MntTotal>{mnt_total}</MntTotal>')
     totales_xml = '<Totales>' + ''.join(tot_parts) + '</Totales>'
 
     encabezado_xml = f'<Encabezado>{iddoc_xml}{emisor_xml}{receptor_xml}{totales_xml}</Encabezado>'
 
-    # 5. Detalles (precios netos)
+    # 5. Detalles (precios netos). El ejemplo oficial de FC46 NO lleva CodImpAdic
+    #    en el detalle: la retención se valida solo por el ImptoReten + IVANoRet
+    #    del encabezado (validación N°37 del SII).
     detalles_xml = ''
     for i, it in enumerate(items_calc, start=1):
         qty = float(it.get('cantidad', 1))

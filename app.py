@@ -26976,14 +26976,19 @@ def admin_lusync_sii_test_set_fact_compra():
             documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
             detalles_casos.append(f"CASO-2 (NC61 f{c2_folio}): Neto ${c2_total:,}".replace(",", "."))
 
-            # CASO 3: ND (56) anula la NC del C2 (simbólica, CodRef 1)
+            # CASO 3: ND (56) anula la NC del C2. Regla SII REF-2-780: al anular
+            # (CodRef 1), los montos e ítems de la ND deben COINCIDIR con el doc
+            # referenciado (la NC). Por eso replica ítems, montos y retención.
             r = generar_nota_debito_xml(
                 caf=cafs_dict[56], folio=folio_56, fecha_emision=fecha,
                 emisor=emisor, receptor=RECEPTOR_SET,
                 referencia={"folio_ref": c2_folio, "tipo_doc_ref": 61, "fecha_ref": fecha,
-                            "cod_ref": 1, "razon_ref": "ANULA NOTA DE CREDITO ELECTRONICA",
-                            "mnt_anulacion": 0},
-                items=[],
+                            "cod_ref": 1, "razon_ref": "ANULA NOTA DE CREDITO ELECTRONICA"},
+                items=[
+                    {'nombre': 'Producto 1', 'cantidad': 120, 'precio_unitario': 3172},
+                    {'nombre': 'Producto 2', 'cantidad': 8, 'precio_unitario': 1618},
+                ],
+                impto_reten={"tipo_imp": 15},
                 set_referencia={"folio_ref": SET, "fecha_ref": fecha,
                                 "razon_ref": "CASO 4829129-3"},
             )
