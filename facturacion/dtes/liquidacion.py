@@ -106,6 +106,7 @@ def generar_liquidacion_xml(
     com_norm = []
     val_com_neto = 0
     val_com_exe = 0
+    val_com_iva = 0
     com_iva_explicito = 0
     hay_iva_explicito = False
     if comisiones:
