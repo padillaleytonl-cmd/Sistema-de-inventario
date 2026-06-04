@@ -106,15 +106,18 @@ def generar_liquidacion_xml(
     com_norm = []
     val_com_neto = 0
     val_com_exe = 0
-    val_com_iva = 0
+    com_iva_explicito = 0
+    hay_iva_explicito = False
     if comisiones:
         for c in comisiones:
             c_neto = int(round(float(c.get('neto', 0))))
             c_exe = int(round(float(c.get('exento', 0))))
             if 'iva' in c and c['iva'] is not None:
                 c_iva = int(round(float(c['iva'])))
+                com_iva_explicito += c_iva
+                hay_iva_explicito = True
             else:
-                c_iva = int(round(c_neto * IVA_PORCENTAJE / 100.0))
+                c_iva = None
             com_norm.append({
                 'tipo_movim': c.get('tipo_movim', 'C'),
                 'glosa': c.get('glosa', 'Comision')[:60],
@@ -123,7 +126,25 @@ def generar_liquidacion_xml(
             })
             val_com_neto += c_neto
             val_com_exe += c_exe
-            val_com_iva += c_iva
+        # ValComIVA se calcula sobre el TOTAL neto de comisiones (round del total),
+        # no sumando el IVA de cada comisión por separado. Con comisiones de signo
+        # mixto esto evita un descuadre de redondeo de 1 peso en el encabezado.
+        if hay_iva_explicito:
+            val_com_iva = com_iva_explicito
+        else:
+            val_com_iva = int(round(val_com_neto * IVA_PORCENTAJE / 100.0))
+        # Distribuir el IVA total entre las líneas de comisión para que la suma
+        # de las líneas coincida con ValComIVA (asignarlo a la última con neto≠0).
+        if not hay_iva_explicito:
+            resto = val_com_iva
+            ult = None
+            for cc in com_norm:
+                cc['iva'] = int(round(cc['neto'] * IVA_PORCENTAJE / 100.0))
+                resto -= cc['iva']
+                if cc['neto'] != 0:
+                    ult = cc
+            if ult is not None and resto != 0:
+                ult['iva'] += resto
 
     # MntTotal del DTE 43 descuenta la comisión del liquidador (neto + IVA).
     mnt_total = mnt_neto + mnt_exe + mnt_iva - val_com_neto - val_com_iva
@@ -182,17 +203,10 @@ def generar_liquidacion_xml(
     # del liquidador) e IVA de Terceros (el del mandante = IVA total − IVA propio).
     # Orden XSD: IVA → IVAProp → IVATerc → ... → Comisiones.
     if com_norm:
-        # IVATerc = IVA de las ventas por cuenta del mandante (todo el IVA del
-        # detalle es de terceros, ya que la liquidación reporta ventas del
-        # mandante). IVAProp = IVA propio del comisionista (porción restante).
-        # Esta formulación mantiene IVATerc ≤ IVA y funciona con comisiones de
-        # cualquier signo (evita IVATerc > IVA cuando la comisión es negativa).
-        if val_com_iva >= 0:
-            iva_prop = val_com_iva
-            iva_terc = mnt_iva - iva_prop
-        else:
-            iva_terc = mnt_iva
-            iva_prop = 0
+        # IVA Propio = IVA de las comisiones del liquidador. IVA de Terceros =
+        # IVA total − IVA propio (el del mandante). Fórmula validada por el SII.
+        iva_prop = val_com_iva
+        iva_terc = mnt_iva - iva_prop
         tot_parts.append(f'<IVAProp>{iva_prop}</IVAProp>')
         tot_parts.append(f'<IVATerc>{iva_terc}</IVATerc>')
     # Comisiones resumen (después de IVA/ImptoReten, antes de MntTotal)
