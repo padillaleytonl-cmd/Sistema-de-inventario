@@ -69,11 +69,14 @@ def generar_liquidacion_xml(
             qty = float(it.get('cantidad', 1))
             prc = float(it.get('precio_unitario', 0))
             monto = int(round(qty * prc))
-        # Boletas afectas: el monto del set es BRUTO (con IVA). En el detalle el
-        # MontoItem debe ser el NETO (bruto/1.19); el IVA se acumula al encabezado.
+        # Boletas afectas: el monto del set es BRUTO (con IVA incluido). El MontoItem
+        # de la LÍNEA se mantiene BRUTO (es lo que el SII espera ver en una boleta,
+        # tipo 39), pero su aporte al MntNeto del ENCABEZADO es el NETO (bruto/1.19)
+        # y el IVA correspondiente se acumula. Así la línea cuadra (bruto) y el
+        # encabezado cuadra (neto + IVA).
+        aporte_neto = monto
         if es_bruto and not es_exe:
-            neto_linea = int(round(monto / (1 + IVA_PORCENTAJE / 100.0)))
-            monto = neto_linea
+            aporte_neto = int(round(monto / (1 + IVA_PORCENTAJE / 100.0)))
         items_norm.append({
             'nombre': it.get('nombre', 'Item')[:80],
             'cantidad': qty, 'precio_unitario': prc,
@@ -84,7 +87,7 @@ def generar_liquidacion_xml(
         if es_exe:
             mnt_exe += monto
         else:
-            mnt_neto += monto
+            mnt_neto += aporte_neto
 
     mnt_iva = int(round(mnt_neto * IVA_PORCENTAJE / 100.0))
     # El MntTotal del DTE 43 DESCUENTA la comisión del liquidador (neto + IVA),
