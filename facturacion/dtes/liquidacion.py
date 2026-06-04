@@ -182,8 +182,17 @@ def generar_liquidacion_xml(
     # del liquidador) e IVA de Terceros (el del mandante = IVA total − IVA propio).
     # Orden XSD: IVA → IVAProp → IVATerc → ... → Comisiones.
     if com_norm:
-        iva_prop = val_com_iva
-        iva_terc = mnt_iva - iva_prop
+        # IVATerc = IVA de las ventas por cuenta del mandante (todo el IVA del
+        # detalle es de terceros, ya que la liquidación reporta ventas del
+        # mandante). IVAProp = IVA propio del comisionista (porción restante).
+        # Esta formulación mantiene IVATerc ≤ IVA y funciona con comisiones de
+        # cualquier signo (evita IVATerc > IVA cuando la comisión es negativa).
+        if val_com_iva >= 0:
+            iva_prop = val_com_iva
+            iva_terc = mnt_iva - iva_prop
+        else:
+            iva_terc = mnt_iva
+            iva_prop = 0
         tot_parts.append(f'<IVAProp>{iva_prop}</IVAProp>')
         tot_parts.append(f'<IVATerc>{iva_terc}</IVATerc>')
     # Comisiones resumen (después de IVA/ImptoReten, antes de MntTotal)
