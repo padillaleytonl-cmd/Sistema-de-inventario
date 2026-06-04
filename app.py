@@ -26941,7 +26941,7 @@ def admin_lusync_sii_test_set_liquidacion():
                     {'nombre': 'EXENTO FACTURA ELECTRONICA 4768', 'cantidad': 1, 'monto': 365464, 'exento': True, 'tpo_doc_liq': 33},
                     {'nombre': 'NETO NOTA DE CREDITO 328', 'cantidad': 1, 'monto': -50894, 'exento': False, 'tpo_doc_liq': 60},
                     {'nombre': 'EXENTO NOTA DE CREDITO 328', 'cantidad': 1, 'monto': -18006, 'exento': True, 'tpo_doc_liq': 60},
-                    {'nombre': 'BOLETAS', 'cantidad': 8262, 'monto': 6228679, 'exento': False, 'tpo_doc_liq': 39},
+                    {'nombre': 'BOLETAS', 'cantidad': 1, 'monto': 6228679, 'exento': False, 'tpo_doc_liq': 39},
                 ], comisiones=None),
                 # CASO 3
                 dict(items=[
