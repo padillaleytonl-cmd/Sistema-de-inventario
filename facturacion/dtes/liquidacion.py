@@ -71,24 +71,26 @@ def generar_liquidacion_xml(
             prc = float(it.get('precio_unitario', 0))
             monto = int(round(qty * prc))
         # Items afectos brutos (p.ej. línea resumen de BOLETAS a consumidor final):
-        # el monto del set incluye IVA. El MontoItem de la línea y el aporte a
-        # MntNeto deben ser el NETO; el IVA se acumula aparte para el encabezado.
-        monto_neto_item = monto
+        # el monto del set incluye IVA. La LÍNEA muestra el MontoItem BRUTO tal cual
+        # del set (como las demás líneas), pero el aporte a MntNeto es el neto y el
+        # IVA incluido se acumula para el encabezado; el SII descompone boletas (39).
+        monto_linea = monto          # lo que se muestra en <MontoItem>
+        aporte_neto = monto          # lo que suma a MntNeto/MntExe
         iva_extra = 0
         if es_bruto and not es_exe:
-            monto_neto_item = int(round(monto / (1 + IVA_PORCENTAJE / 100.0)))
-            iva_extra = monto - monto_neto_item
+            aporte_neto = int(round(monto / (1 + IVA_PORCENTAJE / 100.0)))
+            iva_extra = monto - aporte_neto
         items_norm.append({
             'nombre': it.get('nombre', 'Item')[:80],
             'cantidad': qty, 'precio_unitario': prc,
-            'monto': monto_neto_item, 'exento': es_exe,
+            'monto': monto_linea, 'exento': es_exe,
             'unidad': it.get('unidad'),
             'tpo_doc_liq': it.get('tpo_doc_liq', 33),
         })
         if es_exe:
-            mnt_exe += monto_neto_item
+            mnt_exe += aporte_neto
         else:
-            mnt_neto += monto_neto_item
+            mnt_neto += aporte_neto
         iva_boletas += iva_extra
 
     # IVA del encabezado: el de las ventas afectas normales (neto*19%) más el IVA
