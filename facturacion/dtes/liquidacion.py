@@ -180,12 +180,10 @@ def generar_liquidacion_xml(
         com_tot.append('</Comisiones>')
         tot_parts.append(''.join(com_tot))
     tot_parts.append(f'<MntTotal>{mnt_total}</MntTotal>')
-    # MontoPeriodo: total de ventas o servicios del período liquidado (ventas brutas
-    # por cuenta del mandante, antes de descontar la comisión del liquidador).
-    # Es un campo propio del encabezado de Liquidación-Factura que el SII usa para
-    # validar el período. Orden XSD: MntTotal → MontoPeriodo → SaldoAnterior → VlrPagar.
-    monto_periodo = mnt_neto + mnt_exe + mnt_iva
-    tot_parts.append(f'<MontoPeriodo>{monto_periodo}</MontoPeriodo>')
+    # MontoPeriodo: el SII valida (HED-3-265) que sea IGUAL al MntTotal del documento.
+    # VlrPagar también coincide con el total a pagar. Orden XSD: MntTotal →
+    # MontoPeriodo → SaldoAnterior → VlrPagar.
+    tot_parts.append(f'<MontoPeriodo>{mnt_total}</MontoPeriodo>')
     tot_parts.append(f'<VlrPagar>{mnt_total}</VlrPagar>')
     totales_xml = '<Totales>' + ''.join(tot_parts) + '</Totales>'
 
