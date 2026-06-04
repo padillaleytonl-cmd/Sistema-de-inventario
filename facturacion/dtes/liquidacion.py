@@ -57,9 +57,11 @@ def generar_liquidacion_xml(
     # ── 0. Totales del detalle ──
     mnt_neto = 0
     mnt_exe = 0
+    iva_boletas = 0
     items_norm = []
     for it in items:
         es_exe = bool(it.get('exento'))
+        es_bruto = bool(it.get('bruto'))  # monto incluye IVA (boletas a consumidor)
         if 'monto' in it and it['monto'] is not None:
             monto = int(round(float(it['monto'])))
             qty = it.get('cantidad')
@@ -68,18 +70,30 @@ def generar_liquidacion_xml(
             qty = float(it.get('cantidad', 1))
             prc = float(it.get('precio_unitario', 0))
             monto = int(round(qty * prc))
+        # Items afectos brutos (p.ej. línea resumen de BOLETAS a consumidor final):
+        # el monto del set incluye IVA. El MontoItem de la línea y el aporte a
+        # MntNeto deben ser el NETO; el IVA se acumula aparte para el encabezado.
+        monto_neto_item = monto
+        iva_extra = 0
+        if es_bruto and not es_exe:
+            monto_neto_item = int(round(monto / (1 + IVA_PORCENTAJE / 100.0)))
+            iva_extra = monto - monto_neto_item
         items_norm.append({
             'nombre': it.get('nombre', 'Item')[:80],
             'cantidad': qty, 'precio_unitario': prc,
-            'monto': monto, 'exento': es_exe,
+            'monto': monto_neto_item, 'exento': es_exe,
             'unidad': it.get('unidad'),
             'tpo_doc_liq': it.get('tpo_doc_liq', 33),
         })
         if es_exe:
-            mnt_exe += monto
+            mnt_exe += monto_neto_item
         else:
-            mnt_neto += monto
+            mnt_neto += monto_neto_item
+        iva_boletas += iva_extra
 
+    # IVA del encabezado: el de las ventas afectas normales (neto*19%) más el IVA
+    # ya incluido en las líneas brutas (boletas). Se mantiene la coherencia
+    # IVA == round(MntNeto * 0.19) porque el neto de la boleta entró a MntNeto.
     mnt_iva = int(round(mnt_neto * IVA_PORCENTAJE / 100.0))
     # El MntTotal del DTE 43 DESCUENTA la comisión del liquidador (neto + IVA),
     # porque es lo que el liquidador retiene; al mandante se le paga el resto.
