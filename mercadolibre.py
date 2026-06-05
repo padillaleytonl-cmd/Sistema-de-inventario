@@ -335,22 +335,29 @@ def actualizar_stock_meli(sku_lusync, cantidad):
                         if ok: exitosas += 1
                         else: fallidas += 1
                     else:
-                        # Multiples variantes y no matchea — actualizar TODAS con el mismo stock
-                        # (escenario raro pero práctico: si Lusync solo tiene 1 SKU para publicación con N variantes)
-                        var_ids = [v.get("id") for v in variations]
-                        payload = {"variations": [{"id": vid, "available_quantity": int(cantidad)} for vid in var_ids]}
-                        res = requests.put(
-                            f"{MELI_API_URL}/items/{item_id}",
-                            headers=meli_headers(),
-                            json=payload,
-                            timeout=15
+                        # ── FIX CRÍTICO (pisado de variantes) ──
+                        # Hay MÚLTIPLES variantes y NO logramos identificar a cuál
+                        # corresponde este sku_canal. NUNCA escribir el mismo stock a
+                        # TODAS las variantes: eso pisaba el stock de los otros colores
+                        # (que son otros SKU Lusync) y los dejaba a todos en el valor de
+                        # uno solo (a 0 si este venía en 0). Ese era el bug que dejaba
+                        # publicaciones completas en 0 "cada cierto rato".
+                        #
+                        # Cada variante de color es un SKU Lusync distinto y se actualiza
+                        # en su propia llamada cuando SÍ matchea su SELLER_SKU. Si acá no
+                        # matcheó, lo correcto es NO tocar ninguna variante y avisar para
+                        # corregir el mapeo (el sku_canal debe igualar el SELLER_SKU de la
+                        # variante en MELI).
+                        log.append(
+                            f"  {item_id}: ⚠️ sku_canal '{sku_canal}' no coincide con el "
+                            f"SELLER_SKU de ninguna de las {len(variations)} variantes — "
+                            f"OMITIDO para no pisar el stock de las demás variantes. "
+                            f"Revisa el mapeo de SKUs (el sku_canal debe ser el SELLER_SKU "
+                            f"de la variante en MELI)."
                         )
-                        ok = res.status_code in (200, 201)
-                        log.append(f"  {item_id} {len(var_ids)} variantes: status {res.status_code} {'OK' if ok else 'FAIL'}")
-                        print(f"[MELI Stock] Item:{item_id} {len(var_ids)} variantes (sku no matchea) Qty:{cantidad} Status:{res.status_code}")
-                        if not ok: log.append(f"    body: {res.text[:300]}")
-                        if ok: exitosas += 1
-                        else: fallidas += 1
+                        print(f"[MELI Stock] Item:{item_id} sku_canal={sku_canal} no matchea "
+                              f"variante; OMITIDO (evita pisar las demás variantes)")
+                        # No suma a exitosas ni fallidas: queda como 'omitida'.
             else:
                 # Publicación simple (sin variantes) — actualizar available_quantity directo
                 res = requests.put(
