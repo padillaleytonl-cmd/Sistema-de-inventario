@@ -26954,7 +26954,7 @@ def admin_lusync_sii_test_set_liquidacion():
                 ]),
                 # CASO 4
                 dict(items=[
-                    {'nombre': 'NETO ANTICIPO FACTURACION', 'cantidad': 1, 'monto': 550000, 'exento': False, 'tpo_doc_liq': 30},
+                    {'nombre': 'NETO ANTICIPO FACTURACION', 'cantidad': 1, 'precio_unitario': 550000, 'monto': 550000, 'exento': False, 'tpo_doc_liq': 30},
                     {'nombre': 'NETO FACTURAS', 'cantidad': 51, 'monto': 353979, 'exento': False, 'tpo_doc_liq': 30},
                     {'nombre': 'EXENTO FACTURAS', 'cantidad': 57, 'monto': 208950, 'exento': True, 'tpo_doc_liq': 30},
                     {'nombre': 'NETO FACTURAS ELECTRONICAS', 'cantidad': 44, 'monto': 106363, 'exento': False, 'tpo_doc_liq': 33},
@@ -28135,6 +28135,79 @@ def admin_lusync_sii_test_rcof():
     </div>
     </body></html>"""
     return html
+
+
+@app.route("/admin/lusync/stock/diagnostico-central", methods=["GET"])
+def admin_stock_diagnostico_central():
+    """Diagnostica (y opcionalmente repara) productos cuyo stock no está
+    reflejado en la bodega CENTRAL, que es la que se publica a canales seller.
+
+    Síntoma que resuelve: el producto se ve con stock en Lusync pero publica 0
+    a los marketplaces porque su CENTRAL quedó desincronizada.
+
+    Uso:
+      ?solo_ver=si    → solo lista los afectados, NO modifica nada (default)
+      ?reparar=si     → reasigna CENTRAL = stock_total − stock_en_fulfillment
+    """
+    from inventario import get_conn, set_stock_bodega
+    reparar = request.args.get("reparar") == "si"
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""
+        SELECT p.sku, p.nombre, p.stock,
+               COALESCE(sc.cantidad, 0) AS central,
+               COALESCE(ff.tot, 0)      AS en_fulfillment
+        FROM productos p
+        LEFT JOIN stock_bodega sc
+               ON sc.sku = p.sku AND sc.bodega_codigo = 'CENTRAL'
+        LEFT JOIN (
+               SELECT sb.sku, SUM(sb.cantidad) AS tot
+               FROM stock_bodega sb
+               JOIN bodegas b ON b.codigo = sb.bodega_codigo
+               WHERE b.tipo <> 'propia'
+               GROUP BY sb.sku
+        ) ff ON ff.sku = p.sku
+        WHERE p.stock > 0
+          AND COALESCE(sc.cantidad, 0) = 0
+        ORDER BY p.stock DESC
+    """)
+    filas = cur.fetchall()
+    cur.close(); conn.close()
+
+    afectados = []
+    reparados = 0
+    for sku, nombre, stock_total, central, en_ff in filas:
+        central_objetivo = max(0, int(stock_total or 0) - int(en_ff or 0))
+        item = {
+            "sku": sku, "nombre": nombre,
+            "stock_lusync": int(stock_total or 0),
+            "central_actual": int(central or 0),
+            "en_fulfillment": int(en_ff or 0),
+            "central_objetivo": central_objetivo,
+        }
+        if reparar and central_objetivo > 0:
+            try:
+                set_stock_bodega(sku, "CENTRAL", central_objetivo)
+                # Republica el stock corregido a los canales
+                try:
+                    sincronizar_stock_marketplaces(sku, central_objetivo,
+                                                   contexto="reparacion_central")
+                except Exception as e_s:
+                    item["sync_error"] = str(e_s)[:100]
+                item["reparado"] = True
+                reparados += 1
+            except Exception as e:
+                item["error"] = str(e)[:100]
+        afectados.append(item)
+
+    return jsonify({
+        "modo": "REPARACIÓN" if reparar else "solo diagnóstico",
+        "productos_afectados": len(afectados),
+        "reparados": reparados if reparar else 0,
+        "nota": ("Se reasignó CENTRAL = stock_total − fulfillment y se republicó a canales."
+                 if reparar else
+                 "Solo lectura. Para reparar agrega &reparar=si a la URL."),
+        "detalle": afectados,
+    })
 
 
 if __name__ == "__main__":

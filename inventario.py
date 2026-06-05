@@ -640,6 +640,30 @@ def guardar_producto(p):
     cur.close()
     conn.close()
 
+    # ── Sincronizar stock_bodega CENTRAL ──
+    # El stock que se publica a canales seller sale de la bodega CENTRAL
+    # (bodegas tipo 'propia'). Si guardamos productos.stock sin reflejarlo en
+    # CENTRAL, el producto se ve con stock en Lusync pero publica 0 a los canales.
+    # El stock total de productos.stock = CENTRAL + bodegas de fulfillment.
+    # CENTRAL = stock_total − (lo que ya está reservado en fulfillment).
+    try:
+        stock_total = int(p.get("stock") or 0)
+        # Sumar lo que el SKU tiene en bodegas que NO son 'propia' (fulfillment,
+        # tránsito, dropship): ese stock NO debe asignarse a CENTRAL.
+        conn2 = get_conn(); cur2 = conn2.cursor()
+        cur2.execute("""SELECT COALESCE(SUM(sb.cantidad), 0)
+                        FROM stock_bodega sb
+                        JOIN bodegas b ON b.codigo = sb.bodega_codigo
+                        WHERE sb.sku = %s AND b.tipo <> 'propia'""", (p["sku"],))
+        en_fulfillment = int((cur2.fetchone() or [0])[0] or 0)
+        cur2.close(); conn2.close()
+        central_objetivo = max(0, stock_total - en_fulfillment)
+        # set_stock_bodega ya recalcula productos.stock al final (suma de bodegas),
+        # dejando ambas fuentes consistentes.
+        set_stock_bodega(p["sku"], "CENTRAL", central_objetivo)
+    except Exception as e:
+        print(f"[guardar_producto] no pude sincronizar CENTRAL para {p.get('sku')}: {e}")
+
 def guardar_productos(lista):
     for p in lista:
         guardar_producto(p)
