@@ -18692,17 +18692,30 @@ def admin_sync_masivo_todos():
     dry_run = request.args.get("dry_run") == "si"
     limite = request.args.get("limite", type=int)
 
-    # Traer SKU con su stock CENTRAL (bodegas propias) y si tienen mapeo
+    # Traer SKU con su stock CENTRAL (bodegas propias) y si tienen mapeo.
+    # IMPORTANTE: se usan subqueries agregadas SEPARADAS para stock y mapeos.
+    # Si se hicieran ambos JOIN en la misma query, el SUM de stock_bodega se
+    # multiplicaría por el número de publicaciones (fan-out de JOINs) e inflaría
+    # el stock. Cada subquery agrega por su lado y luego se cruzan 1:1 por sku.
     conn = get_conn(tenant_id=tenant_id); cur = conn.cursor()
     cur.execute("""
         SELECT p.sku,
-               COALESCE(SUM(CASE WHEN b.tipo='propia' THEN sb.cantidad ELSE 0 END),0) AS central,
-               COUNT(DISTINCT m.id) AS n_mapeos
+               COALESCE(st.central, 0) AS central,
+               COALESCE(mp.n_mapeos, 0) AS n_mapeos
         FROM productos p
-        LEFT JOIN stock_bodega sb ON sb.sku = p.sku
-        LEFT JOIN bodegas b       ON b.codigo = sb.bodega_codigo
-        LEFT JOIN sku_mapeo_canal m ON m.sku_lusync = p.sku AND m.activo = TRUE
-        GROUP BY p.sku
+        LEFT JOIN (
+            SELECT sb.sku, SUM(sb.cantidad) AS central
+            FROM stock_bodega sb
+            JOIN bodegas b ON b.codigo = sb.bodega_codigo
+            WHERE b.tipo = 'propia'
+            GROUP BY sb.sku
+        ) st ON st.sku = p.sku
+        LEFT JOIN (
+            SELECT sku_lusync, COUNT(*) AS n_mapeos
+            FROM sku_mapeo_canal
+            WHERE activo = TRUE
+            GROUP BY sku_lusync
+        ) mp ON mp.sku_lusync = p.sku
         ORDER BY p.sku
     """)
     filas = cur.fetchall()
