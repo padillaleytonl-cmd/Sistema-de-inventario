@@ -18709,9 +18709,17 @@ def admin_test_sync_sku():
         cur.close(); conn.close()
         # Ejecutar sync directamente (NO en background)
         resultado = sincronizar_stock_marketplaces(sku, stock, contexto="test_manual")
+        # Detalle extra de MELI (log por publicación) para diagnóstico fino
+        meli_detalle = None
+        try:
+            from mercadolibre import actualizar_stock_meli
+            meli_detalle = actualizar_stock_meli(sku, stock)
+        except Exception as e_m:
+            meli_detalle = {"error": str(e_m)}
         return jsonify({
             "sku": sku,
             "stock_total_lusync": stock,
+            "meli_detalle": meli_detalle,
             "debug": {
                 "stock_disponible_bodegas_propias": suma_propias,
                 "stock_en_tabla_productos": stock_productos,
