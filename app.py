@@ -18669,6 +18669,107 @@ def config_tipificaciones_eliminar():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/admin/lusync/stock/sync-masivo-todos", methods=["GET"])
+def admin_sync_masivo_todos():
+    """Sincroniza el stock de TODOS los SKU a TODOS los canales y devuelve un
+    reporte detallado de cómo respondió cada API.
+
+    Uso:
+      ?tenant_id=N            → obligatorio
+      ?solo_con_mapeo=si      → solo SKU que tienen alguna publicación (default: si)
+      ?limite=N               → procesar solo los primeros N SKU (para pruebas)
+      ?dry_run=si             → NO publica, solo lista qué haría (default: no)
+
+    Publica el stock de CENTRAL (bodegas propias) a los canales seller, igual
+    que el sync normal. Devuelve, por canal: cuántos OK, error, sin_publicaciones.
+    """
+    from inventario import get_conn, _get_pool, cargar_productos
+
+    tenant_id = request.args.get("tenant_id", type=int)
+    if not tenant_id:
+        return jsonify({"error": "Falta tenant_id. Ej: ?tenant_id=1"}), 400
+    solo_con_mapeo = request.args.get("solo_con_mapeo", "si") == "si"
+    dry_run = request.args.get("dry_run") == "si"
+    limite = request.args.get("limite", type=int)
+
+    # Traer SKU con su stock CENTRAL (bodegas propias) y si tienen mapeo
+    conn = get_conn(tenant_id=tenant_id); cur = conn.cursor()
+    cur.execute("""
+        SELECT p.sku,
+               COALESCE(SUM(CASE WHEN b.tipo='propia' THEN sb.cantidad ELSE 0 END),0) AS central,
+               COUNT(DISTINCT m.id) AS n_mapeos
+        FROM productos p
+        LEFT JOIN stock_bodega sb ON sb.sku = p.sku
+        LEFT JOIN bodegas b       ON b.codigo = sb.bodega_codigo
+        LEFT JOIN sku_mapeo_canal m ON m.sku_lusync = p.sku AND m.activo = TRUE
+        GROUP BY p.sku
+        ORDER BY p.sku
+    """)
+    filas = cur.fetchall()
+    cur.close()
+    try:
+        _get_pool().putconn(conn)
+    except Exception:
+        conn.close()
+
+    # Filtrar y limitar
+    objetivo = []
+    for sku, central, n_mapeos in filas:
+        if solo_con_mapeo and int(n_mapeos or 0) == 0:
+            continue
+        objetivo.append((sku, int(central or 0)))
+    if limite:
+        objetivo = objetivo[:limite]
+
+    # Contadores por canal
+    canales = ["woo", "walmart", "paris", "mercadolibre", "falabella", "ripley"]
+    reporte = {c: {"ok": 0, "error": 0, "sin_publicaciones": 0, "parcial": 0} for c in canales}
+    errores_muestra = {c: [] for c in canales}
+    procesados = 0
+
+    if dry_run:
+        return jsonify({
+            "tenant_id": tenant_id,
+            "dry_run": True,
+            "skus_que_se_sincronizarian": len(objetivo),
+            "muestra": [{"sku": s, "stock_central": c} for s, c in objetivo[:20]],
+            "nota": "dry_run=si: no se publicó nada. Quita dry_run para ejecutar.",
+        })
+
+    for sku, central in objetivo:
+        try:
+            res = sincronizar_stock_marketplaces(sku, central, contexto="sync_masivo_todos")
+            procesados += 1
+            for c in canales:
+                estado = (res.get(c) or "").lower()
+                if estado.startswith("ok"):
+                    reporte[c]["ok"] += 1
+                elif estado.startswith("sin_publicaciones"):
+                    reporte[c]["sin_publicaciones"] += 1
+                elif estado.startswith("parcial"):
+                    reporte[c]["parcial"] += 1
+                    if len(errores_muestra[c]) < 5:
+                        errores_muestra[c].append(f"{sku}: {res.get(c)}")
+                elif estado.startswith("error"):
+                    reporte[c]["error"] += 1
+                    if len(errores_muestra[c]) < 5:
+                        errores_muestra[c].append(f"{sku}: {res.get(c)}")
+        except Exception as e:
+            for c in canales:
+                reporte[c]["error"] += 1
+            if len(errores_muestra["mercadolibre"]) < 5:
+                errores_muestra["mercadolibre"].append(f"{sku}: EXCEPCIÓN {str(e)[:80]}")
+
+    return jsonify({
+        "tenant_id": tenant_id,
+        "skus_procesados": procesados,
+        "reporte_por_canal": reporte,
+        "errores_muestra": {c: e for c, e in errores_muestra.items() if e},
+        "nota": "Stock publicado = CENTRAL (bodegas propias). Full no se toca. "
+                "'sin_publicaciones' = el SKU no tiene mapeo en ese canal (normal).",
+    })
+
+
 @app.route("/admin/test_sync_sku")
 def admin_test_sync_sku():
     """Debug: prueba el sync de un SKU a todos los canales y devuelve el resultado completo."""
