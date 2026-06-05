@@ -28137,21 +28137,246 @@ def admin_lusync_sii_test_rcof():
     return html
 
 
+@app.route("/admin/lusync/stock/auditar-todos", methods=["GET"])
+def admin_stock_auditar_todos():
+    """Trae TODOS los SKU con: stock total, stock por bodega, mapeo por canal y
+    un diagnóstico automático de por qué podrían publicar 0 en canales seller.
+
+    Uso:
+      ?tenant_id=N            → obligatorio
+      ?solo_sospechosos=si    → devuelve solo los que tienen algo raro (default: todos)
+      ?formato=resumen        → solo el conteo y los sospechosos (más liviano)
+
+    Para cada SKU clasifica:
+      - "ok": tiene stock en CENTRAL → publica bien en seller
+      - "sin_central_con_fulfillment": stock en fulfillment pero CENTRAL=0
+            → en seller publica 0 aunque hay stock en Full (caso Walky/S1/E-Crib)
+      - "sin_stock_en_ninguna_bodega": productos.stock>0 pero 0 en todas las bodegas
+            → stock 'fantasma' (estimado en Lusync, no asignado a bodega)
+      - "sin_stock_total": no hay stock en ningún lado (agotado real)
+      - "sin_mapeo_seller": tiene stock en CENTRAL pero no tiene publicaciones seller
+    """
+    from inventario import get_conn, _get_pool
+
+    tenant_id = request.args.get("tenant_id", type=int)
+    if not tenant_id:
+        return jsonify({
+            "error": "Falta tenant_id. Ej: /admin/lusync/stock/auditar-todos?tenant_id=1",
+        }), 400
+    solo_sospechosos = request.args.get("solo_sospechosos") == "si"
+    formato = request.args.get("formato", "completo")
+
+    conn = get_conn(tenant_id=tenant_id); cur = conn.cursor()
+
+    # Stock por bodega de todos los SKU, separando CENTRAL (propia) de fulfillment
+    cur.execute("""
+        SELECT p.sku, p.nombre, COALESCE(p.stock, 0) AS stock_total,
+               COALESCE(SUM(CASE WHEN b.tipo = 'propia'  THEN sb.cantidad ELSE 0 END), 0) AS central,
+               COALESCE(SUM(CASE WHEN b.tipo <> 'propia' THEN sb.cantidad ELSE 0 END), 0) AS fulfillment
+        FROM productos p
+        LEFT JOIN stock_bodega sb ON sb.sku = p.sku
+        LEFT JOIN bodegas b       ON b.codigo = sb.bodega_codigo
+        GROUP BY p.sku, p.nombre, p.stock
+        ORDER BY p.sku
+    """)
+    base = cur.fetchall()
+
+    # Mapeo por canal de todos los SKU (un solo query, lo agrupamos en memoria)
+    cur.execute("""
+        SELECT sku_lusync, canal, sku_canal, item_id_canal, activo
+        FROM sku_mapeo_canal
+        ORDER BY sku_lusync, canal
+    """)
+    mapeo = {}
+    for sku_l, canal, sku_c, item_id, activo in cur.fetchall():
+        mapeo.setdefault(sku_l, []).append({
+            "canal": canal, "sku_canal": sku_c,
+            "item_id_canal": item_id, "activo": activo,
+        })
+
+    cur.close()
+    try:
+        _get_pool().putconn(conn)
+    except Exception:
+        conn.close()
+
+    SELLER_CANALES = {"woocommerce", "web", "walmart", "paris",
+                      "falabella", "ripley", "hites", "mercadolibre"}
+
+    items = []
+    contadores = {}
+    for sku, nombre, stock_total, central, fulfillment in base:
+        st = int(stock_total or 0)
+        ce = int(central or 0)
+        ff = int(fulfillment or 0)
+        maps = mapeo.get(sku, [])
+        canales_mapeados = sorted({m["canal"] for m in maps if m["activo"]})
+        tiene_mapeo_seller = any(c in SELLER_CANALES for c in canales_mapeados)
+
+        # Clasificación del estado
+        if st <= 0 and ce <= 0 and ff <= 0:
+            estado = "sin_stock_total"
+        elif ce > 0:
+            estado = "sin_mapeo_seller" if not tiene_mapeo_seller else "ok"
+        elif ff > 0 and ce <= 0:
+            estado = "sin_central_con_fulfillment"
+        elif st > 0 and ce <= 0 and ff <= 0:
+            estado = "sin_stock_en_ninguna_bodega"
+        else:
+            estado = "revisar"
+
+        contadores[estado] = contadores.get(estado, 0) + 1
+
+        es_sospechoso = estado in (
+            "sin_central_con_fulfillment",
+            "sin_stock_en_ninguna_bodega",
+            "sin_mapeo_seller",
+        )
+        if solo_sospechosos and not es_sospechoso:
+            continue
+
+        item = {
+            "sku": sku,
+            "nombre": (nombre or "")[:60],
+            "stock_lusync": st,
+            "central": ce,
+            "fulfillment": ff,
+            "stock_publicaria_seller": ce,  # seller publica CENTRAL
+            "canales_mapeados": canales_mapeados,
+            "estado": estado,
+            "sospechoso": es_sospechoso,
+        }
+        if formato != "resumen":
+            item["mapeo_detalle"] = maps
+        items.append(item)
+
+    items.sort(key=lambda x: (not x["sospechoso"], x["estado"], x["sku"]))
+
+    return jsonify({
+        "tenant_id": tenant_id,
+        "total_skus": len(base),
+        "resumen_por_estado": contadores,
+        "leyenda": {
+            "ok": "Tiene stock en CENTRAL y mapeo seller → publica bien.",
+            "sin_central_con_fulfillment": "Stock en Full pero CENTRAL=0 → publica 0 en seller (caso típico Walky/S1/E-Crib).",
+            "sin_stock_en_ninguna_bodega": "stock>0 en Lusync pero 0 en bodegas → stock fantasma.",
+            "sin_mapeo_seller": "Tiene stock CENTRAL pero sin publicaciones seller activas.",
+            "sin_stock_total": "Agotado en todas las bodegas.",
+        },
+        "skus": items,
+    })
+
+
+@app.route("/admin/lusync/stock/auditar-sku", methods=["GET"])
+def admin_stock_auditar_sku():
+    """Muestra el historial completo de movimientos de un SKU, para entender
+    descuadres entre el stock físico real y el que muestra Lusync.
+
+    Uso:
+      ?tenant_id=N&sku=XXXX   → ambos obligatorios
+
+    Devuelve: stock actual (Lusync + por bodega) y la lista cronológica de
+    movimientos con stock_antes/stock_despues, para detectar dobles descuentos,
+    ventas fantasma o cargas incompletas.
+    """
+    from inventario import get_conn, _get_pool
+
+    tenant_id = request.args.get("tenant_id", type=int)
+    sku = request.args.get("sku", type=str)
+    if not tenant_id or not sku:
+        return jsonify({
+            "error": "Faltan parámetros. Requiere ?tenant_id=N&sku=XXXX",
+            "ejemplo": "/admin/lusync/stock/auditar-sku?tenant_id=1&sku=CBRMLRR001",
+        }), 400
+
+    conn = get_conn(tenant_id=tenant_id); cur = conn.cursor()
+
+    # Stock actual: productos.stock y desglose por bodega
+    cur.execute("SELECT nombre, stock FROM productos WHERE sku=%s", (sku,))
+    prow = cur.fetchone()
+    nombre = prow[0] if prow else None
+    stock_lusync = int(prow[1]) if prow and prow[1] is not None else None
+
+    cur.execute("""SELECT sb.bodega_codigo, b.tipo, sb.cantidad
+                   FROM stock_bodega sb
+                   LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo
+                   WHERE sb.sku=%s
+                   ORDER BY sb.bodega_codigo""", (sku,))
+    bodegas = [{"bodega": r[0], "tipo": r[1], "cantidad": int(r[2] or 0)}
+               for r in cur.fetchall()]
+
+    # Historial de movimientos (más reciente primero)
+    cur.execute("""SELECT id, fecha, tipo, cantidad, motivo,
+                          stock_antes, stock_despues
+                   FROM movimientos
+                   WHERE sku=%s
+                   ORDER BY fecha DESC, id DESC
+                   LIMIT 100""", (sku,))
+    movs = []
+    for r in cur.fetchall():
+        movs.append({
+            "id": r[0],
+            "fecha": r[1].isoformat() if r[1] else None,
+            "tipo": r[2],
+            "cantidad": int(r[3]) if r[3] is not None else None,
+            "motivo": (r[4] or "")[:120],
+            "stock_antes": r[5],
+            "stock_despues": r[6],
+        })
+
+    cur.close()
+    try:
+        _get_pool().putconn(conn)
+    except Exception:
+        conn.close()
+
+    total_bodegas = sum(b["cantidad"] for b in bodegas)
+    return jsonify({
+        "tenant_id": tenant_id,
+        "sku": sku,
+        "nombre": nombre,
+        "stock_lusync": stock_lusync,
+        "stock_sumando_bodegas": total_bodegas,
+        "desglose_bodegas": bodegas,
+        "alerta": ("productos.stock NO coincide con la suma de bodegas"
+                   if stock_lusync is not None and stock_lusync != total_bodegas
+                   else "consistente"),
+        "movimientos_recientes": movs,
+        "nota": "Revisa stock_antes/stock_despues para detectar dobles descuentos o saltos raros.",
+    })
+
+
 @app.route("/admin/lusync/stock/diagnostico-central", methods=["GET"])
 def admin_stock_diagnostico_central():
     """Diagnostica (y opcionalmente repara) productos cuyo stock no está
     reflejado en la bodega CENTRAL, que es la que se publica a canales seller.
 
     Síntoma que resuelve: el producto se ve con stock en Lusync pero publica 0
-    a los marketplaces porque su CENTRAL quedó desincronizada.
+    a los marketplaces porque su CENTRAL quedó desincronizada (sin estar en
+    ninguna bodega física).
 
     Uso:
-      ?solo_ver=si    → solo lista los afectados, NO modifica nada (default)
+      ?tenant_id=N    → OBLIGATORIO. Acota el diagnóstico/reparación a ese tenant.
       ?reparar=si     → reasigna CENTRAL = stock_total − stock_en_fulfillment
+                        (default: solo lectura, no modifica nada)
+
+    IMPORTANTE: el tenant_id se pasa explícito a get_conn para forzar el filtro
+    RLS por tenant. No depende de la sesión, así el resultado es siempre el del
+    tenant solicitado.
     """
-    from inventario import get_conn, set_stock_bodega
+    from inventario import get_conn, set_stock_bodega, _get_pool
+
+    tenant_id = request.args.get("tenant_id", type=int)
+    if not tenant_id:
+        return jsonify({
+            "error": "Falta el parámetro tenant_id. Es obligatorio para acotar "
+                     "el diagnóstico a un solo tenant.",
+            "ejemplo": "/admin/lusync/stock/diagnostico-central?tenant_id=1",
+        }), 400
+
     reparar = request.args.get("reparar") == "si"
-    conn = get_conn(); cur = conn.cursor()
+    # tenant_id explícito → get_conn filtra por RLS a ese tenant (no usa la sesión)
+    conn = get_conn(tenant_id=tenant_id); cur = conn.cursor()
     cur.execute("""
         SELECT p.sku, p.nombre, p.stock,
                COALESCE(sc.cantidad, 0) AS central,
@@ -28171,41 +28396,68 @@ def admin_stock_diagnostico_central():
         ORDER BY p.stock DESC
     """)
     filas = cur.fetchall()
-    cur.close(); conn.close()
+    cur.close()
+    try:
+        _get_pool().putconn(conn)
+    except Exception:
+        conn.close()
 
     afectados = []
+    bug_real = []      # stock fantasma: en Lusync pero en ninguna bodega física
+    solo_fulfillment = []  # stock está en fulfillment; CENTRAL=0 es correcto
     reparados = 0
     for sku, nombre, stock_total, central, en_ff in filas:
-        central_objetivo = max(0, int(stock_total or 0) - int(en_ff or 0))
+        st = int(stock_total or 0)
+        ff = int(en_ff or 0)
+        central_objetivo = max(0, st - ff)
         item = {
             "sku": sku, "nombre": nombre,
-            "stock_lusync": int(stock_total or 0),
+            "stock_lusync": st,
             "central_actual": int(central or 0),
-            "en_fulfillment": int(en_ff or 0),
+            "en_fulfillment": ff,
             "central_objetivo": central_objetivo,
         }
-        if reparar and central_objetivo > 0:
-            try:
-                set_stock_bodega(sku, "CENTRAL", central_objetivo)
-                # Republica el stock corregido a los canales
+        # Clasificar: si todo el stock está en fulfillment, CENTRAL=0 es correcto
+        # (en canal seller no debe publicar lo que despacha el marketplace).
+        if central_objetivo == 0:
+            item["estado"] = "ok_fulfillment"
+            item["nota"] = "Stock en fulfillment; publicar 0 en seller es correcto."
+            solo_fulfillment.append(item)
+        else:
+            item["estado"] = "bug_stock_fantasma"
+            item["nota"] = f"{central_objetivo} unidades en Lusync sin bodega física; publica 0 indebidamente."
+            bug_real.append(item)
+            if reparar:
+                cn = get_conn(tenant_id=tenant_id)
                 try:
-                    sincronizar_stock_marketplaces(sku, central_objetivo,
-                                                   contexto="reparacion_central")
-                except Exception as e_s:
-                    item["sync_error"] = str(e_s)[:100]
-                item["reparado"] = True
-                reparados += 1
-            except Exception as e:
-                item["error"] = str(e)[:100]
+                    set_stock_bodega(sku, "CENTRAL", central_objetivo)
+                    try:
+                        sincronizar_stock_marketplaces(sku, central_objetivo,
+                                                       contexto="reparacion_central")
+                    except Exception as e_s:
+                        item["sync_error"] = str(e_s)[:100]
+                    item["reparado"] = True
+                    reparados += 1
+                except Exception as e:
+                    item["error"] = str(e)[:100]
+                finally:
+                    try:
+                        _get_pool().putconn(cn)
+                    except Exception:
+                        cn.close()
         afectados.append(item)
 
     return jsonify({
+        "tenant_id": tenant_id,
         "modo": "REPARACIÓN" if reparar else "solo diagnóstico",
-        "productos_afectados": len(afectados),
+        "total_listados": len(afectados),
+        "bug_real_stock_fantasma": len(bug_real),
+        "ok_solo_fulfillment": len(solo_fulfillment),
         "reparados": reparados if reparar else 0,
-        "nota": ("Se reasignó CENTRAL = stock_total − fulfillment y se republicó a canales."
+        "nota": ("Se reparó solo el stock fantasma (CENTRAL = stock − fulfillment) y se republicó."
                  if reparar else
-                 "Solo lectura. Para reparar agrega &reparar=si a la URL."),
+                 "Solo lectura. Los 'ok_fulfillment' NO son bug. Para reparar el stock "
+                 "fantasma agrega &reparar=si."),
         "detalle": afectados,
     })
 
