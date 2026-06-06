@@ -19054,17 +19054,37 @@ def admin_test_sync_sku():
         cur.close(); conn.close()
         # Ejecutar sync directamente (NO en background)
         resultado = sincronizar_stock_marketplaces(sku, stock, contexto="test_manual")
-        # Detalle extra de MELI (log por publicación) para diagnóstico fino
-        meli_detalle = None
+        # Detalle por canal (log con el body real de cada API) para diagnóstico fino
+        detalle_canales = {}
         try:
             from mercadolibre import actualizar_stock_meli
-            meli_detalle = actualizar_stock_meli(sku, stock)
+            detalle_canales["mercadolibre"] = actualizar_stock_meli(sku, stock)
         except Exception as e_m:
-            meli_detalle = {"error": str(e_m)}
+            detalle_canales["mercadolibre"] = {"error": str(e_m)[:200]}
+        try:
+            from walmart import actualizar_stock_walmart_lusync
+            detalle_canales["walmart"] = actualizar_stock_walmart_lusync(sku, stock)
+        except Exception as e_w:
+            detalle_canales["walmart"] = {"error": str(e_w)[:200]}
+        try:
+            from paris import actualizar_stock_paris
+            detalle_canales["paris"] = actualizar_stock_paris(sku, stock)
+        except Exception as e_p:
+            detalle_canales["paris"] = {"error": str(e_p)[:200]}
+        try:
+            from ripley import actualizar_stock_ripley_lusync
+            detalle_canales["ripley"] = actualizar_stock_ripley_lusync(sku, stock)
+        except Exception as e_r:
+            detalle_canales["ripley"] = {"error": str(e_r)[:200]}
+        try:
+            from falabella import actualizar_stock_falabella_lusync
+            detalle_canales["falabella"] = actualizar_stock_falabella_lusync(sku, stock)
+        except Exception as e_f:
+            detalle_canales["falabella"] = {"error": str(e_f)[:200]}
         return jsonify({
             "sku": sku,
             "stock_total_lusync": stock,
-            "meli_detalle": meli_detalle,
+            "detalle_canales": detalle_canales,
             "debug": {
                 "stock_disponible_bodegas_propias": suma_propias,
                 "stock_en_tabla_productos": stock_productos,
