@@ -18708,6 +18708,130 @@ def config_tipificaciones_eliminar():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+def _resumen_stock(items, key_stock="stock"):
+    """Calcula resumen y ordena: primero los que están en 0 o None."""
+    en_cero = [i for i in items if not i.get(key_stock)]
+    con_stock = [i for i in items if i.get(key_stock)]
+    ordenado = en_cero + con_stock
+    return {
+        "total": len(items),
+        "con_stock": len(con_stock),
+        "en_cero_o_sin_dato": len(en_cero),
+    }, ordenado
+
+
+@app.route("/admin/lusync/stock/leer-paris", methods=["GET"])
+def admin_stock_leer_paris():
+    """Lee el stock REAL de TODAS las publicaciones de Paris.
+    ?sku=XXXX filtra uno · ?solo_cero=si muestra solo los que están en 0."""
+    sku_filtro = request.args.get("sku", type=str)
+    solo_cero = request.args.get("solo_cero") == "si"
+    try:
+        from paris import obtener_stock_paris
+        items = []
+        offset = 0
+        for _ in range(10):  # hasta 10 páginas (2000 items)
+            data = obtener_stock_paris(limite=200, offset=offset)
+            if not data:
+                break
+            raw = data.get("stock") if isinstance(data, dict) else data
+            if isinstance(raw, dict):
+                raw = raw.get("stock") or raw.get("items") or []
+            if not raw:
+                break
+            for it in raw:
+                items.append({"sku_seller": it.get("sku_seller") or it.get("sku"),
+                              "stock": it.get("quantity"),
+                              "warehouse": it.get("warehouse")})
+            if len(raw) < 200:
+                break
+            offset += 200
+        if sku_filtro:
+            items = [i for i in items if sku_filtro.lower() in str(i["sku_seller"]).lower()]
+        resumen, ordenado = _resumen_stock(items)
+        if solo_cero:
+            ordenado = [i for i in ordenado if not i.get("stock")]
+        return jsonify({"canal": "paris", "resumen": resumen, "stock": ordenado})
+    except Exception as e:
+        return jsonify({"canal": "paris", "error": str(e)[:300]}), 500
+
+
+@app.route("/admin/lusync/stock/leer-ripley", methods=["GET"])
+def admin_stock_leer_ripley():
+    """Lee el stock REAL de TODAS las ofertas de Ripley.
+    ?sku=XXXX filtra uno · ?solo_cero=si muestra solo los que están en 0."""
+    sku_filtro = request.args.get("sku", type=str)
+    solo_cero = request.args.get("solo_cero") == "si"
+    try:
+        from ripley import obtener_ofertas_ripley
+        ofertas = obtener_ofertas_ripley(max_resultados=100)
+        items = []
+        for o in (ofertas or []):
+            items.append({"shop_sku": o.get("shop_sku"),
+                          "stock": o.get("quantity"),
+                          "price": o.get("price"),
+                          "active": o.get("active")})
+        if sku_filtro:
+            items = [i for i in items if sku_filtro.lower() in str(i["shop_sku"]).lower()]
+        resumen, ordenado = _resumen_stock(items)
+        if solo_cero:
+            ordenado = [i for i in ordenado if not i.get("stock")]
+        return jsonify({"canal": "ripley", "resumen": resumen, "stock": ordenado})
+    except Exception as e:
+        return jsonify({"canal": "ripley", "error": str(e)[:300]}), 500
+
+
+@app.route("/admin/lusync/stock/leer-walmart", methods=["GET"])
+def admin_stock_leer_walmart():
+    """Lee el stock REAL de TODAS las publicaciones de Walmart.
+    ?sku=XXXX filtra uno · ?solo_cero=si muestra solo los que están en 0."""
+    sku_filtro = request.args.get("sku", type=str)
+    solo_cero = request.args.get("solo_cero") == "si"
+    try:
+        from walmart import obtener_productos_walmart
+        productos = obtener_productos_walmart(limit=50, max_paginas=5)
+        items = []
+        for p in (productos or []):
+            items.append({"sku": p.get("sku"),
+                          "stock": p.get("availableInventory") or p.get("inventory") or p.get("quantity"),
+                          "status": p.get("status") or p.get("publishedStatus"),
+                          "nombre": (p.get("productName") or "")[:40]})
+        if sku_filtro:
+            items = [i for i in items if sku_filtro.lower() in str(i["sku"]).lower()]
+        resumen, ordenado = _resumen_stock(items)
+        if solo_cero:
+            ordenado = [i for i in ordenado if not i.get("stock")]
+        return jsonify({"canal": "walmart", "resumen": resumen, "stock": ordenado})
+    except Exception as e:
+        return jsonify({"canal": "walmart", "error": str(e)[:300]}), 500
+
+
+@app.route("/admin/lusync/stock/leer-falabella", methods=["GET"])
+def admin_stock_leer_falabella():
+    """Lee el stock REAL de TODAS las publicaciones de Falabella.
+    ?sku=XXXX filtra uno · ?solo_cero=si muestra solo los que están en 0."""
+    sku_filtro = request.args.get("sku", type=str)
+    solo_cero = request.args.get("solo_cero") == "si"
+    try:
+        from falabella import obtener_productos_falabella
+        productos = obtener_productos_falabella(limit=100, offset=0, filter_status="all")
+        raw = productos if isinstance(productos, list) else (productos.get("products") if isinstance(productos, dict) else [])
+        items = []
+        for p in (raw or []):
+            items.append({"sku": p.get("SellerSku") or p.get("sku"),
+                          "stock": p.get("Quantity") or p.get("quantity") or p.get("Available"),
+                          "status": p.get("Status") or p.get("status")})
+        if sku_filtro:
+            items = [i for i in items if sku_filtro.lower() in str(i["sku"]).lower()]
+        resumen, ordenado = _resumen_stock(items)
+        if solo_cero:
+            ordenado = [i for i in ordenado if not i.get("stock")]
+        return jsonify({"canal": "falabella", "resumen": resumen, "stock": ordenado,
+                        "raw_sample": (productos if not items else None)})
+    except Exception as e:
+        return jsonify({"canal": "falabella", "error": str(e)[:300]}), 500
+
+
 @app.route("/admin/lusync/stock/set-bodega", methods=["GET"])
 def admin_stock_set_bodega():
     """Fija el stock de un SKU en una bodega específica y republica a canales.
