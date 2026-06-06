@@ -102,6 +102,18 @@ def actualizar_stock_ripley(sku, cantidad):
             "state_code": str(offer_actual.get("state_code", "11")),
             "logistic_class": (offer_actual.get("logistic_class") or {}).get("code", "")
         }
+        # ── REACTIVACIÓN automática ──
+        # Si la oferta está inactiva (active:false, típicamente por haber llegado a
+        # stock 0) y ahora mandamos stock > 0, hay que reactivarla. En Mirakl la
+        # disponibilidad se controla con available_start_date / available_end_date:
+        # una fecha de fin en el pasado deja la oferta inactiva aunque tenga stock.
+        # Al mandar stock > 0, abrimos la disponibilidad (inicio hoy, sin fin) para
+        # que la oferta vuelva a estar activa. Con stock 0 la dejamos como está.
+        if int(cantidad) > 0 and not offer_actual.get("active", True):
+            from datetime import datetime
+            offer_payload["available_start_date"] = datetime.utcnow().strftime("%Y-%m-%dT00:00:00Z")
+            offer_payload["available_end_date"] = ""  # sin fecha de fin = disponible indefinido
+            print(f"[Ripley] Reactivando oferta {sku} (estaba inactiva, ahora stock={cantidad})")
         # Si tenía discount_price activo, conservarlo
         if offer_actual.get("discount_price"):
             offer_payload["discount_price"] = offer_actual["discount_price"]
