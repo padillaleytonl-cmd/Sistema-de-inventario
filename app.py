@@ -18708,6 +18708,34 @@ def config_tipificaciones_eliminar():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/admin/lusync/stock/set-bodega", methods=["GET"])
+def admin_stock_set_bodega():
+    """Fija el stock de un SKU en una bodega específica y republica a canales.
+    Para corregir casos donde la bodega tiene un número equivocado.
+    Uso: ?tenant_id=N&sku=XXXX&bodega=CENTRAL&cantidad=0"""
+    from inventario import get_conn, _get_pool, set_stock_bodega
+    tenant_id = request.args.get("tenant_id", type=int)
+    sku = request.args.get("sku", type=str)
+    bodega = request.args.get("bodega", type=str)
+    cantidad = request.args.get("cantidad", type=int)
+    if not tenant_id or not sku or not bodega or cantidad is None:
+        return jsonify({"error": "Requiere ?tenant_id=N&sku=XXXX&bodega=CENTRAL&cantidad=N"}), 400
+    try:
+        # set_stock_bodega fija la bodega y recalcula productos.stock = suma bodegas
+        set_stock_bodega(sku, bodega, cantidad)
+        # Republicar a canales (publica CENTRAL por el fix de sincronizar)
+        sync = {}
+        try:
+            sync = sincronizar_stock_marketplaces(sku, cantidad, contexto="set_bodega_manual")
+        except Exception as e:
+            sync = {"error": str(e)[:100]}
+        return jsonify({"ok": True, "sku": sku, "bodega": bodega,
+                        "cantidad_fijada": cantidad, "resync": sync,
+                        "nota": "Bodega fijada y productos.stock recalculado. Republicado a canales."})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:200]}), 500
+
+
 @app.route("/admin/lusync/stock/auditar-todos", methods=["GET"])
 def admin_stock_auditar_todos():
     """Lista TODOS los SKU con stock por bodega, mapeo por canal y un estado
@@ -18781,6 +18809,8 @@ def admin_stock_diagnostico_central():
     if not tenant_id:
         return jsonify({"error": "Falta tenant_id. Ej: ?tenant_id=1"}), 400
     reparar = request.args.get("reparar") == "si"
+    # SKUs a excluir de la reparación (separados por coma). Ej: &excluir=C10,OTRO
+    excluir = set(s.strip() for s in (request.args.get("excluir", "") or "").split(",") if s.strip())
 
     conn = get_conn(tenant_id=tenant_id); cur = conn.cursor()
     cur.execute("""
@@ -18811,12 +18841,14 @@ def admin_stock_diagnostico_central():
                 "suma_bodegas": int(total_bod or 0),
                 "central": int(central or 0), "fulfillment": int(ff or 0),
                 "diferencia": int(stock_prod or 0) - int(total_bod or 0)}
-        if reparar:
+        if reparar and sku not in excluir:
             try:
                 _recalcular_stock_total(sku)
                 item["reparado"] = True; reparados += 1
             except Exception as e:
                 item["error"] = str(e)[:100]
+        elif reparar and sku in excluir:
+            item["excluido"] = True
         items.append(item)
 
     return jsonify({
