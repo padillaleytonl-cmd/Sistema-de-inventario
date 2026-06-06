@@ -133,9 +133,30 @@ def actualizar_stock_ripley(sku, cantidad):
             try:
                 data = res.json()
                 import_id = data.get("import_id", "?")
-                print(f"[Ripley] Stock {sku}={cantidad} OK (import_id={import_id})")
-            except:
-                pass
+                print(f"[Ripley] Stock {sku}={cantidad} encolado (import_id={import_id})")
+                # Verificar el resultado REAL del import async (Mirakl procesa en diferido).
+                # Un import_id NO garantiza que se aplicó: puede terminar FAILED.
+                if import_id and import_id != "?":
+                    import time
+                    estado_final = None
+                    for _ in range(6):  # ~6s máx esperando que procese
+                        time.sleep(1)
+                        est = consultar_estado_import_stock(import_id)
+                        if est and est.get("import_status") in ("COMPLETE", "FAILED", "INTERRUPTED"):
+                            estado_final = est
+                            break
+                    if estado_final:
+                        status = estado_final.get("import_status")
+                        ok_lines = estado_final.get("lines_in_success", "?")
+                        err_lines = estado_final.get("lines_in_error", "?")
+                        print(f"[Ripley] Import {import_id} {sku}: {status} "
+                              f"(ok={ok_lines}, error={err_lines})")
+                        if status == "FAILED" or (isinstance(err_lines, int) and err_lines > 0):
+                            # El import falló: el stock NO se aplicó realmente
+                            print(f"[Ripley] ⚠️ Import FALLÓ para {sku}: {str(estado_final)[:300]}")
+                            return False
+            except Exception as e:
+                print(f"[Ripley] no pude verificar import de {sku}: {e}")
             return True
         print(f"[Ripley] Stock {sku} ERROR {res.status_code}: {res.text[:300]}")
         return False
