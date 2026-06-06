@@ -18720,6 +18720,74 @@ def _resumen_stock(items, key_stock="stock"):
     }, ordenado
 
 
+@app.route("/admin/lusync/stock/reactivar-ripley", methods=["GET"])
+def admin_stock_reactivar_ripley():
+    """Reactiva SOLO las ofertas de Ripley que están inactivas pero tienen stock
+    CENTRAL > 0 en Lusync. Mucho más rápido que el sync masivo (procesa un puñado,
+    no los 90). Uso: ?tenant_id=N [&dry_run=si]"""
+    from inventario import get_conn, _get_pool
+    from ripley import obtener_ofertas_ripley, actualizar_stock_ripley_lusync
+    tenant_id = request.args.get("tenant_id", type=int)
+    if not tenant_id:
+        return jsonify({"error": "Falta tenant_id. Ej: ?tenant_id=1"}), 400
+    dry_run = request.args.get("dry_run") == "si"
+
+    # 1) Ofertas inactivas en Ripley
+    ofertas = obtener_ofertas_ripley(max_resultados=100)
+    inactivas = [o.get("shop_sku") for o in (ofertas or []) if not o.get("active", True)]
+
+    # 2) Mapa shop_sku(ripley) → sku_lusync, y stock CENTRAL por sku_lusync
+    conn = get_conn(tenant_id=tenant_id); cur = conn.cursor()
+    cur.execute("""
+        SELECT m.sku_canal, m.sku_lusync, COALESCE(SUM(sb.cantidad),0) AS central
+        FROM sku_mapeo_canal m
+        LEFT JOIN stock_bodega sb ON sb.sku = m.sku_lusync
+        LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo AND b.tipo='propia'
+        WHERE m.canal='ripley' AND m.activo=TRUE
+        GROUP BY m.sku_canal, m.sku_lusync
+    """)
+    # sku_canal → (sku_lusync, central)
+    info = {r[0]: (r[1], int(r[2] or 0)) for r in cur.fetchall()}
+    cur.close()
+    try: _get_pool().putconn(conn)
+    except Exception: conn.close()
+
+    # 3) Filtrar: inactivas CON stock > 0 (resolver sku_lusync)
+    a_reactivar = []
+    vistos = set()
+    for shop_sku in inactivas:
+        sku_lusync = None; cen = 0
+        if shop_sku in info:
+            sku_lusync, cen = info[shop_sku]
+        else:
+            # match parcial: shop_sku contiene el sku_canal mapeado
+            for skc, (sl, c) in info.items():
+                if skc and skc in shop_sku:
+                    sku_lusync, cen = sl, c; break
+        if sku_lusync and cen > 0 and sku_lusync not in vistos:
+            vistos.add(sku_lusync)
+            a_reactivar.append({"shop_sku": shop_sku, "sku_lusync": sku_lusync, "stock_central": cen})
+
+    if dry_run:
+        return jsonify({"canal": "ripley", "dry_run": True,
+                        "inactivas_total": len(inactivas),
+                        "a_reactivar": len(a_reactivar), "detalle": a_reactivar})
+
+    # 4) Reactivar solo esas (llamando con sku_lusync)
+    resultados = []
+    for item in a_reactivar:
+        try:
+            r = actualizar_stock_ripley_lusync(item["sku_lusync"], item["stock_central"])
+            ok = r.get("ok") if isinstance(r, dict) else bool(r)
+            resultados.append({**item, "resultado": "ok" if ok else "fail"})
+        except Exception as e:
+            resultados.append({**item, "resultado": f"error: {str(e)[:80]}"})
+
+    return jsonify({"canal": "ripley", "reactivadas": len(resultados),
+                    "detalle": resultados,
+                    "nota": "Verifica con leer-ripley?solo_cero=si que queden solo los sin stock real."})
+
+
 @app.route("/admin/lusync/stock/leer-paris", methods=["GET"])
 def admin_stock_leer_paris():
     """Lee el stock REAL de TODAS las publicaciones de Paris.
