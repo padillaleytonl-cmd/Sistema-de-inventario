@@ -145,16 +145,28 @@ def _asegurar_fecha_compra(canal, orden_id, fecha_compra, sku=None):
         print(f"[_asegurar_fecha_compra] {canal} {orden_id}: {e}")
 
 
-def sincronizar_stock_marketplaces(sku, stock, contexto="manual"):
+def sincronizar_stock_marketplaces(sku, stock=None, contexto="manual"):
     """Sincroniza el stock de un SKU con TODOS los marketplaces conectados.
 
     Args:
         sku: SKU Lusync del producto
-        stock: nuevo stock total (entero)
+        stock: IGNORADO para el cálculo (se mantiene por compatibilidad de firma).
+               El stock que se publica a los canales seller se calcula SIEMPRE
+               desde la bodega CENTRAL (bodegas propias).
         contexto: descripción para logs
 
     Returns:
         dict con resultado por canal: {"meli": "ok", "falabella": "error: ...", ...}
+
+    POR QUÉ SE IGNORA EL PARÁMETRO `stock`:
+    Había ~9 llamadas en el código que pasaban valores DISTINTOS: unas el stock
+    total (productos.stock, que incluye fulfillment), otras el de CENTRAL. Eso
+    hacía que, según qué job corriera (ventas, auto_sync periódico, cancelaciones),
+    se publicara un número inflado o inconsistente — dejando SKUs con stock
+    multiplicado (ej. publicar 212 cuando CENTRAL real es 16) o cayendo a 0.
+    Centralizar el cálculo aquí garantiza que SIEMPRE se publique el stock propio
+    (CENTRAL) a los canales seller, sin importar quién llame. Fulfillment NO se
+    toca (lo gestiona cada marketplace).
 
     REGLAS DE ÉXITO/FALLA:
     - Si la función lanza excepción → error
@@ -163,6 +175,32 @@ def sincronizar_stock_marketplaces(sku, stock, contexto="manual"):
     - Si retorna dict sin publicaciones → 'sin_publicaciones' (NO se considera error)
     - Si retorna None o algo que no es dict → ok (compatibilidad legacy)
     """
+    # Stock a publicar = SIEMPRE CENTRAL (bodegas propias), nunca el total.
+    try:
+        from inventario import get_conn, _get_pool
+        _cn = get_conn()
+        _cur = _cn.cursor()
+        _cur.execute("""
+            SELECT COALESCE(SUM(sb.cantidad), 0)
+            FROM stock_bodega sb
+            JOIN bodegas b ON b.codigo = sb.bodega_codigo
+            WHERE sb.sku = %s AND b.tipo = 'propia'
+        """, (sku,))
+        stock_publicar = int((_cur.fetchone() or [0])[0] or 0)
+        _cur.close()
+        try:
+            _get_pool().putconn(_cn)
+        except Exception:
+            _cn.close()
+    except Exception as e:
+        # Fallback defensivo: si no se pudo leer CENTRAL, usar el valor recibido
+        # (comportamiento legacy) en vez de fallar el sync por completo.
+        print(f"[Sync][{contexto}] no pude leer CENTRAL de {sku}: {e}; "
+              f"uso valor recibido={stock}")
+        stock_publicar = int(stock) if stock is not None else 0
+
+    stock_publicar = max(0, stock_publicar)
+
     resultado = {}
     canales = [
         ("woo",          actualizar_stock_woo),
@@ -172,6 +210,7 @@ def sincronizar_stock_marketplaces(sku, stock, contexto="manual"):
         ("falabella",    actualizar_stock_falabella),
         ("ripley",       actualizar_stock_ripley),
     ]
+    stock = stock_publicar  # las llamadas internas de abajo usan `stock`
     for nombre_canal, fn in canales:
         try:
             ret = fn(sku, stock)
