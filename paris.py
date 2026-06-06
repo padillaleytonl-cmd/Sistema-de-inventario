@@ -127,15 +127,29 @@ def actualizar_stock_paris(sku_lusync, cantidad):
                 json=payload,
                 timeout=15
             )
+            # Paris responde status 200 AUNQUE el SKU no exista: el error real
+            # viene DENTRO del body (errors / skusUpdated vacío). Hay que mirar
+            # el contenido, no solo el status, para no reportar un OK falso.
             ok = res.status_code in [200, 201]
-            # Loggear el body siempre para diagnosticar respuestas async que dicen 200 pero rechazan
-            print(f"[Paris Stock] SKU:{sku_paris} Qty:{cantidad} Status:{res.status_code} Body:{res.text[:400]}")
-            log.append(f"  {sku_paris}: status {res.status_code} {'OK' if ok else 'FAIL'} body:{res.text[:200]}")
+            error_body = None
             if ok:
+                try:
+                    data = res.json()
+                    errores = data.get("errors") or {}
+                    actualizados = data.get("skusUpdated") or []
+                    if errores or not actualizados:
+                        ok = False
+                        error_body = str(errores) if errores else "skusUpdated vacío (SKU no aplicado)"
+                except Exception:
+                    pass
+            print(f"[Paris Stock] SKU:{sku_paris} Qty:{cantidad} Status:{res.status_code} Body:{res.text[:400]}")
+            if ok:
+                log.append(f"  {sku_paris}: OK (qty={cantidad})")
                 exitosas += 1
             else:
+                detalle = error_body or res.text[:200]
+                log.append(f"  {sku_paris}: FAIL — {detalle}")
                 fallidas += 1
-                log.append(f"    body: {res.text[:200]}")
         except Exception as e:
             fallidas += 1
             log.append(f"  {sku_paris}: error {e}")
