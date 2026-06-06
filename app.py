@@ -18708,6 +18708,166 @@ def config_tipificaciones_eliminar():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/admin/lusync/stock/auditar-todos", methods=["GET"])
+def admin_stock_auditar_todos():
+    """Lista TODOS los SKU con stock por bodega, mapeo por canal y un estado
+    de diagnóstico. Solo lectura. Uso: ?tenant_id=N [&solo_sospechosos=si]"""
+    from inventario import get_conn, _get_pool
+    tenant_id = request.args.get("tenant_id", type=int)
+    if not tenant_id:
+        return jsonify({"error": "Falta tenant_id. Ej: ?tenant_id=1"}), 400
+    solo_sospechosos = request.args.get("solo_sospechosos") == "si"
+    formato = request.args.get("formato", "completo")
+
+    conn = get_conn(tenant_id=tenant_id); cur = conn.cursor()
+    cur.execute("""
+        SELECT p.sku, p.nombre, COALESCE(p.stock,0) AS stock_total,
+               COALESCE(st.central,0)     AS central,
+               COALESCE(st.fulfillment,0) AS fulfillment
+        FROM productos p
+        LEFT JOIN (
+            SELECT sb.sku,
+                   SUM(CASE WHEN b.tipo='propia'  THEN sb.cantidad ELSE 0 END) AS central,
+                   SUM(CASE WHEN b.tipo<>'propia' THEN sb.cantidad ELSE 0 END) AS fulfillment
+            FROM stock_bodega sb JOIN bodegas b ON b.codigo=sb.bodega_codigo
+            GROUP BY sb.sku
+        ) st ON st.sku = p.sku
+        ORDER BY p.sku
+    """)
+    base = cur.fetchall()
+    cur.execute("""SELECT sku_lusync, canal, sku_canal, item_id_canal, activo
+                   FROM sku_mapeo_canal ORDER BY sku_lusync, canal""")
+    mapeo = {}
+    for sku_l, canal, sku_c, item_id, activo in cur.fetchall():
+        mapeo.setdefault(sku_l, []).append({
+            "canal": canal, "sku_canal": sku_c,
+            "item_id_canal": item_id, "activo": activo})
+    cur.close()
+    try: _get_pool().putconn(conn)
+    except Exception: conn.close()
+
+    SELLER = {"woocommerce","web","walmart","paris","falabella","ripley","hites","mercadolibre"}
+    items = []; contadores = {}
+    for sku, nombre, stock_total, central, fulfillment in base:
+        st = int(stock_total or 0); ce = int(central or 0); ff = int(fulfillment or 0)
+        maps = mapeo.get(sku, [])
+        canales_act = sorted({m["canal"] for m in maps if m["activo"]})
+        tiene_seller = any(c in SELLER for c in canales_act)
+        if st <= 0 and ce <= 0 and ff <= 0: estado = "sin_stock_total"
+        elif ce > 0: estado = "sin_mapeo_seller" if not tiene_seller else "ok"
+        elif ff > 0 and ce <= 0: estado = "sin_central_con_fulfillment"
+        elif st > 0 and ce <= 0 and ff <= 0: estado = "sin_stock_en_ninguna_bodega"
+        else: estado = "revisar"
+        contadores[estado] = contadores.get(estado, 0) + 1
+        sospechoso = estado in ("sin_central_con_fulfillment","sin_stock_en_ninguna_bodega","sin_mapeo_seller")
+        if solo_sospechosos and not sospechoso: continue
+        item = {"sku": sku, "nombre": (nombre or "")[:60], "stock_lusync": st,
+                "central": ce, "fulfillment": ff, "stock_publicaria_seller": ce,
+                "canales_mapeados": canales_act, "estado": estado, "sospechoso": sospechoso}
+        if formato != "resumen": item["mapeo_detalle"] = maps
+        items.append(item)
+    items.sort(key=lambda x: (not x["sospechoso"], x["estado"], x["sku"]))
+    return jsonify({"tenant_id": tenant_id, "total_skus": len(base),
+                    "resumen_por_estado": contadores, "skus": items})
+
+
+@app.route("/admin/lusync/stock/diagnostico-central", methods=["GET"])
+def admin_stock_diagnostico_central():
+    """Productos cuyo productos.stock no cuadra con la suma real de bodegas
+    (stock fantasma). Repara con &reparar=si (deja productos.stock = bodegas).
+    Uso: ?tenant_id=N [&reparar=si]"""
+    from inventario import get_conn, _get_pool, _recalcular_stock_total
+    tenant_id = request.args.get("tenant_id", type=int)
+    if not tenant_id:
+        return jsonify({"error": "Falta tenant_id. Ej: ?tenant_id=1"}), 400
+    reparar = request.args.get("reparar") == "si"
+
+    conn = get_conn(tenant_id=tenant_id); cur = conn.cursor()
+    cur.execute("""
+        SELECT p.sku, p.nombre, COALESCE(p.stock,0),
+               COALESCE(st.central,0), COALESCE(st.fulfillment,0),
+               COALESCE(st.total_bodegas,0)
+        FROM productos p
+        LEFT JOIN (
+            SELECT sb.sku,
+                   SUM(CASE WHEN b.tipo='propia'  THEN sb.cantidad ELSE 0 END) AS central,
+                   SUM(CASE WHEN b.tipo<>'propia' THEN sb.cantidad ELSE 0 END) AS fulfillment,
+                   SUM(sb.cantidad) AS total_bodegas
+            FROM stock_bodega sb JOIN bodegas b ON b.codigo=sb.bodega_codigo
+            GROUP BY sb.sku
+        ) st ON st.sku = p.sku
+        WHERE COALESCE(p.stock,0) <> COALESCE(st.total_bodegas,0)
+        ORDER BY ABS(COALESCE(p.stock,0) - COALESCE(st.total_bodegas,0)) DESC
+    """)
+    filas = cur.fetchall()
+    cur.close()
+    try: _get_pool().putconn(conn)
+    except Exception: conn.close()
+
+    items = []; reparados = 0
+    for sku, nombre, stock_prod, central, ff, total_bod in filas:
+        item = {"sku": sku, "nombre": (nombre or "")[:60],
+                "productos_stock": int(stock_prod or 0),
+                "suma_bodegas": int(total_bod or 0),
+                "central": int(central or 0), "fulfillment": int(ff or 0),
+                "diferencia": int(stock_prod or 0) - int(total_bod or 0)}
+        if reparar:
+            try:
+                _recalcular_stock_total(sku)
+                item["reparado"] = True; reparados += 1
+            except Exception as e:
+                item["error"] = str(e)[:100]
+        items.append(item)
+
+    return jsonify({
+        "tenant_id": tenant_id,
+        "modo": "REPARACIÓN" if reparar else "solo diagnóstico",
+        "productos_descuadrados": len(items),
+        "reparados": reparados if reparar else 0,
+        "nota": ("Se recalculó productos.stock = suma real de bodegas."
+                 if reparar else
+                 "Solo lectura. productos.stock no cuadra con las bodegas. "
+                 "Para corregir agrega &reparar=si."),
+        "detalle": items})
+
+
+@app.route("/admin/lusync/stock/auditar-sku", methods=["GET"])
+def admin_stock_auditar_sku():
+    """Historial de movimientos y stock por bodega de un SKU.
+    Uso: ?tenant_id=N&sku=XXXX"""
+    from inventario import get_conn, _get_pool
+    tenant_id = request.args.get("tenant_id", type=int)
+    sku = request.args.get("sku", type=str)
+    if not tenant_id or not sku:
+        return jsonify({"error": "Requiere ?tenant_id=N&sku=XXXX"}), 400
+    conn = get_conn(tenant_id=tenant_id); cur = conn.cursor()
+    cur.execute("SELECT nombre, stock FROM productos WHERE sku=%s", (sku,))
+    prow = cur.fetchone()
+    cur.execute("""SELECT sb.bodega_codigo, b.tipo, sb.cantidad
+                   FROM stock_bodega sb LEFT JOIN bodegas b ON b.codigo=sb.bodega_codigo
+                   WHERE sb.sku=%s ORDER BY sb.bodega_codigo""", (sku,))
+    bodegas = [{"bodega": r[0], "tipo": r[1], "cantidad": int(r[2] or 0)} for r in cur.fetchall()]
+    movs = []
+    try:
+        cur.execute("""SELECT fecha, tipo, cantidad, motivo, stock_antes, stock_despues
+                       FROM movimientos WHERE sku=%s ORDER BY fecha DESC, id DESC LIMIT 100""", (sku,))
+        for r in cur.fetchall():
+            movs.append({"fecha": r[0].isoformat() if r[0] else None, "tipo": r[1],
+                         "cantidad": r[2], "motivo": (r[3] or "")[:120],
+                         "stock_antes": r[4], "stock_despues": r[5]})
+    except Exception as e:
+        movs = [{"error_leyendo_movimientos": str(e)[:100]}]
+    cur.close()
+    try: _get_pool().putconn(conn)
+    except Exception: conn.close()
+    total_bod = sum(b["cantidad"] for b in bodegas)
+    return jsonify({"tenant_id": tenant_id, "sku": sku,
+        "nombre": prow[0] if prow else None,
+        "stock_lusync": int(prow[1]) if prow and prow[1] is not None else None,
+        "stock_sumando_bodegas": total_bod, "desglose_bodegas": bodegas,
+        "movimientos_recientes": movs})
+
+
 @app.route("/admin/lusync/stock/sync-masivo-todos", methods=["GET"])
 def admin_sync_masivo_todos():
     """Sincroniza el stock de TODOS los SKU a TODOS los canales y devuelve un
