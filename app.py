@@ -18736,17 +18736,23 @@ def admin_stock_reactivar_ripley():
     ofertas = obtener_ofertas_ripley(max_resultados=100)
     inactivas = [o.get("shop_sku") for o in (ofertas or []) if not o.get("active", True)]
 
-    # 2) Mapa shop_sku(ripley) → sku_lusync, y stock CENTRAL por sku_lusync
+    # 2) Mapa shop_sku(ripley) → sku_lusync, y stock CENTRAL por sku_lusync.
+    # IMPORTANTE: el stock se calcula en subquery agregada SEPARADA para no
+    # multiplicarlo por el número de publicaciones (fan-out de JOINs).
     conn = get_conn(tenant_id=tenant_id); cur = conn.cursor()
     cur.execute("""
-        SELECT m.sku_canal, m.sku_lusync, COALESCE(SUM(sb.cantidad),0) AS central
+        SELECT m.sku_canal, m.sku_lusync, COALESCE(st.central, 0) AS central
         FROM sku_mapeo_canal m
-        LEFT JOIN stock_bodega sb ON sb.sku = m.sku_lusync
-        LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo AND b.tipo='propia'
+        LEFT JOIN (
+            SELECT sb.sku, SUM(sb.cantidad) AS central
+            FROM stock_bodega sb
+            JOIN bodegas b ON b.codigo = sb.bodega_codigo
+            WHERE b.tipo = 'propia'
+            GROUP BY sb.sku
+        ) st ON st.sku = m.sku_lusync
         WHERE m.canal='ripley' AND m.activo=TRUE
-        GROUP BY m.sku_canal, m.sku_lusync
+        GROUP BY m.sku_canal, m.sku_lusync, st.central
     """)
-    # sku_canal → (sku_lusync, central)
     info = {r[0]: (r[1], int(r[2] or 0)) for r in cur.fetchall()}
     cur.close()
     try: _get_pool().putconn(conn)
