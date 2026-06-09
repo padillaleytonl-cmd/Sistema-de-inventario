@@ -2789,69 +2789,38 @@ tbody td {
     </div>
   </div>
 
-  <!-- ── SECCIÓN MAPEO SKUs ── -->
+  <!-- ── SECCIÓN MAPEO SKUs (manual) ── -->
   <div id="sec-skumapeo" class="main" style="display:none;">
     <div class="page-header" style="margin-bottom:18px;">
       <div>
-        <div class="page-title">Mapeo de SKUs</div>
-        <div class="page-date" style="margin-top:2px;">Vincula SKUs de cada canal con tu inventario Lusync</div>
+        <div class="page-title">Mapeo de marketplaces</div>
+        <div class="page-date" style="margin-top:2px;">El producto viene de tu web. Vinculá su código en cada marketplace para que Lusync sincronice el stock.</div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <button onclick="abrirImportadorMeli()" style="padding:7px 14px;border:none;background:linear-gradient(135deg,#FFE600,#F5C800);color:#5a3800;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:700;box-shadow:0 2px 8px rgba(255,160,0,0.3);">
-          📥 Importar Excel MercadoLibre
-        </button>
-        <button onclick="abrirImportadorCanal('walmart')" style="padding:7px 14px;border:none;background:linear-gradient(135deg,#0071CE,#0055A5);color:white;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:700;box-shadow:0 2px 8px rgba(0,113,206,0.3);">
-          📥 Importar CSV Walmart
-        </button>
-        <button onclick="abrirImportadorCanal('ripley')" style="padding:7px 14px;border:none;background:linear-gradient(135deg,#E30613,#B5000F);color:white;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:700;box-shadow:0 2px 8px rgba(227,6,19,0.3);">
-          📥 Importar CSV Ripley
-        </button>
-        <button onclick="abrirImportadorCanal('falabella')" style="padding:7px 14px;border:none;background:linear-gradient(135deg,#7AB648,#5A9130);color:white;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:700;box-shadow:0 2px 8px rgba(122,182,72,0.3);">
-          📥 Importar Excel Falabella
-        </button>
-        <button onclick="abrirImportadorCanal('paris')" style="padding:7px 14px;border:none;background:linear-gradient(135deg,#004B9B,#003480);color:white;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:700;box-shadow:0 2px 8px rgba(0,75,155,0.3);">
-          📥 Importar Excel Paris
-        </button>
-        <button disabled title="Próximamente — módulo Hites no habilitado" style="padding:7px 14px;border:0.5px solid #ccc;background:#f0f0f0;color:#aaa;border-radius:8px;font-size:12px;cursor:not-allowed;display:inline-flex;align-items:center;gap:6px;font-weight:600;opacity:0.6;">
-          🔒 Importar Excel Hites <span style="font-size:9px;background:#bbb;color:white;padding:1px 6px;border-radius:10px;margin-left:2px;">Próximo</span>
-        </button>
         <select id="selPlataformaWeb" onchange="cambiarPlataformaWeb()" style="padding:7px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg);color:var(--text);">
           <option value="WooCommerce">WooCommerce</option>
           <option value="Shopify">Shopify</option>
           <option value="VTEX">VTEX</option>
           <option value="Prestashop">Prestashop</option>
           <option value="Jumpseller">Jumpseller</option>
+          <option value="Magento">Magento</option>
         </select>
-        <button onclick="abrirAutoMapeoV2()" style="padding:7px 12px;border:0.5px solid #155724;background:#D4EDDA;color:#155724;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:600;" title="Multi-publicación: 1 SKU Lusync puede tener N publicaciones por marketplace">⚡ Auto-mapeo</button>
-        <button onclick="descargarExcelMapeo()" style="padding:7px 12px;border:0.5px solid var(--border);background:var(--bg);color:var(--text);border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">↓ Excel</button>
+        <button onclick="validarMapeosLote()" id="btnValidarMapeos" style="padding:7px 12px;border:0.5px solid #0C447C;background:#E6F1FB;color:#0C447C;border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:600;" title="Verifica contra cada marketplace que los códigos existen. Procesa de a 20 SKU para no sobrecargar las APIs.">✓ Validar mapeos</button>
+        <button onclick="descargarExcelMapeo()" style="padding:7px 12px;border:0.5px solid var(--border);background:var(--bg);color:var(--text);border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">↓ Plantilla Excel</button>
         <label style="padding:7px 12px;border:0.5px solid var(--border);background:var(--bg);color:var(--text);border-radius:8px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">
-          ↑ Importar
+          ↑ Cargar Excel
           <input type="file" accept=".xlsx" onchange="importarExcelMapeo(this)" style="display:none;">
         </label>
       </div>
     </div>
 
-
-
-    <style>
-    .meli-step { display:flex;flex-direction:column;align-items:center;gap:4px;flex:0 0 auto; }
-    .meli-step-circle { width:28px;height:28px;border-radius:50%;background:var(--bg2);border:2px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--muted);transition:all .3s; }
-    .meli-step.active .meli-step-circle { background:linear-gradient(135deg,#FFE000,#FFA500);border-color:#FFA500;color:#5a3800; }
-    .meli-step.done .meli-step-circle { background:#059669;border-color:#059669;color:white; }
-    .meli-step-label { font-size:10px;color:var(--muted);white-space:nowrap; }
-    .meli-step.active .meli-step-label { color:var(--text);font-weight:600; }
-    .meli-step-line { flex:1;height:2px;background:var(--border);margin:0 8px;margin-bottom:16px;min-width:60px; }
-    .meli-tab { flex:1;padding:7px 12px;border:none;background:transparent;border-radius:7px;font-size:12px;color:var(--muted);cursor:pointer;transition:all .2s;font-weight:500; }
-    .meli-tab.active { background:var(--bg);color:var(--text);font-weight:600;box-shadow:0 1px 4px rgba(0,0,0,.1); }
-    .meli-row { display:flex;align-items:center;padding:10px 14px;border-bottom:0.5px solid var(--border);font-size:12px;gap:10px; }
-    .meli-row:last-child { border-bottom:none; }
-    .meli-row:hover { background:var(--bg2); }
-    .meli-sku-tag { font-family:monospace;font-size:11px;background:var(--bg2);padding:2px 8px;border-radius:5px;border:0.5px solid var(--border);color:var(--text); }
-    .meli-arrow { color:var(--muted);font-size:14px; }
-    .meli-dd-item:hover { background:var(--bg2); }
-    .meli-dd-list::-webkit-scrollbar { width:4px; }
-    .meli-dd-list::-webkit-scrollbar-thumb { background:var(--border);border-radius:4px; }
-    </style>
+    <div id="barraValidacionMapeo" style="display:none;align-items:center;gap:10px;margin-bottom:12px;padding:10px 14px;background:var(--bg2);border-radius:8px;">
+      <span style="font-size:16px;">✓</span>
+      <div style="flex:1;height:6px;background:var(--border);border-radius:3px;overflow:hidden;">
+        <div id="barraValidacionFill" style="width:0%;height:100%;background:#185FA5;transition:width .3s;"></div>
+      </div>
+      <span id="barraValidacionTexto" style="font-size:12px;color:var(--muted);white-space:nowrap;">0 / 0 validados</span>
+    </div>
 
     <div class="card" style="padding:0;overflow:hidden;">
       <div style="overflow-x:auto;max-height:calc(100vh - 220px);">
@@ -2860,17 +2829,15 @@ tbody td {
             <tr style="border-bottom:0.5px solid var(--border);">
               <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;min-width:130px;">SKU LUSYNC</th>
               <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;min-width:240px;">Producto</th>
-              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;min-width:140px;" id="thWeb">SKU Web</th>
               <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;min-width:140px;">SKU Walmart</th>
               <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;min-width:140px;">SKU París</th>
               <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;min-width:140px;">SKU Falabella</th>
               <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;min-width:140px;">SKU Ripley</th>
               <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;min-width:160px;">SKU Mercado Libre</th>
-              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;min-width:140px;">SKU Hites</th>
             </tr>
           </thead>
           <tbody id="bodySkuMapeo">
-            <tr><td colspan="9" style="padding:40px;text-align:center;color:var(--hint);font-size:12px;">Cargando...</td></tr>
+            <tr><td colspan="7" style="padding:40px;text-align:center;color:var(--hint);font-size:12px;">Cargando...</td></tr>
           </tbody>
         </table>
       </div>
@@ -6915,14 +6882,14 @@ function cargarSkuMapeo(){
   }).catch(err => {
     console.error('Error cargando mapeo:', err);
     const body = document.getElementById('bodySkuMapeo');
-    if(body) body.innerHTML = `<tr><td colspan="9" style="padding:40px;text-align:center;color:#721C24;font-size:12px;">Error cargando mapeo: ${err.message}</td></tr>`;
+    if(body) body.innerHTML = `<tr><td colspan="7" style="padding:40px;text-align:center;color:#721C24;font-size:12px;">Error cargando mapeo: ${err.message}</td></tr>`;
   });
 }
 
 function renderTablaSkuMapeo(){
   const body = document.getElementById('bodySkuMapeo');
   if(!_mapeoCache.length){
-    body.innerHTML = '<tr><td colspan="9" style="padding:40px;text-align:center;color:var(--hint);font-size:12px;">No hay productos. Crea productos primero en Inventario.</td></tr>';
+    body.innerHTML = '<tr><td colspan="7" style="padding:40px;text-align:center;color:var(--hint);font-size:12px;">No hay productos. Los productos se importan desde tu web.</td></tr>';
     return;
   }
   body.innerHTML = _mapeoCache.map(m => {
@@ -6937,13 +6904,11 @@ function renderTablaSkuMapeo(){
         ${m.sku_lusync}${badgePubs}
       </td>
       <td style="padding:8px 12px;color:var(--text);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px;" title="${m.nombre}">${m.nombre}</td>
-      ${renderCeldaSku(m.sku_lusync, 'sku_web', m.sku_web, conteo.web)}
       ${renderCeldaSku(m.sku_lusync, 'sku_walmart', m.sku_walmart, conteo.walmart)}
       ${renderCeldaSku(m.sku_lusync, 'sku_paris', m.sku_paris, conteo.paris)}
       ${renderCeldaSku(m.sku_lusync, 'sku_falabella', m.sku_falabella, conteo.falabella)}
       ${renderCeldaSku(m.sku_lusync, 'sku_ripley', m.sku_ripley, conteo.ripley)}
       ${renderCeldaSku(m.sku_lusync, 'sku_mercadolibre', m.sku_mercadolibre, conteo.mercadolibre)}
-      ${renderCeldaSku(m.sku_lusync, 'sku_hites', m.sku_hites, conteo.hites)}
     </tr>
   `;}).join('');
 }
@@ -6975,6 +6940,74 @@ function onChangeSkuMapeo(skuLusync, campo, valor){
   if(!_mapeoEditando[skuLusync]) _mapeoEditando[skuLusync] = {};
   _mapeoEditando[skuLusync][campo] = valor;
 }
+
+// ── VALIDACIÓN MASIVA DE MAPEOS (de a 20 SKU para no sobrecargar las APIs) ──
+const _CANALES_VALIDABLES = ['walmart','paris','falabella','ripley'];
+
+async function validarMapeosLote(){
+  const btn = document.getElementById('btnValidarMapeos');
+  const barra = document.getElementById('barraValidacionMapeo');
+  const fill = document.getElementById('barraValidacionFill');
+  const texto = document.getElementById('barraValidacionTexto');
+  if(btn) btn.disabled = true;
+  if(barra) barra.style.display = 'flex';
+
+  // SKU que tienen al menos un código de marketplace cargado
+  const filas = _mapeoCache.filter(m =>
+    _CANALES_VALIDABLES.some(c => (m['sku_'+c] || '').trim())
+  );
+  const total = filas.length;
+  let hechos = 0;
+
+  // Procesar en lotes de 20
+  for(let i = 0; i < filas.length; i += 20){
+    const lote = filas.slice(i, i + 20);
+    await Promise.all(lote.map(async (m) => {
+      for(const canal of _CANALES_VALIDABLES){
+        const codigo = (m['sku_'+canal] || '').trim();
+        if(!codigo) continue;
+        try{
+          const r = await fetch(`/admin/lusync/stock/validar-mapeo?canal=${canal}&sku_canal=${encodeURIComponent(codigo)}`).then(x=>x.json());
+          pintarEstadoCelda(m.sku_lusync, 'sku_'+canal, r);
+        }catch(e){ /* silencioso: no bloquea el lote */ }
+      }
+      hechos++;
+      if(fill) fill.style.width = Math.round(hechos/total*100) + '%';
+      if(texto) texto.textContent = `${hechos} / ${total} validados`;
+    }));
+  }
+
+  if(texto) texto.textContent = `✓ ${total} SKU validados`;
+  if(btn) btn.disabled = false;
+}
+
+function pintarEstadoCelda(skuLusync, campo, resultado){
+  const id = `mp_${skuLusync}_${campo}`.replace(/[^a-zA-Z0-9_]/g,'_');
+  const input = document.getElementById(id);
+  if(!input) return;
+  // Quitar indicador previo
+  const prev = input.parentElement.querySelector('.val-estado');
+  if(prev) prev.remove();
+
+  let icono, color, titulo;
+  if(resultado.existe && resultado.sugerencias && resultado.sugerencias.length && resultado.sugerencias[0] !== input.value.trim()){
+    icono = '⚠'; color = '#BA7517'; titulo = resultado.recomendacion || `Usar ${resultado.sugerencias[0]}`;
+    input.style.borderColor = '#EF9F27';
+  } else if(resultado.existe){
+    icono = '✓'; color = '#0F6E56'; titulo = 'Válido en el canal';
+    input.style.borderColor = 'transparent';
+  } else {
+    icono = '✗'; color = '#A32D2D'; titulo = resultado.detalle || 'No existe en el canal';
+    input.style.borderColor = '#E24B4A';
+  }
+  const span = document.createElement('span');
+  span.className = 'val-estado';
+  span.textContent = icono;
+  span.title = titulo;
+  span.style.cssText = `margin-left:5px;font-size:12px;font-weight:700;color:${color};cursor:help;flex:0 0 auto;`;
+  input.parentElement.appendChild(span);
+}
+
 
 function guardarFilaSkuMapeo(skuLusync){
   // Leer valores actuales del DOM como fallback si _mapeoEditando está vacío
