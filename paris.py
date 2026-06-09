@@ -186,18 +186,30 @@ def actualizar_stock_paris_v2(sku_marketplace, cantidad):
         return False
 
 
-def obtener_stock_paris(limite=100, offset=0):
-    """Obtiene todo el stock del seller."""
+def obtener_stock_paris(limite=100, offset=0, sku_seller=None, sku=None, sku_parent=None, with_stock=None):
+    """Obtiene el stock del seller desde /v2/stock.
+
+    Parámetros de filtro (según doc Paris):
+      sku_seller: uno o varios seller sku separados por coma (ej: ABC-1,DEF-2)
+      sku: SKU interno Paris con sufijo (ej: MK00L68E8A-1)
+      sku_parent: SKU padre Paris (ej: MK00L68E8A)
+      with_stock: True devuelve solo los que tienen stock
+    """
     try:
+        params = {"limit": limite, "offset": offset}
+        if sku_seller: params["skuSeller"] = sku_seller
+        if sku:        params["sku"] = sku
+        if sku_parent: params["skuParent"] = sku_parent
+        if with_stock is not None: params["withStock"] = str(with_stock).lower()
         res = requests.get(
             f"{PARIS_BASE_URL}/v2/stock",
             headers=paris_headers(),
-            params={"limit": limite, "offset": offset},
+            params=params,
             timeout=15
         )
         if res.status_code == 200:
             return res.json()
-        print(f"[Paris] Error obteniendo stock: {res.status_code}")
+        print(f"[Paris] Error obteniendo stock: {res.status_code} {res.text[:200]}")
         return None
     except Exception as e:
         print(f"[Paris] Error stock: {e}")

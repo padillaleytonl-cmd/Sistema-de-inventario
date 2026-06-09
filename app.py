@@ -18927,8 +18927,8 @@ def admin_stock_reactivar_ripley():
 
 @app.route("/admin/lusync/stock/leer-paris", methods=["GET"])
 def admin_stock_leer_paris():
-    """Lee el INVENTARIO REAL de Paris (/v2/stock) con el sku_seller que usa para
-    stock. ?sku=XXXX filtra · ?solo_cero=si solo los que están en 0."""
+    """Lee el INVENTARIO REAL de Paris (/v2/stock). La respuesta trae {pagging, skus[]}.
+    ?sku=XXXX filtra por seller sku · ?solo_cero=si solo los que están en 0."""
     sku_filtro = request.args.get("sku", type=str)
     solo_cero = request.args.get("solo_cero") == "si"
     try:
@@ -18938,31 +18938,29 @@ def admin_stock_leer_paris():
             data = obtener_stock_paris(limite=100, offset=off)
             if not data:
                 break
-            # La respuesta puede venir como results/stock/data/items
-            raw = (data.get("results") or data.get("stock") or data.get("data")
-                   or data.get("items") or [])
-            if isinstance(raw, dict):
-                raw = raw.get("results") or raw.get("stock") or raw.get("items") or []
+            # La doc indica que la respuesta es {pagging:{...}, skus:[...]}
+            raw = data.get("skus") or data.get("results") or data.get("stock") or []
             if not raw:
                 break
             for it in raw:
                 items.append({
-                    "sku": it.get("sku") or it.get("offer_sku"),
-                    "sku_seller": it.get("sku_seller") or it.get("seller_sku") or it.get("reference"),
+                    "sku": it.get("sku"),
+                    "sku_seller": it.get("sku_seller") or it.get("skuSeller") or it.get("seller_sku"),
+                    "sku_parent": it.get("sku_parent") or it.get("skuParent"),
                     "stock": it.get("quantity") or it.get("stock"),
-                    "warehouse": it.get("warehouse"),
+                    "estado": it.get("status") or it.get("state"),
                 })
             if len(raw) < 100:
                 break
         if sku_filtro:
             f = sku_filtro.lower()
             items = [i for i in items if f in str(i.get("sku")).lower()
-                     or f in str(i.get("sku_seller")).lower()]
+                     or f in str(i.get("sku_seller")).lower()
+                     or f in str(i.get("sku_parent")).lower()]
         resumen, ordenado = _resumen_stock(items)
         if solo_cero:
             ordenado = [i for i in ordenado if not i.get("stock")]
-        return jsonify({"canal": "paris", "resumen": resumen, "stock": ordenado[:150],
-                        "raw_sample": (items[0] if items and sku_filtro and not ordenado else None)})
+        return jsonify({"canal": "paris", "resumen": resumen, "stock": ordenado[:150]})
     except Exception as e:
         return jsonify({"canal": "paris", "error": str(e)[:300]}), 500
 
