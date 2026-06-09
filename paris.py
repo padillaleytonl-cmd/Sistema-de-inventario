@@ -109,51 +109,66 @@ def actualizar_stock_paris(sku_lusync, cantidad):
 
     for pub in publicaciones:
         sku_paris = (pub.get("sku_canal") or "").strip()
-        if not sku_paris:
+        item_id = (pub.get("item_id_canal") or "").strip()
+        if not sku_paris and not item_id:
             fallidas += 1
-            log.append(f"  Publicación sin sku_canal, skip")
+            log.append(f"  Publicación sin sku_canal ni item_id, skip")
             continue
 
-        try:
-            payload = {
-                "skus": [{
-                    "sku_seller": sku_paris,
-                    "quantity": int(cantidad)
-                }]
-            }
-            res = requests.post(
-                f"{PARIS_BASE_URL}/v1/stock/sku-seller",
-                headers=paris_headers(),
-                json=payload,
-                timeout=15
-            )
-            # Paris responde status 200 AUNQUE el SKU no exista: el error real
-            # viene DENTRO del body (errors / skusUpdated vacío). Hay que mirar
-            # el contenido, no solo el status, para no reportar un OK falso.
-            ok = res.status_code in [200, 201]
-            error_body = None
-            if ok:
-                try:
-                    data = res.json()
-                    errores = data.get("errors") or {}
-                    actualizados = data.get("skusUpdated") or []
-                    if errores or not actualizados:
-                        ok = False
-                        error_body = str(errores) if errores else "skusUpdated vacío (SKU no aplicado)"
-                except Exception:
-                    pass
-            print(f"[Paris Stock] SKU:{sku_paris} Qty:{cantidad} Status:{res.status_code} Body:{res.text[:400]}")
-            if ok:
-                log.append(f"  {sku_paris}: OK (qty={cantidad})")
-                exitosas += 1
-            else:
-                detalle = error_body or res.text[:200]
-                log.append(f"  {sku_paris}: FAIL — {detalle}")
-                fallidas += 1
-        except Exception as e:
+        # Paris registra cada publicación con un sku_seller que PUEDE llevar
+        # sufijo de variante (-1, -2) y con un sku interno (item_id + sufijo).
+        # El endpoint /v1/stock/sku-seller exige el sku_seller EXACTO; si el
+        # mapeo no tiene el sufijo, da "Sku not found". Para ser robustos,
+        # probamos varios identificadores en orden hasta que uno funcione:
+        #   1. sku_seller tal cual está en el mapeo
+        #   2. sku_seller + "-1" (sufijo de variante más común)
+        #   3. sku interno de Paris (item_id) vía /v2/stock — identificador único
+        candidatos = []
+        if sku_paris:
+            candidatos.append(("sku-seller", sku_paris))
+            if not sku_paris.endswith(("-1", "-2", "-3", "-4")):
+                candidatos.append(("sku-seller", f"{sku_paris}-1"))
+        if item_id:
+            # /v2/stock usa el sku interno (item_id) que suele llevar -1
+            candidatos.append(("v2-sku", item_id if item_id.endswith(("-1","-2","-3","-4")) else f"{item_id}-1"))
+
+        aplicado = False
+        ultimo_detalle = ""
+        for tipo, codigo in candidatos:
+            try:
+                if tipo == "sku-seller":
+                    payload = {"skus": [{"sku_seller": codigo, "quantity": int(cantidad)}]}
+                    url = f"{PARIS_BASE_URL}/v1/stock/sku-seller"
+                else:  # v2-sku
+                    payload = {"skus": [{"sku": codigo, "quantity": int(cantidad)}]}
+                    url = f"{PARIS_BASE_URL}/v2/stock"
+                res = requests.post(url, headers=paris_headers(), json=payload, timeout=15)
+                ok = res.status_code in [200, 201]
+                if ok:
+                    try:
+                        data = res.json()
+                        errores = data.get("errors") or {}
+                        actualizados = data.get("skusUpdated") or data.get("stock") or []
+                        # skusUpdated vacío Y con errores = no aplicó
+                        if errores or (isinstance(actualizados, list) and len(actualizados) == 0 and "skusUpdated" in data):
+                            ok = False
+                            ultimo_detalle = str(errores) if errores else "no aplicado"
+                    except Exception:
+                        pass
+                print(f"[Paris Stock] {tipo}:{codigo} Qty:{cantidad} Status:{res.status_code} Body:{res.text[:300]}")
+                if ok:
+                    log.append(f"  {codigo} ({tipo}): OK (qty={cantidad})")
+                    exitosas += 1
+                    aplicado = True
+                    break
+                else:
+                    ultimo_detalle = ultimo_detalle or res.text[:150]
+            except Exception as e:
+                ultimo_detalle = str(e)[:150]
+
+        if not aplicado:
             fallidas += 1
-            log.append(f"  {sku_paris}: error {e}")
-            print(f"[Paris] Error stock {sku_paris}: {e}")
+            log.append(f"  {sku_paris or item_id}: FAIL — probé {len(candidatos)} códigos — {ultimo_detalle}")
 
     return {
         "ok": exitosas > 0,
