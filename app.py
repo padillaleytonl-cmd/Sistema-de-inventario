@@ -18720,6 +18720,161 @@ def _resumen_stock(items, key_stock="stock"):
     }, ordenado
 
 
+@app.route("/admin/lusync/stock/sin-mapear", methods=["GET"])
+def admin_stock_sin_mapear():
+    """Lista los SKU que tienen stock CENTRAL > 0 pero NO tienen mapeo en uno o
+    más canales (por lo tanto no se sincronizan ahí).
+    Uso: ?tenant_id=N [&canal=paris para filtrar un canal]"""
+    from inventario import get_conn, _get_pool
+    tenant_id = request.args.get("tenant_id", type=int)
+    canal_filtro = (request.args.get("canal") or "").strip().lower()
+    if not tenant_id:
+        return jsonify({"error": "Falta tenant_id"}), 400
+
+    canales = ["mercadolibre", "walmart", "paris", "falabella", "ripley", "woocommerce"]
+    if canal_filtro:
+        canales = [canal_filtro]
+
+    conn = get_conn(tenant_id=tenant_id); cur = conn.cursor()
+    # SKU con stock CENTRAL > 0 (subquery agregada separada para no multiplicar)
+    cur.execute("""
+        SELECT p.sku, p.nombre, COALESCE(st.central, 0) AS central
+        FROM productos p
+        LEFT JOIN (
+            SELECT sb.sku, SUM(sb.cantidad) AS central
+            FROM stock_bodega sb JOIN bodegas b ON b.codigo = sb.bodega_codigo
+            WHERE b.tipo = 'propia'
+            GROUP BY sb.sku
+        ) st ON st.sku = p.sku
+        WHERE COALESCE(st.central,0) > 0
+        ORDER BY p.sku
+    """)
+    productos = [{"sku": r[0], "nombre": r[1], "central": int(r[2] or 0)} for r in cur.fetchall()]
+
+    # Mapeos existentes por SKU+canal
+    cur.execute("""SELECT sku_lusync, canal FROM sku_mapeo_canal WHERE activo=TRUE""")
+    mapeos = {}
+    for sku_l, can in cur.fetchall():
+        mapeos.setdefault(sku_l, set()).add(can)
+    cur.close()
+    try: _get_pool().putconn(conn)
+    except Exception: conn.close()
+
+    # Para cada producto con stock, ver qué canales le faltan
+    faltantes = []
+    for p in productos:
+        mapeados = mapeos.get(p["sku"], set())
+        sin = [c for c in canales if c not in mapeados]
+        if sin:
+            faltantes.append({"sku": p["sku"], "nombre": (p["nombre"] or "")[:50],
+                              "central": p["central"], "sin_mapear_en": sin})
+
+    # Resumen por canal
+    resumen_canal = {c: 0 for c in canales}
+    for f in faltantes:
+        for c in f["sin_mapear_en"]:
+            resumen_canal[c] += 1
+
+    return jsonify({
+        "tenant_id": tenant_id,
+        "total_con_stock": len(productos),
+        "total_con_faltantes": len(faltantes),
+        "resumen_por_canal": resumen_canal,
+        "detalle": faltantes,
+        "nota": "SKU con stock propio que NO se sincronizan en los canales listados (falta mapeo)."
+    })
+
+
+@app.route("/admin/lusync/stock/validar-mapeo", methods=["GET"])
+def admin_stock_validar_mapeo():
+    """Valida que un sku_canal EXISTE realmente en el marketplace antes de mapear.
+    Evita mapeos a códigos inexistentes (que luego no sincronizan).
+    Uso: ?canal=paris&sku_canal=SDCR2021-1
+    Devuelve {existe: true/false, detalle, sugerencias[]}"""
+    canal = (request.args.get("canal") or "").strip().lower()
+    sku_canal = (request.args.get("sku_canal") or "").strip()
+    if not canal or not sku_canal:
+        return jsonify({"error": "Requiere ?canal=X&sku_canal=Y"}), 400
+
+    try:
+        existe = False
+        detalle = ""
+        sugerencias = []
+
+        if canal == "paris":
+            from paris import obtener_stock_paris
+            # Paris: el sku_seller puede llevar sufijo -1, -2. Probamos variantes.
+            candidatos = [sku_canal]
+            if not sku_canal.endswith(("-1","-2","-3","-4")):
+                candidatos.append(f"{sku_canal}-1")
+            data = obtener_stock_paris(limite=200, offset=0)
+            skus_paris = []
+            if data:
+                for it in (data.get("skus") or []):
+                    ss = it.get("sku_seller") or it.get("skuSeller")
+                    sk = it.get("sku")
+                    if ss: skus_paris.append(ss)
+                    if sk: skus_paris.append(sk)
+            for cand in candidatos:
+                if cand in skus_paris:
+                    existe = True; detalle = f"Existe en Paris como '{cand}'"; break
+            if not existe:
+                # sugerir los que empiezan parecido
+                base = sku_canal.rstrip("-1234")
+                sugerencias = [s for s in skus_paris if base[:6].lower() in str(s).lower()][:5]
+                detalle = f"No se encontró '{sku_canal}' en el inventario de Paris"
+
+        elif canal == "ripley":
+            from ripley import obtener_ofertas_ripley
+            ofertas = obtener_ofertas_ripley(max_resultados=100)
+            shop_skus = [o.get("shop_sku") for o in (ofertas or [])]
+            existe = sku_canal in shop_skus
+            detalle = "Existe en Ripley" if existe else f"No se encontró '{sku_canal}' en las ofertas de Ripley"
+            if not existe:
+                sugerencias = [s for s in shop_skus if sku_canal[:6].lower() in str(s).lower()][:5]
+
+        elif canal == "walmart":
+            from walmart import obtener_productos_walmart
+            productos = obtener_productos_walmart(limit=50, max_paginas=5)
+            skus_wm = [p.get("sku") for p in (productos or [])]
+            existe = sku_canal in skus_wm
+            detalle = "Existe en Walmart" if existe else f"No se encontró '{sku_canal}' en Walmart"
+            if not existe:
+                sugerencias = [s for s in skus_wm if sku_canal[:6].lower() in str(s).lower()][:5]
+
+        elif canal == "falabella":
+            from falabella import obtener_productos_falabella
+            productos = obtener_productos_falabella(limit=100, offset=0, filter_status="all")
+            raw = productos if isinstance(productos, list) else (productos.get("products") if isinstance(productos, dict) else [])
+            skus_fl = [(p.get("SellerSku") or p.get("sku")) for p in (raw or [])]
+            existe = sku_canal in skus_fl
+            detalle = "Existe en Falabella" if existe else f"No se encontró '{sku_canal}' en Falabella"
+            if not existe:
+                sugerencias = [s for s in skus_fl if sku_canal[:6].lower() in str(s).lower()][:5]
+
+        elif canal in ("mercadolibre", "meli"):
+            detalle = "MercadoLibre usa MLC item_id; la validación de stock confirma al sincronizar."
+            existe = sku_canal.upper().startswith("MLC") or True  # no bloqueamos MELI
+
+        elif canal in ("woocommerce", "web", "woo"):
+            detalle = "WooCommerce: validación no aplicada (sync directo)."
+            existe = True
+
+        else:
+            detalle = f"Canal '{canal}' no reconocido para validación"
+
+        return jsonify({
+            "canal": canal, "sku_canal": sku_canal,
+            "existe": existe, "detalle": detalle,
+            "sugerencias": sugerencias,
+            "recomendacion": ("OK para mapear" if existe else
+                              "Revisá el código — no existe en el canal. Ver sugerencias.")
+        })
+    except Exception as e:
+        return jsonify({"canal": canal, "error": str(e)[:300],
+                        "nota": "No se pudo validar (¿credenciales del canal?). Podés mapear igual bajo tu responsabilidad."}), 200
+
+
 @app.route("/admin/lusync/stock/verificar-skus", methods=["GET"])
 def admin_stock_verificar_skus():
     """Muestra el stock real (CENTRAL, fulfillment, total) de una lista de SKU.
