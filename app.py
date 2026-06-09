@@ -18765,27 +18765,46 @@ def admin_stock_verificar_skus():
 @app.route("/admin/lusync/stock/productos-paris", methods=["GET"])
 def admin_stock_productos_paris():
     """Lista productos publicados en Paris con su sku_seller REAL, para verificar
-    qué código usa Paris (y detectar mapeos mal). Opcional ?sku=XXXX (busca por ref)."""
+    qué código usa Paris (y detectar mapeos mal).
+    ?sku=XXXX busca por referencia · ?buscar=TEXTO filtra por nombre/offer_id en memoria."""
     sku = request.args.get("sku", type=str)
+    buscar = request.args.get("buscar", type=str)
     try:
         from paris import obtener_productos_paris
-        data = obtener_productos_paris(limite=100, offset=0, sku_seller=sku)
+        # Traer varias páginas sin filtro para poder buscar en memoria
+        todos = []
+        for off in range(0, 600, 100):
+            data = obtener_productos_paris(limite=100, offset=off, sku_seller=(sku if (sku and off==0 and False) else None))
+            if not data:
+                break
+            raw = data.get("results") or data.get("products") or data.get("data") or []
+            if not raw:
+                break
+            todos.extend(raw)
+            if len(raw) < 100:
+                break
         items = []
-        if data:
-            raw = data.get("products") or data.get("data") or data.get("results") or []
-            if isinstance(raw, dict):
-                raw = raw.get("products") or raw.get("items") or []
-            for p in (raw or []):
-                items.append({
-                    "sku_seller": p.get("sku_seller") or p.get("sellerSku") or p.get("reference") or p.get("identifier"),
-                    "offer_id": p.get("offer_id") or p.get("offerId") or p.get("id"),
-                    "nombre": (p.get("name") or p.get("title") or "")[:50],
-                    "stock": p.get("stock") or p.get("quantity"),
-                    "estado": p.get("status") or p.get("state"),
-                })
-        return jsonify({"canal": "paris", "filtro_sku": sku,
-                        "total": len(items), "productos": items,
-                        "raw_sample": data if not items else None})
+        for p in todos:
+            row = {
+                "sku_seller": p.get("sku_seller") or p.get("sellerSku") or p.get("reference") or p.get("identifier") or p.get("ref_id"),
+                "offer_id": p.get("offer_id") or p.get("offerId") or p.get("id") or p.get("product_id"),
+                "nombre": (p.get("name") or p.get("title") or p.get("product_name") or "")[:60],
+                "stock": p.get("stock") or p.get("quantity"),
+                "estado": p.get("status") or p.get("state"),
+            }
+            items.append(row)
+        # Filtros en memoria
+        if sku:
+            items = [i for i in items if sku.lower() in str(i["sku_seller"]).lower()
+                     or sku.lower() in str(i["offer_id"]).lower()]
+        if buscar:
+            items = [i for i in items if buscar.lower() in str(i["nombre"]).lower()
+                     or buscar.lower() in str(i["offer_id"]).lower()
+                     or buscar.lower() in str(i["sku_seller"]).lower()]
+        return jsonify({"canal": "paris", "filtro_sku": sku, "buscar": buscar,
+                        "total_traidos": len(todos), "total_filtrado": len(items),
+                        "productos": items[:100],
+                        "raw_sample": (todos[0] if todos and not items else None)})
     except Exception as e:
         return jsonify({"canal": "paris", "error": str(e)[:300]}), 500
 
