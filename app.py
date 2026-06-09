@@ -18720,6 +18720,76 @@ def _resumen_stock(items, key_stock="stock"):
     }, ordenado
 
 
+@app.route("/admin/lusync/stock/verificar-skus", methods=["GET"])
+def admin_stock_verificar_skus():
+    """Muestra el stock real (CENTRAL, fulfillment, total) de una lista de SKU.
+    Uso: ?tenant_id=N&skus=SDCMEA001,PBEAMR001,SDCR2021,SDCMR001,CDBRWD001"""
+    from inventario import get_conn, _get_pool
+    tenant_id = request.args.get("tenant_id", type=int)
+    skus_param = request.args.get("skus", type=str)
+    if not tenant_id or not skus_param:
+        return jsonify({"error": "Requiere ?tenant_id=N&skus=SKU1,SKU2,..."}), 400
+    skus = [s.strip() for s in skus_param.split(",") if s.strip()]
+
+    conn = get_conn(tenant_id=tenant_id); cur = conn.cursor()
+    resultado = []
+    for sku in skus:
+        cur.execute("SELECT nombre, stock FROM productos WHERE sku=%s", (sku,))
+        prow = cur.fetchone()
+        cur.execute("""
+            SELECT COALESCE(SUM(CASE WHEN b.tipo='propia'  THEN sb.cantidad ELSE 0 END),0) AS central,
+                   COALESCE(SUM(CASE WHEN b.tipo<>'propia' THEN sb.cantidad ELSE 0 END),0) AS fulfillment
+            FROM stock_bodega sb JOIN bodegas b ON b.codigo=sb.bodega_codigo
+            WHERE sb.sku=%s
+        """, (sku,))
+        srow = cur.fetchone()
+        # Mapeos por canal
+        cur.execute("""SELECT canal, sku_canal, activo FROM sku_mapeo_canal
+                       WHERE sku_lusync=%s ORDER BY canal""", (sku,))
+        maps = [{"canal": r[0], "sku_canal": r[1], "activo": r[2]} for r in cur.fetchall()]
+        resultado.append({
+            "sku": sku,
+            "nombre": (prow[0] if prow else None),
+            "productos_stock": (int(prow[1]) if prow and prow[1] is not None else None),
+            "central": int(srow[0] or 0) if srow else 0,
+            "fulfillment": int(srow[1] or 0) if srow else 0,
+            "publicaria_seller": int(srow[0] or 0) if srow else 0,
+            "mapeos": maps,
+        })
+    cur.close()
+    try: _get_pool().putconn(conn)
+    except Exception: conn.close()
+    return jsonify({"tenant_id": tenant_id, "skus": resultado})
+
+
+@app.route("/admin/lusync/stock/productos-paris", methods=["GET"])
+def admin_stock_productos_paris():
+    """Lista productos publicados en Paris con su sku_seller REAL, para verificar
+    qué código usa Paris (y detectar mapeos mal). Opcional ?sku=XXXX (busca por ref)."""
+    sku = request.args.get("sku", type=str)
+    try:
+        from paris import obtener_productos_paris
+        data = obtener_productos_paris(limite=100, offset=0, sku_seller=sku)
+        items = []
+        if data:
+            raw = data.get("products") or data.get("data") or data.get("results") or []
+            if isinstance(raw, dict):
+                raw = raw.get("products") or raw.get("items") or []
+            for p in (raw or []):
+                items.append({
+                    "sku_seller": p.get("sku_seller") or p.get("sellerSku") or p.get("reference") or p.get("identifier"),
+                    "offer_id": p.get("offer_id") or p.get("offerId") or p.get("id"),
+                    "nombre": (p.get("name") or p.get("title") or "")[:50],
+                    "stock": p.get("stock") or p.get("quantity"),
+                    "estado": p.get("status") or p.get("state"),
+                })
+        return jsonify({"canal": "paris", "filtro_sku": sku,
+                        "total": len(items), "productos": items,
+                        "raw_sample": data if not items else None})
+    except Exception as e:
+        return jsonify({"canal": "paris", "error": str(e)[:300]}), 500
+
+
 @app.route("/admin/lusync/stock/corregir-mapeo", methods=["GET"])
 def admin_stock_corregir_mapeo():
     """Corrige el sku_canal de un mapeo (cuando el código del canal está mal).
