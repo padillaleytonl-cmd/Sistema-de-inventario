@@ -18720,6 +18720,48 @@ def _resumen_stock(items, key_stock="stock"):
     }, ordenado
 
 
+@app.route("/admin/lusync/stock/corregir-mapeo", methods=["GET"])
+def admin_stock_corregir_mapeo():
+    """Corrige el sku_canal de un mapeo (cuando el código del canal está mal).
+    Uso: ?tenant_id=N&sku_lusync=XXX&canal=paris&sku_canal_nuevo=YYY
+         [&dry_run=si para ver antes de cambiar]"""
+    from inventario import get_conn, _get_pool
+    tenant_id = request.args.get("tenant_id", type=int)
+    sku_lusync = request.args.get("sku_lusync", type=str)
+    canal = request.args.get("canal", type=str)
+    sku_nuevo = request.args.get("sku_canal_nuevo", type=str)
+    dry_run = request.args.get("dry_run") == "si"
+    if not all([tenant_id, sku_lusync, canal, sku_nuevo]):
+        return jsonify({"error": "Requiere ?tenant_id=N&sku_lusync=XXX&canal=paris&sku_canal_nuevo=YYY"}), 400
+
+    conn = get_conn(tenant_id=tenant_id); cur = conn.cursor()
+    cur.execute("""SELECT id, sku_canal, item_id_canal, activo
+                   FROM sku_mapeo_canal
+                   WHERE sku_lusync=%s AND canal=%s""", (sku_lusync, canal))
+    actuales = [{"id": r[0], "sku_canal": r[1], "item_id_canal": r[2], "activo": r[3]} for r in cur.fetchall()]
+
+    if dry_run:
+        cur.close()
+        try: _get_pool().putconn(conn)
+        except Exception: conn.close()
+        return jsonify({"dry_run": True, "sku_lusync": sku_lusync, "canal": canal,
+                        "mapeos_actuales": actuales, "sku_canal_nuevo": sku_nuevo,
+                        "nota": "Quita dry_run para aplicar el cambio."})
+
+    cur.execute("""UPDATE sku_mapeo_canal SET sku_canal=%s
+                   WHERE sku_lusync=%s AND canal=%s""", (sku_nuevo, sku_lusync, canal))
+    filas = cur.rowcount
+    conn.commit()
+    cur.close()
+    try: _get_pool().putconn(conn)
+    except Exception: conn.close()
+    return jsonify({"ok": True, "sku_lusync": sku_lusync, "canal": canal,
+                    "mapeos_actualizados": filas,
+                    "sku_canal_anterior": [m["sku_canal"] for m in actuales],
+                    "sku_canal_nuevo": sku_nuevo,
+                    "nota": "Mapeo corregido. Re-sincroniza el SKU para aplicar el stock."})
+
+
 @app.route("/admin/lusync/stock/reactivar-ripley", methods=["GET"])
 def admin_stock_reactivar_ripley():
     """Reactiva SOLO las ofertas de Ripley que están inactivas pero tienen stock
