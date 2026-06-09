@@ -18817,7 +18817,14 @@ def admin_stock_validar_mapeo():
                     if sk: skus_paris.append(sk)
             for cand in candidatos:
                 if cand in skus_paris:
-                    existe = True; detalle = f"Existe en Paris como '{cand}'"; break
+                    existe = True
+                    if cand != sku_canal:
+                        # Existe pero con sufijo distinto: sugerir el exacto
+                        detalle = f"Existe en Paris como '{cand}' (no como '{sku_canal}')"
+                        sugerencias = [cand]
+                    else:
+                        detalle = f"Existe en Paris como '{cand}'"
+                    break
             if not existe:
                 # sugerir los que empiezan parecido
                 base = sku_canal.rstrip("-1234")
@@ -18863,12 +18870,19 @@ def admin_stock_validar_mapeo():
         else:
             detalle = f"Canal '{canal}' no reconocido para validación"
 
+        # Recomendación según el caso
+        if existe and sugerencias and sugerencias[0] != sku_canal:
+            recomendacion = f"Existe, pero mapeá con el código exacto: {sugerencias[0]}"
+        elif existe:
+            recomendacion = "OK para mapear"
+        else:
+            recomendacion = "Revisá el código — no existe en el canal. Ver sugerencias."
+
         return jsonify({
             "canal": canal, "sku_canal": sku_canal,
             "existe": existe, "detalle": detalle,
             "sugerencias": sugerencias,
-            "recomendacion": ("OK para mapear" if existe else
-                              "Revisá el código — no existe en el canal. Ver sugerencias.")
+            "recomendacion": recomendacion
         })
     except Exception as e:
         return jsonify({"canal": canal, "error": str(e)[:300],
