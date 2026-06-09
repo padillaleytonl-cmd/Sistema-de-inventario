@@ -63,11 +63,40 @@ def actualizar_stock_walmart(sku, cantidad):
             headers=headers,
             json=payload
         )
-        print(f"[Walmart Stock] SKU:{sku} Status:{res.status_code}")
-        return res.status_code in [200, 201, 202]
+        ok = res.status_code in [200, 201, 202]
+        if ok:
+            print(f"[Walmart Stock] SKU:{sku} Status:{res.status_code} OK")
+        else:
+            # Loguear el body del error para diagnosticar (SKU inexistente,
+            # publicación inactiva, formato, etc.)
+            print(f"[Walmart Stock] SKU:{sku} Status:{res.status_code} FAIL Body:{res.text[:400]}")
+        return ok
     except Exception as e:
         print(f"[Walmart] Error stock {sku}: {e}")
         return False
+
+
+def _actualizar_stock_walmart_detalle(sku, cantidad):
+    """Igual que actualizar_stock_walmart pero devuelve (ok, detalle) con el
+    body/status del error, para diagnóstico fino en el endpoint de test."""
+    try:
+        headers = walmart_headers()
+        headers["Content-Type"] = "application/json"
+        payload = {
+            "sku": sku,
+            "quantity": {"unit": "EACH", "amount": int(cantidad)}
+        }
+        res = requests.put(
+            f"{WALMART_BASE_URL}/v3/inventory",
+            headers=headers,
+            json=payload
+        )
+        ok = res.status_code in [200, 201, 202]
+        if ok:
+            return True, f"status {res.status_code}"
+        return False, f"status {res.status_code}: {res.text[:250]}"
+    except Exception as e:
+        return False, f"excepción: {str(e)[:200]}"
 
 
 def actualizar_stock_walmart_lusync(sku_lusync, cantidad):
@@ -101,13 +130,14 @@ def actualizar_stock_walmart_lusync(sku_lusync, cantidad):
             fallidas += 1
             log.append(f"  Publicación sin sku_canal")
             continue
-        ok = actualizar_stock_walmart(sku_wm, cantidad)
+        # Llamar capturando el detalle del error para diagnóstico
+        ok, detalle = _actualizar_stock_walmart_detalle(sku_wm, cantidad)
         if ok:
             exitosas += 1
             log.append(f"  {sku_wm}: OK")
         else:
             fallidas += 1
-            log.append(f"  {sku_wm}: FAIL")
+            log.append(f"  {sku_wm}: FAIL — {detalle}")
 
     return {
         "ok": exitosas > 0,
