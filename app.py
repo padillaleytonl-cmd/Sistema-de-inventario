@@ -92,7 +92,7 @@ app.register_blueprint(walmart_bp)
 app.register_blueprint(paris_bp)
 app.register_blueprint(ripley_bp)
 app.register_blueprint(falabella_bp)
-from facturacion.endpoint_liquidacion_bp import liquidacion_set_bp
+from facturacion.dtes.endpoint_liquidacion_bp import liquidacion_set_bp
 app.register_blueprint(liquidacion_set_bp)
 
 # ════════════════════════════════════════════════════════════════════════════
