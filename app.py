@@ -92,8 +92,10 @@ app.register_blueprint(walmart_bp)
 app.register_blueprint(paris_bp)
 app.register_blueprint(ripley_bp)
 app.register_blueprint(falabella_bp)
-from facturacion.dtes.endpoint_liquidacion_bp import liquidacion_set_bp
-app.register_blueprint(liquidacion_set_bp)
+
+# Comparador de precios de marketplaces (descarga Excel)
+from comparador_precios_mkt import comparador_precios_bp
+app.register_blueprint(comparador_precios_bp)
 
 # ════════════════════════════════════════════════════════════════════════════
 # SYNC CENTRALIZADO MULTI-MARKETPLACE
