@@ -71,15 +71,17 @@ def generar_liquidacion_xml(
             prc = float(it.get('precio_unitario', 0))
             monto = int(round(qty * prc))
         # Items afectos brutos (p.ej. línea resumen de BOLETAS a consumidor final):
-        # el monto del set incluye IVA. La LÍNEA muestra el MontoItem BRUTO tal cual
-        # del set (como las demás líneas), pero el aporte a MntNeto es el neto y el
-        # IVA incluido se acumula para el encabezado; el SII descompone boletas (39).
+        # el monto del set incluye IVA. Para que el SII cuadre la línea con el
+        # encabezado, el MontoItem debe ser CONSISTENTE con lo que aporta a MntNeto:
+        # se muestra el NETO descompuesto (no el bruto). El IVA se acumula en el
+        # encabezado. Así: suma de MontoItem afectos == MntNeto (validación SII).
         monto_linea = monto          # lo que se muestra en <MontoItem>
         aporte_neto = monto          # lo que suma a MntNeto/MntExe
         iva_extra = 0
         if es_bruto and not es_exe:
             aporte_neto = int(round(monto / (1 + IVA_PORCENTAJE / 100.0)))
             iva_extra = monto - aporte_neto
+            monto_linea = aporte_neto   # la LÍNEA muestra el neto, no el bruto
         items_norm.append({
             'nombre': it.get('nombre', 'Item')[:80],
             'cantidad': qty, 'precio_unitario': prc,
@@ -196,13 +198,21 @@ def generar_liquidacion_xml(
     tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
     tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
     # En liquidación-factura, el IVA se separa en IVA Propio (el de las comisiones
-    # del liquidador) e IVA de Terceros (el del mandante = IVA total − IVA propio).
+    # del liquidador) e IVA de Terceros (el del mandante). Regla oficial (formato
+    # DTE, tags 109/110): IVAProp < IVA e IVATerc < IVA, y IVAProp+IVATerc = IVA.
     # Orden XSD: IVA → IVAProp → IVATerc → ... → Comisiones.
     if com_norm:
         # IVA Propio = IVA de las comisiones del liquidador. IVA de Terceros =
-        # IVA total − IVA propio (el del mandante). Fórmula validada por el SII.
+        # IVA total − IVA propio (el del mandante).
         iva_prop = val_com_iva
         iva_terc = mnt_iva - iva_prop
+        # Cuando la comisión es negativa, val_com_iva < 0 haría que IVATerc supere
+        # el IVA total, lo que el SII rechaza (IVATerc debe ser < IVA). En ese caso
+        # el IVA de terceros (mandante) es el IVA total y el propio se informa en 0;
+        # el IVA negativo de la comisión ya queda reflejado en ValComIVA.
+        if iva_prop < 0:
+            iva_prop = 0
+            iva_terc = mnt_iva
         tot_parts.append(f'<IVAProp>{iva_prop}</IVAProp>')
         tot_parts.append(f'<IVATerc>{iva_terc}</IVATerc>')
     # Comisiones resumen (después de IVA/ImptoReten, antes de MntTotal)
