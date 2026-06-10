@@ -5,12 +5,14 @@ Blueprint con el endpoint del Set Liquidación-Factura SII (DTE 43, set 4829128)
 
 INTEGRACIÓN en app.py — agregar estas 2 líneas (junto a los otros blueprints):
 
-    from facturacion.endpoint_liquidacion_bp import liquidacion_set_bp
+    from endpoint_liquidacion_bp import liquidacion_set_bp
     app.register_blueprint(liquidacion_set_bp)
 
+Este archivo va en la RAÍZ del repo (al lado de app.py, walmart.py, paris.py).
 Ruta que expone:  GET /admin/lusync/sii/test-set-liquidacion
 """
 from flask import Blueprint, session, redirect, request, jsonify, Response
+from datetime import datetime
 
 liquidacion_set_bp = Blueprint("liquidacion_set_bp", __name__)
 
