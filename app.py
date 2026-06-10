@@ -547,6 +547,7 @@ _sync_locks = {
     "paris":     {"running": False},
     "ripley":    {"running": False},
     "woo":       {"running": False},
+    "autocorreccion": {"running": False},
 }
 
 
@@ -1518,10 +1519,124 @@ scheduler.add_job(_sync_paris_automatico, "interval", minutes=10, id="paris_sync
 scheduler.add_job(_sync_ripley_automatico, "interval", minutes=10, id="ripley_sync",
                   next_run_time=(datetime.now() + timedelta(seconds=480)),
                   max_instances=1, coalesce=True, misfire_grace_time=60)
+@con_tenant_default
+def _sync_autocorreccion():
+    """RED DE SEGURIDAD (cada 60 min): detecta SKU cuyo stock en un canal
+    NO coincide con el CENTRAL de Lusync y los re-sincroniza.
+
+    Enfoque eficiente: LEE el stock real de los canales que lo exponen
+    (Ripley, Paris) y solo re-publica los que DIFIEREN. Así corrige los SKU
+    que quedaron desincronizados sin depender de que tengan ventas nuevas,
+    sin machacar las APIs con updates innecesarios.
+    """
+    if _sync_locks["autocorreccion"]["running"]:
+        print("[AutoCorrección] Ya hay una corrida en curso, salto")
+        return
+    _sync_locks["autocorreccion"]["running"] = True
+    try:
+        import time as _time
+        from inventario import get_conn, _get_pool
+        print("[AutoCorrección] Iniciando detección de desvíos...")
+
+        # 1) Stock CENTRAL por SKU (subquery agregada — no multiplica)
+        conn = get_conn(tenant_id=1, is_admin=True); cur = conn.cursor()
+        cur.execute("""
+            SELECT m.sku_lusync, COALESCE(st.central,0) AS central
+            FROM sku_mapeo_canal m
+            LEFT JOIN (
+                SELECT sb.sku, SUM(sb.cantidad) AS central
+                FROM stock_bodega sb JOIN bodegas b ON b.codigo = sb.bodega_codigo
+                WHERE b.tipo='propia'
+                GROUP BY sb.sku
+            ) st ON st.sku = m.sku_lusync
+            WHERE m.activo=TRUE
+            GROUP BY m.sku_lusync, st.central
+        """)
+        central_por_sku = {r[0]: int(r[1] or 0) for r in cur.fetchall()}
+        cur.close()
+        try: _get_pool().putconn(conn)
+        except Exception: conn.close()
+
+        desvios = []  # (sku, canal, stock_canal, central)
+
+        # 2) Leer Ripley (expone quantity + active)
+        try:
+            from ripley import obtener_ofertas_ripley
+            from inventario import obtener_sku_lusync_por_canal
+            ofertas = obtener_ofertas_ripley(max_resultados=200)
+            for o in (ofertas or []):
+                shop_sku = o.get("shop_sku")
+                qty = o.get("quantity")
+                sku_lusync = obtener_sku_lusync_por_canal("ripley", shop_sku)
+                if not sku_lusync or sku_lusync not in central_por_sku:
+                    continue
+                central = central_por_sku[sku_lusync]
+                # Desvío: el canal tiene distinto que CENTRAL (y CENTRAL>0)
+                if central > 0 and qty is not None and int(qty) != central:
+                    desvios.append((sku_lusync, "ripley", qty, central))
+        except Exception as e:
+            print(f"[AutoCorrección] Ripley lectura error: {str(e)[:120]}")
+
+        # 3) Leer Paris (expone quantity por sku_seller)
+        try:
+            from paris import obtener_stock_paris
+            from inventario import obtener_sku_lusync_por_canal
+            for off in range(0, 600, 100):
+                data = obtener_stock_paris(limite=100, offset=off)
+                if not data: break
+                skus = data.get("skus") or []
+                if not skus: break
+                for it in skus:
+                    ss = it.get("sku_seller") or it.get("skuSeller")
+                    qty = it.get("quantity")
+                    if not ss: continue
+                    # quitar sufijo -N para matchear el mapeo
+                    base = ss.rsplit("-",1)[0] if ss.rsplit("-",1)[-1].isdigit() else ss
+                    sku_lusync = (obtener_sku_lusync_por_canal("paris", ss)
+                                  or obtener_sku_lusync_por_canal("paris", base))
+                    if not sku_lusync or sku_lusync not in central_por_sku:
+                        continue
+                    central = central_por_sku[sku_lusync]
+                    if central > 0 and qty is not None and int(qty) != central:
+                        desvios.append((sku_lusync, "paris", qty, central))
+                if len(skus) < 100: break
+        except Exception as e:
+            print(f"[AutoCorrección] Paris lectura error: {str(e)[:120]}")
+
+        # 4) Re-sincronizar SOLO los SKU con desvío (dedup) en lotes con pausa
+        skus_a_corregir = sorted(set(d[0] for d in desvios))
+        print(f"[AutoCorrección] Desvíos detectados: {len(desvios)} en {len(skus_a_corregir)} SKU")
+        for d in desvios[:50]:
+            print(f"[AutoCorrección]   {d[0]} en {d[1]}: canal={d[2]} vs central={d[3]}")
+
+        corregidos = 0
+        for i, sku in enumerate(skus_a_corregir):
+            try:
+                sincronizar_stock_marketplaces(sku, None, contexto="autocorreccion")
+                corregidos += 1
+            except Exception as e:
+                print(f"[AutoCorrección] error re-sync {sku}: {str(e)[:100]}")
+            if (i+1) % 10 == 0:
+                _time.sleep(2)  # pausa cada 10 para no saturar APIs
+
+        print(f"[AutoCorrección] Completado. {corregidos} SKU re-sincronizados.")
+    except Exception as e:
+        print(f"[AutoCorrección] Error general: {str(e)[:200]}")
+    finally:
+        _sync_locks["autocorreccion"]["running"] = False
+
+
 # Woo cada 10 min
 scheduler.add_job(_sync_woo_automatico, "interval", minutes=10, id="woo_sync",
                   next_run_time=(datetime.now() + timedelta(seconds=600)),
                   max_instances=1, coalesce=True, misfire_grace_time=60)
+
+# RED DE SEGURIDAD: auto-corrección de stock desincronizado cada 60 min.
+# Detecta SKU cuyo stock en un canal no coincide con CENTRAL y los re-sincroniza.
+# Arranca a los 15 min de levantar (para no competir con los syncs iniciales).
+scheduler.add_job(_sync_autocorreccion, "interval", minutes=60, id="autocorreccion_stock",
+                  next_run_time=(datetime.now() + timedelta(seconds=900)),
+                  max_instances=1, coalesce=True, misfire_grace_time=120)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -18720,6 +18835,87 @@ def _resumen_stock(items, key_stock="stock"):
     }, ordenado
 
 
+@app.route("/admin/lusync/stock/autocorregir", methods=["GET"])
+def admin_stock_autocorregir():
+    """Dispara manualmente la red de seguridad: detecta SKU desincronizados
+    (canal != CENTRAL) y los re-sincroniza. Mismo proceso que corre solo cada 60 min.
+    Uso: ?tenant_id=N [&dry_run=si para solo detectar sin corregir]"""
+    tenant_id = request.args.get("tenant_id", type=int)
+    dry_run = request.args.get("dry_run") == "si"
+    if not tenant_id:
+        return jsonify({"error": "Falta tenant_id"}), 400
+
+    from inventario import get_conn, _get_pool, obtener_sku_lusync_por_canal
+
+    # Stock CENTRAL por SKU
+    conn = get_conn(tenant_id=tenant_id); cur = conn.cursor()
+    cur.execute("""
+        SELECT m.sku_lusync, COALESCE(st.central,0) AS central
+        FROM sku_mapeo_canal m
+        LEFT JOIN (
+            SELECT sb.sku, SUM(sb.cantidad) AS central
+            FROM stock_bodega sb JOIN bodegas b ON b.codigo = sb.bodega_codigo
+            WHERE b.tipo='propia' GROUP BY sb.sku
+        ) st ON st.sku = m.sku_lusync
+        WHERE m.activo=TRUE
+        GROUP BY m.sku_lusync, st.central
+    """)
+    central_por_sku = {r[0]: int(r[1] or 0) for r in cur.fetchall()}
+    cur.close()
+    try: _get_pool().putconn(conn)
+    except Exception: conn.close()
+
+    desvios = []
+    # Ripley
+    try:
+        from ripley import obtener_ofertas_ripley
+        for o in (obtener_ofertas_ripley(max_resultados=200) or []):
+            sl = obtener_sku_lusync_por_canal("ripley", o.get("shop_sku"))
+            if sl and sl in central_por_sku:
+                c = central_por_sku[sl]; q = o.get("quantity")
+                if c > 0 and q is not None and int(q) != c:
+                    desvios.append({"sku": sl, "canal": "ripley", "canal_stock": q, "central": c})
+    except Exception as e:
+        pass
+    # Paris
+    try:
+        from paris import obtener_stock_paris
+        for off in range(0, 600, 100):
+            data = obtener_stock_paris(limite=100, offset=off)
+            if not data: break
+            skus = data.get("skus") or []
+            if not skus: break
+            for it in skus:
+                ss = it.get("sku_seller") or it.get("skuSeller")
+                if not ss: continue
+                base = ss.rsplit("-",1)[0] if ss.rsplit("-",1)[-1].isdigit() else ss
+                sl = obtener_sku_lusync_por_canal("paris", ss) or obtener_sku_lusync_por_canal("paris", base)
+                if sl and sl in central_por_sku:
+                    c = central_por_sku[sl]; q = it.get("quantity")
+                    if c > 0 and q is not None and int(q) != c:
+                        desvios.append({"sku": sl, "canal": "paris", "canal_stock": q, "central": c})
+            if len(skus) < 100: break
+    except Exception as e:
+        pass
+
+    skus_corregir = sorted(set(d["sku"] for d in desvios))
+    if dry_run:
+        return jsonify({"dry_run": True, "desvios_detectados": len(desvios),
+                        "skus_a_corregir": len(skus_corregir),
+                        "detalle": desvios})
+
+    corregidos = []
+    for sku in skus_corregir:
+        try:
+            sincronizar_stock_marketplaces(sku, None, contexto="autocorreccion_manual")
+            corregidos.append(sku)
+        except Exception as e:
+            pass
+    return jsonify({"ok": True, "desvios_detectados": len(desvios),
+                    "skus_corregidos": len(corregidos), "skus": corregidos,
+                    "detalle_desvios": desvios})
+
+
 @app.route("/admin/lusync/stock/sin-mapear", methods=["GET"])
 def admin_stock_sin_mapear():
     """Lista los SKU que tienen stock CENTRAL > 0 pero NO tienen mapeo en uno o
@@ -18731,8 +18927,11 @@ def admin_stock_sin_mapear():
     if not tenant_id:
         return jsonify({"error": "Falta tenant_id"}), 400
 
-    canales = ["mercadolibre", "walmart", "paris", "falabella", "ripley", "woocommerce"]
-    if canal_filtro:
+    # Solo los 5 MARKETPLACES necesitan mapeo. La web (Woo/Shopify/VTEX/etc.)
+    # es el MANDANTE del catálogo: los productos nacen ahí y Lusync los importa
+    # con el mismo SKU, así que el match es directo y NO requiere mapeo.
+    canales = ["mercadolibre", "walmart", "paris", "falabella", "ripley"]
+    if canal_filtro and canal_filtro not in ("web", "woocommerce", "woo"):
         canales = [canal_filtro]
 
     conn = get_conn(tenant_id=tenant_id); cur = conn.cursor()
