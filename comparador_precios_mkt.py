@@ -262,18 +262,19 @@ def _mejor_precio(precios_dict, canales):
 
 @comparador_precios_bp.route("/admin/lusync/precios/comparar", methods=["GET"])
 def comparar_precios_marketplaces():
-    # Mismo control de acceso que el resto del panel admin Lusync.
-    # (replica la lógica de @requiere_lusync_admin sin importar app.py para
-    #  evitar import circular: sesión admin o token bypass por header/query)
+    # Control de acceso: acepta sesión normal, sesión super-admin, o token bypass
+    # (misma lógica flexible que usan los otros endpoints del sistema).
     import os
-    autorizado = bool(session.get("is_lusync_admin"))
-    if not autorizado:
-        bypass_token = os.environ.get(
-            "ADMIN_BYPASS_TOKEN",
-            "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw",
-        )
-        token_recibido = request.headers.get("x-admin-token") or request.args.get("token")
-        autorizado = bool(token_recibido and token_recibido == bypass_token)
+    bypass_token = os.environ.get(
+        "ADMIN_BYPASS_TOKEN",
+        "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw",
+    )
+    token_recibido = request.headers.get("x-admin-token") or request.args.get("token")
+    autorizado = (
+        session.get("logged")
+        or session.get("is_lusync_admin")
+        or (token_recibido and token_recibido == bypass_token)
+    )
     if not autorizado:
         return redirect("/admin/lusync/login")
 
