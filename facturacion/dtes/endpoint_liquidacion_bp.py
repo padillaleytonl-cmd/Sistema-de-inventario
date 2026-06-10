@@ -148,49 +148,45 @@ def admin_lusync_sii_test_set_liquidacion():
             paso("Folios a usar", True, f"43: {folio_base} a {folio_base+3}")
 
             casos = [
-                # CASO 1 (estructura exacta del último envío, cuadra SOK)
+                # CASO 1 (glosas EXACTAS del set, con acentos donde corresponde)
                 dict(items=[
                     {'nombre': 'NETO FACTURAS', 'cantidad': 11, 'monto': 670860, 'exento': False, 'tpo_doc_liq': 30},
                     {'nombre': 'EXENTO FACTURAS', 'cantidad': 8, 'monto': 168607, 'exento': True, 'tpo_doc_liq': 30},
                     {'nombre': 'NETO FACTURAS ELECTRONICAS', 'cantidad': 51, 'monto': 109129, 'exento': False, 'tpo_doc_liq': 33},
                     {'nombre': 'EXENTO FACTURAS ELECTRONICAS', 'cantidad': 37, 'monto': 102520, 'exento': True, 'tpo_doc_liq': 33},
                 ], comisiones=None),
-                # CASO 2 — FIX: boletas en modo BRUTO (afecta, tdl=39). El MontoItem
-                # muestra el bruto del set (6228679) pero aporta el neto (5234184) al
-                # encabezado, descomponiendo el IVA. Las demás líneas igual que el envío OK.
+                # CASO 2 — glosas con acentos exactas; BOLETAS en modo bruto (afecta, tdl=39)
                 dict(items=[
-                    {'nombre': 'NETO FACTURA ELECTRONICA 4254', 'cantidad': 1, 'monto': 48705, 'exento': False, 'tpo_doc_liq': 33},
-                    {'nombre': 'EXENTO FACTURA ELECTRONICA 4254', 'cantidad': 1, 'monto': 23845, 'exento': True, 'tpo_doc_liq': 33},
-                    {'nombre': 'NETO FACTURA ELECTRONICA 4768', 'cantidad': 1, 'monto': 624461, 'exento': False, 'tpo_doc_liq': 33},
-                    {'nombre': 'EXENTO FACTURA ELECTRONICA 4768', 'cantidad': 1, 'monto': 365464, 'exento': True, 'tpo_doc_liq': 33},
-                    {'nombre': 'NETO NOTA DE CREDITO 328', 'cantidad': 1, 'monto': -50894, 'exento': False, 'tpo_doc_liq': 60},
-                    {'nombre': 'EXENTO NOTA DE CREDITO 328', 'cantidad': 1, 'monto': -18006, 'exento': True, 'tpo_doc_liq': 60},
-                    {'nombre': 'BOLETAS', 'cantidad': 1, 'monto': 6228679, 'exento': False, 'bruto': True, 'tpo_doc_liq': 39},
+                    {'nombre': 'NETO FACTURA ELECTRÓNICA 4254', 'cantidad': 1, 'monto': 48705, 'exento': False, 'tpo_doc_liq': 33},
+                    {'nombre': 'EXENTO FACTURA ELECTRÓNICA 4254', 'cantidad': 1, 'monto': 23845, 'exento': True, 'tpo_doc_liq': 33},
+                    {'nombre': 'NETO FACTURA ELECTRÓNICA 4768', 'cantidad': 1, 'monto': 624461, 'exento': False, 'tpo_doc_liq': 33},
+                    {'nombre': 'EXENTO FACTURA ELECTRÓNICA 4768', 'cantidad': 1, 'monto': 365464, 'exento': True, 'tpo_doc_liq': 33},
+                    {'nombre': 'NETO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -50894, 'exento': False, 'tpo_doc_liq': 60},
+                    {'nombre': 'EXENTO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -18006, 'exento': True, 'tpo_doc_liq': 60},
+                    {'nombre': 'BOLETAS', 'cantidad': 8262, 'monto': 6228679, 'exento': False, 'bruto': True, 'tpo_doc_liq': 39},
                 ], comisiones=None),
-                # CASO 3 (estructura exacta del último envío, cuadra SOK)
+                # CASO 3 — glosas con acentos exactas
                 dict(items=[
-                    {'nombre': 'NETO FACTURA ELECTRONICA 1515', 'cantidad': 1, 'monto': 373473, 'exento': False, 'tpo_doc_liq': 33},
-                    {'nombre': 'NETO FACTURAS ELECTRONICAS', 'cantidad': 299, 'monto': 148087, 'exento': False, 'tpo_doc_liq': 33},
-                    {'nombre': 'EXENTO FACTURAS ELECTRONICAS', 'cantidad': 51, 'monto': 115158, 'exento': True, 'tpo_doc_liq': 33},
+                    {'nombre': 'NETO FACTURA ELECTRÓNICA 1515', 'cantidad': 1, 'monto': 373473, 'exento': False, 'tpo_doc_liq': 33},
+                    {'nombre': 'NETO FACTURAS ELECTRÓNICAS', 'cantidad': 299, 'monto': 148087, 'exento': False, 'tpo_doc_liq': 33},
+                    {'nombre': 'EXENTO FACTURAS ELECTRÓNICAS', 'cantidad': 51, 'monto': 115158, 'exento': True, 'tpo_doc_liq': 33},
                 ], comisiones=[
-                    {'tipo_movim': 'C', 'glosa': 'NETO COMISION FIJA', 'neto': 3074},
-                    {'tipo_movim': 'C', 'glosa': 'NETO COMISION VARIABLE', 'neto': 7404},
+                    {'tipo_movim': 'C', 'glosa': 'NETO COMISIÓN FIJA', 'neto': 3074},
+                    {'tipo_movim': 'C', 'glosa': 'NETO COMISIÓN VARIABLE', 'neto': 7404},
                 ]),
-                # CASO 4 — estructura exacta del último envío. El fix del peso de
-                # ValComIVA (por línea = -936, no -937) está en liquidacion.py y
-                # corrige el MntTotal a 2527003 (antes 2527004 = encabezado reparaba).
+                # CASO 4 — glosas con acentos exactas; anticipo tdl=99; fix peso en liquidacion.py
                 dict(items=[
-                    {'nombre': 'NETO ANTICIPO FACTURACION', 'cantidad': 299, 'monto': 550000, 'exento': False, 'tpo_doc_liq': 99},
+                    {'nombre': 'NETO ANTICIPO FACTURACIÓN', 'cantidad': 299, 'monto': 550000, 'exento': False, 'tpo_doc_liq': 99},
                     {'nombre': 'NETO FACTURAS', 'cantidad': 51, 'monto': 353979, 'exento': False, 'tpo_doc_liq': 30},
                     {'nombre': 'EXENTO FACTURAS', 'cantidad': 57, 'monto': 208950, 'exento': True, 'tpo_doc_liq': 30},
-                    {'nombre': 'NETO FACTURAS ELECTRONICAS', 'cantidad': 44, 'monto': 106363, 'exento': False, 'tpo_doc_liq': 33},
-                    {'nombre': 'EXENTO FACTURAS ELECTRONICAS', 'cantidad': 9, 'monto': 1531568, 'exento': True, 'tpo_doc_liq': 33},
-                    {'nombre': 'NETO NOTA DE CREDITO 1981', 'cantidad': 1, 'monto': -92616, 'exento': False, 'tpo_doc_liq': 60},
-                    {'nombre': 'NETO LIQUIDACION FACTURA ELECTRONICA 4554', 'cantidad': 1, 'monto': -141710, 'exento': False, 'tpo_doc_liq': 43},
-                    {'nombre': 'EXENTO LIQUIDACION FACTURA ELECTRONICA 4554', 'cantidad': 1, 'monto': -142840, 'exento': True, 'tpo_doc_liq': 43},
+                    {'nombre': 'NETO FACTURAS ELECTRÓNICAS', 'cantidad': 44, 'monto': 106363, 'exento': False, 'tpo_doc_liq': 33},
+                    {'nombre': 'EXENTO FACTURAS ELECTRÓNICAS', 'cantidad': 9, 'monto': 1531568, 'exento': True, 'tpo_doc_liq': 33},
+                    {'nombre': 'NETO NOTA DE CRÉDITO 1981', 'cantidad': 1, 'monto': -92616, 'exento': False, 'tpo_doc_liq': 60},
+                    {'nombre': 'NETO LIQUIDACIÓN FACTURA ELECTRÓNICA 4554', 'cantidad': 1, 'monto': -141710, 'exento': False, 'tpo_doc_liq': 43},
+                    {'nombre': 'EXENTO LIQUIDACIÓN FACTURA ELECTRÓNICA 4554', 'cantidad': 1, 'monto': -142840, 'exento': True, 'tpo_doc_liq': 43},
                 ], comisiones=[
-                    {'tipo_movim': 'C', 'glosa': 'NETO COMISION CONSIGNACION', 'neto': 2156},
-                    {'tipo_movim': 'C', 'glosa': 'NETO COMISIONES LIQUIDACION FACTURA ELECTRONICA 4554', 'neto': -7086},
+                    {'tipo_movim': 'C', 'glosa': 'NETO COMISIÓN CONSIGNACION', 'neto': 2156},
+                    {'tipo_movim': 'C', 'glosa': 'NETO COMISIONES LIQUIDACIÓN FACTURA ELECTRÓNICA 4554', 'neto': -7086},
                 ]),
             ]
 

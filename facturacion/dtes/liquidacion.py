@@ -176,6 +176,14 @@ def generar_liquidacion_xml(
         f'<CmnaOrigen>{_escape_xml(emisor["cmna_origen"])}</CmnaOrigen>',
     ])
     emisor_xml = '<Emisor>' + ''.join(emisor_parts) + '</Emisor>'
+    # RUTMandante: identifica al MANDANTE (dueño de la mercadería liquidada),
+    # responsable del IVA de terceros (IVATerc). Según el XSD oficial DTE_v10,
+    # va como hijo de <Encabezado>, ENTRE </Emisor> y <Receptor> (NO dentro de
+    # Emisor). En el set de certificación el emisor liquida sus propias
+    # operaciones, por lo que por defecto se usa el RUT del emisor; se puede
+    # sobreescribir con emisor['rut_mandante'].
+    rut_mandante = str(emisor.get('rut_mandante') or emisor['rut']).replace('.', '').strip()
+    rutmandante_xml = f'<RUTMandante>{rut_mandante}</RUTMandante>'
 
     # ── 3. Receptor (liquidador/consignatario) ──
     rut_r = str(receptor['rut']).replace('.', '').strip()
@@ -222,7 +230,7 @@ def generar_liquidacion_xml(
     tot_parts.append(f'<VlrPagar>{mnt_total}</VlrPagar>')
     totales_xml = '<Totales>' + ''.join(tot_parts) + '</Totales>'
 
-    encabezado_xml = f'<Encabezado>{iddoc_xml}{emisor_xml}{receptor_xml}{totales_xml}</Encabezado>'
+    encabezado_xml = f'<Encabezado>{iddoc_xml}{emisor_xml}{rutmandante_xml}{receptor_xml}{totales_xml}</Encabezado>'
 
     # ── 5. Detalle ──
     # Estructura verificada: QtyItem con la CANTIDAD real del set y SIN PrcItem/
