@@ -14,14 +14,14 @@ def get_token():
     if _token_cache["token"] and now < _token_cache["expires_at"] - 60:
         return _token_cache["token"]
 
-    import base64
+    import base64, uuid
     credentials = base64.b64encode(f"{WALMART_CLIENT_ID}:{WALMART_CLIENT_SECRET}".encode()).decode()
     res = requests.post(
         "https://marketplace.walmartapis.com/v3/token",
         headers={
             "Authorization": f"Basic {credentials}",
             "WM_SVC.NAME": "Lusync",
-            "WM_QOS.CORRELATION_ID": "lusync-auth",
+            "WM_QOS.CORRELATION_ID": str(uuid.uuid4()),
             "WM_MARKET": "cl",
             "Accept": "application/json",
             "Content-Type": "application/x-www-form-urlencoded"
@@ -38,9 +38,12 @@ def get_token():
     return _token_cache["token"]
 
 def walmart_headers():
+    import uuid
     return {
         "WM_SVC.NAME": "Lusync",
-        "WM_QOS.CORRELATION_ID": "lusync-sync",
+        # CORRELATION_ID debe ser ÚNICO por request (lo exige la doc de Walmart).
+        # Usar un valor fijo causa rechazos intermitentes por deduplicación.
+        "WM_QOS.CORRELATION_ID": str(uuid.uuid4()),
         "WM_SEC.ACCESS_TOKEN": get_token(),
         "WM_MARKET": "cl",
         "Accept": "application/json",
