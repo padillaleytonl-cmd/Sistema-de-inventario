@@ -165,7 +165,7 @@ def admin_lusync_sii_test_set_liquidacion():
                     {'nombre': 'EXENTO FACTURA ELECTRONICA 4768', 'cantidad': 1, 'monto': 365464, 'exento': True, 'tpo_doc_liq': 33},
                     {'nombre': 'NETO NOTA DE CREDITO 328', 'cantidad': 1, 'monto': -50894, 'exento': False, 'tpo_doc_liq': 60},
                     {'nombre': 'EXENTO NOTA DE CREDITO 328', 'cantidad': 1, 'monto': -18006, 'exento': True, 'tpo_doc_liq': 60},
-                    {'nombre': 'BOLETAS', 'cantidad': 8262, 'monto': 6228679, 'exento': False, 'bruto': True, 'tpo_doc_liq': 39},
+                    {'nombre': 'BOLETAS', 'cantidad': 1, 'monto': 6228679, 'exento': False, 'bruto': True, 'tpo_doc_liq': 39},
                 ], comisiones=None),
                 # CASO 3 (estructura exacta del último envío, cuadra SOK)
                 dict(items=[
@@ -180,7 +180,7 @@ def admin_lusync_sii_test_set_liquidacion():
                 # ValComIVA (por línea = -936, no -937) está en liquidacion.py y
                 # corrige el MntTotal a 2527003 (antes 2527004 = encabezado reparaba).
                 dict(items=[
-                    {'nombre': 'NETO ANTICIPO FACTURACION', 'cantidad': 1, 'monto': 550000, 'exento': False, 'tpo_doc_liq': 30},
+                    {'nombre': 'NETO ANTICIPO FACTURACION', 'cantidad': 299, 'monto': 550000, 'exento': False, 'tpo_doc_liq': 99},
                     {'nombre': 'NETO FACTURAS', 'cantidad': 51, 'monto': 353979, 'exento': False, 'tpo_doc_liq': 30},
                     {'nombre': 'EXENTO FACTURAS', 'cantidad': 57, 'monto': 208950, 'exento': True, 'tpo_doc_liq': 30},
                     {'nombre': 'NETO FACTURAS ELECTRONICAS', 'cantidad': 44, 'monto': 106363, 'exento': False, 'tpo_doc_liq': 33},
