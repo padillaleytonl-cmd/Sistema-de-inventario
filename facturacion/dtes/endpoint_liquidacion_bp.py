@@ -163,7 +163,7 @@ def admin_lusync_sii_test_set_liquidacion():
                     {'nombre': 'EXENTO FACTURA ELECTRÓNICA 4768', 'cantidad': 1, 'monto': 365464, 'exento': True, 'tpo_doc_liq': 33},
                     {'nombre': 'NETO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -50894, 'exento': False, 'tpo_doc_liq': 60},
                     {'nombre': 'EXENTO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -18006, 'exento': True, 'tpo_doc_liq': 60},
-                    {'nombre': 'BOLETAS', 'cantidad': 1, 'monto': 6228679, 'exento': False, 'tpo_doc_liq': 35},
+                    {'nombre': 'BOLETAS', 'cantidad': 1, 'monto': 6228679, 'exento': False, 'tpo_doc_liq': 35, 'prc_item': 6228679},
                 ], comisiones=None),
                 # CASO 3 — glosas con acentos exactas
                 dict(items=[
@@ -187,7 +187,7 @@ def admin_lusync_sii_test_set_liquidacion():
                 ], comisiones=[
                     {'tipo_movim': 'C', 'glosa': 'NETO COMISIÓN CONSIGNACION', 'neto': 2156},
                     {'tipo_movim': 'C', 'glosa': 'NETO COMISIONES LIQUIDACIÓN FACTURA ELECTRÓNICA 4554', 'neto': -7086},
-                ], omitir_ipt=True),
+                ]),
             ]
 
             for idx, caso in enumerate(casos, start=1):

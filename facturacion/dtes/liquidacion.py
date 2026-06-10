@@ -88,6 +88,7 @@ def generar_liquidacion_xml(
             'monto': monto_linea, 'exento': es_exe,
             'unidad': it.get('unidad'),
             'tpo_doc_liq': it.get('tpo_doc_liq', 33),
+            'prc_item': it.get('prc_item'),
         })
         if es_exe:
             mnt_exe += aporte_neto
@@ -238,10 +239,10 @@ def generar_liquidacion_xml(
     encabezado_xml = f'<Encabezado>{iddoc_xml}{emisor_xml}{receptor_xml}{totales_xml}</Encabezado>'
 
     # ── 5. Detalle ──
-    # Estructura verificada: QtyItem con la CANTIDAD real del set y SIN PrcItem/
-    # UnmdItem. Con esta forma las líneas cuyo TpoDocLiq coincide con el documento
-    # real liquidado cuadran en la revisión del set. (Agregar PrcItem=monto con
-    # Qty=1 hacía reparar todas las líneas; quitar QtyItem también.)
+    # Estructura: QtyItem con la cantidad del set. PrcItem es OPCIONAL por línea
+    # (tag 22, obligatoriedad 3 en liquidación); va entre QtyItem y MontoItem. Se
+    # emite solo si la línea trae 'prc_item' (útil para líneas consolidadas como
+    # boletas, donde el SII puede esperar el precio unitario explícito).
     # TpoDocLiq va tras NroLinDet, antes de IndExe.
     detalles_xml = ''
     for i, it in enumerate(items_norm, start=1):
@@ -253,6 +254,8 @@ def generar_liquidacion_xml(
         linea_parts.append(f'<NmbItem>{_escape_xml(it["nombre"])}</NmbItem>')
         if it['cantidad'] is not None:
             linea_parts.append(f'<QtyItem>{_fmt_cantidad(float(it["cantidad"]))}</QtyItem>')
+        if it.get('prc_item') is not None:
+            linea_parts.append(f'<PrcItem>{_fmt_cantidad(float(it["prc_item"]))}</PrcItem>')
         linea_parts.append(f'<MontoItem>{monto}</MontoItem>')
         detalles_xml += '\n<Detalle>' + ''.join(linea_parts) + '</Detalle>'
 
