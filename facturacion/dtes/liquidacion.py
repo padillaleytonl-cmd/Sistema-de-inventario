@@ -200,8 +200,11 @@ def generar_liquidacion_xml(
     # En liquidación-factura, el IVA se separa en IVA Propio (el de las comisiones
     # del liquidador) e IVA de Terceros (el del mandante). Regla oficial (formato
     # DTE, tags 109/110): IVAProp < IVA e IVATerc < IVA, y IVAProp+IVATerc = IVA.
-    # Orden XSD: IVA → IVAProp → IVATerc → ... → Comisiones.
-    if com_norm:
+    # Ambos campos son OPCIONALES (obligatoriedad 3). Se pueden omitir con el flag
+    # 'omitir_iva_prop_terc' (útil cuando las comisiones son negativas y el reparto
+    # del SII no es el estándar). Orden XSD: IVA → IVAProp → IVATerc → ... → Comisiones.
+    omitir_ipt = bool(emisor.get('omitir_iva_prop_terc'))
+    if com_norm and not omitir_ipt:
         # IVA Propio = IVA de las comisiones del liquidador. IVA de Terceros =
         # IVA total − IVA propio (el del mandante).
         iva_prop = val_com_iva

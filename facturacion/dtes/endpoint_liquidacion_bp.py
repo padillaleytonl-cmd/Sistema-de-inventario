@@ -155,7 +155,7 @@ def admin_lusync_sii_test_set_liquidacion():
                     {'nombre': 'NETO FACTURAS ELECTRONICAS', 'cantidad': 51, 'monto': 109129, 'exento': False, 'tpo_doc_liq': 33},
                     {'nombre': 'EXENTO FACTURAS ELECTRONICAS', 'cantidad': 37, 'monto': 102520, 'exento': True, 'tpo_doc_liq': 33},
                 ], comisiones=None),
-                # CASO 2 — glosas con acentos exactas; BOLETAS en modo bruto (afecta, tdl=39)
+                # CASO 2 — boleta AFECTA ÍNTEGRA (MontoItem entero a MntNeto, MntTotal=8523935 confirmado OK por SII 05-jun); tdl=35
                 dict(items=[
                     {'nombre': 'NETO FACTURA ELECTRÓNICA 4254', 'cantidad': 1, 'monto': 48705, 'exento': False, 'tpo_doc_liq': 33},
                     {'nombre': 'EXENTO FACTURA ELECTRÓNICA 4254', 'cantidad': 1, 'monto': 23845, 'exento': True, 'tpo_doc_liq': 33},
@@ -163,7 +163,7 @@ def admin_lusync_sii_test_set_liquidacion():
                     {'nombre': 'EXENTO FACTURA ELECTRÓNICA 4768', 'cantidad': 1, 'monto': 365464, 'exento': True, 'tpo_doc_liq': 33},
                     {'nombre': 'NETO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -50894, 'exento': False, 'tpo_doc_liq': 60},
                     {'nombre': 'EXENTO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -18006, 'exento': True, 'tpo_doc_liq': 60},
-                    {'nombre': 'BOLETAS', 'cantidad': 8262, 'monto': 6228679, 'exento': False, 'bruto': True, 'tpo_doc_liq': 39},
+                    {'nombre': 'BOLETAS', 'cantidad': 1, 'monto': 6228679, 'exento': False, 'tpo_doc_liq': 35},
                 ], comisiones=None),
                 # CASO 3 — glosas con acentos exactas
                 dict(items=[
@@ -187,14 +187,17 @@ def admin_lusync_sii_test_set_liquidacion():
                 ], comisiones=[
                     {'tipo_movim': 'C', 'glosa': 'NETO COMISIÓN CONSIGNACION', 'neto': 2156},
                     {'tipo_movim': 'C', 'glosa': 'NETO COMISIONES LIQUIDACIÓN FACTURA ELECTRÓNICA 4554', 'neto': -7086},
-                ]),
+                ], omitir_ipt=True),
             ]
 
             for idx, caso in enumerate(casos, start=1):
                 folio = folio_base + (idx - 1)
+                emisor_caso = dict(emisor)
+                if caso.get("omitir_ipt"):
+                    emisor_caso["omitir_iva_prop_terc"] = True
                 r = generar_liquidacion_xml(
                     caf=caf43, folio=folio, fecha_emision=fecha,
-                    emisor=emisor, receptor=RECEPTOR_SET,
+                    emisor=emisor_caso, receptor=RECEPTOR_SET,
                     items=caso["items"], comisiones=caso["comisiones"],
                     referencias=[{
                         "tpo_doc_ref": "SET", "folio_ref": SET,
