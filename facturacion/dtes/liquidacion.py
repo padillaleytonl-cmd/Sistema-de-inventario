@@ -127,25 +127,20 @@ def generar_liquidacion_xml(
             })
             val_com_neto += c_neto
             val_com_exe += c_exe
-        # ValComIVA se calcula sobre el TOTAL neto de comisiones (round del total),
-        # no sumando el IVA de cada comisión por separado. Con comisiones de signo
-        # mixto esto evita un descuadre de redondeo de 1 peso en el encabezado.
+        # ValComIVA se calcula POR LÍNEA: se redondea el IVA de cada comisión por
+        # separado y se suman. Con comisiones de signo mixto (p.ej. C4 del set:
+        # +2156 y -7086), el round por línea da round(2156*.19)+round(-7086*.19)
+        # = 410 + (-1346) = -936, mientras que round del total daría
+        # round(-4930*.19) = -937. El SII valida el MntTotal contra el método
+        # POR LÍNEA (-936); usar el total (-937) descuadra el encabezado en 1 peso.
         if hay_iva_explicito:
             val_com_iva = com_iva_explicito
+            # El IVA por línea ya viene explícito; respetarlo tal cual.
         else:
-            val_com_iva = int(round(val_com_neto * IVA_PORCENTAJE / 100.0))
-        # Distribuir el IVA total entre las líneas de comisión para que la suma
-        # de las líneas coincida con ValComIVA (asignarlo a la última con neto≠0).
-        if not hay_iva_explicito:
-            resto = val_com_iva
-            ult = None
+            val_com_iva = 0
             for cc in com_norm:
                 cc['iva'] = int(round(cc['neto'] * IVA_PORCENTAJE / 100.0))
-                resto -= cc['iva']
-                if cc['neto'] != 0:
-                    ult = cc
-            if ult is not None and resto != 0:
-                ult['iva'] += resto
+                val_com_iva += cc['iva']
 
     # MntTotal del DTE 43 descuenta la comisión del liquidador (neto + IVA).
     mnt_total = mnt_neto + mnt_exe + mnt_iva - val_com_neto - val_com_iva
