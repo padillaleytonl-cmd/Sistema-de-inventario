@@ -1571,8 +1571,9 @@ def _sync_autocorreccion():
                 if not sku_lusync or sku_lusync not in central_por_sku:
                     continue
                 central = central_por_sku[sku_lusync]
-                # Desvío: el canal tiene distinto que CENTRAL (y CENTRAL>0)
-                if central > 0 and qty is not None and int(qty) != central:
+                # Solo es desvío si el canal devuelve un NÚMERO concreto (no null)
+                # y la diferencia es significativa (>2, para ignorar ventas en curso).
+                if central > 0 and qty is not None and abs(int(qty) - central) > 2:
                     desvios.append((sku_lusync, "ripley", qty, central))
         except Exception as e:
             print(f"[AutoCorrección] Ripley lectura error: {str(e)[:120]}")
@@ -1597,7 +1598,9 @@ def _sync_autocorreccion():
                     if not sku_lusync or sku_lusync not in central_por_sku:
                         continue
                     central = central_por_sku[sku_lusync]
-                    if central > 0 and qty is not None and int(qty) != central:
+                    # Paris a veces devuelve quantity=null en la lectura: NO es 0.
+                    # Solo marcar desvío con número concreto y diferencia significativa.
+                    if central > 0 and qty is not None and abs(int(qty) - central) > 2:
                         desvios.append((sku_lusync, "paris", qty, central))
                 if len(skus) < 100: break
         except Exception as e:
@@ -18873,7 +18876,7 @@ def admin_stock_autocorregir():
             sl = obtener_sku_lusync_por_canal("ripley", o.get("shop_sku"))
             if sl and sl in central_por_sku:
                 c = central_por_sku[sl]; q = o.get("quantity")
-                if c > 0 and q is not None and int(q) != c:
+                if c > 0 and q is not None and abs(int(q) - c) > 2:
                     desvios.append({"sku": sl, "canal": "ripley", "canal_stock": q, "central": c})
     except Exception as e:
         pass
@@ -18892,7 +18895,7 @@ def admin_stock_autocorregir():
                 sl = obtener_sku_lusync_por_canal("paris", ss) or obtener_sku_lusync_por_canal("paris", base)
                 if sl and sl in central_por_sku:
                     c = central_por_sku[sl]; q = it.get("quantity")
-                    if c > 0 and q is not None and int(q) != c:
+                    if c > 0 and q is not None and abs(int(q) - c) > 2:
                         desvios.append({"sku": sl, "canal": "paris", "canal_stock": q, "central": c})
             if len(skus) < 100: break
     except Exception as e:
