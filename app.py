@@ -124,15 +124,54 @@ def reparar_central_stock():
 
     sku = (request.args.get("sku", "") or "").strip()
     cantidad_str = (request.args.get("cantidad", "") or "").strip()
+    solo_ver = (request.args.get("ver", "") or "").lower() in ("si", "1", "true")
+
+    from inventario import (set_stock_bodega, get_stock_bodega,
+                            stock_por_bodega, cargar_productos,
+                            obtener_publicaciones_canal)
+
+    # ── Modo diagnóstico: muestra el estado sin tocar nada ──
+    if solo_ver:
+        if not sku:
+            return jsonify({"error": "Falta ?sku=... para diagnóstico"}), 400
+        try:
+            bodegas = stock_por_bodega(sku) or {}
+        except Exception as e:
+            bodegas = {"error": str(e)}
+        # stock total en productos
+        stock_total = None
+        try:
+            for p in cargar_productos():
+                if p.get("sku") == sku:
+                    stock_total = p.get("stock")
+                    break
+        except Exception:
+            pass
+        # publicaciones mapeadas por canal
+        mapeos = {}
+        for canal in ("woo", "walmart", "paris", "mercadolibre", "falabella", "ripley"):
+            try:
+                pubs = obtener_publicaciones_canal(sku, canal) or []
+                mapeos[canal] = [{"sku_canal": p.get("sku_canal"),
+                                  "item_id": p.get("item_id_canal")} for p in pubs]
+            except Exception as e:
+                mapeos[canal] = f"error: {e}"
+        return jsonify({
+            "modo": "diagnostico (no se modificó nada)",
+            "sku": sku,
+            "stock_total_productos": stock_total,
+            "stock_por_bodega": bodegas,
+            "central": bodegas.get("CENTRAL", "(sin bodega CENTRAL)"),
+            "publicaciones_por_canal": mapeos,
+        })
+
     if not sku or not cantidad_str:
-        return jsonify({"error": "Faltan parámetros. Uso: ?sku=MICO001&cantidad=35"}), 400
+        return jsonify({"error": "Faltan parámetros. Uso: ?sku=MICO001&cantidad=35  "
+                                 "(o ?sku=MICO001&ver=si para solo diagnosticar)"}), 400
     try:
         cantidad = int(cantidad_str)
     except ValueError:
         return jsonify({"error": "cantidad debe ser un número entero"}), 400
-
-    from inventario import (set_stock_bodega, get_stock_bodega,
-                            stock_por_bodega, cargar_productos)
 
     # Estado antes
     try:
@@ -258,13 +297,34 @@ def sincronizar_stock_marketplaces(sku, stock=None, contexto="manual"):
         from inventario import get_conn, _get_pool
         _cn = get_conn()
         _cur = _cn.cursor()
+        # Stock a publicar = bodegas PROPIAS (no fulfillment). Se usa LEFT JOIN y se
+        # trata CENTRAL como 'propia' aunque su fila en 'bodegas' falte o tenga tipo
+        # NULL. Sin esto, un INNER JOIN fallido devolvía 0 y borraba el stock de los
+        # canales aunque stock_bodega.CENTRAL tuviera unidades (bug MICO001/SMPBSG001).
         _cur.execute("""
             SELECT COALESCE(SUM(sb.cantidad), 0)
             FROM stock_bodega sb
-            JOIN bodegas b ON b.codigo = sb.bodega_codigo
-            WHERE sb.sku = %s AND b.tipo = 'propia'
+            LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo
+            WHERE sb.sku = %s
+              AND (b.tipo = 'propia' OR b.tipo IS NULL OR sb.bodega_codigo = 'CENTRAL')
         """, (sku,))
         stock_publicar = int((_cur.fetchone() or [0])[0] or 0)
+
+        # Guard anti-cero: si el cálculo dio 0 pero la bodega CENTRAL del SKU tiene
+        # stock real, NUNCA publicar 0 (eso vaciaría los canales por error). Se usa
+        # el stock real de CENTRAL. Esto evita el bug aun si la config de 'bodegas'
+        # quedó inconsistente en algún tenant.
+        if stock_publicar == 0:
+            _cur.execute("""
+                SELECT COALESCE(SUM(cantidad), 0)
+                FROM stock_bodega
+                WHERE sku = %s AND bodega_codigo = 'CENTRAL'
+            """, (sku,))
+            central_real = int((_cur.fetchone() or [0])[0] or 0)
+            if central_real > 0:
+                print(f"[Sync][{contexto}] GUARD anti-cero activado para {sku}: "
+                      f"cálculo propias=0 pero CENTRAL={central_real}. Publico {central_real}.")
+                stock_publicar = central_real
         _cur.close()
         try:
             _get_pool().putconn(_cn)
