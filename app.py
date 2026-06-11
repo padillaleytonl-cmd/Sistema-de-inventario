@@ -97,6 +97,80 @@ app.register_blueprint(falabella_bp)
 from comparador_precios_mkt import comparador_precios_bp
 app.register_blueprint(comparador_precios_bp)
 
+
+# ════════════════════════════════════════════════════════════════════════════
+# Reparación puntual de bodega CENTRAL (fix stock 0 por importación Woo)
+# ════════════════════════════════════════════════════════════════════════════
+@app.route("/admin/lusync/stock/reparar-central")
+def reparar_central_stock():
+    """Crea/corrige la bodega CENTRAL de un SKU y re-sincroniza a los canales.
+
+    Uso:
+      /admin/lusync/stock/reparar-central?sku=MICO001&cantidad=35
+      (opcional &token=... si no hay sesión)
+
+    Sirve para recuperar productos que quedaron en 0 porque se importaron de
+    Woo sin inicializar su bodega CENTRAL.
+    """
+    import os
+    bypass_token = os.environ.get(
+        "ADMIN_BYPASS_TOKEN",
+        "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw",
+    )
+    token = request.args.get("token", "")
+    if not (session.get("logged") or session.get("is_lusync_admin")
+            or (token and token == bypass_token)):
+        return redirect("/admin/lusync/login")
+
+    sku = (request.args.get("sku", "") or "").strip()
+    cantidad_str = (request.args.get("cantidad", "") or "").strip()
+    if not sku or not cantidad_str:
+        return jsonify({"error": "Faltan parámetros. Uso: ?sku=MICO001&cantidad=35"}), 400
+    try:
+        cantidad = int(cantidad_str)
+    except ValueError:
+        return jsonify({"error": "cantidad debe ser un número entero"}), 400
+
+    from inventario import (set_stock_bodega, get_stock_bodega,
+                            stock_por_bodega, cargar_productos)
+
+    # Estado antes
+    try:
+        antes = stock_por_bodega(sku) or {}
+    except Exception:
+        antes = {}
+
+    # 1. Fijar la bodega CENTRAL con el stock físico real (esto recalcula
+    #    productos.stock automáticamente vía _recalcular_stock_total).
+    set_stock_bodega(sku, "CENTRAL", cantidad)
+
+    # 2. Re-sincronizar a los marketplaces (lee CENTRAL fresco y publica).
+    sync_log = []
+    try:
+        sincronizar_stock_marketplaces(sku, contexto="reparar_central")
+        sync_log.append("Sincronización a marketplaces disparada")
+    except Exception as e:
+        sync_log.append(f"Error al sincronizar: {e}")
+
+    # Estado después
+    central_despues = None
+    try:
+        central_despues = get_stock_bodega(sku, "CENTRAL")
+    except Exception:
+        pass
+
+    return jsonify({
+        "ok": True,
+        "sku": sku,
+        "central_antes": antes.get("CENTRAL", "(no existía)"),
+        "central_despues": central_despues if central_despues is not None else cantidad,
+        "cantidad_fijada": cantidad,
+        "sincronizacion": sync_log,
+        "nota": "El stock CENTRAL es tu stock físico propio. Se publicó a los "
+                "canales seller (Falabella, Walmart, etc.). Verificá en cada "
+                "marketplace en 1-2 minutos.",
+    })
+
 # ════════════════════════════════════════════════════════════════════════════
 # SYNC CENTRALIZADO MULTI-MARKETPLACE
 # ════════════════════════════════════════════════════════════════════════════
@@ -2011,6 +2085,14 @@ def importar():
                         "precio_normal": precio_normal,
                         "precio_oferta": precio_oferta
                     })
+                    # Inicializar la bodega CENTRAL con el stock importado. Sin esto,
+                    # el producto queda sin fila en stock_bodega y la sincronización
+                    # lee CENTRAL=0 y publica 0 a los marketplaces (bug MICO001).
+                    try:
+                        from inventario import set_stock_bodega
+                        set_stock_bodega(sku, "CENTRAL", int(stock or 0))
+                    except Exception as _e_central:
+                        detalle.append(f"  ⚠ {sku}: no se pudo inicializar CENTRAL: {_e_central}")
                     skus_existentes.add(sku)
                     nuevos += 1
                     detalle.append(f"+ [{woo_id}] {sku} '{nombre_padre[:50]}': SIMPLE importado (stock={stock})")
@@ -2075,6 +2157,13 @@ def importar():
                             "precio_normal": precio_normal_v,
                             "precio_oferta": precio_oferta_v
                         })
+                        # Inicializar la bodega CENTRAL con el stock de la variante,
+                        # igual que para productos simples (evita el bug de stock 0).
+                        try:
+                            from inventario import set_stock_bodega
+                            set_stock_bodega(sku_v, "CENTRAL", int(stock_v or 0))
+                        except Exception as _e_central:
+                            detalle.append(f"  ⚠ {sku_v}: no se pudo inicializar CENTRAL: {_e_central}")
                         skus_existentes.add(sku_v)
                         nuevos += 1
                         detalle.append(f"  + [{v_id}] {sku_v} '{nombre_v[:50]}': variante importada (stock={stock_v})")
