@@ -115,7 +115,7 @@ def health_check_stock_fix():
         return redirect("/admin/lusync/login")
 
     from inventario import get_conn
-    info = {"fix_activo": False, "bodegas": [], "nota": ""}
+    info = {"fix_activo": False, "version_fix": "2026-06-10-v3-conteo", "bodegas": [], "nota": ""}
     try:
         cn = get_conn(); cur = cn.cursor()
         # Estado de las bodegas (CENTRAL debe ser 'propia')
