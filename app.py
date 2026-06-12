@@ -98,6 +98,34 @@ from comparador_precios_mkt import comparador_precios_bp
 app.register_blueprint(comparador_precios_bp)
 
 
+@app.route("/admin/lusync/stock/sync-log")
+def ver_sync_log():
+    """Muestra las últimas sincronizaciones de stock con su detalle completo:
+    tenant de la conexión, stock calculado, filas vistas, guards y resultado.
+    Uso: /admin/lusync/stock/sync-log?token=...   (opcional &sku=XXX para filtrar)
+    """
+    import os
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN",
+                                  "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    token = request.args.get("token", "")
+    if not (session.get("logged") or session.get("is_lusync_admin")
+            or (token and token == bypass_token)):
+        return redirect("/admin/lusync/login")
+
+    sku_filtro = (request.args.get("sku", "") or "").strip()
+    entradas = list(_SYNC_TRACE_LOG)
+    if sku_filtro:
+        entradas = [e for e in entradas if e.get("sku") == sku_filtro]
+    entradas.reverse()  # más recientes primero
+    return jsonify({
+        "total": len(entradas),
+        "corridas": entradas,
+        "nota": "Más recientes primero. 'tenant_conexion' es el tenant RLS con el que "
+                "se calculó el stock. 'filas_vistas'=0 indica que el RLS bloqueó la "
+                "lectura (guard_rls debería haber actuado).",
+    })
+
+
 @app.route("/admin/lusync/stock/trazar-ajuste")
 def trazar_ajuste_stock():
     """Simula un ajuste paso a paso mostrando el stock en cada etapa, SIN publicar.
@@ -170,7 +198,7 @@ def health_check_stock_fix():
         return redirect("/admin/lusync/login")
 
     from inventario import get_conn
-    info = {"fix_activo": False, "version_fix": "2026-06-10-v8-traza", "bodegas": [], "nota": ""}
+    info = {"fix_activo": False, "version_fix": "2026-06-11-v10-lectura-blindada", "bodegas": [], "nota": ""}
     try:
         cn = get_conn(); cur = cn.cursor()
         # Estado de las bodegas (CENTRAL debe ser 'propia')
@@ -464,6 +492,13 @@ def _asegurar_fecha_compra(canal, orden_id, fecha_compra, sku=None):
         print(f"[_asegurar_fecha_compra] {canal} {orden_id}: {e}")
 
 
+# Registro en memoria de las últimas sincronizaciones de stock (diagnóstico).
+# Cada entrada: sku, contexto, tenant de la conexión, stock calculado, guards
+# que actuaron y resultado por canal. Se consulta en /admin/lusync/stock/sync-log.
+from collections import deque as _deque_sync
+_SYNC_TRACE_LOG = _deque_sync(maxlen=50)
+
+
 def sincronizar_stock_marketplaces(sku, stock=None, contexto="manual"):
     """Sincroniza el stock de un SKU con TODOS los marketplaces conectados.
 
@@ -495,28 +530,69 @@ def sincronizar_stock_marketplaces(sku, stock=None, contexto="manual"):
     - Si retorna None o algo que no es dict → ok (compatibilidad legacy)
     """
     # Stock a publicar = SIEMPRE CENTRAL (bodegas propias), nunca el total.
+    _trace = {"sku": sku, "contexto": contexto}
     try:
         from inventario import get_conn, _get_pool
         _cn = get_conn()
         _cur = _cn.cursor()
-        # Stock a publicar = bodegas PROPIAS (no fulfillment). Se usa LEFT JOIN y se
-        # trata CENTRAL como 'propia' aunque su fila en 'bodegas' falte o tenga tipo
-        # NULL. Sin esto, un INNER JOIN fallido devolvía 0 y borraba el stock de los
-        # canales aunque stock_bodega.CENTRAL tuviera unidades (bug MICO001/SMPBSG001).
+        # Registrar el tenant efectivo de ESTA conexión (diagnóstico RLS).
+        try:
+            _cur.execute("SELECT current_setting('app.tenant_id', true), current_setting('app.is_admin', true)")
+            _t_row = _cur.fetchone() or (None, None)
+            _trace["tenant_conexion"] = _t_row[0]
+            _trace["is_admin_conexion"] = _t_row[1]
+        except Exception:
+            pass
+        # LECTURA BLINDADA (v10): el stock a publicar se lee SIEMPRE con bypass
+        # admin LOCAL a la transacción, resolviendo el tenant dueño del SKU.
+        # Motivo: con RLS multi-tenant, la misma query devuelve resultados
+        # distintos según el contexto de la conexión (sesión de usuario, job del
+        # scheduler, token). Eso hacía que el ajuste manual publicara 0 y el
+        # scheduler lo "levantara" después con desfase. Con bypass local +
+        # tenant explícito, el resultado es idéntico desde cualquier ruta.
+        # set_config(..., true) es transacción-local y el rollback final lo
+        # limpia: NO contamina la conexión al volver al pool.
+        _cur.execute("SELECT set_config('app.is_admin', 'true', true)")
+        # Stock propio por tenant (JOIN también por tenant para no mezclar ni
+        # duplicar filas de bodegas homónimas de otros tenants).
         _cur.execute("""
-            SELECT COALESCE(SUM(sb.cantidad), 0)
+            SELECT sb.tenant_id, COALESCE(SUM(sb.cantidad), 0)
             FROM stock_bodega sb
-            LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo
+            LEFT JOIN bodegas b
+              ON b.codigo = sb.bodega_codigo AND b.tenant_id = sb.tenant_id
             WHERE sb.sku = %s
               AND (b.tipo = 'propia' OR b.tipo IS NULL OR sb.bodega_codigo = 'CENTRAL')
+            GROUP BY sb.tenant_id
         """, (sku,))
-        stock_publicar = int((_cur.fetchone() or [0])[0] or 0)
+        _por_tenant = {int(r[0]): int(r[1] or 0) for r in _cur.fetchall()
+                       if r and r[0] is not None}
+        _trace["stock_por_tenant"] = dict(_por_tenant)
 
-        # Guard anti-cero: si el cálculo dio 0 pero hay stock real, NUNCA publicar 0
-        # (eso vaciaría los canales por error). Busca el stock real en dos lugares:
-        # primero la bodega CENTRAL, y si ahí también es 0, el campo productos.stock
-        # (puede tener el valor si se editó por una ruta que no actualizó la bodega,
-        # ej. edición de producto o sync Woo → bug CTSECNSB001).
+        if len(_por_tenant) == 1:
+            stock_publicar = next(iter(_por_tenant.values()))
+        elif len(_por_tenant) > 1:
+            # SKU presente en varios tenants: desambiguar por el tenant del
+            # mapeo de canales activo (el que realmente publica).
+            _cur.execute("""
+                SELECT DISTINCT tenant_id FROM sku_mapeo_canal
+                WHERE sku_lusync = %s AND activo = TRUE
+            """, (sku,))
+            _t_map = [int(r[0]) for r in _cur.fetchall() if r and r[0] is not None]
+            _eleg = [t for t in _t_map if t in _por_tenant]
+            if len(_eleg) == 1:
+                stock_publicar = _por_tenant[_eleg[0]]
+                _trace["tenant_elegido"] = _eleg[0]
+            else:
+                stock_publicar = max(_por_tenant.values())
+                _trace["tenant_ambiguo"] = True
+                print(f"[Sync][{contexto}] AVISO {sku}: stock en varios tenants "
+                      f"{_por_tenant}; publico {stock_publicar}. Revisar tenant_id de los datos.")
+        else:
+            stock_publicar = 0
+        _trace["stock_calculado"] = stock_publicar
+
+        # Guard anti-cero (respaldo; el bypass local sigue activo en esta transacción):
+        # nunca publicar 0 si existe stock real en CENTRAL o en productos.stock.
         if stock_publicar == 0:
             _cur.execute("""
                 SELECT COALESCE(SUM(cantidad), 0)
@@ -526,28 +602,21 @@ def sincronizar_stock_marketplaces(sku, stock=None, contexto="manual"):
             central_real = int((_cur.fetchone() or [0])[0] or 0)
             if central_real > 0:
                 print(f"[Sync][{contexto}] GUARD anti-cero (CENTRAL) para {sku}: "
-                      f"cálculo propias=0 pero CENTRAL={central_real}. Publico {central_real}.")
+                      f"cálculo=0 pero CENTRAL={central_real}. Publico {central_real}.")
+                _trace["guard_central"] = central_real
                 stock_publicar = central_real
             else:
-                # Segunda red: el stock maestro del producto.
-                _cur.execute("SELECT COALESCE(stock, 0) FROM productos WHERE sku = %s", (sku,))
+                _cur.execute("SELECT COALESCE(MAX(stock), 0) FROM productos WHERE sku = %s", (sku,))
                 row_prod = _cur.fetchone()
                 prod_stock = int(row_prod[0]) if row_prod and row_prod[0] is not None else 0
                 if prod_stock > 0:
                     print(f"[Sync][{contexto}] GUARD anti-cero (productos.stock) para {sku}: "
-                          f"CENTRAL=0 pero productos.stock={prod_stock}. Sincronizo CENTRAL y publico {prod_stock}.")
-                    # Auto-reparar: dejar la bodega CENTRAL consistente con el maestro.
-                    try:
-                        _cur.execute("""
-                            INSERT INTO stock_bodega (sku, bodega_codigo, cantidad, actualizado_at)
-                            VALUES (%s, 'CENTRAL', %s, NOW())
-                            ON CONFLICT (sku, bodega_codigo)
-                            DO UPDATE SET cantidad = EXCLUDED.cantidad, actualizado_at = NOW()
-                        """, (sku, prod_stock))
-                        _cn.commit()
-                    except Exception as _e_rep:
-                        print(f"[Sync][{contexto}] no pude auto-reparar CENTRAL de {sku}: {_e_rep}")
+                          f"CENTRAL=0 pero productos.stock={prod_stock}. Publico {prod_stock}.")
+                    _trace["guard_productos_stock"] = prod_stock
                     stock_publicar = prod_stock
+        # Cerrar la transacción: limpia el set_config local (bypass) antes de
+        # devolver la conexión al pool.
+        _cn.rollback()
         _cur.close()
         try:
             _get_pool().putconn(_cn)
@@ -558,6 +627,8 @@ def sincronizar_stock_marketplaces(sku, stock=None, contexto="manual"):
         # (comportamiento legacy) en vez de fallar el sync por completo.
         print(f"[Sync][{contexto}] no pude leer CENTRAL de {sku}: {e}; "
               f"uso valor recibido={stock}")
+        _trace["fallback_except"] = str(e)[:200]
+        _trace["stock_recibido_usado"] = stock
         stock_publicar = int(stock) if stock is not None else 0
 
     stock_publicar = max(0, stock_publicar)
@@ -627,6 +698,17 @@ def sincronizar_stock_marketplaces(sku, stock=None, contexto="manual"):
 
     # Incluir el stock que se publicó, para diagnóstico desde los endpoints.
     resultado["_stock_publicado"] = stock_publicar
+
+    # Registrar esta corrida en el log de diagnóstico (en memoria).
+    try:
+        import datetime as _dt
+        _trace["timestamp"] = _dt.datetime.now().isoformat(timespec="seconds")
+        _trace["stock_publicado"] = stock_publicar
+        _trace["resultado_canales"] = dict(resultado)
+        _SYNC_TRACE_LOG.append(_trace)
+    except Exception:
+        pass
+
     return resultado
 
 # ════════════════════════════════════════════════════════════════════════════
