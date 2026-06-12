@@ -115,7 +115,7 @@ def health_check_stock_fix():
         return redirect("/admin/lusync/login")
 
     from inventario import get_conn
-    info = {"fix_activo": False, "version_fix": "2026-06-10-v6-diag-canal", "bodegas": [], "nota": ""}
+    info = {"fix_activo": False, "version_fix": "2026-06-10-v7-conteo-consistente", "bodegas": [], "nota": ""}
     try:
         cn = get_conn(); cur = cn.cursor()
         # Estado de las bodegas (CENTRAL debe ser 'propia')
@@ -21528,8 +21528,21 @@ def pos_ajuste():
     except Exception as e:
         return jsonify({"error": f"Error ajustando bodega: {e}"}), 500
 
-    p["stock"] = max(0, p["stock"] + cantidad_ajuste)
-    guardar_producto(p)
+    # ajustar_stock_bodega() ya recalcula productos.stock como la suma real de
+    # todas las bodegas (vía _recalcular_stock_total). NO volver a sumar el delta
+    # sobre el cache (p["stock"]) porque ese cache puede estar viejo o incluir
+    # fulfillment, lo que descuadra productos.stock vs las bodegas. Releemos el
+    # valor ya recalculado para mantener todo consistente.
+    try:
+        from inventario import get_conn as _gc_stock
+        _cs = _gc_stock(); _cur_s = _cs.cursor()
+        _cur_s.execute("SELECT COALESCE(stock, 0) FROM productos WHERE sku = %s", (sku,))
+        _row_s = _cur_s.fetchone()
+        p["stock"] = int(_row_s[0]) if _row_s and _row_s[0] is not None else max(0, p["stock"] + cantidad_ajuste)
+        _cur_s.close(); _cs.close()
+    except Exception:
+        # Si por algún motivo no se pudo releer, usar el cálculo manual como respaldo.
+        p["stock"] = max(0, p["stock"] + cantidad_ajuste)
 
     tipo_mov = "entrada" if cantidad_ajuste > 0 else "salida"
     motivo_completo = f"Ajuste {motivo_ajuste} | Bodega: {bodega} | {notas}" if notas else f"Ajuste {motivo_ajuste} | Bodega: {bodega}"
