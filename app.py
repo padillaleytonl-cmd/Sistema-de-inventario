@@ -1830,7 +1830,7 @@ def _sync_autocorreccion():
             FROM sku_mapeo_canal m
             LEFT JOIN (
                 SELECT sb.sku, SUM(sb.cantidad) AS central
-                FROM stock_bodega sb JOIN bodegas b ON b.codigo = sb.bodega_codigo
+                FROM stock_bodega sb LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo
                 WHERE b.tipo='propia'
                 GROUP BY sb.sku
             ) st ON st.sku = m.sku_lusync
@@ -2531,8 +2531,8 @@ def entrada():
             try:
                 _c = get_conn(); _cur = _c.cursor()
                 _cur.execute("""SELECT COALESCE(SUM(sb.cantidad),0) FROM stock_bodega sb
-                                JOIN bodegas b ON b.codigo=sb.bodega_codigo
-                                WHERE sb.sku=%s AND b.tipo='propia'""", (p["sku"],))
+                                LEFT JOIN bodegas b ON b.codigo=sb.bodega_codigo
+                        WHERE sb.sku=%s AND (b.tipo='propia' OR b.tipo IS NULL OR sb.bodega_codigo='CENTRAL')""", (p["sku"],))
                 stock_disponible = int(_cur.fetchone()[0] or 0)
                 _cur.close(); _c.close()
             except Exception as e:
@@ -2616,8 +2616,8 @@ def salida():
             try:
                 _c = get_conn(); _cur = _c.cursor()
                 _cur.execute("""SELECT COALESCE(SUM(sb.cantidad),0) FROM stock_bodega sb
-                                JOIN bodegas b ON b.codigo=sb.bodega_codigo
-                                WHERE sb.sku=%s AND b.tipo='propia'""", (p["sku"],))
+                                LEFT JOIN bodegas b ON b.codigo=sb.bodega_codigo
+                        WHERE sb.sku=%s AND (b.tipo='propia' OR b.tipo IS NULL OR sb.bodega_codigo='CENTRAL')""", (p["sku"],))
                 stock_disponible = int(_cur.fetchone()[0] or 0)
                 _cur.close(); _c.close()
             except Exception as e:
@@ -5124,8 +5124,8 @@ def admin_revertir_duplicados(numero_orden):
         for sku in skus_afectados:
             cur.execute("""
                 SELECT COALESCE(SUM(sb.cantidad),0) FROM stock_bodega sb
-                JOIN bodegas b ON b.codigo = sb.bodega_codigo
-                WHERE sb.sku = %s AND b.tipo = 'propia'
+                LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo
+                WHERE sb.sku = %s AND (b.tipo = 'propia' OR b.tipo IS NULL OR sb.bodega_codigo = 'CENTRAL')
             """, (sku,))
             stock_disp = int(cur.fetchone()[0] or 0)
             sincronizar_stock_marketplaces(sku, stock_disp, contexto="revertir_duplicados")
@@ -19157,7 +19157,7 @@ def admin_stock_autocorregir():
         FROM sku_mapeo_canal m
         LEFT JOIN (
             SELECT sb.sku, SUM(sb.cantidad) AS central
-            FROM stock_bodega sb JOIN bodegas b ON b.codigo = sb.bodega_codigo
+            FROM stock_bodega sb LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo
             WHERE b.tipo='propia' GROUP BY sb.sku
         ) st ON st.sku = m.sku_lusync
         WHERE m.activo=TRUE
@@ -19244,7 +19244,7 @@ def admin_stock_sin_mapear():
         FROM productos p
         LEFT JOIN (
             SELECT sb.sku, SUM(sb.cantidad) AS central
-            FROM stock_bodega sb JOIN bodegas b ON b.codigo = sb.bodega_codigo
+            FROM stock_bodega sb LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo
             WHERE b.tipo = 'propia'
             GROUP BY sb.sku
         ) st ON st.sku = p.sku
@@ -19410,7 +19410,7 @@ def admin_stock_verificar_skus():
         cur.execute("""
             SELECT COALESCE(SUM(CASE WHEN b.tipo='propia'  THEN sb.cantidad ELSE 0 END),0) AS central,
                    COALESCE(SUM(CASE WHEN b.tipo<>'propia' THEN sb.cantidad ELSE 0 END),0) AS fulfillment
-            FROM stock_bodega sb JOIN bodegas b ON b.codigo=sb.bodega_codigo
+            FROM stock_bodega sb LEFT JOIN bodegas b ON b.codigo=sb.bodega_codigo
             WHERE sb.sku=%s
         """, (sku,))
         srow = cur.fetchone()
@@ -19761,7 +19761,7 @@ def admin_stock_auditar_todos():
             SELECT sb.sku,
                    SUM(CASE WHEN b.tipo='propia'  THEN sb.cantidad ELSE 0 END) AS central,
                    SUM(CASE WHEN b.tipo<>'propia' THEN sb.cantidad ELSE 0 END) AS fulfillment
-            FROM stock_bodega sb JOIN bodegas b ON b.codigo=sb.bodega_codigo
+            FROM stock_bodega sb LEFT JOIN bodegas b ON b.codigo=sb.bodega_codigo
             GROUP BY sb.sku
         ) st ON st.sku = p.sku
         ORDER BY p.sku
@@ -19827,7 +19827,7 @@ def admin_stock_diagnostico_central():
                    SUM(CASE WHEN b.tipo='propia'  THEN sb.cantidad ELSE 0 END) AS central,
                    SUM(CASE WHEN b.tipo<>'propia' THEN sb.cantidad ELSE 0 END) AS fulfillment,
                    SUM(sb.cantidad) AS total_bodegas
-            FROM stock_bodega sb JOIN bodegas b ON b.codigo=sb.bodega_codigo
+            FROM stock_bodega sb LEFT JOIN bodegas b ON b.codigo=sb.bodega_codigo
             GROUP BY sb.sku
         ) st ON st.sku = p.sku
         WHERE COALESCE(p.stock,0) <> COALESCE(st.total_bodegas,0)
@@ -21335,8 +21335,8 @@ def pos_entrada_lote():
         try:
             _c = _get_conn(); _cur = _c.cursor()
             _cur.execute("""SELECT COALESCE(SUM(sb.cantidad),0) FROM stock_bodega sb
-                            JOIN bodegas b ON b.codigo=sb.bodega_codigo
-                            WHERE sb.sku=%s AND b.tipo='propia'""", (sku,))
+                            LEFT JOIN bodegas b ON b.codigo=sb.bodega_codigo
+                        WHERE sb.sku=%s AND (b.tipo='propia' OR b.tipo IS NULL OR sb.bodega_codigo='CENTRAL')""", (sku,))
             stock_disp = int(_cur.fetchone()[0] or 0)
             _cur.close(); _c.close()
         except Exception:
@@ -21430,8 +21430,8 @@ def pos_salida_lote():
         try:
             _c = _get_conn(); _cur = _c.cursor()
             _cur.execute("""SELECT COALESCE(SUM(sb.cantidad),0) FROM stock_bodega sb
-                            JOIN bodegas b ON b.codigo=sb.bodega_codigo
-                            WHERE sb.sku=%s AND b.tipo='propia'""", (sku,))
+                            LEFT JOIN bodegas b ON b.codigo=sb.bodega_codigo
+                        WHERE sb.sku=%s AND (b.tipo='propia' OR b.tipo IS NULL OR sb.bodega_codigo='CENTRAL')""", (sku,))
             stock_disp = int(_cur.fetchone()[0] or 0)
             _cur.close(); _c.close()
         except Exception:
@@ -21531,8 +21531,8 @@ def pos_ajuste():
     try:
         _c = _get_conn(); _cur = _c.cursor()
         _cur.execute("""SELECT COALESCE(SUM(sb.cantidad),0) FROM stock_bodega sb
-                        JOIN bodegas b ON b.codigo=sb.bodega_codigo
-                        WHERE sb.sku=%s AND b.tipo='propia'""", (sku,))
+                        LEFT JOIN bodegas b ON b.codigo=sb.bodega_codigo
+                        WHERE sb.sku=%s AND (b.tipo='propia' OR b.tipo IS NULL OR sb.bodega_codigo='CENTRAL')""", (sku,))
         stock_disp = int(_cur.fetchone()[0] or 0)
         _cur.close(); _c.close()
     except Exception:
