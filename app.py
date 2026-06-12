@@ -115,7 +115,7 @@ def health_check_stock_fix():
         return redirect("/admin/lusync/login")
 
     from inventario import get_conn
-    info = {"fix_activo": False, "version_fix": "2026-06-10-v4-guard-maestro", "bodegas": [], "nota": ""}
+    info = {"fix_activo": False, "version_fix": "2026-06-10-v5-autocorreccion", "bodegas": [], "nota": ""}
     try:
         cn = get_conn(); cur = cn.cursor()
         # Estado de las bodegas (CENTRAL debe ser 'propia')
@@ -1852,7 +1852,7 @@ def _sync_autocorreccion():
             LEFT JOIN (
                 SELECT sb.sku, SUM(sb.cantidad) AS central
                 FROM stock_bodega sb LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo
-                WHERE b.tipo='propia'
+                WHERE (b.tipo='propia' OR b.tipo IS NULL OR sb.bodega_codigo='CENTRAL')
                 GROUP BY sb.sku
             ) st ON st.sku = m.sku_lusync
             WHERE m.activo=TRUE
@@ -19179,7 +19179,7 @@ def admin_stock_autocorregir():
         LEFT JOIN (
             SELECT sb.sku, SUM(sb.cantidad) AS central
             FROM stock_bodega sb LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo
-            WHERE b.tipo='propia' GROUP BY sb.sku
+            WHERE (b.tipo='propia' OR b.tipo IS NULL OR sb.bodega_codigo='CENTRAL') GROUP BY sb.sku
         ) st ON st.sku = m.sku_lusync
         WHERE m.activo=TRUE
         GROUP BY m.sku_lusync, st.central
@@ -19266,7 +19266,7 @@ def admin_stock_sin_mapear():
         LEFT JOIN (
             SELECT sb.sku, SUM(sb.cantidad) AS central
             FROM stock_bodega sb LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo
-            WHERE b.tipo = 'propia'
+            WHERE (b.tipo = 'propia' OR b.tipo IS NULL OR sb.bodega_codigo = 'CENTRAL')
             GROUP BY sb.sku
         ) st ON st.sku = p.sku
         WHERE COALESCE(st.central,0) > 0
@@ -19569,8 +19569,8 @@ def admin_stock_reactivar_ripley():
         LEFT JOIN (
             SELECT sb.sku, SUM(sb.cantidad) AS central
             FROM stock_bodega sb
-            JOIN bodegas b ON b.codigo = sb.bodega_codigo
-            WHERE b.tipo = 'propia'
+            LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo
+            WHERE (b.tipo = 'propia' OR b.tipo IS NULL OR sb.bodega_codigo = 'CENTRAL')
             GROUP BY sb.sku
         ) st ON st.sku = m.sku_lusync
         WHERE m.canal='ripley' AND m.activo=TRUE
@@ -19962,8 +19962,8 @@ def admin_sync_masivo_todos():
         LEFT JOIN (
             SELECT sb.sku, SUM(sb.cantidad) AS central
             FROM stock_bodega sb
-            JOIN bodegas b ON b.codigo = sb.bodega_codigo
-            WHERE b.tipo = 'propia'
+            LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo
+            WHERE (b.tipo = 'propia' OR b.tipo IS NULL OR sb.bodega_codigo = 'CENTRAL')
             GROUP BY sb.sku
         ) st ON st.sku = p.sku
         LEFT JOIN (
