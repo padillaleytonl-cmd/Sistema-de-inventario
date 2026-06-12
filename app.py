@@ -115,7 +115,7 @@ def health_check_stock_fix():
         return redirect("/admin/lusync/login")
 
     from inventario import get_conn
-    info = {"fix_activo": False, "version_fix": "2026-06-10-v5-autocorreccion", "bodegas": [], "nota": ""}
+    info = {"fix_activo": False, "version_fix": "2026-06-10-v6-diag-canal", "bodegas": [], "nota": ""}
     try:
         cn = get_conn(); cur = cn.cursor()
         # Estado de las bodegas (CENTRAL debe ser 'propia')
@@ -570,6 +570,8 @@ def sincronizar_stock_marketplaces(sku, stock=None, contexto="manual"):
         except Exception as e_al:
             print(f"[SyncCentral] no pude crear alerta: {e_al}")
 
+    # Incluir el stock que se publicó, para diagnóstico desde los endpoints.
+    resultado["_stock_publicado"] = stock_publicar
     return resultado
 
 # ════════════════════════════════════════════════════════════════════════════
