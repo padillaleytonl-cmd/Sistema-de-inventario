@@ -115,7 +115,7 @@ def health_check_stock_fix():
         return redirect("/admin/lusync/login")
 
     from inventario import get_conn
-    info = {"fix_activo": False, "version_fix": "2026-06-10-v3-conteo", "bodegas": [], "nota": ""}
+    info = {"fix_activo": False, "version_fix": "2026-06-10-v4-guard-maestro", "bodegas": [], "nota": ""}
     try:
         cn = get_conn(); cur = cn.cursor()
         # Estado de las bodegas (CENTRAL debe ser 'propia')
@@ -457,10 +457,11 @@ def sincronizar_stock_marketplaces(sku, stock=None, contexto="manual"):
         """, (sku,))
         stock_publicar = int((_cur.fetchone() or [0])[0] or 0)
 
-        # Guard anti-cero: si el cálculo dio 0 pero la bodega CENTRAL del SKU tiene
-        # stock real, NUNCA publicar 0 (eso vaciaría los canales por error). Se usa
-        # el stock real de CENTRAL. Esto evita el bug aun si la config de 'bodegas'
-        # quedó inconsistente en algún tenant.
+        # Guard anti-cero: si el cálculo dio 0 pero hay stock real, NUNCA publicar 0
+        # (eso vaciaría los canales por error). Busca el stock real en dos lugares:
+        # primero la bodega CENTRAL, y si ahí también es 0, el campo productos.stock
+        # (puede tener el valor si se editó por una ruta que no actualizó la bodega,
+        # ej. edición de producto o sync Woo → bug CTSECNSB001).
         if stock_publicar == 0:
             _cur.execute("""
                 SELECT COALESCE(SUM(cantidad), 0)
@@ -469,9 +470,29 @@ def sincronizar_stock_marketplaces(sku, stock=None, contexto="manual"):
             """, (sku,))
             central_real = int((_cur.fetchone() or [0])[0] or 0)
             if central_real > 0:
-                print(f"[Sync][{contexto}] GUARD anti-cero activado para {sku}: "
+                print(f"[Sync][{contexto}] GUARD anti-cero (CENTRAL) para {sku}: "
                       f"cálculo propias=0 pero CENTRAL={central_real}. Publico {central_real}.")
                 stock_publicar = central_real
+            else:
+                # Segunda red: el stock maestro del producto.
+                _cur.execute("SELECT COALESCE(stock, 0) FROM productos WHERE sku = %s", (sku,))
+                row_prod = _cur.fetchone()
+                prod_stock = int(row_prod[0]) if row_prod and row_prod[0] is not None else 0
+                if prod_stock > 0:
+                    print(f"[Sync][{contexto}] GUARD anti-cero (productos.stock) para {sku}: "
+                          f"CENTRAL=0 pero productos.stock={prod_stock}. Sincronizo CENTRAL y publico {prod_stock}.")
+                    # Auto-reparar: dejar la bodega CENTRAL consistente con el maestro.
+                    try:
+                        _cur.execute("""
+                            INSERT INTO stock_bodega (sku, bodega_codigo, cantidad, actualizado_at)
+                            VALUES (%s, 'CENTRAL', %s, NOW())
+                            ON CONFLICT (sku, bodega_codigo)
+                            DO UPDATE SET cantidad = EXCLUDED.cantidad, actualizado_at = NOW()
+                        """, (sku, prod_stock))
+                        _cn.commit()
+                    except Exception as _e_rep:
+                        print(f"[Sync][{contexto}] no pude auto-reparar CENTRAL de {sku}: {_e_rep}")
+                    stock_publicar = prod_stock
         _cur.close()
         try:
             _get_pool().putconn(_cn)
