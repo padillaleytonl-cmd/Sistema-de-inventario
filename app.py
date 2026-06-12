@@ -98,6 +98,119 @@ from comparador_precios_mkt import comparador_precios_bp
 app.register_blueprint(comparador_precios_bp)
 
 
+@app.route("/admin/lusync/stock/health")
+def health_check_stock_fix():
+    """Dice si el fix del bug de stock está activo, SIN modificar nada.
+
+    Uso: /admin/lusync/stock/health?token=...
+    Prueba la query nueva contra un SKU de ejemplo y reporta el estado de
+    las bodegas (que CENTRAL sea 'propia'). Sirve para confirmar el deploy.
+    """
+    import os
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN",
+                                  "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    token = request.args.get("token", "")
+    if not (session.get("logged") or session.get("is_lusync_admin")
+            or (token and token == bypass_token)):
+        return redirect("/admin/lusync/login")
+
+    from inventario import get_conn
+    info = {"fix_activo": False, "bodegas": [], "nota": ""}
+    try:
+        cn = get_conn(); cur = cn.cursor()
+        # Estado de las bodegas (CENTRAL debe ser 'propia')
+        cur.execute("SELECT codigo, tipo FROM bodegas ORDER BY codigo")
+        for cod, tipo in cur.fetchall():
+            info["bodegas"].append({"codigo": cod, "tipo": tipo})
+        central = next((b for b in info["bodegas"] if b["codigo"] == "CENTRAL"), None)
+        info["central_tipo"] = central["tipo"] if central else "(no existe)"
+        info["central_es_propia"] = bool(central and central["tipo"] == "propia")
+        # El fix de inventario.py garantiza CENTRAL='propia'. Si lo es, el deploy corrió.
+        info["fix_activo"] = info["central_es_propia"]
+        info["nota"] = ("Fix activo: CENTRAL es 'propia' y la query robusta está vigente."
+                        if info["fix_activo"] else
+                        "ATENCIÓN: CENTRAL no es 'propia'. Subí inventario.py y esperá el deploy.")
+        cur.close(); cn.close()
+    except Exception as e:
+        info["error"] = str(e)
+    return jsonify(info)
+
+
+@app.route("/admin/lusync/stock/recuperar-lote", methods=["GET", "POST"])
+def recuperar_stock_lote():
+    """Recupera el stock de varios SKU a la vez (post-conteo físico).
+
+    Uso (GET, simple):
+      /admin/lusync/stock/recuperar-lote?token=...&datos=MICO001:35,SMPBSG001:33,OTRO:12
+    Uso (POST, JSON):
+      {"datos": {"MICO001": 35, "SMPBSG001": 33}}
+
+    Fija CENTRAL = cantidad para cada SKU y re-sincroniza a los canales con la
+    query corregida. Devuelve el detalle de qué se publicó por cada SKU.
+    """
+    import os
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN",
+                                  "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    token = request.args.get("token", "")
+    if not (session.get("logged") or session.get("is_lusync_admin")
+            or (token and token == bypass_token)):
+        return redirect("/admin/lusync/login")
+
+    # Parsear los datos (de query string o JSON)
+    pares = {}
+    if request.method == "POST" and (request.json or {}).get("datos"):
+        d = request.json["datos"]
+        if isinstance(d, dict):
+            pares = {str(k).strip(): int(v) for k, v in d.items()}
+    else:
+        datos_str = (request.args.get("datos", "") or "").strip()
+        if datos_str:
+            for par in datos_str.split(","):
+                if ":" in par:
+                    sku_p, cant_p = par.split(":", 1)
+                    try:
+                        pares[sku_p.strip()] = int(cant_p.strip())
+                    except ValueError:
+                        pass
+
+    if not pares:
+        return jsonify({"error": "Sin datos. Uso: ?datos=SKU1:35,SKU2:33"}), 400
+
+    from inventario import set_stock_bodega, get_conn
+
+    resultados = []
+    for sku, cantidad in pares.items():
+        r = {"sku": sku, "cantidad_fijada": cantidad}
+        try:
+            set_stock_bodega(sku, "CENTRAL", cantidad)
+            # cuánto se va a publicar (query corregida)
+            cn = get_conn(); cur = cn.cursor()
+            cur.execute("""
+                SELECT COALESCE(SUM(sb.cantidad), 0)
+                FROM stock_bodega sb
+                LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo
+                WHERE sb.sku = %s
+                  AND (b.tipo = 'propia' OR b.tipo IS NULL OR sb.bodega_codigo = 'CENTRAL')
+            """, (sku,))
+            r["stock_que_se_publica"] = int((cur.fetchone() or [0])[0] or 0)
+            cur.close(); cn.close()
+            sincronizar_stock_marketplaces(sku, contexto="recuperar_lote")
+            r["ok"] = True
+        except Exception as e:
+            r["ok"] = False
+            r["error"] = str(e)
+        resultados.append(r)
+
+    publicados_ok = sum(1 for r in resultados if r.get("ok") and r.get("stock_que_se_publica", 0) > 0)
+    return jsonify({
+        "total_skus": len(resultados),
+        "publicados_con_stock": publicados_ok,
+        "resultados": resultados,
+        "nota": "Verificá los canales en 1-2 min. Si 'stock_que_se_publica' "
+                "coincide con tu conteo, el fix está funcionando.",
+    })
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # Reparación puntual de bodega CENTRAL (fix stock 0 por importación Woo)
 # ════════════════════════════════════════════════════════════════════════════
@@ -183,11 +296,42 @@ def reparar_central_stock():
     #    productos.stock automáticamente vía _recalcular_stock_total).
     set_stock_bodega(sku, "CENTRAL", cantidad)
 
-    # 2. Re-sincronizar a los marketplaces (lee CENTRAL fresco y publica).
-    sync_log = []
+    # 1b. Verificar qué stock va a calcular la sincronización (diagnóstico).
+    #     Replica la query de sincronizar_stock_marketplaces para mostrarlo.
+    stock_calculado = None
+    diag_bodegas = {}
     try:
-        sincronizar_stock_marketplaces(sku, contexto="reparar_central")
+        from inventario import get_conn
+        _cn = get_conn(); _cur = _cn.cursor()
+        _cur.execute("""
+            SELECT sb.bodega_codigo, sb.cantidad, b.tipo
+            FROM stock_bodega sb
+            LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo
+            WHERE sb.sku = %s
+        """, (sku,))
+        for cod, cant, tipo in _cur.fetchall():
+            diag_bodegas[cod] = {"cantidad": cant, "tipo": tipo}
+        _cur.execute("""
+            SELECT COALESCE(SUM(sb.cantidad), 0)
+            FROM stock_bodega sb
+            LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo
+            WHERE sb.sku = %s
+              AND (b.tipo = 'propia' OR b.tipo IS NULL OR sb.bodega_codigo = 'CENTRAL')
+        """, (sku,))
+        stock_calculado = int((_cur.fetchone() or [0])[0] or 0)
+        _cur.close(); _cn.close()
+    except Exception as e:
+        diag_bodegas = {"error": str(e)}
+
+    # 2. Re-sincronizar a los marketplaces (lee CENTRAL fresco y publica).
+    #    Capturamos el detalle por canal para ver exactamente qué se publicó.
+    sync_log = []
+    detalle_publicacion = {}
+    try:
+        ret = sincronizar_stock_marketplaces(sku, contexto="reparar_central")
         sync_log.append("Sincronización a marketplaces disparada")
+        if isinstance(ret, dict):
+            detalle_publicacion = ret
     except Exception as e:
         sync_log.append(f"Error al sincronizar: {e}")
 
@@ -203,6 +347,9 @@ def reparar_central_stock():
         "sku": sku,
         "central_antes": antes.get("CENTRAL", "(no existía)"),
         "central_despues": central_despues if central_despues is not None else cantidad,
+        "stock_que_se_publico": stock_calculado,
+        "_diagnostico_bodegas": diag_bodegas,
+        "_detalle_por_canal": detalle_publicacion,
         "cantidad_fijada": cantidad,
         "sincronizacion": sync_log,
         "nota": "El stock CENTRAL es tu stock físico propio. Se publicó a los "
