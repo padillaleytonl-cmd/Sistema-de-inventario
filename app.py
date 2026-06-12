@@ -98,6 +98,61 @@ from comparador_precios_mkt import comparador_precios_bp
 app.register_blueprint(comparador_precios_bp)
 
 
+@app.route("/admin/lusync/stock/trazar-ajuste")
+def trazar_ajuste_stock():
+    """Simula un ajuste paso a paso mostrando el stock en cada etapa, SIN publicar.
+    Uso: /admin/lusync/stock/trazar-ajuste?sku=PBEAMR001&delta=1&token=...
+    delta puede ser positivo o negativo. Sirve para ver en qué punto el stock
+    se descuadra. Solo toca la bodega CENTRAL, NO publica a canales.
+    """
+    import os
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN",
+                                  "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    token = request.args.get("token", "")
+    if not (session.get("logged") or session.get("is_lusync_admin")
+            or (token and token == bypass_token)):
+        return redirect("/admin/lusync/login")
+
+    sku = (request.args.get("sku", "") or "").strip()
+    delta = int(request.args.get("delta", "0") or "0")
+    if not sku:
+        return jsonify({"error": "Falta ?sku="}), 400
+
+    from inventario import get_conn, stock_por_bodega, ajustar_stock_bodega
+    traza = []
+
+    def snapshot(etapa):
+        try:
+            bod = stock_por_bodega(sku) or {}
+        except Exception as e:
+            bod = {"error": str(e)}
+        cn = get_conn(); cur = cn.cursor()
+        cur.execute("SELECT COALESCE(stock,0) FROM productos WHERE sku=%s", (sku,))
+        r = cur.fetchone()
+        prod = int(r[0]) if r and r[0] is not None else None
+        cur.execute("""
+            SELECT COALESCE(SUM(sb.cantidad), 0)
+            FROM stock_bodega sb
+            LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo
+            WHERE sb.sku = %s
+              AND (b.tipo='propia' OR b.tipo IS NULL OR sb.bodega_codigo='CENTRAL')
+        """, (sku,))
+        publicar = int((cur.fetchone() or [0])[0] or 0)
+        cur.close(); cn.close()
+        traza.append({"etapa": etapa, "central": bod.get("CENTRAL"),
+                      "bodegas": bod, "productos_stock": prod,
+                      "stock_que_se_publicaria": publicar})
+
+    snapshot("1_inicial")
+    if delta != 0:
+        ajustar_stock_bodega(sku, "CENTRAL", delta)
+        snapshot(f"2_despues_ajustar_CENTRAL_delta_{delta}")
+
+    return jsonify({"sku": sku, "delta_aplicado": delta, "traza": traza,
+                    "nota": "Solo se ajustó CENTRAL (no se publicó a canales). "
+                            "Mirá 'stock_que_se_publicaria' en cada etapa."})
+
+
 @app.route("/admin/lusync/stock/health")
 def health_check_stock_fix():
     """Dice si el fix del bug de stock está activo, SIN modificar nada.
@@ -115,7 +170,7 @@ def health_check_stock_fix():
         return redirect("/admin/lusync/login")
 
     from inventario import get_conn
-    info = {"fix_activo": False, "version_fix": "2026-06-10-v7-conteo-consistente", "bodegas": [], "nota": ""}
+    info = {"fix_activo": False, "version_fix": "2026-06-10-v8-traza", "bodegas": [], "nota": ""}
     try:
         cn = get_conn(); cur = cn.cursor()
         # Estado de las bodegas (CENTRAL debe ser 'propia')
