@@ -27861,11 +27861,11 @@ def admin_lusync_sii_test_set_libro_ventas():
                 libro_id="LibroVentas", tmst_firma=ts)
             paso("Generar Libro de Ventas", True, f"{len(libro['xml'])} bytes")
 
-            from facturacion.dtes.firma import firmar_envio
+            from facturacion.dtes.firma import firmar_envio_completo
             try:
-                libro_firmado = firmar_envio(
+                libro_firmado = firmar_envio_completo(
                     libro["xml"], cert["pfx_bytes"], cert["password"],
-                    set_dte_id=libro["libro_id"])
+                    set_dte_id=libro["libro_id"], documento_ids=[])
                 paso("Firmar EnvioLibro", True, f"{len(libro_firmado)} bytes")
             except Exception as e_f:
                 import traceback
@@ -28044,11 +28044,11 @@ def admin_lusync_sii_test_set_libro_compras():
                 libro_id="LibroCompras", tmst_firma=ts)
             paso("Generar Libro de Compras", True, f"{len(libro['xml'])} bytes")
 
-            from facturacion.dtes.firma import firmar_envio
+            from facturacion.dtes.firma import firmar_envio_completo
             try:
-                libro_firmado = firmar_envio(
+                libro_firmado = firmar_envio_completo(
                     libro["xml"], cert["pfx_bytes"], cert["password"],
-                    set_dte_id=libro["libro_id"])
+                    set_dte_id=libro["libro_id"], documento_ids=[])
                 paso("Firmar EnvioLibro", True, f"{len(libro_firmado)} bytes")
             except Exception as e_f:
                 import traceback
@@ -28192,11 +28192,11 @@ def admin_lusync_sii_test_set_libro_guias():
                 libro_id="LibroGuias", tmst_firma=ts)
             paso("Generar Libro de Guías", True, f"{len(libro['xml'])} bytes")
 
-            from facturacion.dtes.firma import firmar_envio
+            from facturacion.dtes.firma import firmar_envio_completo
             try:
-                libro_firmado = firmar_envio(
+                libro_firmado = firmar_envio_completo(
                     libro["xml"], cert["pfx_bytes"], cert["password"],
-                    set_dte_id=libro["libro_id"])
+                    set_dte_id=libro["libro_id"], documento_ids=[])
                 paso("Firmar EnvioLibro", True, f"{len(libro_firmado)} bytes")
             except Exception as e_f:
                 import traceback
