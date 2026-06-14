@@ -136,14 +136,21 @@ def generar_liquidacion_xml(
         # = 410 + (-1346) = -936, mientras que round del total daría
         # round(-4930*.19) = -937. El SII valida el MntTotal contra el método
         # POR LÍNEA (-936); usar el total (-937) descuadra el encabezado en 1 peso.
-        if hay_iva_explicito:
-            val_com_iva = com_iva_explicito
-            # El IVA por línea ya viene explícito; respetarlo tal cual.
-        else:
-            val_com_iva = 0
-            for cc in com_norm:
+        # ValComIVA = round(ValComNeto_TOTAL × 0.19). Esta es la regla del
+        # formato oficial (facturacion.cl: ValComIVA = Valor × TasaIVA) y la que
+        # cumple el CASO 3 del set (aceptado por el SII). Con comisiones de signo
+        # mixto (C4: +2156 y -7086 → total -4930), round(-4930×.19) = -937.
+        # El método por línea daba -936, que el SII rechazó en el envío 47.
+        # IVAProp/IVATerc se derivan de este ValComIVA (ver más abajo).
+        val_com_iva = int(round(val_com_neto * IVA_PORCENTAJE / 100.0))
+        # Repartir el IVA total entre las líneas de comisión para el detalle
+        # (la suma debe dar val_com_iva). La última línea absorbe el redondeo.
+        if com_norm:
+            acum = 0
+            for cc in com_norm[:-1]:
                 cc['iva'] = int(round(cc['neto'] * IVA_PORCENTAJE / 100.0))
-                val_com_iva += cc['iva']
+                acum += cc['iva']
+            com_norm[-1]['iva'] = val_com_iva - acum
 
     # MntTotal del DTE 43 descuenta la comisión del liquidador (neto + IVA).
     mnt_total = mnt_neto + mnt_exe + mnt_iva - val_com_neto - val_com_iva
@@ -206,17 +213,19 @@ def generar_liquidacion_xml(
     # del SII no es el estándar). Orden XSD: IVA → IVAProp → IVATerc → ... → Comisiones.
     omitir_ipt = bool(emisor.get('omitir_iva_prop_terc'))
     if com_norm and not omitir_ipt:
-        # IVA Propio = IVA de las comisiones del liquidador. IVA de Terceros =
-        # IVA total − IVA propio (el del mandante).
+        # Regla EXACTA derivada del CASO 3 del set (aceptado por el SII):
+        #   IVAProp = ValComIVA   (el IVA de las comisiones del liquidador)
+        #   IVATerc = IVA − IVAProp
+        # y se cumple IVAProp + IVATerc = IVA.
+        # En el C3 (comisiones +): ValComIVA=1991, IVAProp=1991, IVATerc=97105,
+        # IVA=99096 → 1991+97105=99096 ✓ (este encabezado el SII lo ACEPTÓ).
+        # IMPORTANTE: cuando ValComIVA es negativo (C4, comisiones de signo mixto),
+        # IVAProp DEBE ir negativo también (el formato lo permite en liquidación:
+        # campos 109/110 admiten valor negativo). Forzar IVAProp=0 — como hacía el
+        # envío 47 — rompe la relación IVAProp=ValComIVA y el SII repara el
+        # encabezado. Por eso NO se fuerza a 0.
         iva_prop = val_com_iva
         iva_terc = mnt_iva - iva_prop
-        # Cuando la comisión es negativa, val_com_iva < 0 haría que IVATerc supere
-        # el IVA total, lo que el SII rechaza (IVATerc debe ser < IVA). En ese caso
-        # el IVA de terceros (mandante) es el IVA total y el propio se informa en 0;
-        # el IVA negativo de la comisión ya queda reflejado en ValComIVA.
-        if iva_prop < 0:
-            iva_prop = 0
-            iva_terc = mnt_iva
         tot_parts.append(f'<IVAProp>{iva_prop}</IVAProp>')
         tot_parts.append(f'<IVATerc>{iva_terc}</IVATerc>')
     # Comisiones resumen (después de IVA/ImptoReten, antes de MntTotal)

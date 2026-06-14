@@ -73,9 +73,9 @@ def admin_lusync_sii_test_set_liquidacion():
         </div>
         <table>
         <tr><td><b>CASO 1</b></td><td>Liquidación (43)</td><td>4 líneas neto/exento</td><td style="text-align:right;">Total $1.199.314</td></tr>
-        <tr><td><b>CASO 2</b></td><td>Liquidación (43)</td><td>FE, NC negativas, boletas</td><td style="text-align:right;">Total $7.340.486</td></tr>
+        <tr><td><b>CASO 2</b></td><td>Liquidación (43)</td><td>FE, NC negativas, boletas</td><td style="text-align:right;">Total $8.523.935</td></tr>
         <tr><td><b>CASO 3</b></td><td>Liquidación (43)</td><td>FE + comisiones</td><td style="text-align:right;">Total $735.814</td></tr>
-        <tr><td><b>CASO 4</b></td><td>Liquidación (43)</td><td>anticipo, NC, comisiones negativas</td><td style="text-align:right;">Total $2.521.137</td></tr>
+        <tr><td><b>CASO 4</b></td><td>Liquidación (43)</td><td>anticipo, NC, comisiones negativas</td><td style="text-align:right;">Total $2.527.004</td></tr>
         </table>
         <a class="btn" href="?tenant_id=""" + str(tenant_id) + """&descargar=si""" + extra_q + """">
         📥 Generar y descargar sobre EnvioDTE</a>
@@ -163,7 +163,7 @@ def admin_lusync_sii_test_set_liquidacion():
                     {'nombre': 'EXENTO FACTURA ELECTRÓNICA 4768', 'cantidad': 1, 'monto': 365464, 'exento': True, 'tpo_doc_liq': 33},
                     {'nombre': 'NETO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -50894, 'exento': False, 'tpo_doc_liq': 60},
                     {'nombre': 'EXENTO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -18006, 'exento': True, 'tpo_doc_liq': 60},
-                    {'nombre': 'BOLETAS', 'cantidad': 8262, 'monto': 6228679, 'exento': False, 'tpo_doc_liq': 39},
+                    {'nombre': 'BOLETAS', 'cantidad': 1, 'monto': 6228679, 'exento': False, 'tpo_doc_liq': 39, 'prc_item': 6228679},
                 ], comisiones=None),
                 # CASO 3 — glosas con acentos exactas
                 dict(items=[
