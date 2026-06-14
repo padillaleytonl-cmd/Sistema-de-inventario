@@ -279,10 +279,11 @@ def generar_nota_debito_xml(
             linea_parts.append(f'<DescuentoMonto>{it["_desc_aplicado"]}</DescuentoMonto>')
         elif it.get('descuento_monto'):
             linea_parts.append(f'<DescuentoMonto>{it["_desc_aplicado"]}</DescuentoMonto>')
-        # ND asociada a factura de compra: la retención se declara en los Totales
-        # (ImptoReten). El ejemplo oficial del SII NO lleva CodImpAdic en el detalle
-        # (provoca HED-2-302: el SII lee el código como impuesto adicional con monto 0).
         linea_parts.append(f'<MontoItem>{it["_monto_item"]}</MontoItem>')
+        # ND asociada a factura de compra: CodImpAdic vincula el ítem con la
+        # retención del encabezado. Va DESPUÉS de MontoItem (orden certificado).
+        if impto_reten and not es_exe:
+            linea_parts.append(f'<CodImpAdic>{impto_reten.get("tipo_imp", 15)}</CodImpAdic>')
         detalles_xml += '<Detalle>' + ''.join(linea_parts) + '</Detalle>'
 
     # 6. Descuento global
