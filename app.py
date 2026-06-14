@@ -27397,6 +27397,7 @@ def admin_lusync_sii_test_set_guias():
 
 
 
+
 @app.route("/admin/lusync/sii/test-set-fact-exenta", methods=["GET"])
 def admin_lusync_sii_test_set_fact_exenta():
     """Emite los 8 casos del Set Factura Exenta SII (4897586) en UN sobre EnvioDTE:
@@ -27478,7 +27479,7 @@ def admin_lusync_sii_test_set_fact_exenta():
         </div>
         <table>
         <tr><td><b>CASO 1</b></td><td>FE (34)</td><td>HORAS PROGRAMADOR 3 x 2.838</td><td style="text-align:right;">$8.514</td></tr>
-        <tr><td><b>CASO 2</b></td><td>NC (61)</td><td>Modifica monto C1 (valor 355)</td><td style="text-align:right;">$355</td></tr>
+        <tr><td><b>CASO 2</b></td><td>NC (61)</td><td>Modifica monto C1 (3 x 355)</td><td style="text-align:right;">$1.065</td></tr>
         <tr><td><b>CASO 3</b></td><td>FE (34)</td><td>2 servicios consultoría</td><td style="text-align:right;">$391.398</td></tr>
         <tr><td><b>CASO 4</b></td><td>NC (61)</td><td>Corrige giro C3 (simbólica)</td><td style="text-align:right;">$0</td></tr>
         <tr><td><b>CASO 5</b></td><td>ND (56)</td><td>Anula NC del C4 (simbólica)</td><td style="text-align:right;">$0</td></tr>
@@ -27557,6 +27558,25 @@ def admin_lusync_sii_test_set_fact_exenta():
             folio_34 = int(f34_param) if f34_param.isdigit() else cafs_dict[34].rango_desde
             folio_61 = int(f61_param) if f61_param.isdigit() else cafs_dict[61].rango_desde
             folio_56 = int(f56_param) if f56_param.isdigit() else cafs_dict[56].rango_desde
+
+            # Validación de rango: el set usa 3 folios de 34, 3 de 61, 2 de 56.
+            # Si el folio inicial + los necesarios se sale del rango del CAF, abortar
+            # ANTES de generar (evita rechazos CAF-3-605 del SII y quemar el envío).
+            rango_checks = [
+                (34, folio_34, 3, cafs_dict[34]),
+                (61, folio_61, 3, cafs_dict[61]),
+                (56, folio_56, 2, cafs_dict[56]),
+            ]
+            for tipo_chk, ini, cantidad, caf_chk in rango_checks:
+                fin = ini + cantidad - 1
+                if ini < caf_chk.rango_desde or fin > caf_chk.rango_hasta:
+                    paso(f"Validar folios CAF {tipo_chk}", False,
+                         f"Folios {ini}-{fin} fuera del rango del CAF "
+                         f"({caf_chk.rango_desde}-{caf_chk.rango_hasta}). "
+                         f"Ajusta f{tipo_chk} para que los {cantidad} folios entren en el rango.")
+                    error_fatal = True
+
+        if not error_fatal:
             paso("Folios a usar", True,
                  f"34: {folio_34}-{folio_34+2} · 61: {folio_61}-{folio_61+2} · 56: {folio_56}-{folio_56+1}")
 
@@ -27579,7 +27599,7 @@ def admin_lusync_sii_test_set_fact_exenta():
                 emisor=emisor, receptor=RECEPTOR_SET,
                 referencia={"folio_ref": c1_folio, "tipo_doc_ref": 34, "fecha_ref": fecha,
                             "cod_ref": 3, "razon_ref": "MODIFICA MONTO"},
-                items=[{'nombre': 'HORAS PROGRAMADOR', 'cantidad': 1, 'precio_unitario': 355, 'unidad': 'Hora'}],
+                items=[{'nombre': 'HORAS PROGRAMADOR', 'cantidad': 3, 'precio_unitario': 355, 'unidad': 'Hora'}],
                 set_referencia={"folio_ref": SET, "fecha_ref": fecha, "razon_ref": f"CASO {SET}-2"},
                 es_exenta=True,
             )
