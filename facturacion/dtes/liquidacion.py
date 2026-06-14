@@ -89,6 +89,7 @@ def generar_liquidacion_xml(
             'unidad': it.get('unidad'),
             'tpo_doc_liq': it.get('tpo_doc_liq', 33),
             'prc_item': it.get('prc_item'),
+            'ind_exe_cero': it.get('ind_exe_cero', False),
         })
         if es_exe:
             mnt_exe += aporte_neto
@@ -212,7 +213,16 @@ def generar_liquidacion_xml(
     # 'omitir_iva_prop_terc' (útil cuando las comisiones son negativas y el reparto
     # del SII no es el estándar). Orden XSD: IVA → IVAProp → IVATerc → ... → Comisiones.
     omitir_ipt = bool(emisor.get('omitir_iva_prop_terc'))
-    if com_norm and not omitir_ipt:
+    iva_terc_forzado = emisor.get('iva_terc_todo')
+    if iva_terc_forzado and not com_norm and not omitir_ipt:
+        # Liquidación de SOLO ventas por cuenta de tercero (sin comisiones del
+        # liquidador): todo el IVA del documento es IVA de Terceros (del mandante),
+        # e IVAProp=0. Validación 36 SII: ventas por cuenta de terceros deben
+        # declarar IVA propio e IVA terceros, con IVAProp+IVATerc=IVA. Sin estos
+        # campos, el SII valida la línea de boletas como venta propia y la repara.
+        tot_parts.append('<IVAProp>0</IVAProp>')
+        tot_parts.append(f'<IVATerc>{mnt_iva}</IVATerc>')
+    elif com_norm and not omitir_ipt:
         # Regla EXACTA derivada del CASO 3 del set (aceptado por el SII):
         #   IVAProp = ValComIVA   (el IVA de las comisiones del liquidador)
         #   IVATerc = IVA − IVAProp
@@ -260,6 +270,12 @@ def generar_liquidacion_xml(
         linea_parts.append(f'<TpoDocLiq>{it.get("tpo_doc_liq", 33)}</TpoDocLiq>')
         if it['exento']:
             linea_parts.append('<IndExe>1</IndExe>')
+        elif it.get('ind_exe_cero'):
+            # IndExe=0 explícito para afectos: el manual de integración lista
+            # 0=afecto como valor válido en liquidación. Útil para líneas
+            # consolidadas (boletas) donde el validador del set puede esperar
+            # el indicador de afectación explícito en vez de omitirlo.
+            linea_parts.append('<IndExe>0</IndExe>')
         linea_parts.append(f'<NmbItem>{_escape_xml(it["nombre"])}</NmbItem>')
         if it['cantidad'] is not None:
             linea_parts.append(f'<QtyItem>{_fmt_cantidad(float(it["cantidad"]))}</QtyItem>')
