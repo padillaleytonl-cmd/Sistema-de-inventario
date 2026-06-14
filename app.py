@@ -27127,7 +27127,7 @@ def admin_lusync_sii_test_set_basico():
 
 @app.route("/admin/lusync/sii/test-set-guias", methods=["GET"])
 def admin_lusync_sii_test_set_guias():
-    """Emite los 3 casos del Set Guía de Despacho SII (4829125) en UN sobre EnvioDTE.
+    """Emite los 3 casos del Set Guía de Despacho SII (4897585) en UN sobre EnvioDTE.
 
     CASO 1: Traslado interno entre bodegas (IndTraslado=5, sin precios)
     CASO 2: Venta, despacho por emisor al cliente (IndTraslado=1, TipoDespacho=2)
@@ -27183,7 +27183,7 @@ def admin_lusync_sii_test_set_guias():
         border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;margin-right:10px;}
         a.btn-warn{background:#dc2626;}</style></head><body>
         <div class="card">
-        <h2 style="margin-top:0;">📦 Emitir SET GUÍA DE DESPACHO SII (4829125)</h2>
+        <h2 style="margin-top:0;">📦 Emitir SET GUÍA DE DESPACHO SII (4897585)</h2>
         """ + folios_msg + """
         <div class="warn">
         Genera los 3 casos del set oficial del SII de Guías de Despacho.<br><br>
@@ -27192,8 +27192,8 @@ def admin_lusync_sii_test_set_guias():
         </div>
         <table>
         <tr><td><b>CASO 1</b></td><td>Guía (52)</td><td>Traslado interno entre bodegas (sin precios)</td><td style="text-align:right;">$0</td></tr>
-        <tr><td><b>CASO 2</b></td><td>Guía (52)</td><td>Venta, despacho por emisor</td><td style="text-align:right;">$5.018.814</td></tr>
-        <tr><td><b>CASO 3</b></td><td>Guía (52)</td><td>Venta, despacho por cliente</td><td style="text-align:right;">$3.708.307</td></tr>
+        <tr><td><b>CASO 2</b></td><td>Guía (52)</td><td>Venta, despacho por emisor</td><td style="text-align:right;">$125.810</td></tr>
+        <tr><td><b>CASO 3</b></td><td>Guía (52)</td><td>Venta, despacho por cliente</td><td style="text-align:right;">$172.062</td></tr>
         </table>
         <a class="btn" href="?tenant_id=""" + str(tenant_id) + """&descargar=si""" + extra_q + """">
         📥 Generar y descargar sobre EnvioDTE</a>
@@ -27274,13 +27274,13 @@ def admin_lusync_sii_test_set_guias():
                 emisor=emisor, receptor=RECEPTOR_SET,  # ignorado, se reemplaza por emisor
                 ind_traslado=5, tipo_despacho=0,  # 0 = omitir el campo
                 items=[
-                    {'nombre': 'ITEM 1', 'cantidad': 81, 'precio_unitario': 0, 'exento': False},
-                    {'nombre': 'ITEM 2', 'cantidad': 132, 'precio_unitario': 0, 'exento': False},
-                    {'nombre': 'ITEM 3', 'cantidad': 91, 'precio_unitario': 0, 'exento': False},
+                    {'nombre': 'ITEM 1', 'cantidad': 52, 'precio_unitario': 0, 'exento': False},
+                    {'nombre': 'ITEM 2', 'cantidad': 46, 'precio_unitario': 0, 'exento': False},
+                    {'nombre': 'ITEM 3', 'cantidad': 16, 'precio_unitario': 0, 'exento': False},
                 ],
                 referencias=[{
-                    "tpo_doc_ref": "SET", "folio_ref": "4829125",
-                    "fecha_ref": fecha, "razon_ref": "CASO 4829125-1",
+                    "tpo_doc_ref": "SET", "folio_ref": "4897585",
+                    "fecha_ref": fecha, "razon_ref": "CASO 4897585-1",
                 }],
             )
             caso1_folio = r["folio"]; caso1_total = r["totales"]["mnt_total"]
@@ -27295,12 +27295,12 @@ def admin_lusync_sii_test_set_guias():
                 emisor=emisor, receptor=RECEPTOR_SET,
                 ind_traslado=1, tipo_despacho=2,
                 items=[
-                    {'nombre': 'ITEM 1', 'cantidad': 381, 'precio_unitario': 7745, 'exento': False},
-                    {'nombre': 'ITEM 2', 'cantidad': 739, 'precio_unitario': 1714, 'exento': False},
+                    {'nombre': 'ITEM 1', 'cantidad': 39, 'precio_unitario': 1397, 'exento': False},
+                    {'nombre': 'ITEM 2', 'cantidad': 60, 'precio_unitario': 854, 'exento': False},
                 ],
                 referencias=[{
-                    "tpo_doc_ref": "SET", "folio_ref": "4829125",
-                    "fecha_ref": fecha, "razon_ref": "CASO 4829125-2",
+                    "tpo_doc_ref": "SET", "folio_ref": "4897585",
+                    "fecha_ref": fecha, "razon_ref": "CASO 4897585-2",
                 }],
             )
             caso2_folio = r["folio"]; caso2_total = r["totales"]["mnt_total"]
@@ -27315,12 +27315,12 @@ def admin_lusync_sii_test_set_guias():
                 emisor=emisor, receptor=RECEPTOR_SET,
                 ind_traslado=1, tipo_despacho=1,
                 items=[
-                    {'nombre': 'ITEM 1', 'cantidad': 180, 'precio_unitario': 2063, 'exento': False},
-                    {'nombre': 'ITEM 2', 'cantidad': 454, 'precio_unitario': 6046, 'exento': False},
+                    {'nombre': 'ITEM 1', 'cantidad': 74, 'precio_unitario': 1001, 'exento': False},
+                    {'nombre': 'ITEM 2', 'cantidad': 61, 'precio_unitario': 1156, 'exento': False},
                 ],
                 referencias=[{
-                    "tpo_doc_ref": "SET", "folio_ref": "4829125",
-                    "fecha_ref": fecha, "razon_ref": "CASO 4829125-3",
+                    "tpo_doc_ref": "SET", "folio_ref": "4897585",
+                    "fecha_ref": fecha, "razon_ref": "CASO 4897585-3",
                 }],
             )
             caso3_folio = r["folio"]; caso3_total = r["totales"]["mnt_total"]
@@ -27388,7 +27388,7 @@ def admin_lusync_sii_test_set_guias():
     .card{{max-width:780px;margin:0 auto;background:#f9f9f7;border-radius:14px;padding:28px;box-shadow:0 4px 20px rgba(0,0,0,0.06);}}
     h2{{margin-top:0;}}</style></head><body>
     <div class="card">
-      <h2>📦 Set Guía de Despacho SII (4829125)</h2>
+      <h2>📦 Set Guía de Despacho SII (4897585)</h2>
       <p>Tenant {tenant_id} · ambiente {ambiente}</p>
       <div>{filas}</div>
     </div>
