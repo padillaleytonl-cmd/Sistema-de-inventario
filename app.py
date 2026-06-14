@@ -27762,6 +27762,466 @@ def admin_lusync_sii_test_set_fact_exenta():
     </div>
     </body></html>"""
 
+
+
+@app.route("/admin/lusync/sii/test-set-libro-ventas", methods=["GET"])
+def admin_lusync_sii_test_set_libro_ventas():
+    """Genera el Libro de Ventas (IECV) del período, set SII 4897587.
+
+    Para emisor 100% electrónico: Carátula + ResumenPeriodo SIN detalle.
+    Resume los documentos del SET BÁSICO ya certificado:
+      Facturas (33): 4 docs · Notas Crédito (61): 3 docs · Notas Débito (56): 1 doc
+
+    Uso: /admin/lusync/sii/test-set-libro-ventas?tenant_id=3&periodo=2026-06&descargar=si
+    """
+    if not session.get("logged"):
+        return redirect("/login")
+    if session.get("rol") != "admin" and not session.get("is_lusync_admin"):
+        return jsonify({"ok": False, "error": "solo admin del tenant"}), 403
+    from inventario import get_conn, release_conn
+    from facturacion.certificados import obtener_certificado
+    from facturacion.db import obtener_config_facturacion
+
+    tenant_id = request.args.get("tenant_id", default=3, type=int)
+    ambiente = request.args.get("ambiente", default="certificacion")
+    periodo = request.args.get("periodo", default="2026-06")
+    descargar = request.args.get("descargar", default="")
+    confirmar = request.args.get("confirmar", default="")
+
+    pasos = []
+    def paso(nombre, ok, detalle=""):
+        pasos.append({"nombre": nombre, "ok": ok, "detalle": detalle})
+
+    if confirmar != "si" and descargar != "si":
+        return """<!DOCTYPE html><html><head><meta charset="utf-8">
+        <title>Confirmar Libro de Ventas SII</title>
+        <style>body{font-family:-apple-system,sans-serif;background:#f6f5f1;padding:40px;}
+        .card{max-width:680px;margin:0 auto;background:white;border-radius:14px;padding:28px;box-shadow:0 4px 20px rgba(0,0,0,0.06);}
+        .warn{background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:14px;color:#92400e;font-size:13px;margin-bottom:10px;}
+        a.btn{display:inline-block;margin-top:18px;background:#534AB7;color:white;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;}</style></head><body>
+        <div class="card">
+        <h2 style="margin-top:0;">📗 Generar LIBRO DE VENTAS SII (4897587)</h2>
+        <div class="warn">
+        Libro de Ventas del período """ + periodo + """ (solo resumen, emisor electrónico).<br>
+        Resume: 4 Facturas (33) + 3 NC (61) + 1 ND (56) del Set Básico.<br>
+        No consume folios (es un libro, no un DTE).
+        </div>
+        <a class="btn" href="?tenant_id=""" + str(tenant_id) + """&periodo=""" + periodo + """&descargar=si">
+        📥 Generar y descargar EnvioLibro</a>
+        </div></body></html>"""
+
+    error_fatal = False
+    try:
+        cert = obtener_certificado(get_conn, release_conn, tenant_id)
+        if not cert.get("ok"):
+            paso("Leer certificado", False, cert.get("error", "?")); error_fatal = True
+        else:
+            paso("Leer certificado", True, cert["metadata"].get("titular", "?"))
+
+        if not error_fatal:
+            config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+            rut_emisor = config["rut_emisor"]
+            rut_envia = cert["metadata"].get("rut", "18849272-K")
+            paso("Datos del emisor", True, f"{rut_emisor}")
+
+            from facturacion.dtes.libro_cv import construir_totales_periodo_venta, generar_libro_xml
+
+            # ResumenPeriodo por tipo de documento (totales del Set Básico).
+            # Montos del set 4897584 ya certificado.
+            totales = []
+            # Facturas (33): 4 docs
+            totales.append(construir_totales_periodo_venta(
+                tpo_doc=33, tot_doc=4,
+                tot_mnt_exe=48415, tot_mnt_neto=3071476,
+                tot_mnt_iva=583581, tot_mnt_total=3703472))
+            # Notas de Crédito (61): 3 docs
+            totales.append(construir_totales_periodo_venta(
+                tpo_doc=61, tot_doc=3,
+                tot_mnt_exe=34849, tot_mnt_neto=1346486,
+                tot_mnt_iva=255832, tot_mnt_total=1637167))
+            # Notas de Débito (56): 1 doc (caso 8, MntTotal 0)
+            totales.append(construir_totales_periodo_venta(
+                tpo_doc=56, tot_doc=1,
+                tot_mnt_exe=0, tot_mnt_neto=0,
+                tot_mnt_iva=0, tot_mnt_total=0))
+            paso("Construir ResumenPeriodo", True, "33: 4 docs · 61: 3 docs · 56: 1 doc")
+
+            try:
+                from zoneinfo import ZoneInfo
+                ts = datetime.now(ZoneInfo("America/Santiago")).strftime("%Y-%m-%dT%H:%M:%S")
+            except Exception:
+                ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+
+            libro = generar_libro_xml(
+                rut_emisor=rut_emisor, rut_envia=rut_envia,
+                periodo_tributario=periodo, tipo_operacion="VENTA",
+                totales_periodo=totales, detalles=None,
+                fch_resol="2026-05-15", nro_resol=0,
+                tipo_libro="ESPECIAL", tipo_envio="TOTAL",
+                libro_id="LibroVentas", tmst_firma=ts)
+            paso("Generar Libro de Ventas", True, f"{len(libro['xml'])} bytes")
+
+            from facturacion.dtes.firma import firmar_envio
+            try:
+                libro_firmado = firmar_envio(
+                    libro["xml"], cert["pfx_bytes"], cert["password"],
+                    set_dte_id=libro["libro_id"])
+                paso("Firmar EnvioLibro", True, f"{len(libro_firmado)} bytes")
+            except Exception as e_f:
+                import traceback
+                paso("Firmar EnvioLibro", False, f"{e_f}<br><pre style='font-size:10px;'>{traceback.format_exc()[:500]}</pre>")
+                error_fatal = True
+
+            if not error_fatal and descargar == "si":
+                from flask import Response
+                return Response(libro_firmado, mimetype="application/xml",
+                    headers={"Content-Disposition": 'attachment; filename="EnvioLibroVentas.xml"'})
+
+    except Exception as e:
+        import traceback
+        paso("ERROR", False, f"{e}<br><pre style='font-size:10px;'>{traceback.format_exc()[:1000]}</pre>")
+
+    filas = ''
+    for p in pasos:
+        icon = '✅' if p['ok'] else '❌'; color = '#16a34a' if p['ok'] else '#dc2626'
+        filas += f'<div style="border-left:3px solid {color};padding:10px 16px;margin:8px 0;background:white;border-radius:6px;"><b>{icon} {p["nombre"]}</b><div style="font-size:13px;color:#666;margin-top:4px;">{p["detalle"]}</div></div>'
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Libro de Ventas SII</title>
+    <style>body{{font-family:-apple-system,sans-serif;background:#f6f5f1;padding:40px;}}
+    .card{{max-width:780px;margin:0 auto;background:#f9f9f7;border-radius:14px;padding:28px;}}</style></head><body>
+    <div class="card"><h2>📗 Libro de Ventas SII (4897587)</h2><p>Período {periodo} · tenant {tenant_id}</p><div>{filas}</div></div>
+    </body></html>"""
+
+
+
+@app.route("/admin/lusync/sii/test-set-libro-compras", methods=["GET"])
+def admin_lusync_sii_test_set_libro_compras():
+    """Genera el Libro de Compras (IECV) del período, set SII 4897588.
+
+    Lleva Detalle (cada documento) + ResumenPeriodo. 7 documentos:
+      Tipo 30 (factura): f234 normal, f781 IVA uso común (fct 0.60)
+      Tipo 33 (fact elec): f32 con exento, f67 entrega gratuita (IVA no rec cod 4)
+      Tipo 46 (fact compra): f9 retención total IVA
+      Tipo 60 (NC): f451, f211 descuentos
+
+    Uso: /admin/lusync/sii/test-set-libro-compras?tenant_id=3&periodo=2026-06&descargar=si
+    """
+    if not session.get("logged"):
+        return redirect("/login")
+    if session.get("rol") != "admin" and not session.get("is_lusync_admin"):
+        return jsonify({"ok": False, "error": "solo admin del tenant"}), 403
+    from inventario import get_conn, release_conn
+    from facturacion.certificados import obtener_certificado
+    from facturacion.db import obtener_config_facturacion
+
+    tenant_id = request.args.get("tenant_id", default=3, type=int)
+    ambiente = request.args.get("ambiente", default="certificacion")
+    periodo = request.args.get("periodo", default="2026-06")
+    descargar = request.args.get("descargar", default="")
+    confirmar = request.args.get("confirmar", default="")
+
+    pasos = []
+    def paso(nombre, ok, detalle=""):
+        pasos.append({"nombre": nombre, "ok": ok, "detalle": detalle})
+
+    if confirmar != "si" and descargar != "si":
+        return """<!DOCTYPE html><html><head><meta charset="utf-8">
+        <title>Confirmar Libro de Compras SII</title>
+        <style>body{font-family:-apple-system,sans-serif;background:#f6f5f1;padding:40px;}
+        .card{max-width:680px;margin:0 auto;background:white;border-radius:14px;padding:28px;box-shadow:0 4px 20px rgba(0,0,0,0.06);}
+        .warn{background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:14px;color:#92400e;font-size:13px;margin-bottom:10px;}
+        a.btn{display:inline-block;margin-top:18px;background:#534AB7;color:white;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;}</style></head><body>
+        <div class="card">
+        <h2 style="margin-top:0;">📕 Generar LIBRO DE COMPRAS SII (4897588)</h2>
+        <div class="warn">
+        Libro de Compras del período """ + periodo + """ (con detalle + resumen).<br>
+        7 documentos: 2 facturas (30), 2 fact. elec (33), 1 fact. compra (46), 2 NC (60).<br>
+        Incluye IVA uso común (fct 0.60), entrega gratuita, retención total.<br>
+        No consume folios (es un libro).
+        </div>
+        <a class="btn" href="?tenant_id=""" + str(tenant_id) + """&periodo=""" + periodo + """&descargar=si">
+        📥 Generar y descargar EnvioLibro</a>
+        </div></body></html>"""
+
+    error_fatal = False
+    try:
+        cert = obtener_certificado(get_conn, release_conn, tenant_id)
+        if not cert.get("ok"):
+            paso("Leer certificado", False, cert.get("error", "?")); error_fatal = True
+        else:
+            paso("Leer certificado", True, cert["metadata"].get("titular", "?"))
+
+        if not error_fatal:
+            config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+            rut_emisor = config["rut_emisor"]
+            rut_envia = cert["metadata"].get("rut", "18849272-K")
+            paso("Datos del emisor", True, f"{rut_emisor}")
+
+            from facturacion.dtes.libro_cv import (
+                construir_totales_periodo_compra, construir_detalle_compra, generar_libro_xml)
+
+            def iva(n): return round(n * 0.19)
+            RUT_PROV = "55555555-5"  # proveedor de prueba
+            F = f"{periodo}-14"      # fecha doc dentro del período
+
+            # ── DETALLE (cada documento) ──
+            detalles = []
+            # 1. Tipo 30 f234 — normal
+            detalles.append(construir_detalle_compra(
+                tpo_doc=30, nro_doc=234, fch_doc=F, rut_doc=RUT_PROV,
+                mnt_neto=18139, mnt_iva=iva(18139), mnt_total=18139+iva(18139)))
+            # 2. Tipo 33 f32 — con exento
+            detalles.append(construir_detalle_compra(
+                tpo_doc=33, nro_doc=32, fch_doc=F, rut_doc=RUT_PROV,
+                mnt_exe=8667, mnt_neto=6039, mnt_iva=iva(6039),
+                mnt_total=8667+6039+iva(6039)))
+            # 3. Tipo 30 f781 — IVA uso común (MntIVA en IVAUsoComun, no en MntIVA)
+            detalles.append(construir_detalle_compra(
+                tpo_doc=30, nro_doc=781, fch_doc=F, rut_doc=RUT_PROV,
+                mnt_neto=29747, mnt_iva=0, iva_uso_comun=iva(29747),
+                mnt_total=29747+iva(29747)))
+            # 4. Tipo 60 f451 — NC descuento a factura 234
+            detalles.append(construir_detalle_compra(
+                tpo_doc=60, nro_doc=451, fch_doc=F, rut_doc=RUT_PROV,
+                mnt_neto=2698, mnt_iva=iva(2698), mnt_total=2698+iva(2698)))
+            # 5. Tipo 33 f67 — entrega gratuita (IVA no recuperable cod 4)
+            detalles.append(construir_detalle_compra(
+                tpo_doc=33, nro_doc=67, fch_doc=F, rut_doc=RUT_PROV,
+                mnt_neto=9817, mnt_iva=0,
+                cod_iva_no_rec=4, mnt_iva_no_rec=iva(9817),
+                mnt_total=9817+iva(9817)))
+            # 6. Tipo 46 f9 — factura compra retención total (MntTotal NO resta retención)
+            detalles.append(construir_detalle_compra(
+                tpo_doc=46, nro_doc=9, fch_doc=F, rut_doc=RUT_PROV,
+                mnt_neto=9470, mnt_iva=iva(9470),
+                iva_ret_total=iva(9470), cod_otro_imp_ret=15,
+                mnt_total=9470+iva(9470)))
+            # 7. Tipo 60 f211 — NC descuento a factura elec 32
+            detalles.append(construir_detalle_compra(
+                tpo_doc=60, nro_doc=211, fch_doc=F, rut_doc=RUT_PROV,
+                mnt_neto=4012, mnt_iva=iva(4012), mnt_total=4012+iva(4012)))
+            paso("Construir Detalle (7 docs)", True,
+                 "30: f234,f781 · 33: f32,f67 · 46: f9 · 60: f451,f211")
+
+            # ── RESUMEN por tipo de documento ──
+            totales = []
+            # Tipo 30: f234 (normal) + f781 (uso común)
+            totales.append(construir_totales_periodo_compra(
+                tpo_doc=30, tot_doc=2, tot_mnt_neto=18139+29747,
+                tot_mnt_iva=iva(18139),
+                tot_op_iva_uso_comun=1, tot_iva_uso_comun=iva(29747),
+                fct_prop=0.60, tot_cred_iva_uso_comun=round(iva(29747)*0.60),
+                tot_mnt_total=(18139+iva(18139))+(29747+iva(29747))))
+            # Tipo 33: f32 (exento) + f67 (entrega gratuita, IVA no rec cod 4)
+            totales.append(construir_totales_periodo_compra(
+                tpo_doc=33, tot_doc=2, tot_mnt_exe=8667, tot_mnt_neto=6039+9817,
+                tot_mnt_iva=iva(6039),
+                cod_iva_no_rec=4, tot_mnt_iva_no_rec=iva(9817),
+                tot_mnt_total=(8667+6039+iva(6039))+(9817+iva(9817))))
+            # Tipo 46: f9 retención total
+            totales.append(construir_totales_periodo_compra(
+                tpo_doc=46, tot_doc=1, tot_mnt_neto=9470, tot_mnt_iva=iva(9470),
+                tot_iva_ret_total=iva(9470), cod_otro_imp_ret=15,
+                tot_mnt_total=9470+iva(9470)))
+            # Tipo 60: f451 + f211
+            totales.append(construir_totales_periodo_compra(
+                tpo_doc=60, tot_doc=2, tot_mnt_neto=2698+4012,
+                tot_mnt_iva=iva(2698)+iva(4012),
+                tot_mnt_total=(2698+iva(2698))+(4012+iva(4012))))
+            paso("Construir ResumenPeriodo", True, "30: 2 · 33: 2 · 46: 1 · 60: 2")
+
+            try:
+                from zoneinfo import ZoneInfo
+                ts = datetime.now(ZoneInfo("America/Santiago")).strftime("%Y-%m-%dT%H:%M:%S")
+            except Exception:
+                ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+
+            libro = generar_libro_xml(
+                rut_emisor=rut_emisor, rut_envia=rut_envia,
+                periodo_tributario=periodo, tipo_operacion="COMPRA",
+                totales_periodo=totales, detalles=detalles,
+                fch_resol="2026-05-15", nro_resol=0,
+                tipo_libro="ESPECIAL", tipo_envio="TOTAL",
+                libro_id="LibroCompras", tmst_firma=ts)
+            paso("Generar Libro de Compras", True, f"{len(libro['xml'])} bytes")
+
+            from facturacion.dtes.firma import firmar_envio
+            try:
+                libro_firmado = firmar_envio(
+                    libro["xml"], cert["pfx_bytes"], cert["password"],
+                    set_dte_id=libro["libro_id"])
+                paso("Firmar EnvioLibro", True, f"{len(libro_firmado)} bytes")
+            except Exception as e_f:
+                import traceback
+                paso("Firmar EnvioLibro", False, f"{e_f}<br><pre style='font-size:10px;'>{traceback.format_exc()[:500]}</pre>")
+                error_fatal = True
+
+            if not error_fatal and descargar == "si":
+                from flask import Response
+                return Response(libro_firmado, mimetype="application/xml",
+                    headers={"Content-Disposition": 'attachment; filename="EnvioLibroCompras.xml"'})
+
+    except Exception as e:
+        import traceback
+        paso("ERROR", False, f"{e}<br><pre style='font-size:10px;'>{traceback.format_exc()[:1000]}</pre>")
+
+    filas = ''
+    for p in pasos:
+        icon = '✅' if p['ok'] else '❌'; color = '#16a34a' if p['ok'] else '#dc2626'
+        filas += f'<div style="border-left:3px solid {color};padding:10px 16px;margin:8px 0;background:white;border-radius:6px;"><b>{icon} {p["nombre"]}</b><div style="font-size:13px;color:#666;margin-top:4px;">{p["detalle"]}</div></div>'
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Libro de Compras SII</title>
+    <style>body{{font-family:-apple-system,sans-serif;background:#f6f5f1;padding:40px;}}
+    .card{{max-width:780px;margin:0 auto;background:#f9f9f7;border-radius:14px;padding:28px;}}</style></head><body>
+    <div class="card"><h2>📕 Libro de Compras SII (4897588)</h2><p>Período {periodo} · tenant {tenant_id}</p><div>{filas}</div></div>
+    </body></html>"""
+
+
+
+@app.route("/admin/lusync/sii/test-set-libro-guias", methods=["GET"])
+def admin_lusync_sii_test_set_libro_guias():
+    """Genera el Libro de Guías del período, set SII 4897589.
+
+    Construido con las 3 guías del Set Guías (4897585) certificado:
+      Caso 1 (f70): traslado interno (TpoOper=5, no venta) → tabla no-venta
+      Caso 2 (f71): venta facturada en el período → ref a factura, TotMntModificado
+      Caso 3 (f72): venta ANULADA → Anulado=1, TotGuiaAnulada
+
+    Uso: /admin/lusync/sii/test-set-libro-guias?tenant_id=3&periodo=2026-06&f52=70&descargar=si
+    """
+    if not session.get("logged"):
+        return redirect("/login")
+    if session.get("rol") != "admin" and not session.get("is_lusync_admin"):
+        return jsonify({"ok": False, "error": "solo admin del tenant"}), 403
+    from inventario import get_conn, release_conn
+    from facturacion.certificados import obtener_certificado
+    from facturacion.db import obtener_config_facturacion
+
+    tenant_id = request.args.get("tenant_id", default=3, type=int)
+    ambiente = request.args.get("ambiente", default="certificacion")
+    periodo = request.args.get("periodo", default="2026-06")
+    descargar = request.args.get("descargar", default="")
+    confirmar = request.args.get("confirmar", default="")
+    # Folios de las guías ya certificadas (del Set Guías). Default 70,71,72.
+    f52_param = (request.args.get("f52") or "").strip()
+    f52 = int(f52_param) if f52_param.isdigit() else 70
+
+    pasos = []
+    def paso(nombre, ok, detalle=""):
+        pasos.append({"nombre": nombre, "ok": ok, "detalle": detalle})
+
+    if confirmar != "si" and descargar != "si":
+        return """<!DOCTYPE html><html><head><meta charset="utf-8">
+        <title>Confirmar Libro de Guías SII</title>
+        <style>body{font-family:-apple-system,sans-serif;background:#f6f5f1;padding:40px;}
+        .card{max-width:680px;margin:0 auto;background:white;border-radius:14px;padding:28px;box-shadow:0 4px 20px rgba(0,0,0,0.06);}
+        .warn{background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:14px;color:#92400e;font-size:13px;margin-bottom:10px;}
+        a.btn{display:inline-block;margin-top:18px;background:#534AB7;color:white;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;}</style></head><body>
+        <div class="card">
+        <h2 style="margin-top:0;">📘 Generar LIBRO DE GUÍAS SII (4897589)</h2>
+        <div class="warn">
+        Libro de Guías del período """ + periodo + """ (guías folios """ + str(f52) + """-""" + str(f52+2) + """).<br>
+        Caso 1: traslado interno · Caso 2: venta facturada · Caso 3: venta anulada.<br>
+        No consume folios (es un libro).
+        </div>
+        <a class="btn" href="?tenant_id=""" + str(tenant_id) + """&periodo=""" + periodo + """&f52=""" + str(f52) + """&descargar=si">
+        📥 Generar y descargar EnvioLibro</a>
+        </div></body></html>"""
+
+    error_fatal = False
+    try:
+        cert = obtener_certificado(get_conn, release_conn, tenant_id)
+        if not cert.get("ok"):
+            paso("Leer certificado", False, cert.get("error", "?")); error_fatal = True
+        else:
+            paso("Leer certificado", True, cert["metadata"].get("titular", "?"))
+
+        if not error_fatal:
+            config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+            rut_emisor = config["rut_emisor"]
+            rut_envia = cert["metadata"].get("rut", "18849272-K")
+            paso("Datos del emisor", True, f"{rut_emisor}")
+
+            from facturacion.dtes.libro_guia import (
+                construir_detalle_guia, construir_resumen_guia, generar_libro_guia_xml)
+
+            def iva(n): return round(n * 0.19)
+            F = f"{periodo}-14"
+            RUT_CLI = "55555555-5"
+
+            # ── DETALLE de cada guía ──
+            detalles = []
+            # Caso 1 (f70): traslado interno (TpoOper=5), sin venta, sin monto
+            detalles.append(construir_detalle_guia(
+                folio=f52, tpo_oper=5, fch_doc=F))
+            # Caso 2 (f71): venta facturada → ref a factura emitida + monto
+            detalles.append(construir_detalle_guia(
+                folio=f52+1, tpo_oper=1, fch_doc=F, rut_doc=RUT_CLI,
+                mnt_neto=105723, iva=iva(105723), mnt_total=125810,
+                tpo_doc_ref=33, folio_doc_ref=140, fch_doc_ref=F))
+            # Caso 3 (f72): venta ANULADA
+            detalles.append(construir_detalle_guia(
+                folio=f52+2, tpo_oper=1, fch_doc=F, rut_doc=RUT_CLI,
+                mnt_neto=144590, iva=iva(144590), mnt_total=172062,
+                anulado=1))
+            paso("Construir Detalle (3 guías)", True,
+                 f"f{f52}: interno · f{f52+1}: venta facturada · f{f52+2}: anulada")
+
+            # ── RESUMEN ──
+            # Caso 2 facturada → su monto va en TotMntModificado (no en venta directa)
+            # Caso 3 anulada → TotGuiaAnulada=1
+            # Caso 1 traslado interno → tabla no-venta (cod 5)
+            resumen = construir_resumen_guia(
+                tot_guias_anuladas=1,
+                tot_guias_venta=0,
+                tot_mnt_guias_venta=0,
+                tot_mnt_modificado=125810,
+                guias_no_venta=[{"cod_traslado": 5, "cantidad": 1, "monto": 0}])
+            paso("Construir ResumenPeriodo", True,
+                 "anuladas:1 · modificado:125.810 · traslado interno:1")
+
+            try:
+                from zoneinfo import ZoneInfo
+                ts = datetime.now(ZoneInfo("America/Santiago")).strftime("%Y-%m-%dT%H:%M:%S")
+            except Exception:
+                ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+
+            libro = generar_libro_guia_xml(
+                rut_emisor=rut_emisor, rut_envia=rut_envia,
+                periodo_tributario=periodo, detalles=detalles, resumen=resumen,
+                fch_resol="2026-05-15", nro_resol=0,
+                tipo_libro="ESPECIAL", tipo_envio="TOTAL",
+                libro_id="LibroGuias", tmst_firma=ts)
+            paso("Generar Libro de Guías", True, f"{len(libro['xml'])} bytes")
+
+            from facturacion.dtes.firma import firmar_envio
+            try:
+                libro_firmado = firmar_envio(
+                    libro["xml"], cert["pfx_bytes"], cert["password"],
+                    set_dte_id=libro["libro_id"])
+                paso("Firmar EnvioLibro", True, f"{len(libro_firmado)} bytes")
+            except Exception as e_f:
+                import traceback
+                paso("Firmar EnvioLibro", False, f"{e_f}<br><pre style='font-size:10px;'>{traceback.format_exc()[:500]}</pre>")
+                error_fatal = True
+
+            if not error_fatal and descargar == "si":
+                from flask import Response
+                return Response(libro_firmado, mimetype="application/xml",
+                    headers={"Content-Disposition": 'attachment; filename="EnvioLibroGuias.xml"'})
+
+    except Exception as e:
+        import traceback
+        paso("ERROR", False, f"{e}<br><pre style='font-size:10px;'>{traceback.format_exc()[:1000]}</pre>")
+
+    filas = ''
+    for p in pasos:
+        icon = '✅' if p['ok'] else '❌'; color = '#16a34a' if p['ok'] else '#dc2626'
+        filas += f'<div style="border-left:3px solid {color};padding:10px 16px;margin:8px 0;background:white;border-radius:6px;"><b>{icon} {p["nombre"]}</b><div style="font-size:13px;color:#666;margin-top:4px;">{p["detalle"]}</div></div>'
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Libro de Guías SII</title>
+    <style>body{{font-family:-apple-system,sans-serif;background:#f6f5f1;padding:40px;}}
+    .card{{max-width:780px;margin:0 auto;background:#f9f9f7;border-radius:14px;padding:28px;}}</style></head><body>
+    <div class="card"><h2>📘 Libro de Guías SII (4897589)</h2><p>Período {periodo} · tenant {tenant_id}</p><div>{filas}</div></div>
+    </body></html>"""
+
 @app.route("/admin/lusync/sii/test-set-boletas", methods=["GET"])
 @requiere_lusync_admin
 def admin_lusync_sii_test_set_boletas():
