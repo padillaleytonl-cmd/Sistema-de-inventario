@@ -28222,6 +28222,246 @@ def admin_lusync_sii_test_set_libro_guias():
     <div class="card"><h2>📘 Libro de Guías SII (4897589)</h2><p>Período {periodo} · tenant {tenant_id}</p><div>{filas}</div></div>
     </body></html>"""
 
+
+
+@app.route("/admin/lusync/sii/test-set-fact-compra", methods=["GET"])
+def admin_lusync_sii_test_set_fact_compra():
+    """Emite los 3 casos del Set Factura de Compra SII (4897593) en UN sobre EnvioDTE:
+       1 Factura de Compra (46) + 1 Nota de Crédito (61) + 1 Nota de Débito (56).
+
+    La factura de compra lleva retención TOTAL del IVA (ImptoReten TipoImp 15).
+    La NC (devolución) lleva su ImptoReten. La ND anula la NC replicando montos
+    (regla SII REF-2-780: al anular con CodRef 1 los montos deben coincidir).
+
+    Casos (set 4897593):
+      C1 FC46: Producto 1 (1122 x 8490) + Producto 2 (42 x 4732)
+      C2 NC61: devolución Producto 1 (374) + Producto 2 (14), mismos precios + retención
+      C3 ND56: anula NC C2, replica ítems/montos de la NC + retención
+
+    Uso: /admin/lusync/sii/test-set-fact-compra?tenant_id=3&f46=110&f61=146&f56=143&descargar=si
+    """
+    if not session.get("logged"):
+        return redirect("/login")
+    if session.get("rol") != "admin" and not session.get("is_lusync_admin"):
+        return jsonify({"ok": False, "error": "solo admin del tenant"}), 403
+    from inventario import get_conn, release_conn
+    from facturacion.certificados import obtener_certificado
+    from facturacion.db import obtener_config_facturacion
+
+    tenant_id = request.args.get("tenant_id", default=3, type=int)
+    ambiente = request.args.get("ambiente", default="certificacion")
+    confirmar = request.args.get("confirmar", default="")
+    descargar = request.args.get("descargar", default="")
+    SET = "4897593"
+
+    pasos = []
+    def paso(nombre, ok, detalle=""):
+        pasos.append({"nombre": nombre, "ok": ok, "detalle": detalle})
+
+    # Receptor = proveedor (en factura de compra el emisor es el comprador)
+    RECEPTOR_SET = {
+        "rut": "55555555-5",
+        "razon_social": "PROVEEDOR DE PRUEBAS LUSYNC",
+        "giro": "Comercio al por menor",
+        "direccion": "Av. Providencia 1234",
+        "comuna": "Providencia",
+    }
+
+    if confirmar != "si" and descargar != "si":
+        f46_q = request.args.get("f46", ""); f61_q = request.args.get("f61", ""); f56_q = request.args.get("f56", "")
+        extra_q = ""
+        if f46_q: extra_q += f"&f46={f46_q}"
+        if f61_q: extra_q += f"&f61={f61_q}"
+        if f56_q: extra_q += f"&f56={f56_q}"
+        return """<!DOCTYPE html><html><head><meta charset="utf-8">
+        <title>Confirmar Set Factura de Compra SII</title>
+        <style>body{font-family:-apple-system,sans-serif;background:#f6f5f1;padding:40px;}
+        .card{max-width:680px;margin:0 auto;background:white;border-radius:14px;padding:28px;box-shadow:0 4px 20px rgba(0,0,0,0.06);}
+        .warn{background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:14px;color:#92400e;font-size:13px;margin-bottom:10px;}
+        table{width:100%;border-collapse:collapse;margin:14px 0;font-size:12px;}td{padding:6px 8px;border-bottom:1px solid #f0f0ee;}
+        a.btn{display:inline-block;margin-top:18px;background:#534AB7;color:white;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;}</style></head><body>
+        <div class="card">
+        <h2 style="margin-top:0;">🛒 Emitir SET FACTURA DE COMPRA SII (4897593)</h2>
+        <div class="warn">
+        Genera los 3 casos: 1 Factura de Compra (46) + 1 NC (61) + 1 ND (56).<br>
+        La factura de compra lleva retención TOTAL del IVA.<br>
+        Consume: 1 folio CAF 46 + 1 folio CAF 61 + 1 folio CAF 56
+        </div>
+        <table>
+        <tr><td><b>CASO 1</b></td><td>FC (46)</td><td>Producto 1 (1122) + Producto 2 (42), ret. total</td><td style="text-align:right;">$9.724.524</td></tr>
+        <tr><td><b>CASO 2</b></td><td>NC (61)</td><td>Devolución items 1 y 2</td><td style="text-align:right;">$3.241.508</td></tr>
+        <tr><td><b>CASO 3</b></td><td>ND (56)</td><td>Anula NC del CASO 2</td><td style="text-align:right;">$3.241.508</td></tr>
+        </table>
+        <a class="btn" href="?tenant_id=""" + str(tenant_id) + """&descargar=si""" + extra_q + """">
+        📥 Generar y descargar sobre EnvioDTE</a>
+        </div></body></html>"""
+
+    error_fatal = False
+    detalles_casos = []
+    documentos_sin_firma = []
+    documento_ids = []
+    try:
+        cert = obtener_certificado(get_conn, release_conn, tenant_id)
+        if not cert.get("ok"):
+            paso("Leer certificado", False, cert.get("error", "?")); error_fatal = True
+        else:
+            paso("Leer certificado", True, cert["metadata"].get("titular", "?"))
+
+        cafs_dict = {}
+        if not error_fatal:
+            config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+            emisor = {
+                "rut": config["rut_emisor"], "razon_social": config["razon_social"],
+                "giro": config.get("giro", "Venta al por menor"),
+                "dir_origen": config.get("direccion", "Sin dirección"),
+                "cmna_origen": config.get("comuna", "Santiago"),
+            }
+            if config.get("acteco"):
+                emisor["acteco"] = config["acteco"]
+            paso("Datos del emisor", True, f"{emisor['razon_social']} · {emisor['rut']}")
+
+            from facturacion.dtes.caf_parser import parsear_caf_xml
+            conn = get_conn()
+            try:
+                with conn.cursor() as cur:
+                    for tipo in (46, 61, 56):
+                        cur.execute("""
+                            SELECT xml_caf FROM facturacion_cafs
+                            WHERE tenant_id = %s AND tipo_dte = %s
+                            ORDER BY id DESC LIMIT 1
+                        """, (tenant_id, tipo))
+                        row = cur.fetchone()
+                        if not row:
+                            paso(f"CAF tipo {tipo}", False, f"No hay CAF tipo {tipo} cargado"); error_fatal = True
+                        else:
+                            caf = parsear_caf_xml(row[0]); cafs_dict[tipo] = caf
+                            paso(f"CAF tipo {tipo}", True, f"Rango {caf.rango_desde}-{caf.rango_hasta}")
+            finally:
+                release_conn(conn)
+
+        if not error_fatal:
+            from facturacion.dtes.factura_compra import generar_factura_compra_xml
+            from facturacion.dtes.nota_credito import generar_nota_credito_xml
+            from facturacion.dtes.nota_debito import generar_nota_debito_xml
+            try:
+                from zoneinfo import ZoneInfo
+                fecha = datetime.now(ZoneInfo("America/Santiago")).strftime("%Y-%m-%d")
+            except Exception:
+                from datetime import timezone as _tz, timedelta as _td
+                fecha = (datetime.now(_tz.utc) - _td(hours=4)).strftime("%Y-%m-%d")
+
+            f46_param = (request.args.get("f46") or "").strip()
+            f61_param = (request.args.get("f61") or "").strip()
+            f56_param = (request.args.get("f56") or "").strip()
+            folio_46 = int(f46_param) if f46_param.isdigit() else cafs_dict[46].rango_desde
+            folio_61 = int(f61_param) if f61_param.isdigit() else cafs_dict[61].rango_desde
+            folio_56 = int(f56_param) if f56_param.isdigit() else cafs_dict[56].rango_desde
+            # Validación de rango (evita CAF-3-605)
+            for tipo_chk, ini, caf_chk in [(46, folio_46, cafs_dict[46]), (61, folio_61, cafs_dict[61]), (56, folio_56, cafs_dict[56])]:
+                if ini < caf_chk.rango_desde or ini > caf_chk.rango_hasta:
+                    paso(f"Validar folio CAF {tipo_chk}", False,
+                         f"Folio {ini} fuera del rango {caf_chk.rango_desde}-{caf_chk.rango_hasta}")
+                    error_fatal = True
+
+        if not error_fatal:
+            paso("Folios a usar", True, f"46: {folio_46} · 61: {folio_61} · 56: {folio_56}")
+
+            # CASO 1: Factura de Compra (46) con retención total
+            r = generar_factura_compra_xml(
+                caf=cafs_dict[46], folio=folio_46, fecha_emision=fecha,
+                emisor=emisor, receptor=RECEPTOR_SET,
+                items=[
+                    {'nombre': 'Producto 1', 'cantidad': 1122, 'precio_unitario': 8490},
+                    {'nombre': 'Producto 2', 'cantidad': 42, 'precio_unitario': 4732},
+                ],
+                referencias=[{"tpo_doc_ref": "SET", "folio_ref": SET, "fecha_ref": fecha, "razon_ref": f"CASO {SET}-1"}])
+            c1_folio = r["folio"]; c1_total = r["totales"]["mnt_total"]
+            documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
+            detalles_casos.append(f"CASO-1 (FC46 f{c1_folio}): ${c1_total:,}".replace(",", "."))
+
+            # CASO 2: NC (61) devolución de items 1 y 2 (mismos precios + retención)
+            r = generar_nota_credito_xml(
+                caf=cafs_dict[61], folio=folio_61, fecha_emision=fecha,
+                emisor=emisor, receptor=RECEPTOR_SET,
+                referencia={"folio_ref": c1_folio, "tipo_doc_ref": 46, "fecha_ref": fecha,
+                            "cod_ref": 3, "razon_ref": "DEVOLUCION DE MERCADERIA ITEMS 1 Y 2"},
+                items=[
+                    {'nombre': 'Producto 1', 'cantidad': 374, 'precio_unitario': 8490},
+                    {'nombre': 'Producto 2', 'cantidad': 14, 'precio_unitario': 4732},
+                ],
+                impto_reten={"tipo_imp": 15},
+                set_referencia={"folio_ref": SET, "fecha_ref": fecha, "razon_ref": f"CASO {SET}-2"})
+            c2_folio = r["folio"]; c2_total = r["totales"]["mnt_total"]
+            documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
+            detalles_casos.append(f"CASO-2 (NC61 f{c2_folio}): ${c2_total:,}".replace(",", "."))
+
+            # CASO 3: ND (56) anula la NC del C2. Regla REF-2-780: replica ítems
+            # y montos de la NC (con retención), no va en 0.
+            r = generar_nota_debito_xml(
+                caf=cafs_dict[56], folio=folio_56, fecha_emision=fecha,
+                emisor=emisor, receptor=RECEPTOR_SET,
+                referencia={"folio_ref": c2_folio, "tipo_doc_ref": 61, "fecha_ref": fecha,
+                            "cod_ref": 1, "razon_ref": "ANULA NOTA DE CREDITO ELECTRONICA"},
+                items=[
+                    {'nombre': 'Producto 1', 'cantidad': 374, 'precio_unitario': 8490},
+                    {'nombre': 'Producto 2', 'cantidad': 14, 'precio_unitario': 4732},
+                ],
+                impto_reten={"tipo_imp": 15},
+                set_referencia={"folio_ref": SET, "fecha_ref": fecha, "razon_ref": f"CASO {SET}-3"})
+            c3_folio = r["folio"]; c3_total = r["totales"]["mnt_total"]
+            documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
+            detalles_casos.append(f"CASO-3 (ND56 f{c3_folio}): ${c3_total:,}".replace(",", "."))
+
+            paso("Generar 3 documentos", True, " · ".join(detalles_casos))
+
+        if not error_fatal:
+            from facturacion.dtes.envio_dte import armar_envio_dte
+            set_id = "SetFactCompraDoc"
+            subtot = {46: 1, 61: 1, 56: 1}
+            sobre = armar_envio_dte(
+                dtes_firmados=documentos_sin_firma,
+                rut_emisor=emisor["rut"],
+                rut_envia=cert["metadata"].get("rut", "18849272-K"),
+                fch_resol="2026-05-15", nro_resol=0,
+                subtotales=subtot, set_dte_id=set_id)
+            paso("Armar sobre EnvioDTE (3 docs)", True, f"{len(sobre)} bytes")
+
+            if request.args.get("debug") == "sin-firma":
+                from flask import Response
+                return Response(sobre, mimetype="application/xml",
+                    headers={"Content-Disposition": 'attachment; filename="EnvioDTE_FactCompra_DEBUG.xml"'})
+
+        if not error_fatal:
+            from facturacion.dtes.firma import firmar_envio_completo
+            try:
+                sobre_firmado = firmar_envio_completo(
+                    sobre, cert["pfx_bytes"], cert["password"],
+                    set_dte_id=set_id, documento_ids=documento_ids)
+                paso("Firmar sobre completo", True, f"{len(sobre_firmado)} bytes")
+            except Exception as e_firma:
+                import traceback
+                paso("Firmar sobre completo", False, f"{e_firma}<br><pre style='font-size:10px;'>{traceback.format_exc()[:500]}</pre>")
+                error_fatal = True
+
+        if not error_fatal and descargar == "si":
+            from flask import Response
+            return Response(sobre_firmado, mimetype="application/xml",
+                headers={"Content-Disposition": 'attachment; filename="EnvioDTE_FactCompra_Firmado.xml"'})
+
+    except Exception as e:
+        import traceback
+        paso("ERROR", False, f"{e}<br><pre style='font-size:10px;'>{traceback.format_exc()[:1000]}</pre>")
+
+    filas = ''
+    for p in pasos:
+        icon = '✅' if p['ok'] else '❌'; color = '#16a34a' if p['ok'] else '#dc2626'
+        filas += f'<div style="border-left:3px solid {color};padding:10px 16px;margin:8px 0;background:white;border-radius:6px;"><b>{icon} {p["nombre"]}</b><div style="font-size:13px;color:#666;margin-top:4px;">{p["detalle"]}</div></div>'
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Test Set Factura de Compra SII</title>
+    <style>body{{font-family:-apple-system,sans-serif;background:#f6f5f1;padding:40px;}}
+    .card{{max-width:780px;margin:0 auto;background:#f9f9f7;border-radius:14px;padding:28px;}}</style></head><body>
+    <div class="card"><h2>🛒 Set Factura de Compra SII (4897593)</h2><p>Tenant {tenant_id} · ambiente {ambiente}</p><div>{filas}</div></div>
+    </body></html>"""
+
 @app.route("/admin/lusync/sii/test-set-boletas", methods=["GET"])
 @requiere_lusync_admin
 def admin_lusync_sii_test_set_boletas():
