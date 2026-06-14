@@ -26663,7 +26663,7 @@ def admin_lusync_sii_diag_folios():
 
 @app.route("/admin/lusync/sii/test-set-basico", methods=["GET"])
 def admin_lusync_sii_test_set_basico():
-    """Emite los 8 casos del Set Básico SII (4829122) en UN solo sobre EnvioDTE:
+    """Emite los 8 casos del Set Básico SII (4897584) en UN solo sobre EnvioDTE:
        4 Facturas Electrónicas (33) + 3 Notas de Crédito (61) + 1 Nota de Débito (56).
 
     Auth: sesión normal de admin de tenant (no requiere super-admin lusync).
@@ -26724,7 +26724,7 @@ def admin_lusync_sii_test_set_basico():
         border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;margin-right:10px;}
         a.btn-warn{background:#dc2626;}</style></head><body>
         <div class="card">
-        <h2 style="margin-top:0;">📋 Emitir SET BÁSICO SII (4829122)</h2>
+        <h2 style="margin-top:0;">📋 Emitir SET BÁSICO SII (4897584)</h2>
         """ + folios_msg + """
         <div class="warn">
         Genera los 8 casos del set oficial del SII: 4 Facturas + 3 NC + 1 ND.<br><br>
@@ -26733,14 +26733,14 @@ def admin_lusync_sii_test_set_basico():
         • Consume: 4 folios CAF 33 + 3 folios CAF 61 + 1 folio CAF 56
         </div>
         <table>
-        <tr><td><b>CASO 1</b></td><td>Factura (33)</td><td>2 items afectos simples</td><td style="text-align:right;">$1.258.446</td></tr>
-        <tr><td><b>CASO 2</b></td><td>Factura (33)</td><td>2 items con descuento por línea</td><td style="text-align:right;">$8.561.437</td></tr>
-        <tr><td><b>CASO 3</b></td><td>Factura (33)</td><td>2 afectos + 1 exento mezclado</td><td style="text-align:right;">$1.777.296</td></tr>
-        <tr><td><b>CASO 4</b></td><td>Factura (33)</td><td>3 items + descuento global 23%</td><td style="text-align:right;">$3.719.165</td></tr>
-        <tr><td><b>CASO 5</b></td><td>NC (61)</td><td>Anula CASO 1 (CORRIGE GIRO)</td><td style="text-align:right;">$1.258.446</td></tr>
-        <tr><td><b>CASO 6</b></td><td>NC (61)</td><td>Devolución parcial CASO 2</td><td style="text-align:right;">~$4.200.337</td></tr>
-        <tr><td><b>CASO 7</b></td><td>NC (61)</td><td>Anula CASO 3 (ANULA FACTURA)</td><td style="text-align:right;">$1.777.296</td></tr>
-        <tr><td><b>CASO 8</b></td><td>ND (56)</td><td>Anula NC del CASO 5</td><td style="text-align:right;">$1.258.446</td></tr>
+        <tr><td><b>CASO 1</b></td><td>Factura (33)</td><td>2 items afectos simples</td><td style="text-align:right;">$419.499</td></tr>
+        <tr><td><b>CASO 2</b></td><td>Factura (33)</td><td>2 items con descuento por línea</td><td style="text-align:right;">$1.802.468</td></tr>
+        <tr><td><b>CASO 3</b></td><td>Factura (33)</td><td>2 afectos + 1 exento mezclado</td><td style="text-align:right;">$785.732</td></tr>
+        <tr><td><b>CASO 4</b></td><td>Factura (33)</td><td>3 items + descuento global 10%</td><td style="text-align:right;">$695.773</td></tr>
+        <tr><td><b>CASO 5</b></td><td>NC (61)</td><td>Anula CASO 1 (CORRIGE GIRO)</td><td style="text-align:right;">$0</td></tr>
+        <tr><td><b>CASO 6</b></td><td>NC (61)</td><td>Devolución parcial CASO 2</td><td style="text-align:right;">$851.435</td></tr>
+        <tr><td><b>CASO 7</b></td><td>NC (61)</td><td>Anula CASO 3 (ANULA FACTURA)</td><td style="text-align:right;">$785.732</td></tr>
+        <tr><td><b>CASO 8</b></td><td>ND (56)</td><td>Anula NC del CASO 5</td><td style="text-align:right;">$0</td></tr>
         </table>
         <a class="btn" href="?tenant_id=""" + str(tenant_id) + """&descargar=si""" + extra_q + """">
         📥 Generar y descargar sobre EnvioDTE</a>
@@ -26826,17 +26826,17 @@ def admin_lusync_sii_test_set_basico():
                  f"56: {folio_56} (param f56={f56_param!r})")
 
             # CASO 1: Factura 33, 2 items afectos simples
-            # Set certif SII: referencia obligatoria SET/CASO 4829122-1 (manual pág 1 punto 6)
+            # Set certif SII: referencia obligatoria SET/CASO 4897584-1 (manual pág 1 punto 6)
             r = generar_factura_xml(
                 caf=cafs_dict[33], folio=folio_33, fecha_emision=fecha,
                 emisor=emisor, receptor=RECEPTOR_SET,
                 items=[
-                    {'nombre': 'Cajón AFECTO', 'cantidad': 171, 'precio_unitario': 3634, 'exento': False},
-                    {'nombre': 'Relleno AFECTO', 'cantidad': 72, 'precio_unitario': 6057, 'exento': False},
+                    {'nombre': 'Cajón AFECTO', 'cantidad': 134, 'precio_unitario': 1552, 'exento': False},
+                    {'nombre': 'Relleno AFECTO', 'cantidad': 57, 'precio_unitario': 2536, 'exento': False},
                 ],
                 referencias=[{
-                    "tpo_doc_ref": "SET", "folio_ref": "4829122",
-                    "fecha_ref": fecha, "razon_ref": "CASO 4829122-1",
+                    "tpo_doc_ref": "SET", "folio_ref": "4897584",
+                    "fecha_ref": fecha, "razon_ref": "CASO 4897584-1",
                 }],
             )
             caso1_folio = r["folio"]; caso1_total = r["totales"]["mnt_total"]
@@ -26849,12 +26849,12 @@ def admin_lusync_sii_test_set_basico():
                 caf=cafs_dict[33], folio=folio_33, fecha_emision=fecha,
                 emisor=emisor, receptor=RECEPTOR_SET,
                 items=[
-                    {'nombre': 'Pañuelo AFECTO', 'cantidad': 788, 'precio_unitario': 6096, 'exento': False, 'descuento_pct': 10},
-                    {'nombre': 'ITEM 2 AFECTO', 'cantidad': 734, 'precio_unitario': 5147, 'exento': False, 'descuento_pct': 24},
+                    {'nombre': 'Pañuelo AFECTO', 'cantidad': 363, 'precio_unitario': 2893, 'exento': False, 'descuento_pct': 5},
+                    {'nombre': 'ITEM 2 AFECTO', 'cantidad': 294, 'precio_unitario': 1954, 'exento': False, 'descuento_pct': 10},
                 ],
                 referencias=[{
-                    "tpo_doc_ref": "SET", "folio_ref": "4829122",
-                    "fecha_ref": fecha, "razon_ref": "CASO 4829122-2",
+                    "tpo_doc_ref": "SET", "folio_ref": "4897584",
+                    "fecha_ref": fecha, "razon_ref": "CASO 4897584-2",
                 }],
             )
             caso2_folio = r["folio"]; caso2_total = r["totales"]["mnt_total"]
@@ -26867,13 +26867,13 @@ def admin_lusync_sii_test_set_basico():
                 caf=cafs_dict[33], folio=folio_33, fecha_emision=fecha,
                 emisor=emisor, receptor=RECEPTOR_SET,
                 items=[
-                    {'nombre': 'Pintura B&W AFECTO', 'cantidad': 67, 'precio_unitario': 7115, 'exento': False},
-                    {'nombre': 'ITEM 2 AFECTO', 'cantidad': 241, 'precio_unitario': 4096, 'exento': False},
-                    {'nombre': 'ITEM 3 SERVICIO EXENTO', 'cantidad': 1, 'precio_unitario': 35325, 'exento': True},
+                    {'nombre': 'Pintura B&W AFECTO', 'cantidad': 29, 'precio_unitario': 3246, 'exento': False},
+                    {'nombre': 'ITEM 2 AFECTO', 'cantidad': 170, 'precio_unitario': 3158, 'exento': False},
+                    {'nombre': 'ITEM 3 SERVICIO EXENTO', 'cantidad': 1, 'precio_unitario': 34849, 'exento': True},
                 ],
                 referencias=[{
-                    "tpo_doc_ref": "SET", "folio_ref": "4829122",
-                    "fecha_ref": fecha, "razon_ref": "CASO 4829122-3",
+                    "tpo_doc_ref": "SET", "folio_ref": "4897584",
+                    "fecha_ref": fecha, "razon_ref": "CASO 4897584-3",
                 }],
             )
             caso3_folio = r["folio"]; caso3_total = r["totales"]["mnt_total"]
@@ -26886,15 +26886,15 @@ def admin_lusync_sii_test_set_basico():
                 caf=cafs_dict[33], folio=folio_33, fecha_emision=fecha,
                 emisor=emisor, receptor=RECEPTOR_SET,
                 items=[
-                    {'nombre': 'ITEM 1 AFECTO', 'cantidad': 433, 'precio_unitario': 6157, 'exento': False},
-                    {'nombre': 'ITEM 2 AFECTO', 'cantidad': 183, 'precio_unitario': 7530, 'exento': False},
-                    {'nombre': 'ITEM 3 SERVICIO EXENTO', 'cantidad': 2, 'precio_unitario': 6837, 'exento': True},
+                    {'nombre': 'ITEM 1 AFECTO', 'cantidad': 163, 'precio_unitario': 2712, 'exento': False},
+                    {'nombre': 'ITEM 2 AFECTO', 'cantidad': 69, 'precio_unitario': 2825, 'exento': False},
+                    {'nombre': 'ITEM 3 SERVICIO EXENTO', 'cantidad': 2, 'precio_unitario': 6783, 'exento': True},
                 ],
-                descuento_global_pct=23,
+                descuento_global_pct=10,
                 descuento_global_glosa="DESCUENTO GLOBAL ITEMES AFECTOS",
                 referencias=[{
-                    "tpo_doc_ref": "SET", "folio_ref": "4829122",
-                    "fecha_ref": fecha, "razon_ref": "CASO 4829122-4",
+                    "tpo_doc_ref": "SET", "folio_ref": "4897584",
+                    "fecha_ref": fecha, "razon_ref": "CASO 4897584-4",
                 }],
             )
             caso4_folio = r["folio"]; caso4_total = r["totales"]["mnt_total"]
@@ -26908,8 +26908,8 @@ def admin_lusync_sii_test_set_basico():
                 referencia={"folio_ref": caso1_folio, "tipo_doc_ref": 33, "fecha_ref": fecha,
                             "cod_ref": 2, "razon_ref": "CORRIGE GIRO DEL RECEPTOR"},
                 items=None, monto_anulacion=caso1_total,
-                set_referencia={"folio_ref": "4829122", "fecha_ref": fecha,
-                                "razon_ref": "CASO 4829122-5"},
+                set_referencia={"folio_ref": "4897584", "fecha_ref": fecha,
+                                "razon_ref": "CASO 4897584-5"},
             )
             caso5_folio = r["folio"]; caso5_total = r["totales"]["mnt_total"]
             documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
@@ -26923,11 +26923,11 @@ def admin_lusync_sii_test_set_basico():
                 referencia={"folio_ref": caso2_folio, "tipo_doc_ref": 33, "fecha_ref": fecha,
                             "cod_ref": 3, "razon_ref": "DEVOLUCION DE MERCADERIAS"},
                 items=[
-                    {'nombre': 'Pañuelo AFECTO', 'cantidad': 289, 'precio_unitario': 6096, 'exento': False, 'descuento_pct': 10},
-                    {'nombre': 'ITEM 2 AFECTO', 'cantidad': 497, 'precio_unitario': 5147, 'exento': False, 'descuento_pct': 24},
+                    {'nombre': 'Pañuelo AFECTO', 'cantidad': 133, 'precio_unitario': 2893, 'exento': False, 'descuento_pct': 5},
+                    {'nombre': 'ITEM 2 AFECTO', 'cantidad': 199, 'precio_unitario': 1954, 'exento': False, 'descuento_pct': 10},
                 ],
-                set_referencia={"folio_ref": "4829122", "fecha_ref": fecha,
-                                "razon_ref": "CASO 4829122-6"},
+                set_referencia={"folio_ref": "4897584", "fecha_ref": fecha,
+                                "razon_ref": "CASO 4897584-6"},
             )
             caso6_folio = r["folio"]; caso6_total = r["totales"]["mnt_total"]
             documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
@@ -26944,12 +26944,12 @@ def admin_lusync_sii_test_set_basico():
                 referencia={"folio_ref": caso3_folio, "tipo_doc_ref": 33, "fecha_ref": fecha,
                             "cod_ref": 1, "razon_ref": "ANULA FACTURA"},
                 items=[
-                    {'nombre': 'Pintura B&W AFECTO', 'cantidad': 67, 'precio_unitario': 7115, 'exento': False},
-                    {'nombre': 'ITEM 2 AFECTO', 'cantidad': 241, 'precio_unitario': 4096, 'exento': False},
-                    {'nombre': 'ITEM 3 SERVICIO EXENTO', 'cantidad': 1, 'precio_unitario': 35325, 'exento': True},
+                    {'nombre': 'Pintura B&W AFECTO', 'cantidad': 29, 'precio_unitario': 3246, 'exento': False},
+                    {'nombre': 'ITEM 2 AFECTO', 'cantidad': 170, 'precio_unitario': 3158, 'exento': False},
+                    {'nombre': 'ITEM 3 SERVICIO EXENTO', 'cantidad': 1, 'precio_unitario': 34849, 'exento': True},
                 ],
-                set_referencia={"folio_ref": "4829122", "fecha_ref": fecha,
-                                "razon_ref": "CASO 4829122-7"},
+                set_referencia={"folio_ref": "4897584", "fecha_ref": fecha,
+                                "razon_ref": "CASO 4897584-7"},
             )
             caso7_folio = r["folio"]; caso7_total = r["totales"]["mnt_total"]
             documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
@@ -26966,8 +26966,8 @@ def admin_lusync_sii_test_set_basico():
                             "cod_ref": 1, "razon_ref": "ANULA NOTA DE CREDITO ELECTRONICA",
                             "mnt_anulacion": 0},
                 items=[],  # ignorado; el código genera item simbólico
-                set_referencia={"folio_ref": "4829122", "fecha_ref": fecha,
-                                "razon_ref": "CASO 4829122-8"},
+                set_referencia={"folio_ref": "4897584", "fecha_ref": fecha,
+                                "razon_ref": "CASO 4897584-8"},
             )
             caso8_folio = r["folio"]; caso8_total = r["totales"]["mnt_total"]
             documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
@@ -27038,7 +27038,7 @@ def admin_lusync_sii_test_set_basico():
                 return Response(
                     sobre_firmado,
                     mimetype="application/xml",
-                    headers={"Content-Disposition": 'attachment; filename="EnvioDTE_SetBasico4829122.xml"'},
+                    headers={"Content-Disposition": 'attachment; filename="EnvioDTE_SetBasico4897584.xml"'},
                 )
 
         # ─── 6. Envío SOAP (si confirmar=si) ───
@@ -27116,7 +27116,7 @@ def admin_lusync_sii_test_set_basico():
     <div class="card">
       <div class="header">
         <h1>{emoji} {titulo}</h1>
-        <p>Set Básico SII 4829122 · ambiente {ambiente} · tenant {tenant_id}</p>
+        <p>Set Básico SII 4897584 · ambiente {ambiente} · tenant {tenant_id}</p>
       </div>
       <div>{filas}</div>
       <div class="footer">{nota}</div>
