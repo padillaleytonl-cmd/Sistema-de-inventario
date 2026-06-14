@@ -284,6 +284,26 @@ def generar_liquidacion_xml(
         linea_parts.append(f'<MontoItem>{monto}</MontoItem>')
         detalles_xml += '\n<Detalle>' + ''.join(linea_parts) + '</Detalle>'
 
+    # ── 5b. Subtotales Informativos (SubTotInfo) ──
+    # Va entre el Detalle y las Referencias (orden del XSD). Declara el desglose
+    # neto/IVA de un grupo de lineas (p.ej. resumen de boletas). Validacion 43/45/46
+    # SII: documentos asociados a boletas deben declarar Total Monto Neto + IVA.
+    subtotinfo_xml = ''
+    subtotales = emisor.get('subtotales_info')
+    if subtotales and isinstance(subtotales, list):
+        for i, sti in enumerate(subtotales[:20], start=1):
+            sti_parts = [f'<NroSTI>{i}</NroSTI>']
+            sti_parts.append(f'<GlosaSTI>{str(sti.get("glosa", "BOLETAS"))[:40]}</GlosaSTI>')
+            if sti.get('neto') is not None:
+                sti_parts.append(f'<SubTotNetoSTI>{int(sti["neto"])}</SubTotNetoSTI>')
+            if sti.get('iva') is not None:
+                sti_parts.append(f'<SubTotIVASTI>{int(sti["iva"])}</SubTotIVASTI>')
+            if sti.get('exento') is not None:
+                sti_parts.append(f'<SubTotExeSTI>{int(sti["exento"])}</SubTotExeSTI>')
+            if sti.get('valor') is not None:
+                sti_parts.append(f'<ValSubtotSTI>{int(sti["valor"])}</ValSubtotSTI>')
+            subtotinfo_xml += '\n<SubTotInfo>' + ''.join(sti_parts) + '</SubTotInfo>'
+
     # ── 6. Referencias ──
     referencia_xml = ''
     if referencias and isinstance(referencias, list):
@@ -341,6 +361,7 @@ def generar_liquidacion_xml(
         f'<Liquidacion ID="{documento_id}">'
         f'\n{encabezado_xml}'
         f'{detalles_xml}'
+        f'{subtotinfo_xml}'
         f'\n{referencia_xml}'
         f'{comisiones_xml}'
         f'\n{ted.decode("iso-8859-1")}'

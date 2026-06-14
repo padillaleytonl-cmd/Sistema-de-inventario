@@ -164,7 +164,8 @@ def admin_lusync_sii_test_set_liquidacion():
                     {'nombre': 'NETO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -50894, 'exento': False, 'tpo_doc_liq': 60},
                     {'nombre': 'EXENTO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -18006, 'exento': True, 'tpo_doc_liq': 60},
                     {'nombre': 'BOLETAS', 'cantidad': 1, 'monto': 6228679, 'exento': False, 'tpo_doc_liq': 39, 'prc_item': 6228679},
-                ], comisiones=None, iva_terc_todo=True),
+                ], comisiones=None, iva_terc_todo=True,
+                   subtotales_info=[{'glosa': 'BOLETAS', 'neto': 6228679, 'iva': 1183449}]),
                 # CASO 3 — glosas con acentos exactas
                 dict(items=[
                     {'nombre': 'NETO FACTURA ELECTRÓNICA 1515', 'cantidad': 1, 'monto': 373473, 'exento': False, 'tpo_doc_liq': 33},
@@ -197,6 +198,8 @@ def admin_lusync_sii_test_set_liquidacion():
                     emisor_caso["omitir_iva_prop_terc"] = True
                 if caso.get("iva_terc_todo"):
                     emisor_caso["iva_terc_todo"] = True
+                if caso.get("subtotales_info"):
+                    emisor_caso["subtotales_info"] = caso["subtotales_info"]
                 r = generar_liquidacion_xml(
                     caf=caf43, folio=folio, fecha_emision=fecha,
                     emisor=emisor_caso, receptor=RECEPTOR_SET,
