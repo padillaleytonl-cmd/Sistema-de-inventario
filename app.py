@@ -97,6 +97,10 @@ app.register_blueprint(falabella_bp)
 from comparador_precios_mkt import comparador_precios_bp
 app.register_blueprint(comparador_precios_bp)
 
+# Set Liquidación-Factura SII (DTE 43, set 4829128) — endpoint de certificación
+from endpoint_liquidacion_bp import liquidacion_set_bp
+app.register_blueprint(liquidacion_set_bp)
+
 
 @app.route("/admin/lusync/stock/sync-log")
 def ver_sync_log():
