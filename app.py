@@ -28514,6 +28514,10 @@ def admin_lusync_sii_test_set_exportacion():
     debug = request.args.get("debug", default="")
     # Tipo de cambio a CLP (el SII no valida el valor real, solo la conversión)
     tc_eur = request.args.get("tc", default=1050.50, type=float)
+    # Folios a usar (los del primer envío 101/51/51 ya se consumieron → default siguientes)
+    f110 = request.args.get("f110", default=0, type=int)
+    f112 = request.args.get("f112", default=0, type=int)
+    f111 = request.args.get("f111", default=0, type=int)
 
     pasos = []
     def paso(nombre, ok, detalle=""):
@@ -28596,6 +28600,12 @@ def admin_lusync_sii_test_set_exportacion():
             documentos_sin_firma = []
             documento_ids = []
 
+            # Folios efectivos: param URL, o rango_desde+1 (el primero 101/51/51 ya
+            # se consumió en el envío anterior que procesó con EPR).
+            folio110 = f110 if f110 else cafs[110].rango_desde + 1
+            folio112 = f112 if f112 else cafs[112].rango_desde + 1
+            folio111 = f111 if f111 else cafs[111].rango_desde + 1
+
             # ═══ CASO 1: Factura Exportación 110 (EURO) ═══
             aduana_c1 = {
                 "cod_mod_venta": 2,       # BAJO CONDICIÓN
@@ -28609,10 +28619,11 @@ def admin_lusync_sii_test_set_exportacion():
                 "peso_neto": 442, "unid_peso_neto": 6,     # KN
                 "tot_items": 1, "tot_bultos": 44,
                 "cod_tpo_bultos": 80, "cant_bultos": 44,   # PALLETS
+                "marcas": "CHATARRA DE ALUMINIO",
                 "cod_pais_recep": 406, "cod_pais_destin": 406,  # AUSTRALIA
             }
             r1 = generar_exportacion_xml(
-                caf=cafs[110], folio=cafs[110].rango_desde, fecha_emision=fch,
+                caf=cafs[110], folio=folio110, fecha_emision=fch,
                 emisor=emisor, receptor=RECEPTOR_AU,
                 items=[{"nombre": "CHATARRA DE ALUMINIO", "cantidad": 442,
                         "precio_unitario": 134, "unidad": "KN"}],
@@ -28623,7 +28634,6 @@ def admin_lusync_sii_test_set_exportacion():
                               "fecha_ref": fch, "razon_ref": "MANIFIESTO INTERNACIONAL"}],
                 tipo_dte=110, timestamp_firma=ts)
             documentos_sin_firma.append(r1["xml"]); documento_ids.append(r1["documento_id"])
-            folio110 = cafs[110].rango_desde
             paso("Caso 1 — Factura Exp 110", True,
                  f"Folio {folio110} · MntExe {r1['totales']['mnt_exe']} EUR · {r1['totales']['mnt_exe_clp']} CLP")
 
@@ -28633,7 +28643,7 @@ def admin_lusync_sii_test_set_exportacion():
                 "cod_pais_recep": 406, "cod_pais_destin": 406,
             }
             r2 = generar_exportacion_xml(
-                caf=cafs[112], folio=cafs[112].rango_desde, fecha_emision=fch,
+                caf=cafs[112], folio=folio112, fecha_emision=fch,
                 emisor=emisor, receptor=RECEPTOR_AU,
                 items=[{"nombre": "CHATARRA DE ALUMINIO", "cantidad": 147,
                         "precio_unitario": 134, "unidad": "KN"}],
@@ -28644,13 +28654,12 @@ def admin_lusync_sii_test_set_exportacion():
                               "razon_ref": "DEVOLUCION DE MERCADERIA"}],
                 tipo_dte=112, timestamp_firma=ts)
             documentos_sin_firma.append(r2["xml"]); documento_ids.append(r2["documento_id"])
-            folio112 = cafs[112].rango_desde
             paso("Caso 2 — NC Exp 112", True,
                  f"Folio {folio112} · MntExe {r2['totales']['mnt_exe']} EUR · ref FE {folio110}")
 
             # ═══ CASO 3: ND Exportación 111 (anula NC) ═══
             r3 = generar_exportacion_xml(
-                caf=cafs[111], folio=cafs[111].rango_desde, fecha_emision=fch,
+                caf=cafs[111], folio=folio111, fecha_emision=fch,
                 emisor=emisor, receptor=RECEPTOR_AU,
                 items=[{"nombre": "CHATARRA DE ALUMINIO", "cantidad": 147,
                         "precio_unitario": 134, "unidad": "KN"}],
@@ -28661,7 +28670,6 @@ def admin_lusync_sii_test_set_exportacion():
                               "razon_ref": "ANULA NOTA DE CREDITO"}],
                 tipo_dte=111, timestamp_firma=ts)
             documentos_sin_firma.append(r3["xml"]); documento_ids.append(r3["documento_id"])
-            folio111 = cafs[111].rango_desde
             paso("Caso 3 — ND Exp 111", True,
                  f"Folio {folio111} · MntExe {r3['totales']['mnt_exe']} EUR · ref NC {folio112}")
 
