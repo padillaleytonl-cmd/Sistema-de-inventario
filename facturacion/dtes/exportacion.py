@@ -107,20 +107,23 @@ def generar_exportacion_xml(
         # Descuento / recargo por línea
         desc_monto = 0
         recargo_monto = 0
-        if it.get('descuento_pct'):
-            desc_monto = _round(linea * float(it['descuento_pct']) / 100)
-        if it.get('recargo_pct'):
-            recargo_monto = _round(linea * float(it['recargo_pct']) / 100)
+        desc_pct = float(it.get('descuento_pct') or 0)
+        recargo_pct = float(it.get('recargo_pct') or 0)
+        if desc_pct:
+            desc_monto = _round(linea * desc_pct / 100)
+        if recargo_pct:
+            recargo_monto = _round(linea * recargo_pct / 100)
         monto_item = linea - desc_monto + recargo_monto
         # En exportación el MontoItem se redondea a ENTERO para que la suma
-        # del detalle cuadre exactamente con MntExe/MntTotal (también enteros)
-        # y con el TED. Los descuentos/recargos de línea se muestran con su
-        # valor real, pero el MontoItem resultante es entero.
+        # del detalle cuadre exactamente con MntExe/MntTotal (también enteros).
+        # El descuento/recargo de línea se expresa como PORCENTAJE (DescuentoPct/
+        # RecargoPct), igual que en los sets de certificación nacionales.
         monto_item_fmt = _round(monto_item)
         suma_lineas += monto_item_fmt
         detalles.append({
             'nro': i, 'nombre': nombre, 'qty': qty, 'prc': prc,
             'unidad': it.get('unidad'),
+            'desc_pct': desc_pct, 'recargo_pct': recargo_pct,
             'desc_monto': desc_monto, 'recargo_monto': recargo_monto,
             'monto_item': monto_item_fmt,
         })
@@ -277,10 +280,12 @@ def generar_exportacion_xml(
             if d['unidad']:
                 partes.append(f'<UnmdItem>{_escape_xml(d["unidad"])}</UnmdItem>')
             partes.append(f'<PrcItem>{_fmt_dec(d["prc"], 4)}</PrcItem>')
-        if d['desc_monto']:
-            partes.append(f'<DescuentoMonto>{_fmt_dec(d["desc_monto"], 2)}</DescuentoMonto>')
-        if d['recargo_monto']:
-            partes.append(f'<RecargoMonto>{_fmt_dec(d["recargo_monto"], 2)}</RecargoMonto>')
+        # Descuento/recargo de línea como PORCENTAJE (orden schema: DescuentoPct
+        # antes de RecargoPct). Es lo que esperan los sets de certificación.
+        if d['desc_pct']:
+            partes.append(f'<DescuentoPct>{d["desc_pct"]:g}</DescuentoPct>')
+        if d['recargo_pct']:
+            partes.append(f'<RecargoPct>{d["recargo_pct"]:g}</RecargoPct>')
         partes.append(f'<MontoItem>{d["monto_item"]}</MontoItem>')
         detalles_xml += '<Detalle>' + ''.join(partes) + '</Detalle>\n'
 

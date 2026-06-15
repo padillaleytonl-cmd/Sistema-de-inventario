@@ -28854,7 +28854,8 @@ def admin_lusync_sii_test_set_exportacion2():
                 caf=caf110, folio=folio1, fecha_emision=fch,
                 emisor=emisor, receptor=RECEPTOR_AR,
                 items=[{"nombre": "ASESORIAS Y PROYECTOS PROFESIONALES",
-                        "valor_linea": 2, "cantidad": None}],
+                        "cantidad": 1, "precio_unitario": 2, "unidad": "U",
+                        "recargo_pct": 10}],
                 moneda="DOLAR USA", tipo_cambio=tc_usd, aduana=aduana_c1,
                 fma_pag_exp=11,  # ACRED
                 ind_servicio=3,  # Factura de Servicio
@@ -28920,11 +28921,13 @@ def admin_lusync_sii_test_set_exportacion2():
                 caf=caf110, folio=folio3, fecha_emision=fch,
                 emisor=emisor, receptor=RECEPTOR_AR,
                 items=[{"nombre": "ALOJAMIENTO HABITACIONES",
-                        "valor_linea": 5, "cantidad": None}],
+                        "cantidad": 1, "precio_unitario": 5, "unidad": "U"}],
                 moneda="DOLAR USA", tipo_cambio=tc_usd, aduana=aduana_c3,
                 ind_servicio=3,  # Factura de Servicio
                 referencias=[{"tpo_doc_ref": "SET", "folio_ref": "4897591",
-                              "fecha_ref": fch, "razon_ref": "CASO 4897591-3"}],
+                              "fecha_ref": fch, "razon_ref": "CASO 4897591-3"},
+                             {"tpo_doc_ref": 812, "folio_ref": "RSNA3",
+                              "fecha_ref": fch, "razon_ref": "RESOLUCION SNA"}],
                 tipo_dte=110, timestamp_firma=ts)
             documentos_sin_firma.append(r3["xml"]); documento_ids.append(r3["documento_id"])
             paso("Caso 3 — Alojamiento (110)", True,
