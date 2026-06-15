@@ -36,6 +36,13 @@ def _round(valor) -> int:
     return int(round(valor))
 
 
+def _limpiar_rut(rut) -> str:
+    """Quita puntos y espacios del RUT, deja formato NNNNNNNN-D que exige el schema."""
+    if rut is None:
+        return ''
+    return str(rut).replace('.', '').replace(' ', '').upper()
+
+
 def _escape_xml(s) -> str:
     if s is None:
         return ''
@@ -164,16 +171,17 @@ def generar_exportacion_xml(
         iddoc.append(f'<FmaPagExp>{fma_pag_exp}</FmaPagExp>')
     enc.append('<IdDoc>' + ''.join(iddoc) + '</IdDoc>')
     # Emisor
-    em = [f'<RUTEmisor>{emisor["rut"]}</RUTEmisor>',
+    em = [f'<RUTEmisor>{_limpiar_rut(emisor["rut"])}</RUTEmisor>',
           f'<RznSoc>{_escape_xml(emisor["razon_social"])}</RznSoc>',
           f'<GiroEmis>{_escape_xml(emisor.get("giro", "Exportacion"))}</GiroEmis>']
-    if emisor.get('acteco'):
-        em.append(f'<Acteco>{emisor["acteco"]}</Acteco>')
+    # Acteco es OBLIGATORIO en exportación (debe ir antes de DirOrigen)
+    acteco_val = emisor.get('acteco') or 620100
+    em.append(f'<Acteco>{acteco_val}</Acteco>')
     em.append(f'<DirOrigen>{_escape_xml(emisor.get("dir_origen", "Sin direccion"))}</DirOrigen>')
     em.append(f'<CmnaOrigen>{_escape_xml(emisor.get("cmna_origen", "Santiago"))}</CmnaOrigen>')
     enc.append('<Emisor>' + ''.join(em) + '</Emisor>')
     # Receptor extranjero
-    re = [f'<RUTRecep>{receptor.get("rut", "55555555-5")}</RUTRecep>',
+    re = [f'<RUTRecep>{_limpiar_rut(receptor.get("rut", "55555555-5"))}</RUTRecep>',
           f'<RznSocRecep>{_escape_xml(receptor["razon_social"])}</RznSocRecep>']
     if receptor.get('nacionalidad'):
         re.append(f'<Extranjero><Nacionalidad>{receptor["nacionalidad"]}</Nacionalidad></Extranjero>')
@@ -294,7 +302,7 @@ def generar_exportacion_xml(
     primer_item = detalles[0]['nombre'][:40] if detalles else 'Item'
     ted = construir_ted(
         caf=caf, folio=folio, fecha_emision=fecha_emision,
-        rut_receptor=receptor.get('rut', '55555555-5'),
+        rut_receptor=_limpiar_rut(receptor.get('rut', '55555555-5')),
         razon_social_receptor=_escape_xml(receptor['razon_social']),
         monto_total=mnt_total if isinstance(mnt_total, int) else _round(mnt_total),
         detalle_primer_item=_escape_xml(primer_item),
