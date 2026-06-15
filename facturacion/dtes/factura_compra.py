@@ -114,7 +114,7 @@ def generar_factura_compra_xml(
     tot_parts.append(
         '<ImptoReten>'
         f'<TipoImp>{cod_imp_reten}</TipoImp>'
-        f'<TasaImp>{IVA_PORCENTAJE}.00</TasaImp>'
+        f'<TasaImp>{IVA_PORCENTAJE}</TasaImp>'
         f'<MontoImp>{mnt_reten}</MontoImp>'
         '</ImptoReten>'
     )

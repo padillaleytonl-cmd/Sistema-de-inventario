@@ -101,16 +101,14 @@ def armar_envio_dte(
         f'</Caratula>'
     )
 
-    # Concatenar los DTE internos sin modificar. Se separan con '\n' para que
-    # ninguna línea supere el límite del SII de 4096 chars (CHR-00002). El salto
-    # entre DTEs no afecta los digests individuales (van por ID) y C14N lo preserva.
-    dtes_xml = '\n'.join(_extraer_dte_interno(d) for d in dtes_firmados)
+    # Concatenar los DTE internos sin modificar (versión certificada SOK 3-jun:
+    # sin saltos de línea entre DTEs, que provocaban HED-2-302 en factura compra).
+    dtes_xml = ''.join(_extraer_dte_interno(d) for d in dtes_firmados)
 
     # Sobre completo (sin Signature todavía) — tag raíz EnvioDTE, schema v10.
     # CRÍTICO: orden de atributos EXACTO como lo exige el SII:
     #   xmlns → xmlns:xsi → xsi:schemaLocation → version
     # Si "version" va antes de "xsi:schemaLocation", el SII devuelve SCH-00001.
-    # Saltos '\n' entre Caratula y DTEs para no exceder 4096 chars por línea.
     envio = (
         '<?xml version="1.0" encoding="ISO-8859-1"?>'
         '<EnvioDTE '
@@ -119,7 +117,7 @@ def armar_envio_dte(
         'xsi:schemaLocation="http://www.sii.cl/SiiDte EnvioDTE_v10.xsd" '
         'version="1.0">'
         f'<SetDTE ID="{set_dte_id}">'
-        f'{caratula}\n'
+        f'{caratula}'
         f'{dtes_xml}'
         f'</SetDTE>'
         '</EnvioDTE>'

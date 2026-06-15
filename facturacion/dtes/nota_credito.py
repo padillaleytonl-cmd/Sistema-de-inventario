@@ -357,7 +357,7 @@ def generar_nota_credito_xml(
             tot_parts.append(
                 '<ImptoReten>'
                 f'<TipoImp>{_ti}</TipoImp>'
-                f'<TasaImp>{IVA_PORCENTAJE}.00</TasaImp>'
+                f'<TasaImp>{IVA_PORCENTAJE}</TasaImp>'
                 f'<MontoImp>{_mi}</MontoImp>'
                 '</ImptoReten>'
             )
