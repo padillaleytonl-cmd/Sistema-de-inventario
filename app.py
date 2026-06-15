@@ -28751,7 +28751,9 @@ def admin_lusync_sii_test_set_exportacion2():
     tenant_id = request.args.get("tenant_id", default=3, type=int)
     descargar = request.args.get("descargar", default="")
     debug = request.args.get("debug", default="")
-    tc_usd = request.args.get("tc", default=970.50, type=float)
+    # TC entero (971) para que la conversión a pesos nunca genere decimales .5,
+    # eliminando ambigüedad de redondeo que descuadra el encabezado en el set.
+    tc_usd = request.args.get("tc", default=971, type=float)
     # Folios para los 3 casos (todos 110)
     f1 = request.args.get("f1", default=0, type=int)
     f2 = request.args.get("f2", default=0, type=int)
