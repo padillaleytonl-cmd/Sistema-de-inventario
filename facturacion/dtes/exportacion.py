@@ -234,6 +234,13 @@ def generar_exportacion_xml(
             # Marcas: el SII lo exige obligatorio en exportación (HED-2-804)
             marcas = aduana.get('marcas', 'SIN MARCAS')
             bultos.append(f'<Marcas>{_escape_xml(marcas)}</Marcas>')
+            # Para contenedores, el SII exige IdContainer y Sello (HED-2-804)
+            if aduana.get('id_container'):
+                bultos.append(f'<IdContainer>{_escape_xml(aduana["id_container"])}</IdContainer>')
+            if aduana.get('sello'):
+                bultos.append(f'<Sello>{_escape_xml(aduana["sello"])}</Sello>')
+            if aduana.get('emisor_sello'):
+                bultos.append(f'<EmisorSello>{_escape_xml(aduana["emisor_sello"])}</EmisorSello>')
             bultos.append('</TipoBultos>')
             ad.append(''.join(bultos))
         if flete is not None:

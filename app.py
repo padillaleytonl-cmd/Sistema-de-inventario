@@ -28881,6 +28881,9 @@ def admin_lusync_sii_test_set_exportacion2():
                 "tot_items": 2, "tot_bultos": 12,
                 "cod_tpo_bultos": 75, "cant_bultos": 12,   # CONTENEDOR REFRIGERADO
                 "marcas": "CIRUELAS Y PASAS",
+                "id_container": "ABCD1234567",
+                "sello": "SELLO12345",
+                "emisor_sello": "ADUANA",
                 "cod_pais_recep": 224, "cod_pais_destin": 224,
             }
             r2 = generar_exportacion_xml(
