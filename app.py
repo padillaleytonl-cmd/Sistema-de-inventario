@@ -28913,15 +28913,12 @@ def admin_lusync_sii_test_set_exportacion2():
             paso("Caso 2 — Ciruelas+Pasas (110)", True,
                  f"Folio {folio2} · MntExe {r2['totales']['mnt_exe']} USD")
 
-            # ═══ CASO 3: Alojamiento (servicio), nacionalidad argentina ═══
-            # Se le da una sección Aduana coherente y completa (cláusula, vía,
-            # puertos, países) igual que el Caso 1 que el set aceptó. El set
-            # permite "agregar otros datos que se estimen necesarios" (instr. 2).
+            # ═══ CASO 3: Alojamiento (servicio usado totalmente en el extranjero) ═══
+            # Normativa SII (formato_dte, cambio 15/11/2019): IndServicio=6 =
+            # "Servicios prestados y utilizados totalmente en el extranjero".
+            # El alojamiento en Argentina es justo ese caso (no hay embarque
+            # físico), por eso NO lleva sección Aduana de puertos/cláusula.
             aduana_c3 = {
-                "cod_clau_venta": 5,      # FOB
-                "cod_via_transp": 4,      # AÉREO
-                "cod_pto_embarque": 901,  # ARICA
-                "cod_pto_desemb": 262,    # BUENOS AIRES
                 "cod_pais_recep": 224, "cod_pais_destin": 224,  # ARGENTINA
             }
             r3 = generar_exportacion_xml(
@@ -28931,7 +28928,7 @@ def admin_lusync_sii_test_set_exportacion2():
                         "cantidad": 1, "precio_unitario": 5, "unidad": "U"}],
                 moneda="DOLAR USA", tipo_cambio=tc_usd, aduana=aduana_c3,
                 fma_pag_exp=11,  # ACRED
-                ind_servicio=3,  # Factura de Servicio
+                ind_servicio=6,  # Servicio prestado/utilizado totalmente en extranjero
                 referencias=[{"tpo_doc_ref": "SET", "folio_ref": "4897591",
                               "fecha_ref": fch, "razon_ref": "CASO 4897591-3"},
                              {"tpo_doc_ref": 812, "folio_ref": "RSNA3",
