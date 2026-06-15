@@ -28650,7 +28650,7 @@ def admin_lusync_sii_test_set_exportacion():
                 moneda="EURO", tipo_cambio=tc_eur, aduana=aduana_c2,
                 fma_pag_exp=2,
                 referencias=[{"tpo_doc_ref": 110, "folio_ref": folio110,
-                              "fecha_ref": fch, "cod_ref": 1,
+                              "fecha_ref": fch, "cod_ref": 3,
                               "razon_ref": "DEVOLUCION DE MERCADERIA"}],
                 tipo_dte=112, timestamp_firma=ts)
             documentos_sin_firma.append(r2["xml"]); documento_ids.append(r2["documento_id"])
