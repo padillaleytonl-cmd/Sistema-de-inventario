@@ -357,7 +357,7 @@ def generar_nota_credito_xml(
             tot_parts.append(
                 '<ImptoReten>'
                 f'<TipoImp>{_ti}</TipoImp>'
-                f'<TasaImp>{IVA_PORCENTAJE}</TasaImp>'
+                f'<TasaImp>{IVA_PORCENTAJE}.00</TasaImp>'
                 f'<MontoImp>{_mi}</MontoImp>'
                 '</ImptoReten>'
             )
@@ -390,9 +390,6 @@ def generar_nota_credito_xml(
 
         if es_exe:
             linea_parts.append('<IndExe>1</IndExe>')
-        # Indicador Agente Retenedor (formato 2.5): líneas afectas a retención.
-        if impto_reten and not es_exe:
-            linea_parts.append('<Retenedor><IndAgente>R</IndAgente></Retenedor>')
         linea_parts.append(f'<NmbItem>{_escape_xml(nombre)}</NmbItem>')
         linea_parts.append(f'<QtyItem>{_fmt_cantidad(qty)}</QtyItem>')
         linea_parts.append(f'<UnmdItem>{_escape_xml(unidad)}</UnmdItem>')

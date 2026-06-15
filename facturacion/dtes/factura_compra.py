@@ -114,7 +114,7 @@ def generar_factura_compra_xml(
     tot_parts.append(
         '<ImptoReten>'
         f'<TipoImp>{cod_imp_reten}</TipoImp>'
-        f'<TasaImp>{IVA_PORCENTAJE}</TasaImp>'
+        f'<TasaImp>{IVA_PORCENTAJE}.00</TasaImp>'
         f'<MontoImp>{mnt_reten}</MontoImp>'
         '</ImptoReten>'
     )
@@ -139,9 +139,6 @@ def generar_factura_compra_xml(
         nombre = it.get('nombre', 'Producto')[:80]
         linea_parts = [
             f'<NroLinDet>{i}</NroLinDet>',
-            # Indicador Agente Retenedor (formato 2.5, cambio N°26): marca la
-            # línea como sujeta a retención. Va después de IndExe, antes de NmbItem.
-            '<Retenedor><IndAgente>R</IndAgente></Retenedor>',
             f'<NmbItem>{_escape_xml(nombre)}</NmbItem>',
             f'<QtyItem>{_fmt_cantidad(qty)}</QtyItem>',
             f'<UnmdItem>{_escape_xml(unidad)}</UnmdItem>',
