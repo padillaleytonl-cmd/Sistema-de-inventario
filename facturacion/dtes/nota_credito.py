@@ -354,13 +354,11 @@ def generar_nota_credito_xml(
         if impto_reten and mnt_neto > 0:
             _ti = impto_reten.get('tipo_imp', 15)
             _mi = int(impto_reten.get('monto_imp', mnt_iva))
-            tot_parts.append(
-                '<ImptoReten>'
-                f'<TipoImp>{_ti}</TipoImp>'
-                f'<TasaImp>{IVA_PORCENTAJE}</TasaImp>'
-                f'<MontoImp>{_mi}</MontoImp>'
-                '</ImptoReten>'
-            )
+            _ir = '<ImptoReten>' + f'<TipoImp>{_ti}</TipoImp>'
+            if not impto_reten.get('sin_tasa'):
+                _ir += f'<TasaImp>{IVA_PORCENTAJE}</TasaImp>'
+            _ir += f'<MontoImp>{_mi}</MontoImp>' + '</ImptoReten>'
+            tot_parts.append(_ir)
             # IVANoRet solo en retención parcial (MontoImp != IVA); en total se omite.
             _ivanoret = mnt_iva - _mi
             if _ivanoret > 0:

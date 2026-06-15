@@ -37,6 +37,7 @@ def generar_factura_compra_xml(
     fecha_vencimiento: Optional[str] = None,
     cod_imp_reten: int = 15,            # 15 = IVA Retenido Total
     ind_agente: bool = False,           # True → <Retenedor><IndAgente>R</IndAgente></Retenedor> en cada línea afecta
+    tasa_reten=19,                      # tasa del ImptoReten; None = omitir <TasaImp>
     timestamp_firma: Optional[str] = None,
 ) -> Dict:
     """Genera el XML de una Factura de Compra Electrónica (DTE 46) con
@@ -112,13 +113,11 @@ def generar_factura_compra_xml(
         tot_parts.append(f'<MntExe>{mnt_exe}</MntExe>')
     tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}</TasaIVA>')
     tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
-    tot_parts.append(
-        '<ImptoReten>'
-        f'<TipoImp>{cod_imp_reten}</TipoImp>'
-        f'<TasaImp>{IVA_PORCENTAJE}</TasaImp>'
-        f'<MontoImp>{mnt_reten}</MontoImp>'
-        '</ImptoReten>'
-    )
+    _imp_reten = '<ImptoReten>' + f'<TipoImp>{cod_imp_reten}</TipoImp>'
+    if tasa_reten is not None:
+        _imp_reten += f'<TasaImp>{tasa_reten}</TasaImp>'
+    _imp_reten += f'<MontoImp>{mnt_reten}</MontoImp>' + '</ImptoReten>'
+    tot_parts.append(_imp_reten)
     # IVANoRet solo en retención PARCIAL (MontoImp != IVA). En total, se omite.
     iva_no_ret = mnt_iva - mnt_reten
     if iva_no_ret > 0:
