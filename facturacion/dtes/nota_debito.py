@@ -269,7 +269,12 @@ def generar_nota_debito_xml(
         if es_exe:
             linea_parts.append('<IndExe>1</IndExe>')
         # Retenedor (agente retenedor) en líneas afectas, antes de NmbItem (orden schema)
-        if impto_reten and not es_exe and impto_reten.get('ind_agente'):
+        if impto_reten and not es_exe and impto_reten.get('mnt_base'):
+            linea_parts.append(
+                '<Retenedor><IndAgente>R</IndAgente>'
+                f'<MntBaseFaena>{it["_monto_item"]}</MntBaseFaena></Retenedor>'
+            )
+        elif impto_reten and not es_exe and impto_reten.get('ind_agente'):
             linea_parts.append('<Retenedor><IndAgente>R</IndAgente></Retenedor>')
         linea_parts.append(f'<NmbItem>{_escape_xml(nombre)}</NmbItem>')
         linea_parts.append(f'<QtyItem>{_fmt_cantidad(qty)}</QtyItem>')

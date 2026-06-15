@@ -37,6 +37,7 @@ def generar_factura_compra_xml(
     fecha_vencimiento: Optional[str] = None,
     cod_imp_reten: int = 15,            # 15 = IVA Retenido Total
     ind_agente: bool = False,           # True → <Retenedor><IndAgente>R</IndAgente></Retenedor> en cada línea afecta
+    mnt_base: bool = False,             # True → Retenedor con IndAgente=R + MntBaseFaena=monto neto (base de retención explícita)
     tasa_reten=19,                      # tasa del ImptoReten; None = omitir <TasaImp>
     timestamp_firma: Optional[str] = None,
 ) -> Dict:
@@ -142,7 +143,15 @@ def generar_factura_compra_xml(
         ]
         # Retenedor: va DESPUÉS de NroLinDet y ANTES de NmbItem (orden del schema).
         # IndAgente=R indica que el emisor actúa como agente retenedor del IVA.
-        if ind_agente:
+        # mnt_base → declara además MntBaseFaena = monto neto de la línea (base de retención).
+        if mnt_base:
+            linea_parts.append(
+                '<Retenedor>'
+                '<IndAgente>R</IndAgente>'
+                f'<MntBaseFaena>{it["_monto_item"]}</MntBaseFaena>'
+                '</Retenedor>'
+            )
+        elif ind_agente:
             linea_parts.append('<Retenedor><IndAgente>R</IndAgente></Retenedor>')
         linea_parts += [
             f'<NmbItem>{_escape_xml(nombre)}</NmbItem>',
