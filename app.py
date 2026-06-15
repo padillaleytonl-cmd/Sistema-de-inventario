@@ -28357,6 +28357,9 @@ def admin_lusync_sii_test_set_fact_compra():
             ind_agente = (request.args.get("agente") or "").strip() in ("1", "si", "true")
             # notasa=1 → omite <TasaImp> del ImptoReten (prueba diagnóstica: ¿el SII lee ese campo?)
             sin_tasa = (request.args.get("notasa") or "").strip() in ("1", "si", "true")
+            # codret=N → código de retención (default 15). Prueba: ¿el SII calcula bien otro código de retención total?
+            cod_ret_param = (request.args.get("codret") or "").strip()
+            cod_ret = int(cod_ret_param) if cod_ret_param.isdigit() else 15
             folio_46 = int(f46_param) if f46_param.isdigit() else cafs_dict[46].rango_desde
             folio_61 = int(f61_param) if f61_param.isdigit() else cafs_dict[61].rango_desde
             folio_56 = int(f56_param) if f56_param.isdigit() else cafs_dict[56].rango_desde
@@ -28380,6 +28383,7 @@ def admin_lusync_sii_test_set_fact_compra():
                 ],
                 referencias=[{"tpo_doc_ref": "SET", "folio_ref": SET, "fecha_ref": fecha, "razon_ref": f"CASO {SET}-1"}],
                 ind_agente=ind_agente,
+                cod_imp_reten=cod_ret,
                 tasa_reten=(None if sin_tasa else 19))
             c1_folio = r["folio"]; c1_total = r["totales"]["mnt_total"]
             documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
@@ -28395,7 +28399,7 @@ def admin_lusync_sii_test_set_fact_compra():
                     {'nombre': 'Producto 1', 'cantidad': 374, 'precio_unitario': 8490},
                     {'nombre': 'Producto 2', 'cantidad': 14, 'precio_unitario': 4732},
                 ],
-                impto_reten={"tipo_imp": 15, "ind_agente": ind_agente, "sin_tasa": sin_tasa},
+                impto_reten={"tipo_imp": cod_ret, "ind_agente": ind_agente, "sin_tasa": sin_tasa},
                 set_referencia={"folio_ref": SET, "fecha_ref": fecha, "razon_ref": f"CASO {SET}-2"})
             c2_folio = r["folio"]; c2_total = r["totales"]["mnt_total"]
             documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
@@ -28412,7 +28416,7 @@ def admin_lusync_sii_test_set_fact_compra():
                     {'nombre': 'Producto 1', 'cantidad': 374, 'precio_unitario': 8490},
                     {'nombre': 'Producto 2', 'cantidad': 14, 'precio_unitario': 4732},
                 ],
-                impto_reten={"tipo_imp": 15, "ind_agente": ind_agente, "sin_tasa": sin_tasa},
+                impto_reten={"tipo_imp": cod_ret, "ind_agente": ind_agente, "sin_tasa": sin_tasa},
                 set_referencia={"folio_ref": SET, "fecha_ref": fecha, "razon_ref": f"CASO {SET}-3"})
             c3_folio = r["folio"]; c3_total = r["totales"]["mnt_total"]
             documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
