@@ -28914,9 +28914,9 @@ def admin_lusync_sii_test_set_exportacion2():
                  f"Folio {folio2} · MntExe {r2['totales']['mnt_exe']} USD")
 
             # ═══ CASO 3: Alojamiento (servicio), nacionalidad argentina, sin cláusula ═══
-            aduana_c3 = {
-                "cod_pais_recep": 224, "cod_pais_destin": 224,  # ARGENTINA
-            }
+            # El set solo indica NACIONALIDAD (va en el receptor), sin operación
+            # aduanera (sin cláusula, vía, puertos ni país receptor/destino).
+            aduana_c3 = None
             r3 = generar_exportacion_xml(
                 caf=caf110, folio=folio3, fecha_emision=fch,
                 emisor=emisor, receptor=RECEPTOR_AR,

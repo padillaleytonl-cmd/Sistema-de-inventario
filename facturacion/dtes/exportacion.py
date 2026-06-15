@@ -93,7 +93,6 @@ def generar_exportacion_xml(
     # ─── 1. Calcular líneas de detalle ───
     detalles = []
     suma_lineas = 0
-    descuentos_linea_global = []  # descuentos de línea → DscRcgGlobal (exportación)
     for i, it in enumerate(items, start=1):
         nombre = it.get('nombre', 'Item')[:80]
         if 'valor_linea' in it and it.get('cantidad') is None:
@@ -105,27 +104,21 @@ def generar_exportacion_xml(
             qty = float(it.get('cantidad', 1))
             prc = float(it.get('precio_unitario', 0))
             linea = qty * prc
-        # Descuento / recargo por línea
+        # Descuento / recargo por línea (patrón del Set Básico certificado):
+        # emite DescuentoPct + DescuentoMonto juntos, MontoItem NETO.
+        # El SII valida: MontoItem + DescuentoMonto = PrcItem × QtyItem.
         desc_pct = float(it.get('descuento_pct') or 0)
         recargo_pct = float(it.get('recargo_pct') or 0)
-        # En EXPORTACIÓN el SII exige MontoItem = PrcItem × QtyItem ESTRICTO
-        # (reparo DET-2-200). El descuento de línea NO puede reducir el MontoItem;
-        # se traslada a DscRcgGlobal (descuento global). El recargo de línea pequeño
-        # se absorbe en el redondeo del MontoItem entero.
+        desc_monto = _round(linea * desc_pct / 100) if desc_pct else 0
         recargo_monto = _round(linea * recargo_pct / 100) if recargo_pct else 0
-        monto_item = linea + recargo_monto   # BRUTO (sin restar descuento)
+        monto_item = linea - desc_monto + recargo_monto   # NETO
         monto_item_fmt = _round(monto_item)
         suma_lineas += monto_item_fmt
-        # Si hay descuento de línea, acumularlo para DscRcgGlobal (tipo D)
-        desc_linea_monto = _round(linea * desc_pct / 100) if desc_pct else 0
-        if desc_linea_monto:
-            descuentos_linea_global.append({
-                'glosa': f'DESCUENTO LINEA {i}', 'monto': desc_linea_monto})
         detalles.append({
             'nro': i, 'nombre': nombre, 'qty': qty, 'prc': prc,
             'unidad': it.get('unidad'),
-            'desc_pct': 0, 'recargo_pct': recargo_pct,
-            'desc_monto': 0, 'recargo_monto': recargo_monto,
+            'desc_pct': desc_pct, 'recargo_pct': recargo_pct,
+            'desc_monto': desc_monto, 'recargo_monto': recargo_monto,
             'monto_item': monto_item_fmt,
         })
 
@@ -133,10 +126,6 @@ def generar_exportacion_xml(
     # El flete y seguro van como recargos globales además de informativos en Aduana.
     dsc_rcg = []
     nro_dr = 1
-    # Descuentos de línea trasladados a global (tipo D) — exportación
-    for dl in descuentos_linea_global:
-        dsc_rcg.append({'nro': nro_dr, 'tipo': 'D', 'glosa': dl['glosa'],
-                        'tipo_valor': '$', 'valor': dl['monto']}); nro_dr += 1
     if flete is not None:
         dsc_rcg.append({'nro': nro_dr, 'tipo': 'R', 'glosa': 'FLETE',
                         'tipo_valor': '$', 'valor': flete}); nro_dr += 1
@@ -285,12 +274,18 @@ def generar_exportacion_xml(
             if d['unidad']:
                 partes.append(f'<UnmdItem>{_escape_xml(d["unidad"])}</UnmdItem>')
             partes.append(f'<PrcItem>{_fmt_dec(d["prc"], 4)}</PrcItem>')
-        # Descuento/recargo de línea como PORCENTAJE (orden schema: DescuentoPct
-        # antes de RecargoPct). Es lo que esperan los sets de certificación.
+        # Descuento/recargo de línea: el Set Básico certificado emite
+        # DescuentoPct + DescuentoMonto juntos (orden schema: Pct antes de Monto;
+        # bloque descuento completo antes del bloque recargo). El Monto solo se
+        # emite si es > 0 (MntImpType no acepta 0).
         if d['desc_pct']:
             partes.append(f'<DescuentoPct>{d["desc_pct"]:g}</DescuentoPct>')
+            if d['desc_monto']:
+                partes.append(f'<DescuentoMonto>{d["desc_monto"]}</DescuentoMonto>')
         if d['recargo_pct']:
             partes.append(f'<RecargoPct>{d["recargo_pct"]:g}</RecargoPct>')
+            if d['recargo_monto']:
+                partes.append(f'<RecargoMonto>{d["recargo_monto"]}</RecargoMonto>')
         partes.append(f'<MontoItem>{d["monto_item"]}</MontoItem>')
         detalles_xml += '<Detalle>' + ''.join(partes) + '</Detalle>\n'
 
