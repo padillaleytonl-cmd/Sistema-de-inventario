@@ -343,12 +343,8 @@ def generar_nota_credito_xml(
             tot_parts.append(f'<MntNeto>{mnt_neto}</MntNeto>')
         if mnt_exe > 0:
             tot_parts.append(f'<MntExe>{mnt_exe}</MntExe>')
-        # Retención total (impto_reten que cubre todo el IVA): el ejemplo oficial
-        # de LibreDTE NO incluye TasaIVA (el SII deriva la tasa del ImptoReten).
-        _es_reten_total = bool(impto_reten) and int(impto_reten.get('monto_imp', mnt_iva)) >= mnt_iva
         if mnt_neto > 0:
-            if not _es_reten_total:
-                tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
+            tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
             tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
         elif es_item_sin_valor:
             # CASO 5: NC con item sin valor lleva TasaIVA pero sin MntNeto/IVA
@@ -394,6 +390,9 @@ def generar_nota_credito_xml(
 
         if es_exe:
             linea_parts.append('<IndExe>1</IndExe>')
+        # Indicador Agente Retenedor (formato 2.5): líneas afectas a retención.
+        if impto_reten and not es_exe:
+            linea_parts.append('<Retenedor><IndAgente>R</IndAgente></Retenedor>')
         linea_parts.append(f'<NmbItem>{_escape_xml(nombre)}</NmbItem>')
         linea_parts.append(f'<QtyItem>{_fmt_cantidad(qty)}</QtyItem>')
         linea_parts.append(f'<UnmdItem>{_escape_xml(unidad)}</UnmdItem>')
