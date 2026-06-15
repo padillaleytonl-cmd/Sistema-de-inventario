@@ -28913,16 +28913,20 @@ def admin_lusync_sii_test_set_exportacion2():
             paso("Caso 2 — Ciruelas+Pasas (110)", True,
                  f"Folio {folio2} · MntExe {r2['totales']['mnt_exe']} USD")
 
-            # ═══ CASO 3: Alojamiento (servicio), nacionalidad argentina, sin cláusula ═══
-            # El set solo indica NACIONALIDAD (va en el receptor), sin operación
-            # aduanera (sin cláusula, vía, puertos ni país receptor/destino).
-            aduana_c3 = None
+            # ═══ CASO 3: Alojamiento (servicio), nacionalidad argentina ═══
+            # El set indica NACIONALIDAD ARGENTINA (va en el receptor). Se agrega
+            # FmaPagExp y país receptor/destino en Aduana para que el encabezado
+            # cuadre (igual que el Caso 1 que el set aceptó).
+            aduana_c3 = {
+                "cod_pais_recep": 224, "cod_pais_destin": 224,  # ARGENTINA
+            }
             r3 = generar_exportacion_xml(
                 caf=caf110, folio=folio3, fecha_emision=fch,
                 emisor=emisor, receptor=RECEPTOR_AR,
                 items=[{"nombre": "ALOJAMIENTO HABITACIONES",
                         "cantidad": 1, "precio_unitario": 5, "unidad": "U"}],
                 moneda="DOLAR USA", tipo_cambio=tc_usd, aduana=aduana_c3,
+                fma_pag_exp=11,  # ACRED
                 ind_servicio=3,  # Factura de Servicio
                 referencias=[{"tpo_doc_ref": "SET", "folio_ref": "4897591",
                               "fecha_ref": fch, "razon_ref": "CASO 4897591-3"},
