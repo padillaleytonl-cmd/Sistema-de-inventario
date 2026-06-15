@@ -28632,7 +28632,7 @@ def admin_lusync_sii_test_set_exportacion():
                 flete=700.27, seguro=239.23,
                 referencias=[{"tpo_doc_ref": "SET", "folio_ref": "4897590",
                               "fecha_ref": fch, "razon_ref": "CASO 4897590-1"},
-                             {"tpo_doc_ref": 801, "folio_ref": "MIC1",
+                             {"tpo_doc_ref": 810, "folio_ref": "MIC1",
                               "fecha_ref": fch, "razon_ref": "MANIFIESTO INTERNACIONAL"}],
                 tipo_dte=110, timestamp_firma=ts)
             documentos_sin_firma.append(r1["xml"]); documento_ids.append(r1["documento_id"])
