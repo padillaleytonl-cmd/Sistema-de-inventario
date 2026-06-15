@@ -223,11 +223,14 @@ def generar_nota_debito_xml(
             tot_parts.append(f'<MntExe>{mnt_exe}</MntExe>')
         tot_parts.append(f'<MntTotal>{mnt_total}</MntTotal>')
     else:
+        # Retención total: el ejemplo oficial de LibreDTE NO incluye TasaIVA.
+        _es_reten_total = bool(impto_reten) and int(impto_reten.get('monto_imp', mnt_iva)) >= mnt_iva
         if mnt_total > 0:
             tot_parts.append(f'<MntNeto>{mnt_neto}</MntNeto>')
             if mnt_exe > 0:
                 tot_parts.append(f'<MntExe>{mnt_exe}</MntExe>')
-            tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
+            if not _es_reten_total:
+                tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
             tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
         elif es_item_sin_valor:
             # CASO 8: ND con item sin valor lleva TasaIVA pero sin MntNeto/IVA
@@ -279,11 +282,11 @@ def generar_nota_debito_xml(
             linea_parts.append(f'<DescuentoMonto>{it["_desc_aplicado"]}</DescuentoMonto>')
         elif it.get('descuento_monto'):
             linea_parts.append(f'<DescuentoMonto>{it["_desc_aplicado"]}</DescuentoMonto>')
-        linea_parts.append(f'<MontoItem>{it["_monto_item"]}</MontoItem>')
         # ND asociada a factura de compra: CodImpAdic vincula el ítem con la
-        # retención del encabezado. Va DESPUÉS de MontoItem (orden certificado).
+        # retención. Va ANTES de MontoItem (orden del schema). Solo líneas afectas.
         if impto_reten and not es_exe:
             linea_parts.append(f'<CodImpAdic>{impto_reten.get("tipo_imp", 15)}</CodImpAdic>')
+        linea_parts.append(f'<MontoItem>{it["_monto_item"]}</MontoItem>')
         detalles_xml += '<Detalle>' + ''.join(linea_parts) + '</Detalle>'
 
     # 6. Descuento global

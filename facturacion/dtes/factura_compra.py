@@ -103,13 +103,13 @@ def generar_factura_compra_xml(
     receptor_xml = '<Receptor>' + ''.join(rec_parts) + '</Receptor>'
 
     # 4. Totales con ImptoReten — alineado con LibreDTE (DTE 46 certificado):
-    #    orden: MntNeto, [MntExe], TasaIVA, IVA, ImptoReten, MntTotal.
-    #    TasaIVA y TasaImp van como ENTERO (19), no "19.00".
+    #    orden: MntNeto, [MntExe], IVA, ImptoReten, MntTotal.
+    #    En retención TOTAL el ejemplo oficial de LibreDTE NO incluye TasaIVA
+    #    (el SII deriva la tasa del ImptoReten). TasaImp va como ENTERO (19).
     #    En retención TOTAL (MontoImp == IVA) NO se incluye IVANoRet.
     tot_parts = [f'<MntNeto>{mnt_neto}</MntNeto>']
     if mnt_exe > 0:
         tot_parts.append(f'<MntExe>{mnt_exe}</MntExe>')
-    tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}</TasaIVA>')
     tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
     tot_parts.append(
         '<ImptoReten>'
@@ -143,8 +143,8 @@ def generar_factura_compra_xml(
             f'<QtyItem>{_fmt_cantidad(qty)}</QtyItem>',
             f'<UnmdItem>{_escape_xml(unidad)}</UnmdItem>',
             f'<PrcItem>{_fmt_cantidad(prc)}</PrcItem>',
-            f'<MontoItem>{it["_monto_item"]}</MontoItem>',
             f'<CodImpAdic>{cod_imp_reten}</CodImpAdic>',
+            f'<MontoItem>{it["_monto_item"]}</MontoItem>',
         ]
         detalles_xml += '<Detalle>' + ''.join(linea_parts) + '</Detalle>'
 
