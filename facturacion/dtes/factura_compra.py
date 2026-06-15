@@ -36,7 +36,7 @@ def generar_factura_compra_xml(
     forma_pago: int = 2,
     fecha_vencimiento: Optional[str] = None,
     cod_imp_reten: int = 15,            # 15 = IVA Retenido Total
-    cod_imp_detalle: bool = True,       # si False, omite CodImpAdic del detalle (solo ImptoReten en totales)
+    ind_agente: bool = False,           # True → <Retenedor><IndAgente>R</IndAgente></Retenedor> en cada línea afecta
     timestamp_firma: Optional[str] = None,
 ) -> Dict:
     """Genera el XML de una Factura de Compra Electrónica (DTE 46) con
@@ -105,7 +105,7 @@ def generar_factura_compra_xml(
 
     # 4. Totales con ImptoReten — alineado con LibreDTE (DTE 46 certificado):
     #    orden: MntNeto, [MntExe], TasaIVA, IVA, ImptoReten, MntTotal.
-    #    TasaIVA es OBLIGATORIA (sin ella → HED-2-235). TasaImp va ENTERO (19).
+    #    TasaIVA y TasaImp van como ENTERO (19), no "19.00".
     #    En retención TOTAL (MontoImp == IVA) NO se incluye IVANoRet.
     tot_parts = [f'<MntNeto>{mnt_neto}</MntNeto>']
     if mnt_exe > 0:
@@ -140,14 +140,19 @@ def generar_factura_compra_xml(
         nombre = it.get('nombre', 'Producto')[:80]
         linea_parts = [
             f'<NroLinDet>{i}</NroLinDet>',
+        ]
+        # Retenedor: va DESPUÉS de NroLinDet y ANTES de NmbItem (orden del schema).
+        # IndAgente=R indica que el emisor actúa como agente retenedor del IVA.
+        if ind_agente:
+            linea_parts.append('<Retenedor><IndAgente>R</IndAgente></Retenedor>')
+        linea_parts += [
             f'<NmbItem>{_escape_xml(nombre)}</NmbItem>',
             f'<QtyItem>{_fmt_cantidad(qty)}</QtyItem>',
             f'<UnmdItem>{_escape_xml(unidad)}</UnmdItem>',
             f'<PrcItem>{_fmt_cantidad(prc)}</PrcItem>',
+            f'<CodImpAdic>{cod_imp_reten}</CodImpAdic>',
+            f'<MontoItem>{it["_monto_item"]}</MontoItem>',
         ]
-        if cod_imp_detalle:
-            linea_parts.append(f'<CodImpAdic>{cod_imp_reten}</CodImpAdic>')
-        linea_parts.append(f'<MontoItem>{it["_monto_item"]}</MontoItem>')
         detalles_xml += '<Detalle>' + ''.join(linea_parts) + '</Detalle>'
 
     # 6. Referencias (para NC/ND y SET)

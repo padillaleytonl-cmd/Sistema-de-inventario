@@ -390,6 +390,9 @@ def generar_nota_credito_xml(
 
         if es_exe:
             linea_parts.append('<IndExe>1</IndExe>')
+        # Retenedor (agente retenedor) en líneas afectas, antes de NmbItem (orden schema)
+        if impto_reten and not es_exe and impto_reten.get('ind_agente'):
+            linea_parts.append('<Retenedor><IndAgente>R</IndAgente></Retenedor>')
         linea_parts.append(f'<NmbItem>{_escape_xml(nombre)}</NmbItem>')
         linea_parts.append(f'<QtyItem>{_fmt_cantidad(qty)}</QtyItem>')
         linea_parts.append(f'<UnmdItem>{_escape_xml(unidad)}</UnmdItem>')
@@ -402,7 +405,7 @@ def generar_nota_credito_xml(
                 linea_parts.append(f'<DescuentoMonto>{it["_desc_aplicado"]}</DescuentoMonto>')
         # NC asociada a factura de compra: CodImpAdic vincula el ítem con la
         # retención. Va ANTES de MontoItem (orden del schema). Solo líneas afectas.
-        if impto_reten and not es_exe and not impto_reten.get('sin_cod_detalle'):
+        if impto_reten and not es_exe:
             linea_parts.append(f'<CodImpAdic>{impto_reten.get("tipo_imp", 15)}</CodImpAdic>')
         linea_parts.append(f'<MontoItem>{it["_monto_item"]}</MontoItem>')
         detalles_xml += '<Detalle>' + ''.join(linea_parts) + '</Detalle>'

@@ -28353,8 +28353,8 @@ def admin_lusync_sii_test_set_fact_compra():
             f46_param = (request.args.get("f46") or "").strip()
             f61_param = (request.args.get("f61") or "").strip()
             f56_param = (request.args.get("f56") or "").strip()
-            # sincod=1 → omite CodImpAdic del detalle (prueba HED-2-302: solo ImptoReten en totales)
-            sin_cod_detalle = (request.args.get("sincod") or "").strip() in ("1", "si", "true")
+            # agente=1 → declara <Retenedor><IndAgente>R</IndAgente></Retenedor> en cada línea afecta
+            ind_agente = (request.args.get("agente") or "").strip() in ("1", "si", "true")
             folio_46 = int(f46_param) if f46_param.isdigit() else cafs_dict[46].rango_desde
             folio_61 = int(f61_param) if f61_param.isdigit() else cafs_dict[61].rango_desde
             folio_56 = int(f56_param) if f56_param.isdigit() else cafs_dict[56].rango_desde
@@ -28377,7 +28377,7 @@ def admin_lusync_sii_test_set_fact_compra():
                     {'nombre': 'Producto 2', 'cantidad': 42, 'precio_unitario': 4732},
                 ],
                 referencias=[{"tpo_doc_ref": "SET", "folio_ref": SET, "fecha_ref": fecha, "razon_ref": f"CASO {SET}-1"}],
-                cod_imp_detalle=(not sin_cod_detalle))
+                ind_agente=ind_agente)
             c1_folio = r["folio"]; c1_total = r["totales"]["mnt_total"]
             documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
             detalles_casos.append(f"CASO-1 (FC46 f{c1_folio}): ${c1_total:,}".replace(",", "."))
@@ -28392,7 +28392,7 @@ def admin_lusync_sii_test_set_fact_compra():
                     {'nombre': 'Producto 1', 'cantidad': 374, 'precio_unitario': 8490},
                     {'nombre': 'Producto 2', 'cantidad': 14, 'precio_unitario': 4732},
                 ],
-                impto_reten={"tipo_imp": 15, "sin_cod_detalle": sin_cod_detalle},
+                impto_reten={"tipo_imp": 15, "ind_agente": ind_agente},
                 set_referencia={"folio_ref": SET, "fecha_ref": fecha, "razon_ref": f"CASO {SET}-2"})
             c2_folio = r["folio"]; c2_total = r["totales"]["mnt_total"]
             documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
@@ -28409,7 +28409,7 @@ def admin_lusync_sii_test_set_fact_compra():
                     {'nombre': 'Producto 1', 'cantidad': 374, 'precio_unitario': 8490},
                     {'nombre': 'Producto 2', 'cantidad': 14, 'precio_unitario': 4732},
                 ],
-                impto_reten={"tipo_imp": 15, "sin_cod_detalle": sin_cod_detalle},
+                impto_reten={"tipo_imp": 15, "ind_agente": ind_agente},
                 set_referencia={"folio_ref": SET, "fecha_ref": fecha, "razon_ref": f"CASO {SET}-3"})
             c3_folio = r["folio"]; c3_total = r["totales"]["mnt_total"]
             documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
