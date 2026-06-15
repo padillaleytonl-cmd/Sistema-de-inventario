@@ -153,7 +153,10 @@ def generar_exportacion_xml(
             else:
                 mnt_exe -= monto
 
-    mnt_exe_fmt = _round(mnt_exe) if mnt_exe == int(mnt_exe) else round(mnt_exe, 2)
+    # En exportación el MntExe/MntTotal del documento deben ser ENTEROS
+    # (el TED no acepta decimales y debe coincidir exactamente con MntTotal).
+    # El flete/seguro se expresan con decimales solo en Aduana (informativos).
+    mnt_exe_fmt = _round(mnt_exe)
     mnt_total = mnt_exe_fmt
 
     # ─── 3. OtraMoneda: conversión a pesos chilenos ───
@@ -225,6 +228,9 @@ def generar_exportacion_xml(
                       f'<CodTpoBultos>{aduana["cod_tpo_bultos"]}</CodTpoBultos>']
             if aduana.get('cant_bultos') is not None:
                 bultos.append(f'<CantBultos>{aduana["cant_bultos"]}</CantBultos>')
+            # Marcas: el SII lo exige obligatorio en exportación (HED-2-804)
+            marcas = aduana.get('marcas', 'SIN MARCAS')
+            bultos.append(f'<Marcas>{_escape_xml(marcas)}</Marcas>')
             bultos.append('</TipoBultos>')
             ad.append(''.join(bultos))
         if flete is not None:
@@ -304,7 +310,7 @@ def generar_exportacion_xml(
         caf=caf, folio=folio, fecha_emision=fecha_emision,
         rut_receptor=_limpiar_rut(receptor.get('rut', '55555555-5')),
         razon_social_receptor=_escape_xml(receptor['razon_social']),
-        monto_total=mnt_total if isinstance(mnt_total, int) else _round(mnt_total),
+        monto_total=mnt_total,
         detalle_primer_item=_escape_xml(primer_item),
         timestamp_emision=timestamp_firma,
     )
