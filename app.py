@@ -28475,6 +28475,234 @@ def admin_lusync_sii_test_set_fact_compra():
     <div class="card"><h2>🛒 Set Factura de Compra SII (4897593)</h2><p>Tenant {tenant_id} · ambiente {ambiente}</p><div>{filas}</div></div>
     </body></html>"""
 
+# ════════════════════════════════════════════════════════════════════════════
+# ENDPOINT SET EXPORTACIÓN — pegar en app.py
+# ════════════════════════════════════════════════════════════════════════════
+# Genera los documentos de exportación de los sets SII 4897590 (EURO, set=1) y
+# 4897591 (DÓLAR, set=2). DEBEN enviarse en sobres SEPARADOS (instrucción oficial 4).
+#
+#   SET 1 (4897590, EURO) — 3 casos:
+#     Caso 1: Factura Exportación (110) — Chatarra aluminio 442 KN × 134 EUR, CIF
+#     Caso 2: NC Exportación (112) — devolución 147 KN, ref caso 1
+#     Caso 3: ND Exportación (111) — anula NC, ref caso 2
+#
+# Uso:
+#   /admin/lusync/sii/test-set-exportacion?tenant_id=3&set=1&descargar=si
+#   (set=1 EURO por ahora; set=2 DÓLAR se agrega después)
+#
+# El sobre se sube a https://maullin.sii.cl/cgi_dte/UPL/DTEauth?1 (DTEs, no libros).
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/lusync/sii/test-set-exportacion", methods=["GET"])
+def admin_lusync_sii_test_set_exportacion():
+    """Genera el Set de Documentos de Exportación (4897590 EURO / 4897591 DÓLAR)."""
+    if not session.get("logged"):
+        return redirect("/login")
+    if session.get("rol") != "admin" and not session.get("is_lusync_admin"):
+        return jsonify({"ok": False, "error": "solo admin del tenant"}), 403
+    from inventario import get_conn, release_conn
+    from facturacion.certificados import obtener_certificado
+    from facturacion.db import obtener_config_facturacion
+    from facturacion.dtes.caf_parser import parsear_caf_xml
+    from facturacion.dtes.exportacion import generar_exportacion_xml
+    from facturacion.dtes.envio_dte import armar_envio_dte
+    from facturacion.dtes.firma import firmar_envio_completo
+
+    tenant_id = request.args.get("tenant_id", default=3, type=int)
+    set_num = request.args.get("set", default=1, type=int)
+    descargar = request.args.get("descargar", default="")
+    debug = request.args.get("debug", default="")
+    # Tipo de cambio a CLP (el SII no valida el valor real, solo la conversión)
+    tc_eur = request.args.get("tc", default=1050.50, type=float)
+
+    pasos = []
+    def paso(nombre, ok, detalle=""):
+        pasos.append({"nombre": nombre, "ok": ok, "detalle": detalle})
+
+    # Receptor extranjero de pruebas
+    RECEPTOR_AU = {
+        "rut": "55555555-5", "razon_social": "IMPORTADORA AUSTRALIA PTY",
+        "giro": "Importador", "direccion": "George St 100", "comuna": "Sydney",
+        "nacionalidad": 406,  # AUSTRALIA
+    }
+
+    if descargar != "si":
+        return """<!DOCTYPE html><html><head><meta charset="utf-8">
+        <title>Set Exportación SII</title>
+        <style>body{font-family:-apple-system,sans-serif;background:#f6f5f1;padding:40px;}
+        .card{max-width:680px;margin:0 auto;background:white;border-radius:14px;padding:28px;box-shadow:0 4px 20px rgba(0,0,0,0.06);}
+        .warn{background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:14px;color:#92400e;font-size:13px;margin-bottom:10px;}
+        a.btn{display:inline-block;margin-top:18px;background:#534AB7;color:white;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;}</style></head><body>
+        <div class="card">
+        <h2 style="margin-top:0;">🌍 Set Documentos Exportación (1) — 4897590 EURO</h2>
+        <div class="warn">
+        3 casos en UN sobre: Factura Exp (110) + NC Exp (112) + ND Exp (111).<br>
+        Moneda EURO · Chatarra de aluminio · Australia · CIF.<br>
+        Folios: 110→101, 112→51, 111→51.<br>
+        Se envía SEPARADO del Set 2 (DÓLAR).
+        </div>
+        <a class="btn" href="?tenant_id=""" + str(tenant_id) + """&set=1&descargar=si">
+        📥 Generar y descargar sobre Exportación (EURO)</a>
+        </div></body></html>"""
+
+    error_fatal = False
+    try:
+        cert = obtener_certificado(get_conn, release_conn, tenant_id)
+        if not cert.get("ok"):
+            paso("Leer certificado", False, cert.get("error", "?")); error_fatal = True
+        else:
+            paso("Leer certificado", True, cert["metadata"].get("titular", "?"))
+
+        if not error_fatal:
+            config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+            rut_emisor = config["rut_emisor"]
+            rut_envia = cert["metadata"].get("rut", "18849272-K")
+            emisor = {
+                "rut": rut_emisor, "razon_social": config["razon_social"],
+                "giro": config.get("giro", "Exportacion"),
+                "dir_origen": config.get("direccion", "Santiago"),
+                "cmna_origen": config.get("comuna", "Santiago"),
+            }
+            if config.get("acteco"):
+                emisor["acteco"] = config["acteco"]
+            paso("Datos del emisor", True, f"{rut_emisor}")
+
+            # ─── Cargar CAF 110, 112, 111 ───
+            cafs = {}
+            conn = get_conn()
+            try:
+                with conn.cursor() as cur:
+                    for tipo in (110, 112, 111):
+                        cur.execute("""
+                            SELECT xml_caf FROM facturacion_cafs
+                            WHERE tenant_id = %s AND tipo_dte = %s
+                            ORDER BY id DESC LIMIT 1
+                        """, (tenant_id, tipo))
+                        row = cur.fetchone()
+                        if not row:
+                            paso(f"CAF tipo {tipo}", False, f"No hay CAF {tipo}"); error_fatal = True
+                        else:
+                            cafs[tipo] = parsear_caf_xml(row[0])
+                            paso(f"CAF tipo {tipo}", True,
+                                 f"Rango {cafs[tipo].rango_desde}-{cafs[tipo].rango_hasta}")
+            finally:
+                release_conn(conn)
+
+        if not error_fatal:
+            from zoneinfo import ZoneInfo
+            ts = datetime.now(ZoneInfo("America/Santiago")).strftime("%Y-%m-%dT%H:%M:%S")
+            fch = ts[:10]
+
+            documentos_sin_firma = []
+            documento_ids = []
+
+            # ═══ CASO 1: Factura Exportación 110 (EURO) ═══
+            aduana_c1 = {
+                "cod_mod_venta": 2,       # BAJO CONDICIÓN
+                "cod_clau_venta": 1,      # CIF
+                "tot_clau_venta": 2049.78,
+                "cod_via_transp": 7,      # CARRETERO/TERRESTRE
+                "cod_pto_embarque": 918,  # CALDERA
+                "cod_pto_desemb": 811,    # SIDNEY
+                "tara": 0, "cod_unid_tara": 10,        # U
+                "peso_bruto": 442, "unid_peso_bruto": 6,   # KN
+                "peso_neto": 442, "unid_peso_neto": 6,     # KN
+                "tot_items": 1, "tot_bultos": 44,
+                "cod_tpo_bultos": 80, "cant_bultos": 44,   # PALLETS
+                "cod_pais_recep": 406, "cod_pais_destin": 406,  # AUSTRALIA
+            }
+            r1 = generar_exportacion_xml(
+                caf=cafs[110], folio=cafs[110].rango_desde, fecha_emision=fch,
+                emisor=emisor, receptor=RECEPTOR_AU,
+                items=[{"nombre": "CHATARRA DE ALUMINIO", "cantidad": 442,
+                        "precio_unitario": 134, "unidad": "KN"}],
+                moneda="EURO", tipo_cambio=tc_eur, aduana=aduana_c1,
+                fma_pag_exp=2,  # COBRANZA
+                flete=700.27, seguro=239.23,
+                referencias=[{"tpo_doc_ref": 801, "folio_ref": "MIC1",
+                              "fecha_ref": fch, "razon_ref": "MANIFIESTO INTERNACIONAL"}],
+                tipo_dte=110, timestamp_firma=ts)
+            documentos_sin_firma.append(r1["xml"]); documento_ids.append(r1["documento_id"])
+            folio110 = cafs[110].rango_desde
+            paso("Caso 1 — Factura Exp 110", True,
+                 f"Folio {folio110} · MntExe {r1['totales']['mnt_exe']} EUR · {r1['totales']['mnt_exe_clp']} CLP")
+
+            # ═══ CASO 2: NC Exportación 112 (devolución 147 KN) ═══
+            aduana_c2 = {
+                "cod_mod_venta": 2, "cod_clau_venta": 1, "cod_via_transp": 7,
+                "cod_pais_recep": 406, "cod_pais_destin": 406,
+            }
+            r2 = generar_exportacion_xml(
+                caf=cafs[112], folio=cafs[112].rango_desde, fecha_emision=fch,
+                emisor=emisor, receptor=RECEPTOR_AU,
+                items=[{"nombre": "CHATARRA DE ALUMINIO", "cantidad": 147,
+                        "precio_unitario": 134, "unidad": "KN"}],
+                moneda="EURO", tipo_cambio=tc_eur, aduana=aduana_c2,
+                fma_pag_exp=2,
+                referencias=[{"tpo_doc_ref": 110, "folio_ref": folio110,
+                              "fecha_ref": fch, "cod_ref": 1,
+                              "razon_ref": "DEVOLUCION DE MERCADERIA"}],
+                tipo_dte=112, timestamp_firma=ts)
+            documentos_sin_firma.append(r2["xml"]); documento_ids.append(r2["documento_id"])
+            folio112 = cafs[112].rango_desde
+            paso("Caso 2 — NC Exp 112", True,
+                 f"Folio {folio112} · MntExe {r2['totales']['mnt_exe']} EUR · ref FE {folio110}")
+
+            # ═══ CASO 3: ND Exportación 111 (anula NC) ═══
+            r3 = generar_exportacion_xml(
+                caf=cafs[111], folio=cafs[111].rango_desde, fecha_emision=fch,
+                emisor=emisor, receptor=RECEPTOR_AU,
+                items=[{"nombre": "CHATARRA DE ALUMINIO", "cantidad": 147,
+                        "precio_unitario": 134, "unidad": "KN"}],
+                moneda="EURO", tipo_cambio=tc_eur, aduana=aduana_c2,
+                fma_pag_exp=2,
+                referencias=[{"tpo_doc_ref": 112, "folio_ref": folio112,
+                              "fecha_ref": fch, "cod_ref": 1,
+                              "razon_ref": "ANULA NOTA DE CREDITO"}],
+                tipo_dte=111, timestamp_firma=ts)
+            documentos_sin_firma.append(r3["xml"]); documento_ids.append(r3["documento_id"])
+            folio111 = cafs[111].rango_desde
+            paso("Caso 3 — ND Exp 111", True,
+                 f"Folio {folio111} · MntExe {r3['totales']['mnt_exe']} EUR · ref NC {folio112}")
+
+            # ─── Armar sobre EnvioDTE (3 docs, 3 tipos) ───
+            subtot = {110: 1, 112: 1, 111: 1}
+            sobre = armar_envio_dte(
+                documentos_sin_firma, rut_emisor=rut_emisor, rut_envia=rut_envia,
+                fch_resol="2026-05-15", nro_resol=0, subtotales=subtot,
+                set_dte_id="SetExpo1", tmst_firma_env=ts)
+            paso("Armar sobre EnvioDTE", True, f"{len(sobre)} bytes · 3 docs")
+
+            if debug == "sin-firma":
+                from flask import Response
+                return Response(sobre, mimetype="application/xml",
+                    headers={"Content-Disposition": 'attachment; filename="ExpoSet1_sinfirma.xml"'})
+
+            sobre_firmado = firmar_envio_completo(
+                sobre, cert["pfx_bytes"], cert["password"],
+                set_dte_id="SetExpo1", documento_ids=documento_ids)
+            paso("Firmar sobre completo", True, f"{len(sobre_firmado)} bytes")
+
+            if descargar == "si":
+                from flask import Response
+                return Response(sobre_firmado, mimetype="application/xml",
+                    headers={"Content-Disposition": 'attachment; filename="EnvioExportacionSet1.xml"'})
+
+    except Exception as e:
+        import traceback
+        paso("ERROR", False, f"{e}<br><pre style='font-size:10px;'>{traceback.format_exc()[:1200]}</pre>")
+
+    filas = ''
+    for p in pasos:
+        icon = '✅' if p['ok'] else '❌'; color = '#16a34a' if p['ok'] else '#dc2626'
+        filas += f'<div style="border-left:3px solid {color};padding:10px 16px;margin:8px 0;background:white;border-radius:6px;"><b>{icon} {p["nombre"]}</b><div style="font-size:13px;color:#666;margin-top:4px;">{p["detalle"]}</div></div>'
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Set Exportación SII</title>
+    <style>body{{font-family:-apple-system,sans-serif;background:#f6f5f1;padding:40px;}}
+    .card{{max-width:780px;margin:0 auto;background:#f9f9f7;border-radius:14px;padding:28px;}}</style></head><body>
+    <div class="card"><h2>🌍 Set Exportación (1) EURO — 4897590</h2><p>tenant {tenant_id}</p><div>{filas}</div></div>
+    </body></html>"""
+
+
 @app.route("/admin/lusync/sii/test-set-boletas", methods=["GET"])
 @requiere_lusync_admin
 def admin_lusync_sii_test_set_boletas():
