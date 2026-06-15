@@ -28630,7 +28630,9 @@ def admin_lusync_sii_test_set_exportacion():
                 moneda="EURO", tipo_cambio=tc_eur, aduana=aduana_c1,
                 fma_pag_exp=2,  # COBRANZA
                 flete=700.27, seguro=239.23,
-                referencias=[{"tpo_doc_ref": 801, "folio_ref": "MIC1",
+                referencias=[{"tpo_doc_ref": "SET", "folio_ref": "4897590",
+                              "fecha_ref": fch, "razon_ref": "CASO 4897590-1"},
+                             {"tpo_doc_ref": 801, "folio_ref": "MIC1",
                               "fecha_ref": fch, "razon_ref": "MANIFIESTO INTERNACIONAL"}],
                 tipo_dte=110, timestamp_firma=ts)
             documentos_sin_firma.append(r1["xml"]); documento_ids.append(r1["documento_id"])
@@ -28649,7 +28651,9 @@ def admin_lusync_sii_test_set_exportacion():
                         "precio_unitario": 134, "unidad": "KN"}],
                 moneda="EURO", tipo_cambio=tc_eur, aduana=aduana_c2,
                 fma_pag_exp=2,
-                referencias=[{"tpo_doc_ref": 110, "folio_ref": folio110,
+                referencias=[{"tpo_doc_ref": "SET", "folio_ref": "4897590",
+                              "fecha_ref": fch, "razon_ref": "CASO 4897590-2"},
+                             {"tpo_doc_ref": 110, "folio_ref": folio110,
                               "fecha_ref": fch, "cod_ref": 3,
                               "razon_ref": "DEVOLUCION DE MERCADERIA"}],
                 tipo_dte=112, timestamp_firma=ts)
@@ -28665,7 +28669,9 @@ def admin_lusync_sii_test_set_exportacion():
                         "precio_unitario": 134, "unidad": "KN"}],
                 moneda="EURO", tipo_cambio=tc_eur, aduana=aduana_c2,
                 fma_pag_exp=2,
-                referencias=[{"tpo_doc_ref": 112, "folio_ref": folio112,
+                referencias=[{"tpo_doc_ref": "SET", "folio_ref": "4897590",
+                              "fecha_ref": fch, "razon_ref": "CASO 4897590-3"},
+                             {"tpo_doc_ref": 112, "folio_ref": folio112,
                               "fecha_ref": fch, "cod_ref": 1,
                               "razon_ref": "ANULA NOTA DE CREDITO"}],
                 tipo_dte=111, timestamp_firma=ts)
