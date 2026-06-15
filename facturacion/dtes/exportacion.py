@@ -93,6 +93,7 @@ def generar_exportacion_xml(
     # ─── 1. Calcular líneas de detalle ───
     detalles = []
     suma_lineas = 0
+    descuentos_linea_global = []  # descuentos de línea → DscRcgGlobal (exportación)
     for i, it in enumerate(items, start=1):
         nombre = it.get('nombre', 'Item')[:80]
         if 'valor_linea' in it and it.get('cantidad') is None:
@@ -105,26 +106,26 @@ def generar_exportacion_xml(
             prc = float(it.get('precio_unitario', 0))
             linea = qty * prc
         # Descuento / recargo por línea
-        desc_monto = 0
-        recargo_monto = 0
         desc_pct = float(it.get('descuento_pct') or 0)
         recargo_pct = float(it.get('recargo_pct') or 0)
-        if desc_pct:
-            desc_monto = _round(linea * desc_pct / 100)
-        if recargo_pct:
-            recargo_monto = _round(linea * recargo_pct / 100)
-        monto_item = linea - desc_monto + recargo_monto
-        # En exportación el MontoItem se redondea a ENTERO para que la suma
-        # del detalle cuadre exactamente con MntExe/MntTotal (también enteros).
-        # El descuento/recargo de línea se expresa como PORCENTAJE (DescuentoPct/
-        # RecargoPct), igual que en los sets de certificación nacionales.
+        # En EXPORTACIÓN el SII exige MontoItem = PrcItem × QtyItem ESTRICTO
+        # (reparo DET-2-200). El descuento de línea NO puede reducir el MontoItem;
+        # se traslada a DscRcgGlobal (descuento global). El recargo de línea pequeño
+        # se absorbe en el redondeo del MontoItem entero.
+        recargo_monto = _round(linea * recargo_pct / 100) if recargo_pct else 0
+        monto_item = linea + recargo_monto   # BRUTO (sin restar descuento)
         monto_item_fmt = _round(monto_item)
         suma_lineas += monto_item_fmt
+        # Si hay descuento de línea, acumularlo para DscRcgGlobal (tipo D)
+        desc_linea_monto = _round(linea * desc_pct / 100) if desc_pct else 0
+        if desc_linea_monto:
+            descuentos_linea_global.append({
+                'glosa': f'DESCUENTO LINEA {i}', 'monto': desc_linea_monto})
         detalles.append({
             'nro': i, 'nombre': nombre, 'qty': qty, 'prc': prc,
             'unidad': it.get('unidad'),
-            'desc_pct': desc_pct, 'recargo_pct': recargo_pct,
-            'desc_monto': desc_monto, 'recargo_monto': recargo_monto,
+            'desc_pct': 0, 'recargo_pct': recargo_pct,
+            'desc_monto': 0, 'recargo_monto': recargo_monto,
             'monto_item': monto_item_fmt,
         })
 
@@ -132,6 +133,10 @@ def generar_exportacion_xml(
     # El flete y seguro van como recargos globales además de informativos en Aduana.
     dsc_rcg = []
     nro_dr = 1
+    # Descuentos de línea trasladados a global (tipo D) — exportación
+    for dl in descuentos_linea_global:
+        dsc_rcg.append({'nro': nro_dr, 'tipo': 'D', 'glosa': dl['glosa'],
+                        'tipo_valor': '$', 'valor': dl['monto']}); nro_dr += 1
     if flete is not None:
         dsc_rcg.append({'nro': nro_dr, 'tipo': 'R', 'glosa': 'FLETE',
                         'tipo_valor': '$', 'valor': flete}); nro_dr += 1
