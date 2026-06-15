@@ -96,8 +96,6 @@ def generar_exportacion_xml(
     # ─── 1. Calcular líneas de detalle ───
     detalles = []
     suma_lineas = 0
-    suma_desc_linea = 0      # descuentos de línea (se restan del MntExe)
-    suma_recargo_linea = 0   # recargos de línea (se suman al MntExe)
     for i, it in enumerate(items, start=1):
         nombre = it.get('nombre', 'Item')[:80]
         if 'valor_linea' in it and it.get('cantidad') is None:
@@ -109,18 +107,17 @@ def generar_exportacion_xml(
             qty = float(it.get('cantidad', 1))
             prc = float(it.get('precio_unitario', 0))
             linea = qty * prc
-        # Descuento / recargo por línea. En EXPORTACIÓN el SII valida
-        # MontoItem = PrcItem × QtyItem ESTRICTO (reparo DET-2-200), por lo que
-        # el MontoItem es BRUTO. El DescuentoPct/DescuentoMonto se informa en la
-        # línea, pero el descuento se descuenta del MntExe (no del MontoItem).
+        # Descuento / recargo por línea. El SII valida en exportación:
+        # MontoItem = PrcItem×QtyItem − DescuentoMonto (+ RecargoMonto).
+        # Es decir, MontoItem es NETO y el DescuentoPct/Monto se declara en la
+        # línea. El MntExe usa la suma de los MontoItem netos (no se vuelve a
+        # restar el descuento de línea).
         desc_pct = float(it.get('descuento_pct') or 0)
         recargo_pct = float(it.get('recargo_pct') or 0)
         desc_monto = _round(linea * desc_pct / 100) if desc_pct else 0
         recargo_monto = _round(linea * recargo_pct / 100) if recargo_pct else 0
-        monto_item_fmt = _round(linea)   # BRUTO = Prc × Qty
+        monto_item_fmt = _round(linea - desc_monto + recargo_monto)   # NETO
         suma_lineas += monto_item_fmt
-        suma_desc_linea += desc_monto    # se resta del MntExe
-        suma_recargo_linea += recargo_monto
         detalles.append({
             'nro': i, 'nombre': nombre, 'qty': qty, 'prc': prc,
             'unidad': it.get('unidad'),
@@ -145,10 +142,9 @@ def generar_exportacion_xml(
                         'tipo_valor': rg.get('tipo_valor', '$'),
                         'valor': rg['valor']}); nro_dr += 1
 
-    # MntExe = suma de líneas BRUTAS - descuentos de línea + recargos de línea
-    #          + recargos globales. (MontoItem es bruto, el desc/recargo de línea
-    #          se aplica aquí porque el SII calcula el neto a nivel total.)
-    mnt_exe = suma_lineas - suma_desc_linea + suma_recargo_linea
+    # MntExe = suma de MontoItem (netos) + recargos globales.
+    # El descuento de línea YA está restado en cada MontoItem neto.
+    mnt_exe = suma_lineas
     for dr in dsc_rcg:
         if dr['tipo_valor'] == '$':
             if dr['tipo'] == 'R':
