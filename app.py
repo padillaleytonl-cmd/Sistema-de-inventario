@@ -28914,10 +28914,14 @@ def admin_lusync_sii_test_set_exportacion2():
                  f"Folio {folio2} · MntExe {r2['totales']['mnt_exe']} USD")
 
             # ═══ CASO 3: Alojamiento (servicio), nacionalidad argentina ═══
-            # El set indica NACIONALIDAD ARGENTINA (va en el receptor). Se agrega
-            # FmaPagExp y país receptor/destino en Aduana para que el encabezado
-            # cuadre (igual que el Caso 1 que el set aceptó).
+            # Se le da una sección Aduana coherente y completa (cláusula, vía,
+            # puertos, países) igual que el Caso 1 que el set aceptó. El set
+            # permite "agregar otros datos que se estimen necesarios" (instr. 2).
             aduana_c3 = {
+                "cod_clau_venta": 5,      # FOB
+                "cod_via_transp": 4,      # AÉREO
+                "cod_pto_embarque": 901,  # ARICA
+                "cod_pto_desemb": 262,    # BUENOS AIRES
                 "cod_pais_recep": 224, "cod_pais_destin": 224,  # ARGENTINA
             }
             r3 = generar_exportacion_xml(
