@@ -108,12 +108,15 @@ def generar_exportacion_xml(
         desc_monto = 0
         recargo_monto = 0
         if it.get('descuento_pct'):
-            desc_monto = round(linea * float(it['descuento_pct']) / 100, 2)
+            desc_monto = _round(linea * float(it['descuento_pct']) / 100)
         if it.get('recargo_pct'):
-            recargo_monto = round(linea * float(it['recargo_pct']) / 100, 2)
+            recargo_monto = _round(linea * float(it['recargo_pct']) / 100)
         monto_item = linea - desc_monto + recargo_monto
-        # En exportación los montos pueden ser enteros o con decimales según moneda
-        monto_item_fmt = _round(monto_item) if monto_item == int(monto_item) else round(monto_item, 2)
+        # En exportación el MontoItem se redondea a ENTERO para que la suma
+        # del detalle cuadre exactamente con MntExe/MntTotal (también enteros)
+        # y con el TED. Los descuentos/recargos de línea se muestran con su
+        # valor real, pero el MontoItem resultante es entero.
+        monto_item_fmt = _round(monto_item)
         suma_lineas += monto_item_fmt
         detalles.append({
             'nro': i, 'nombre': nombre, 'qty': qty, 'prc': prc,
