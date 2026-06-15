@@ -249,7 +249,7 @@ def generar_exportacion_xml(
             f'<MntTotOtrMnda>{mnt_tot_clp}</MntTotOtrMnda>']
     enc.append('<OtraMoneda>' + ''.join(otra) + '</OtraMoneda>')
     enc.append('</Encabezado>')
-    encabezado_xml = ''.join(enc)
+    encabezado_xml = '\n'.join(enc)
 
     # ─── 5. Detalle ───
     detalles_xml = ''
@@ -266,7 +266,7 @@ def generar_exportacion_xml(
         if d['recargo_monto']:
             partes.append(f'<RecargoMonto>{_fmt_dec(d["recargo_monto"], 2)}</RecargoMonto>')
         partes.append(f'<MontoItem>{d["monto_item"]}</MontoItem>')
-        detalles_xml += '<Detalle>' + ''.join(partes) + '</Detalle>'
+        detalles_xml += '<Detalle>' + ''.join(partes) + '</Detalle>\n'
 
     # ─── 6. Descuentos/Recargos globales ───
     dsc_rcg_xml = ''
@@ -277,7 +277,7 @@ def generar_exportacion_xml(
                   f'<TpoValor>{dr["tipo_valor"]}</TpoValor>',
                   f'<ValorDR>{_fmt_dec(dr["valor"], 2)}</ValorDR>',
                   '<IndExeDR>1</IndExeDR>']  # exportación es exenta
-        dsc_rcg_xml += '<DscRcgGlobal>' + ''.join(partes) + '</DscRcgGlobal>'
+        dsc_rcg_xml += '<DscRcgGlobal>' + ''.join(partes) + '</DscRcgGlobal>\n'
 
     # ─── 7. Referencias ───
     referencia_xml = ''
@@ -294,7 +294,7 @@ def generar_exportacion_xml(
                 partes.append(f'<CodRef>{ref["cod_ref"]}</CodRef>')
             if ref.get('razon_ref'):
                 partes.append(f'<RazonRef>{_escape_xml(ref["razon_ref"])}</RazonRef>')
-            referencia_xml += '<Referencia>' + ''.join(partes) + '</Referencia>'
+            referencia_xml += '<Referencia>' + ''.join(partes) + '</Referencia>\n'
 
     # ─── 8. TED (el monto del TED es MntTotal en moneda extranjera) ───
     if timestamp_firma is None:
@@ -312,16 +312,16 @@ def generar_exportacion_xml(
     # ─── 9. DTE completo: raíz <Exportaciones> ───
     documento_id = f'F{folio}T{tipo_dte}'
     dte_xml = (
-        '<?xml version="1.0" encoding="ISO-8859-1"?>'
-        '<DTE version="1.0">'
-        f'<Exportaciones ID="{documento_id}">'
-        f'{encabezado_xml}'
-        f'{detalles_xml}'
-        f'{dsc_rcg_xml}'
-        f'{referencia_xml}'
-        f'{ted.decode("iso-8859-1")}'
-        f'<TmstFirma>{timestamp_firma}</TmstFirma>'
-        f'</Exportaciones>'
+        '<?xml version="1.0" encoding="ISO-8859-1"?>\n'
+        '<DTE version="1.0">\n'
+        f'<Exportaciones ID="{documento_id}">\n'
+        f'{encabezado_xml}\n'
+        f'{detalles_xml}\n'
+        f'{dsc_rcg_xml}\n'
+        f'{referencia_xml}\n'
+        f'{ted.decode("iso-8859-1")}\n'
+        f'<TmstFirma>{timestamp_firma}</TmstFirma>\n'
+        f'</Exportaciones>\n'
         '</DTE>'
     )
 
