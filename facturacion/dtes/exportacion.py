@@ -273,6 +273,7 @@ def generar_exportacion_xml(
     detalles_xml = ''
     for d in detalles:
         partes = [f'<NroLinDet>{d["nro"]}</NroLinDet>',
+                  '<IndExe>1</IndExe>',  # exportación: cada línea es exenta
                   f'<NmbItem>{_escape_xml(d["nombre"])}</NmbItem>']
         if d['qty'] is not None:
             partes.append(f'<QtyItem>{_fmt_cant(d["qty"])}</QtyItem>')
