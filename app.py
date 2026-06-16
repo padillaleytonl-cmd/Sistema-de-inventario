@@ -28150,14 +28150,17 @@ def admin_lusync_sii_test_set_libro_compras_exentos():
 
             # ── DETALLE (cada documento) ──
             detalles = []
-            # 1. Tipo 30 f234 — factura papel afecta
+            # 1. Tipo 30 f234 — factura papel afecta (IVA no recuperable cod 1)
             detalles.append(construir_detalle_compra(
                 tpo_doc=30, nro_doc=234, fch_doc=F, rut_doc=RUT_PROV,
-                mnt_neto=36674, mnt_iva=iva(36674), mnt_total=36674+iva(36674)))
-            # 2. Tipo 33 f32 — fact elec con exento + afecto
+                mnt_neto=36674, mnt_iva=0,
+                cod_iva_no_rec=1, mnt_iva_no_rec=iva(36674),
+                mnt_total=36674+iva(36674)))
+            # 2. Tipo 33 f32 — fact elec con exento + afecto (IVA no rec cod 1)
             detalles.append(construir_detalle_compra(
                 tpo_doc=33, nro_doc=32, fch_doc=F, rut_doc=RUT_PROV,
-                mnt_exe=9705, mnt_neto=8907, mnt_iva=iva(8907),
+                mnt_exe=9705, mnt_neto=8907, mnt_iva=0,
+                cod_iva_no_rec=1, mnt_iva_no_rec=iva(8907),
                 mnt_total=9705+8907+iva(8907)))
             # 3. Tipo 34 f781 — factura exenta electrónica (solo exento)
             detalles.append(construir_detalle_compra(
@@ -28167,14 +28170,17 @@ def admin_lusync_sii_test_set_libro_compras_exentos():
             detalles.append(construir_detalle_compra(
                 tpo_doc=32, nro_doc=45, fch_doc=F, rut_doc=RUT_PROV,
                 mnt_exe=29694, mnt_total=29694))
-            # 5. Tipo 60 f451 — NC papel descuento a factura 234
+            # 5. Tipo 60 f451 — NC papel descuento a factura 234 (IVA no rec cod 1)
             detalles.append(construir_detalle_compra(
                 tpo_doc=60, nro_doc=451, fch_doc=F, rut_doc=RUT_PROV,
-                mnt_neto=2819, mnt_iva=iva(2819), mnt_total=2819+iva(2819)))
-            # 6. Tipo 61 f67 — NC elec anula factura elec 32 (reversa exe+afecto)
+                mnt_neto=2819, mnt_iva=0,
+                cod_iva_no_rec=1, mnt_iva_no_rec=iva(2819),
+                mnt_total=2819+iva(2819)))
+            # 6. Tipo 61 f67 — NC elec anula factura elec 32 (IVA no rec cod 1)
             detalles.append(construir_detalle_compra(
                 tpo_doc=61, nro_doc=67, fch_doc=F, rut_doc=RUT_PROV,
-                mnt_exe=9705, mnt_neto=8907, mnt_iva=iva(8907),
+                mnt_exe=9705, mnt_neto=8907, mnt_iva=0,
+                cod_iva_no_rec=1, mnt_iva_no_rec=iva(8907),
                 mnt_total=9705+8907+iva(8907)))
             # 7. Tipo 56 f211 — ND elec corrige factura exenta 781 (exento)
             detalles.append(construir_detalle_compra(
@@ -28186,23 +28192,27 @@ def admin_lusync_sii_test_set_libro_compras_exentos():
             # ── RESUMEN por tipo de documento (cada tipo tiene 1 doc) ──
             totales = []
             totales.append(construir_totales_periodo_compra(
-                tpo_doc=30, tot_doc=1, tot_mnt_neto=36674, tot_mnt_iva=iva(36674),
+                tpo_doc=30, tot_doc=1, tot_mnt_neto=36674, tot_mnt_iva=0,
+                cod_iva_no_rec=1, tot_mnt_iva_no_rec=iva(36674),
                 tot_mnt_total=36674+iva(36674)))
             totales.append(construir_totales_periodo_compra(
                 tpo_doc=32, tot_doc=1, tot_mnt_exe=29694, tot_mnt_total=29694))
             totales.append(construir_totales_periodo_compra(
                 tpo_doc=33, tot_doc=1, tot_mnt_exe=9705, tot_mnt_neto=8907,
-                tot_mnt_iva=iva(8907), tot_mnt_total=9705+8907+iva(8907)))
+                tot_mnt_iva=0, cod_iva_no_rec=1, tot_mnt_iva_no_rec=iva(8907),
+                tot_mnt_total=9705+8907+iva(8907)))
             totales.append(construir_totales_periodo_compra(
                 tpo_doc=34, tot_doc=1, tot_mnt_exe=29971, tot_mnt_total=29971))
             totales.append(construir_totales_periodo_compra(
                 tpo_doc=56, tot_doc=1, tot_mnt_exe=6673, tot_mnt_total=6673))
             totales.append(construir_totales_periodo_compra(
-                tpo_doc=60, tot_doc=1, tot_mnt_neto=2819, tot_mnt_iva=iva(2819),
+                tpo_doc=60, tot_doc=1, tot_mnt_neto=2819, tot_mnt_iva=0,
+                cod_iva_no_rec=1, tot_mnt_iva_no_rec=iva(2819),
                 tot_mnt_total=2819+iva(2819)))
             totales.append(construir_totales_periodo_compra(
                 tpo_doc=61, tot_doc=1, tot_mnt_exe=9705, tot_mnt_neto=8907,
-                tot_mnt_iva=iva(8907), tot_mnt_total=9705+8907+iva(8907)))
+                tot_mnt_iva=0, cod_iva_no_rec=1, tot_mnt_iva_no_rec=iva(8907),
+                tot_mnt_total=9705+8907+iva(8907)))
             paso("Construir ResumenPeriodo", True, "7 tipos: 30,32,33,34,56,60,61")
 
             try:
