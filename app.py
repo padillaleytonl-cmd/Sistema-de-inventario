@@ -28758,6 +28758,7 @@ def admin_lusync_sii_test_set_exportacion2():
     # ad3 = aduana ('no'=sin aduana, 'pais'=solo países, 'full'=completa)
     is3 = request.args.get("is3", default=3, type=int)
     ad3mode = request.args.get("ad3", default="no")
+    om3 = request.args.get("om3", default="no")  # OtraMoneda Caso 3: 'no' = omitir
     # Folios para los 3 casos (todos 110)
     f1 = request.args.get("f1", default=0, type=int)
     f2 = request.args.get("f2", default=0, type=int)
@@ -28936,12 +28937,13 @@ def admin_lusync_sii_test_set_exportacion2():
                     "cod_pais_recep": 224, "cod_pais_destin": 224,
                 }
             kw_is3 = {} if is3 == 0 else {"ind_servicio": is3}
+            tc_c3 = None if om3 == "no" else tc_usd
             r3 = generar_exportacion_xml(
                 caf=caf110, folio=folio3, fecha_emision=fch,
                 emisor=emisor, receptor=RECEPTOR_AR,
                 items=[{"nombre": "ALOJAMIENTO HABITACIONES",
                         "cantidad": 1, "precio_unitario": 5, "unidad": "U"}],
-                moneda="DOLAR USA", tipo_cambio=tc_usd, aduana=aduana_c3,
+                moneda="DOLAR USA", tipo_cambio=tc_c3, aduana=aduana_c3,
                 fma_pag_exp=11,  # ACRED
                 **kw_is3,
                 referencias=[{"tpo_doc_ref": "SET", "folio_ref": "4897591",

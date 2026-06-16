@@ -165,8 +165,11 @@ def generar_exportacion_xml(
     mnt_total = mnt_exe_fmt
 
     # ─── 3. OtraMoneda: conversión a pesos chilenos ───
-    mnt_exe_clp = _round(mnt_exe_fmt * tipo_cambio)
-    mnt_tot_clp = _round(mnt_total * tipo_cambio)
+    if tipo_cambio is not None:
+        mnt_exe_clp = _round(mnt_exe_fmt * tipo_cambio)
+        mnt_tot_clp = _round(mnt_total * tipo_cambio)
+    else:
+        mnt_exe_clp = mnt_tot_clp = 0
 
     # ─── 4. Encabezado ───
     enc = ['<Encabezado>']
@@ -260,12 +263,15 @@ def generar_exportacion_xml(
            f'<MntExe>{mnt_exe_fmt}</MntExe>',
            f'<MntTotal>{mnt_total}</MntTotal>']
     enc.append('<Totales>' + ''.join(tot) + '</Totales>')
-    # OtraMoneda (conversión a pesos) — va al final del Encabezado
-    otra = [f'<TpoMoneda>PESO CL</TpoMoneda>',
-            f'<TpoCambio>{_fmt_dec(tipo_cambio, 4)}</TpoCambio>',
-            f'<MntExeOtrMnda>{mnt_exe_clp}</MntExeOtrMnda>',
-            f'<MntTotOtrMnda>{mnt_tot_clp}</MntTotOtrMnda>']
-    enc.append('<OtraMoneda>' + ''.join(otra) + '</OtraMoneda>')
+    # OtraMoneda (conversión a pesos) — va al final del Encabezado.
+    # Solo se incluye si hay tipo_cambio (es opcional en el schema; LibreDTE
+    # tampoco la agrega salvo que el emisor la informe explícitamente).
+    if tipo_cambio is not None:
+        otra = [f'<TpoMoneda>PESO CL</TpoMoneda>',
+                f'<TpoCambio>{_fmt_dec(tipo_cambio, 4)}</TpoCambio>',
+                f'<MntExeOtrMnda>{mnt_exe_clp}</MntExeOtrMnda>',
+                f'<MntTotOtrMnda>{mnt_tot_clp}</MntTotOtrMnda>']
+        enc.append('<OtraMoneda>' + ''.join(otra) + '</OtraMoneda>')
     enc.append('</Encabezado>')
     encabezado_xml = '\n'.join(enc)
 
