@@ -27994,7 +27994,7 @@ def admin_lusync_sii_test_set_libro_compras():
                 tpo_doc=46, nro_doc=9, fch_doc=F, rut_doc=RUT_PROV,
                 mnt_neto=9470, mnt_iva=iva(9470),
                 iva_ret_total=iva(9470), cod_otro_imp_ret=15,
-                mnt_total=9470+iva(9470)))
+                mnt_total=9470))  # retención TOTAL: MntTotal = neto (IVA retenido)
             # 7. Tipo 60 f211 — NC descuento a factura elec 32
             detalles.append(construir_detalle_compra(
                 tpo_doc=60, nro_doc=211, fch_doc=F, rut_doc=RUT_PROV,
@@ -28021,7 +28021,7 @@ def admin_lusync_sii_test_set_libro_compras():
             totales.append(construir_totales_periodo_compra(
                 tpo_doc=46, tot_doc=1, tot_mnt_neto=9470, tot_mnt_iva=iva(9470),
                 tot_iva_ret_total=iva(9470), cod_otro_imp_ret=15,
-                tot_mnt_total=9470+iva(9470)))
+                tot_mnt_total=9470))  # retención TOTAL: total = neto
             # Tipo 60: f451 + f211
             totales.append(construir_totales_periodo_compra(
                 tpo_doc=60, tot_doc=2, tot_mnt_neto=2698+4012,
