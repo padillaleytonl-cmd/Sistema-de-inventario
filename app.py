@@ -28756,8 +28756,8 @@ def admin_lusync_sii_test_set_exportacion2():
     tc_usd = request.args.get("tc", default=971, type=float)
     # Caso 3 configurable para iterar: is3 = IndServicio (0=omitir, 3, 6);
     # ad3 = aduana ('no'=sin aduana, 'pais'=solo países, 'full'=completa)
-    is3 = request.args.get("is3", default=3, type=int)
-    ad3mode = request.args.get("ad3", default="full")
+    is3 = request.args.get("is3", default=0, type=int)
+    ad3mode = request.args.get("ad3", default="pais")
     # Folios para los 3 casos (todos 110)
     f1 = request.args.get("f1", default=0, type=int)
     f2 = request.args.get("f2", default=0, type=int)
@@ -28920,12 +28920,16 @@ def admin_lusync_sii_test_set_exportacion2():
                  f"Folio {folio2} · MntExe {r2['totales']['mnt_exe']} USD")
 
             # ═══ CASO 3: Alojamiento — configurable para diagnóstico (is3, ad3) ═══
+            # Sin IndServicio el SII trata el doc como exportación normal y exige
+            # CodModVenta (modalidad de venta) — reparo HED-2-804.
             if ad3mode == "no":
                 aduana_c3 = None
             elif ad3mode == "pais":
-                aduana_c3 = {"cod_pais_recep": 224, "cod_pais_destin": 224}
+                aduana_c3 = {"cod_mod_venta": 1,  # A FIRME
+                             "cod_pais_recep": 224, "cod_pais_destin": 224}
             else:  # full
                 aduana_c3 = {
+                    "cod_mod_venta": 1,       # A FIRME (obligatorio sin IndServicio)
                     "cod_clau_venta": 5, "cod_via_transp": 4,
                     "cod_pto_embarque": 901, "cod_pto_desemb": 262,
                     "cod_pais_recep": 224, "cod_pais_destin": 224,
