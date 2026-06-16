@@ -28757,8 +28757,8 @@ def admin_lusync_sii_test_set_exportacion2():
     # Caso 3 configurable para iterar: is3 = IndServicio (0=omitir, 3, 6);
     # ad3 = aduana ('no'=sin aduana, 'pais'=solo países, 'full'=completa)
     is3 = request.args.get("is3", default=3, type=int)
-    ad3mode = request.args.get("ad3", default="no")
-    om3 = request.args.get("om3", default="no")  # OtraMoneda Caso 3: 'no' = omitir
+    ad3mode = request.args.get("ad3", default="full")
+    om3 = request.args.get("om3", default="si")  # OtraMoneda Caso 3: 'si' = incluir
     # Folios para los 3 casos (todos 110)
     f1 = request.args.get("f1", default=0, type=int)
     f2 = request.args.get("f2", default=0, type=int)
@@ -28928,11 +28928,10 @@ def admin_lusync_sii_test_set_exportacion2():
             elif ad3mode == "pais":
                 aduana_c3 = {"cod_mod_venta": 1,  # A FIRME
                              "cod_pais_recep": 224, "cod_pais_destin": 224}
-            else:  # full
+            else:  # full = aduana idéntica al Caso 1 aceptado (con IndServicio=3
+                    # NO se exige CodModVenta ni TotClauVenta)
                 aduana_c3 = {
-                    "cod_mod_venta": 1,       # A FIRME (obligatorio sin IndServicio)
-                    "cod_clau_venta": 5, "tot_clau_venta": 5,  # FOB, total = valor
-                    "cod_via_transp": 4,
+                    "cod_clau_venta": 5, "cod_via_transp": 4,
                     "cod_pto_embarque": 901, "cod_pto_desemb": 262,
                     "cod_pais_recep": 224, "cod_pais_destin": 224,
                 }
