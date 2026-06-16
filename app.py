@@ -28756,8 +28756,8 @@ def admin_lusync_sii_test_set_exportacion2():
     tc_usd = request.args.get("tc", default=971, type=float)
     # Caso 3 configurable para iterar: is3 = IndServicio (0=omitir, 3, 6);
     # ad3 = aduana ('no'=sin aduana, 'pais'=solo países, 'full'=completa)
-    is3 = request.args.get("is3", default=3, type=int)
-    ad3mode = request.args.get("ad3", default="full")
+    is3 = request.args.get("is3", default=4, type=int)  # 4 = Servicios Hotelería
+    ad3mode = request.args.get("ad3", default="no")
     om3 = request.args.get("om3", default="si")  # OtraMoneda Caso 3: 'si' = incluir
     # Folios para los 3 casos (todos 110)
     f1 = request.args.get("f1", default=0, type=int)
