@@ -28076,6 +28076,181 @@ def admin_lusync_sii_test_set_libro_compras():
 
 
 
+@app.route("/admin/lusync/sii/test-set-libro-compras-exentos", methods=["GET"])
+def admin_lusync_sii_test_set_libro_compras_exentos():
+    """Genera el Libro de Compras para EXENTOS del período, set SII 4897594.
+
+    Lleva Detalle (7 docs) + ResumenPeriodo. Contribuyente exento: el IVA de
+    las facturas afectas NO da derecho a crédito (es costo), no se calcula
+    IVA recuperable. 7 documentos:
+      30 f234 (factura papel afecta), 33 f32 (fact elec exento+afecto),
+      34 f781 (fact exenta elec), 32 f45 (fact exenta papel),
+      60 f451 (NC papel descuento), 61 f67 (NC elec anula f32),
+      56 f211 (ND elec corrige f781)
+
+    Uso: /admin/lusync/sii/test-set-libro-compras-exentos?tenant_id=3&periodo=2026-06&descargar=si
+    """
+    if not session.get("logged"):
+        return redirect("/login")
+    if session.get("rol") != "admin" and not session.get("is_lusync_admin"):
+        return jsonify({"ok": False, "error": "solo admin del tenant"}), 403
+    from inventario import get_conn, release_conn
+    from facturacion.certificados import obtener_certificado
+    from facturacion.db import obtener_config_facturacion
+
+    tenant_id = request.args.get("tenant_id", default=3, type=int)
+    ambiente = request.args.get("ambiente", default="certificacion")
+    periodo = request.args.get("periodo", default="2026-06")
+    descargar = request.args.get("descargar", default="")
+    confirmar = request.args.get("confirmar", default="")
+
+    pasos = []
+    def paso(nombre, ok, detalle=""):
+        pasos.append({"nombre": nombre, "ok": ok, "detalle": detalle})
+
+    if confirmar != "si" and descargar != "si":
+        return """<!DOCTYPE html><html><head><meta charset="utf-8">
+        <title>Confirmar Libro Compras Exentos SII</title>
+        <style>body{font-family:-apple-system,sans-serif;background:#f6f5f1;padding:40px;}
+        .card{max-width:680px;margin:0 auto;background:white;border-radius:14px;padding:28px;box-shadow:0 4px 20px rgba(0,0,0,0.06);}
+        .warn{background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:14px;color:#92400e;font-size:13px;margin-bottom:10px;}
+        a.btn{display:inline-block;margin-top:18px;background:#534AB7;color:white;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;}</style></head><body>
+        <div class="card">
+        <h2 style="margin-top:0;">📗 Generar LIBRO COMPRAS EXENTOS SII (4897594)</h2>
+        <div class="warn">
+        Libro de Compras para Exentos del período """ + periodo + """ (detalle + resumen).<br>
+        7 documentos: 30,32,33,34 (facturas) · 60,61 (NC) · 56 (ND).<br>
+        Contribuyente exento: IVA no recuperable (es costo).<br>
+        No consume folios (es un libro).
+        </div>
+        <a class="btn" href="?tenant_id=""" + str(tenant_id) + """&periodo=""" + periodo + """&descargar=si">
+        📥 Generar y descargar EnvioLibro</a>
+        </div></body></html>"""
+
+    error_fatal = False
+    try:
+        cert = obtener_certificado(get_conn, release_conn, tenant_id)
+        if not cert.get("ok"):
+            paso("Leer certificado", False, cert.get("error", "?")); error_fatal = True
+        else:
+            paso("Leer certificado", True, cert["metadata"].get("titular", "?"))
+
+        if not error_fatal:
+            config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+            rut_emisor = config["rut_emisor"]
+            rut_envia = cert["metadata"].get("rut", "18849272-K")
+            paso("Datos del emisor", True, f"{rut_emisor}")
+
+            from facturacion.dtes.libro_cv import (
+                construir_totales_periodo_compra, construir_detalle_compra, generar_libro_xml)
+
+            def iva(n): return round(n * 0.19)
+            RUT_PROV = "55555555-5"
+            F = f"{periodo}-14"
+
+            # ── DETALLE (cada documento) ──
+            detalles = []
+            # 1. Tipo 30 f234 — factura papel afecta
+            detalles.append(construir_detalle_compra(
+                tpo_doc=30, nro_doc=234, fch_doc=F, rut_doc=RUT_PROV,
+                mnt_neto=36674, mnt_iva=iva(36674), mnt_total=36674+iva(36674)))
+            # 2. Tipo 33 f32 — fact elec con exento + afecto
+            detalles.append(construir_detalle_compra(
+                tpo_doc=33, nro_doc=32, fch_doc=F, rut_doc=RUT_PROV,
+                mnt_exe=9705, mnt_neto=8907, mnt_iva=iva(8907),
+                mnt_total=9705+8907+iva(8907)))
+            # 3. Tipo 34 f781 — factura exenta electrónica (solo exento)
+            detalles.append(construir_detalle_compra(
+                tpo_doc=34, nro_doc=781, fch_doc=F, rut_doc=RUT_PROV,
+                mnt_exe=29971, mnt_total=29971))
+            # 4. Tipo 32 f45 — factura exenta papel (solo exento)
+            detalles.append(construir_detalle_compra(
+                tpo_doc=32, nro_doc=45, fch_doc=F, rut_doc=RUT_PROV,
+                mnt_exe=29694, mnt_total=29694))
+            # 5. Tipo 60 f451 — NC papel descuento a factura 234
+            detalles.append(construir_detalle_compra(
+                tpo_doc=60, nro_doc=451, fch_doc=F, rut_doc=RUT_PROV,
+                mnt_neto=2819, mnt_iva=iva(2819), mnt_total=2819+iva(2819)))
+            # 6. Tipo 61 f67 — NC elec anula factura elec 32 (reversa exe+afecto)
+            detalles.append(construir_detalle_compra(
+                tpo_doc=61, nro_doc=67, fch_doc=F, rut_doc=RUT_PROV,
+                mnt_exe=9705, mnt_neto=8907, mnt_iva=iva(8907),
+                mnt_total=9705+8907+iva(8907)))
+            # 7. Tipo 56 f211 — ND elec corrige factura exenta 781 (exento)
+            detalles.append(construir_detalle_compra(
+                tpo_doc=56, nro_doc=211, fch_doc=F, rut_doc=RUT_PROV,
+                mnt_exe=6673, mnt_total=6673))
+            paso("Construir Detalle (7 docs)", True,
+                 "30:f234 · 33:f32 · 34:f781 · 32:f45 · 60:f451 · 61:f67 · 56:f211")
+
+            # ── RESUMEN por tipo de documento (cada tipo tiene 1 doc) ──
+            totales = []
+            totales.append(construir_totales_periodo_compra(
+                tpo_doc=30, tot_doc=1, tot_mnt_neto=36674, tot_mnt_iva=iva(36674),
+                tot_mnt_total=36674+iva(36674)))
+            totales.append(construir_totales_periodo_compra(
+                tpo_doc=32, tot_doc=1, tot_mnt_exe=29694, tot_mnt_total=29694))
+            totales.append(construir_totales_periodo_compra(
+                tpo_doc=33, tot_doc=1, tot_mnt_exe=9705, tot_mnt_neto=8907,
+                tot_mnt_iva=iva(8907), tot_mnt_total=9705+8907+iva(8907)))
+            totales.append(construir_totales_periodo_compra(
+                tpo_doc=34, tot_doc=1, tot_mnt_exe=29971, tot_mnt_total=29971))
+            totales.append(construir_totales_periodo_compra(
+                tpo_doc=56, tot_doc=1, tot_mnt_exe=6673, tot_mnt_total=6673))
+            totales.append(construir_totales_periodo_compra(
+                tpo_doc=60, tot_doc=1, tot_mnt_neto=2819, tot_mnt_iva=iva(2819),
+                tot_mnt_total=2819+iva(2819)))
+            totales.append(construir_totales_periodo_compra(
+                tpo_doc=61, tot_doc=1, tot_mnt_exe=9705, tot_mnt_neto=8907,
+                tot_mnt_iva=iva(8907), tot_mnt_total=9705+8907+iva(8907)))
+            paso("Construir ResumenPeriodo", True, "7 tipos: 30,32,33,34,56,60,61")
+
+            try:
+                from zoneinfo import ZoneInfo
+                ts = datetime.now(ZoneInfo("America/Santiago")).strftime("%Y-%m-%dT%H:%M:%S")
+            except Exception:
+                ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+
+            libro = generar_libro_xml(
+                rut_emisor=rut_emisor, rut_envia=rut_envia,
+                periodo_tributario=periodo, tipo_operacion="COMPRA",
+                totales_periodo=totales, detalles=detalles,
+                fch_resol="2026-05-15", nro_resol=0,
+                tipo_libro="ESPECIAL", tipo_envio="TOTAL",
+                libro_id="LibroComprasExentos", tmst_firma=ts)
+            paso("Generar Libro Compras Exentos", True, f"{len(libro['xml'])} bytes")
+
+            from facturacion.dtes.firma import firmar_envio_completo
+            try:
+                libro_firmado = firmar_envio_completo(
+                    libro["xml"], cert["pfx_bytes"], cert["password"],
+                    set_dte_id=libro["libro_id"], documento_ids=[])
+                paso("Firmar EnvioLibro", True, f"{len(libro_firmado)} bytes")
+            except Exception as e_f:
+                import traceback
+                paso("Firmar EnvioLibro", False, f"{e_f}<br><pre style='font-size:10px;'>{traceback.format_exc()[:500]}</pre>")
+                error_fatal = True
+
+            if not error_fatal and descargar == "si":
+                from flask import Response
+                return Response(libro_firmado, mimetype="application/xml",
+                    headers={"Content-Disposition": 'attachment; filename="EnvioLibroComprasExentos.xml"'})
+
+    except Exception as e:
+        import traceback
+        paso("ERROR", False, f"{e}<br><pre style='font-size:10px;'>{traceback.format_exc()[:1000]}</pre>")
+
+    filas = ''
+    for p in pasos:
+        icon = '✅' if p['ok'] else '❌'; color = '#16a34a' if p['ok'] else '#dc2626'
+        filas += f'<div style="border-left:3px solid {color};padding:10px 16px;margin:8px 0;background:white;border-radius:6px;"><b>{icon} {p["nombre"]}</b><div style="font-size:13px;color:#666;margin-top:4px;">{p["detalle"]}</div></div>'
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Libro Compras Exentos SII</title>
+    <style>body{{font-family:-apple-system,sans-serif;background:#f6f5f1;padding:40px;}}
+    .card{{max-width:780px;margin:0 auto;background:#f9f9f7;border-radius:14px;padding:28px;}}</style></head><body>
+    <div class="card"><h2>📗 Libro Compras Exentos SII (4897594)</h2><p>Período {periodo} · tenant {tenant_id}</p><div>{filas}</div></div>
+    </body></html>"""
+
+
 @app.route("/admin/lusync/sii/test-set-libro-guias", methods=["GET"])
 def admin_lusync_sii_test_set_libro_guias():
     """Genera el Libro de Guías del período, set SII 4897589.
