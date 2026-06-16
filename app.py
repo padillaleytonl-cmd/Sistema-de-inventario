@@ -28157,26 +28157,28 @@ def admin_lusync_sii_test_set_libro_guias():
                 folio=f52+1, tpo_oper=1, fch_doc=F, rut_doc=RUT_CLI,
                 mnt_neto=105723, iva=iva(105723), mnt_total=125810,
                 tpo_doc_ref=33, folio_doc_ref=140, fch_doc_ref=F))
-            # Caso 3 (f72): venta ANULADA
+            # Caso 3 (f72): venta ANULADA después de envío al SII (Anulado=2)
             detalles.append(construir_detalle_guia(
                 folio=f52+2, tpo_oper=1, fch_doc=F, rut_doc=RUT_CLI,
                 mnt_neto=144590, iva=iva(144590), mnt_total=172062,
-                anulado=1))
+                anulado=2))
             paso("Construir Detalle (3 guías)", True,
                  f"f{f52}: interno · f{f52+1}: venta facturada · f{f52+2}: anulada")
 
-            # ── RESUMEN ──
-            # Caso 2 facturada → su monto va en TotMntModificado (no en venta directa)
-            # Caso 3 anulada → TotGuiaAnulada=1
-            # Caso 1 traslado interno → tabla no-venta (cod 5)
+            # ── RESUMEN (según reglas oficiales SII, formato_lgd) ──
+            # f71 venta facturada → TotGuiaVenta=1, su monto en TotMntGuiaVta
+            # f72 anulada tras envío → Anulado=2 → TotGuiaAnulada=1
+            # f70 traslado interno → tabla no-venta (cod 5)
+            # TotMntModificado solo aplica a guías con Modificado=3 (ninguna aquí)
             resumen = construir_resumen_guia(
+                tot_folios_anulados=0,
                 tot_guias_anuladas=1,
-                tot_guias_venta=0,
-                tot_mnt_guias_venta=0,
-                tot_mnt_modificado=125810,
+                tot_guias_venta=1,
+                tot_mnt_guias_venta=125810,
+                tot_mnt_modificado=0,
                 guias_no_venta=[{"cod_traslado": 5, "cantidad": 1, "monto": 0}])
             paso("Construir ResumenPeriodo", True,
-                 "anuladas:1 · modificado:125.810 · traslado interno:1")
+                 "venta:1 (125.810) · anulada:1 · traslado interno:1")
 
             try:
                 from zoneinfo import ZoneInfo
