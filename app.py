@@ -28754,6 +28754,10 @@ def admin_lusync_sii_test_set_exportacion2():
     # TC entero (971) para que la conversión a pesos nunca genere decimales .5,
     # eliminando ambigüedad de redondeo que descuadra el encabezado en el set.
     tc_usd = request.args.get("tc", default=971, type=float)
+    # Caso 3 configurable para iterar: is3 = IndServicio (0=omitir, 3, 6);
+    # ad3 = aduana ('no'=sin aduana, 'pais'=solo países, 'full'=completa)
+    is3 = request.args.get("is3", default=3, type=int)
+    ad3mode = request.args.get("ad3", default="full")
     # Folios para los 3 casos (todos 110)
     f1 = request.args.get("f1", default=0, type=int)
     f2 = request.args.get("f2", default=0, type=int)
@@ -28915,14 +28919,18 @@ def admin_lusync_sii_test_set_exportacion2():
             paso("Caso 2 — Ciruelas+Pasas (110)", True,
                  f"Folio {folio2} · MntExe {r2['totales']['mnt_exe']} USD")
 
-            # ═══ CASO 3: Alojamiento (servicio usado totalmente en el extranjero) ═══
-            # Normativa SII (formato_dte, cambio 15/11/2019): IndServicio=6 =
-            # "Servicios prestados y utilizados totalmente en el extranjero".
-            # El alojamiento en Argentina es justo ese caso (no hay embarque
-            # físico), por eso NO lleva sección Aduana de puertos/cláusula.
-            aduana_c3 = {
-                "cod_pais_recep": 224, "cod_pais_destin": 224,  # ARGENTINA
-            }
+            # ═══ CASO 3: Alojamiento — configurable para diagnóstico (is3, ad3) ═══
+            if ad3mode == "no":
+                aduana_c3 = None
+            elif ad3mode == "pais":
+                aduana_c3 = {"cod_pais_recep": 224, "cod_pais_destin": 224}
+            else:  # full
+                aduana_c3 = {
+                    "cod_clau_venta": 5, "cod_via_transp": 4,
+                    "cod_pto_embarque": 901, "cod_pto_desemb": 262,
+                    "cod_pais_recep": 224, "cod_pais_destin": 224,
+                }
+            kw_is3 = {} if is3 == 0 else {"ind_servicio": is3}
             r3 = generar_exportacion_xml(
                 caf=caf110, folio=folio3, fecha_emision=fch,
                 emisor=emisor, receptor=RECEPTOR_AR,
@@ -28930,7 +28938,7 @@ def admin_lusync_sii_test_set_exportacion2():
                         "cantidad": 1, "precio_unitario": 5, "unidad": "U"}],
                 moneda="DOLAR USA", tipo_cambio=tc_usd, aduana=aduana_c3,
                 fma_pag_exp=11,  # ACRED
-                ind_servicio=6,  # Servicio prestado/utilizado totalmente en extranjero
+                **kw_is3,
                 referencias=[{"tpo_doc_ref": "SET", "folio_ref": "4897591",
                               "fecha_ref": fch, "razon_ref": "CASO 4897591-3"},
                              {"tpo_doc_ref": 812, "folio_ref": "RSNA3",
