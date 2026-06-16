@@ -28940,7 +28940,7 @@ def admin_lusync_sii_test_set_exportacion2():
                 caf=caf110, folio=folio3, fecha_emision=fch,
                 emisor=emisor, receptor=RECEPTOR_AR,
                 items=[{"nombre": "ALOJAMIENTO HABITACIONES",
-                        "cantidad": 1, "precio_unitario": 5, "unidad": "U"}],
+                        "valor_linea": 5, "cantidad": None}],  # VALOR LINEA directo
                 moneda="DOLAR USA", tipo_cambio=tc_usd, aduana=aduana_c3,
                 fma_pag_exp=11,  # ACRED
                 **kw_is3,
