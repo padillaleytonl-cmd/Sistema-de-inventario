@@ -33,7 +33,7 @@ def generar_factura_compra_xml(
     receptor: Dict,
     items: List[Dict],
     referencias: Optional[List[Dict]] = None,
-    forma_pago: int = 2,
+    forma_pago: int = 1,
     fecha_vencimiento: Optional[str] = None,
     cod_imp_reten: int = 15,            # 15 = IVA Retenido Total
     ind_agente: bool = False,           # True → <Retenedor><IndAgente>R</IndAgente></Retenedor> en cada línea afecta
@@ -156,8 +156,8 @@ def generar_factura_compra_xml(
             linea_parts.append('<Retenedor><IndAgente>R</IndAgente></Retenedor>')
         linea_parts += [
             f'<NmbItem>{_escape_xml(nombre)}</NmbItem>',
-            f'<QtyItem>{_fmt_cantidad(qty)}</QtyItem>',
-            f'<PrcItem>{_fmt_cantidad(prc)}</PrcItem>',
+            f'<QtyItem>{qty:.1f}</QtyItem>',
+            f'<PrcItem>{prc:.1f}</PrcItem>',
             f'<CodImpAdic>{cod_imp_reten}</CodImpAdic>',
             f'<MontoItem>{it["_monto_item"]}</MontoItem>',
         ]
