@@ -243,6 +243,20 @@ def generar_liquidacion_xml(
         iva_terc = mnt_iva - iva_prop
         tot_parts.append(f'<IVAProp>{iva_prop}</IVAProp>')
         tot_parts.append(f'<IVATerc>{iva_terc}</IVATerc>')
+    # ── ImptoReten (impuesto 14 = IVA Margen Comercialización) ──
+    # Si el documento declara CodImpAdic=14 en líneas (boletas en liquidación),
+    # el SII exige declarar ese impuesto en Totales con tasa y monto (HED-2-302).
+    # Va después de IVATerc y antes de Comisiones (orden del XSD).
+    imp_reten = emisor.get('impto_reten')
+    if imp_reten:
+        for ir in imp_reten:
+            tot_parts.append(
+                '<ImptoReten>'
+                f'<TipoImp>{ir["tipo"]}</TipoImp>'
+                f'<TasaImp>{ir.get("tasa", IVA_PORCENTAJE)}.00</TasaImp>'
+                f'<MontoImp>{ir["monto"]}</MontoImp>'
+                '</ImptoReten>'
+            )
     # Comisiones resumen (después de IVA/ImptoReten, antes de MntTotal)
     if com_norm:
         com_tot = ['<Comisiones>']

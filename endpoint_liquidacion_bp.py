@@ -166,7 +166,8 @@ def admin_lusync_sii_test_set_liquidacion():
                     {'nombre': 'NETO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -47447, 'exento': False, 'tpo_doc_liq': 61, 'cod_imp_adic': 14},
                     {'nombre': 'EXENTO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -17332, 'exento': True, 'tpo_doc_liq': 61},
                     {'nombre': 'BOLETAS', 'cantidad': 7565, 'monto': 5703687, 'exento': False, 'tpo_doc_liq': 39, 'cod_imp_adic': 14},
-                ], comisiones=None),
+                ], comisiones=None,
+                   impto_reten=[{'tipo': 14, 'tasa': 19, 'monto': 1192127}]),
                 # CASO 3 — con comisiones (set 4897592)
                 dict(items=[
                     {'nombre': 'NETO FACTURA ELECTRÓNICA 1515', 'cantidad': 1, 'monto': 342837, 'exento': False, 'tpo_doc_liq': 33},
@@ -201,6 +202,8 @@ def admin_lusync_sii_test_set_liquidacion():
                     emisor_caso["iva_terc_todo"] = True
                 if caso.get("subtotales_info"):
                     emisor_caso["subtotales_info"] = caso["subtotales_info"]
+                if caso.get("impto_reten"):
+                    emisor_caso["impto_reten"] = caso["impto_reten"]
                 r = generar_liquidacion_xml(
                     caf=caf43, folio=folio, fecha_emision=fecha,
                     emisor=emisor_caso, receptor=RECEPTOR_SET,
