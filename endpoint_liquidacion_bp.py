@@ -164,9 +164,8 @@ def admin_lusync_sii_test_set_liquidacion():
                     {'nombre': 'EXENTO FACTURA ELECTRÓNICA 4768', 'cantidad': 1, 'monto': 335503, 'exento': True, 'tpo_doc_liq': 33},
                     {'nombre': 'NETO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -47447, 'exento': False, 'tpo_doc_liq': 60},
                     {'nombre': 'EXENTO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -17332, 'exento': True, 'tpo_doc_liq': 60},
-                    {'nombre': 'BOLETAS', 'cantidad': 7565, 'monto': 5703687, 'exento': False, 'tpo_doc_liq': 39, 'bruto_en_linea': True},
-                ], comisiones=None, iva_terc_todo=True,
-                   subtotales_info=[{'glosa': 'BOLETAS', 'neto': 4793014, 'iva': 910673}]),
+                    {'nombre': 'BOLETAS', 'cantidad': 7565, 'monto': 5703687, 'exento': False, 'tpo_doc_liq': 39},
+                ], comisiones=None, iva_terc_todo=True),
                 # CASO 3 — con comisiones (set 4897592)
                 dict(items=[
                     {'nombre': 'NETO FACTURA ELECTRÓNICA 1515', 'cantidad': 1, 'monto': 342837, 'exento': False, 'tpo_doc_liq': 33},
