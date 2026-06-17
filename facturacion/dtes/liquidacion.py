@@ -93,6 +93,7 @@ def generar_liquidacion_xml(
             'unidad': it.get('unidad'),
             'tpo_doc_liq': it.get('tpo_doc_liq', 33),
             'prc_item': it.get('prc_item'),
+            'cod_imp_adic': it.get('cod_imp_adic'),
             'ind_exe_cero': it.get('ind_exe_cero', False),
         })
         if es_exe:
@@ -285,6 +286,8 @@ def generar_liquidacion_xml(
             linea_parts.append(f'<QtyItem>{_fmt_cantidad(float(it["cantidad"]))}</QtyItem>')
         if it.get('prc_item') is not None:
             linea_parts.append(f'<PrcItem>{_fmt_cantidad(float(it["prc_item"]))}</PrcItem>')
+        if it.get('cod_imp_adic') is not None:
+            linea_parts.append(f'<CodImpAdic>{it["cod_imp_adic"]}</CodImpAdic>')
         linea_parts.append(f'<MontoItem>{monto}</MontoItem>')
         detalles_xml += '\n<Detalle>' + ''.join(linea_parts) + '</Detalle>'
 

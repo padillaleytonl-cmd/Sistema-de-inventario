@@ -155,17 +155,18 @@ def admin_lusync_sii_test_set_liquidacion():
                     {'nombre': 'NETO FACTURAS ELECTRONICAS', 'cantidad': 46, 'monto': 100774, 'exento': False, 'tpo_doc_liq': 33},
                     {'nombre': 'EXENTO FACTURAS ELECTRONICAS', 'cantidad': 34, 'monto': 94722, 'exento': True, 'tpo_doc_liq': 33},
                 ], comisiones=None),
-                # CASO 2 — boleta BRUTA: el módulo descompone 5703687 en neto+IVA
-                # (boletas a consumidor final incluyen IVA). neto=4793014, IVA=910673
+                # CASO 2 — replica el ejemplo oficial dansanti que CERTIFICA:
+                # líneas afectas con CodImpAdic=14 (IVA Margen Comercialización),
+                # boleta tdl=39 con QtyItem real y MontoItem neto (sin bruto/subtot)
                 dict(items=[
-                    {'nombre': 'NETO FACTURA ELECTRÓNICA 4254', 'cantidad': 1, 'monto': 45443, 'exento': False, 'tpo_doc_liq': 33},
+                    {'nombre': 'NETO FACTURA ELECTRÓNICA 4254', 'cantidad': 1, 'monto': 45443, 'exento': False, 'tpo_doc_liq': 33, 'cod_imp_adic': 14},
                     {'nombre': 'EXENTO FACTURA ELECTRÓNICA 4254', 'cantidad': 1, 'monto': 22678, 'exento': True, 'tpo_doc_liq': 33},
-                    {'nombre': 'NETO FACTURA ELECTRÓNICA 4768', 'cantidad': 1, 'monto': 572671, 'exento': False, 'tpo_doc_liq': 33},
+                    {'nombre': 'NETO FACTURA ELECTRÓNICA 4768', 'cantidad': 1, 'monto': 572671, 'exento': False, 'tpo_doc_liq': 33, 'cod_imp_adic': 14},
                     {'nombre': 'EXENTO FACTURA ELECTRÓNICA 4768', 'cantidad': 1, 'monto': 335503, 'exento': True, 'tpo_doc_liq': 33},
-                    {'nombre': 'NETO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -47447, 'exento': False, 'tpo_doc_liq': 60},
-                    {'nombre': 'EXENTO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -17332, 'exento': True, 'tpo_doc_liq': 60},
-                    {'nombre': 'BOLETAS', 'cantidad': 1, 'monto': 5703687, 'exento': False, 'tpo_doc_liq': 39},
-                ], comisiones=None, iva_terc_todo=True),
+                    {'nombre': 'NETO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -47447, 'exento': False, 'tpo_doc_liq': 61, 'cod_imp_adic': 14},
+                    {'nombre': 'EXENTO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -17332, 'exento': True, 'tpo_doc_liq': 61},
+                    {'nombre': 'BOLETAS', 'cantidad': 7565, 'monto': 5703687, 'exento': False, 'tpo_doc_liq': 39, 'cod_imp_adic': 14},
+                ], comisiones=None),
                 # CASO 3 — con comisiones (set 4897592)
                 dict(items=[
                     {'nombre': 'NETO FACTURA ELECTRÓNICA 1515', 'cantidad': 1, 'monto': 342837, 'exento': False, 'tpo_doc_liq': 33},
