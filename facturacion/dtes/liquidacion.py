@@ -159,7 +159,10 @@ def generar_liquidacion_xml(
             com_norm[-1]['iva'] = val_com_iva - acum
 
     # MntTotal del DTE 43 descuenta la comisión del liquidador (neto + IVA).
-    mnt_total = mnt_neto + mnt_exe + mnt_iva - val_com_neto - val_com_iva
+    # Además SUMA el ImptoReten (impuesto 14 = IVA Margen Comercialización):
+    # el SII valida MntTotal = MntNeto + MntExe + IVA + ImptoReten (HED-2-260).
+    _imp_reten_total = sum(int(ir['monto']) for ir in (emisor.get('impto_reten') or []))
+    mnt_total = mnt_neto + mnt_exe + mnt_iva + _imp_reten_total - val_com_neto - val_com_iva
 
     # ── 1. IdDoc ──
     # TpoTranVenta=1 (ventas del giro): LibreDTE lo agrega siempre a los DTE que
