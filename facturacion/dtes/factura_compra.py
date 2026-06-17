@@ -124,6 +124,7 @@ def generar_factura_compra_xml(
     if iva_no_ret > 0:
         tot_parts.append(f'<IVANoRet>{iva_no_ret}</IVANoRet>')
     tot_parts.append(f'<MntTotal>{mnt_total}</MntTotal>')
+    tot_parts.append(f'<VlrPagar>{mnt_total}</VlrPagar>')
     totales_xml = '<Totales>' + ''.join(tot_parts) + '</Totales>'
 
     encabezado_xml = f'<Encabezado>{iddoc_xml}{emisor_xml}{receptor_xml}{totales_xml}</Encabezado>'
@@ -156,7 +157,6 @@ def generar_factura_compra_xml(
         linea_parts += [
             f'<NmbItem>{_escape_xml(nombre)}</NmbItem>',
             f'<QtyItem>{_fmt_cantidad(qty)}</QtyItem>',
-            f'<UnmdItem>{_escape_xml(unidad)}</UnmdItem>',
             f'<PrcItem>{_fmt_cantidad(prc)}</PrcItem>',
             f'<CodImpAdic>{cod_imp_reten}</CodImpAdic>',
             f'<MontoItem>{it["_monto_item"]}</MontoItem>',
