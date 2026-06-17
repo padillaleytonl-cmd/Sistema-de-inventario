@@ -214,7 +214,7 @@ def generar_liquidacion_xml(
     tot_parts.append(f'<MntNeto>{mnt_neto}</MntNeto>')
     if mnt_exe != 0:
         tot_parts.append(f'<MntExe>{mnt_exe}</MntExe>')
-    tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
+    tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}</TasaIVA>')
     # Si el impuesto va declarado como ImptoReten (código 14 = IVA Margen
     # Comercialización), el campo <IVA> normal va en 0: el 14 ES el IVA de la
     # liquidación, no un impuesto adicional. Evita el doble cómputo.
@@ -307,7 +307,12 @@ def generar_liquidacion_xml(
             linea_parts.append('<IndExe>0</IndExe>')
         linea_parts.append(f'<NmbItem>{_escape_xml(it["nombre"])}</NmbItem>')
         if it['cantidad'] is not None:
-            linea_parts.append(f'<QtyItem>{_fmt_cantidad(float(it["cantidad"]))}</QtyItem>')
+            # Formato decimal explícito (p.ej. '7565.0'), igual que el generador
+            # oficial dansanti que certifica liquidaciones. El validador del set 43
+            # espera la cantidad con decimal en las líneas; '7565' entero reparaba.
+            _qty = float(it["cantidad"])
+            _qty_str = f'{_qty:.1f}' if _qty == int(_qty) else _fmt_cantidad(_qty)
+            linea_parts.append(f'<QtyItem>{_qty_str}</QtyItem>')
         if it.get('prc_item') is not None:
             linea_parts.append(f'<PrcItem>{_fmt_cantidad(float(it["prc_item"]))}</PrcItem>')
         if it.get('cod_imp_adic') is not None:
