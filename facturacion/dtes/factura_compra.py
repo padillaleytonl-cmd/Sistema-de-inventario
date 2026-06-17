@@ -33,7 +33,7 @@ def generar_factura_compra_xml(
     receptor: Dict,
     items: List[Dict],
     referencias: Optional[List[Dict]] = None,
-    forma_pago: int = 1,
+    forma_pago: int = 2,
     fecha_vencimiento: Optional[str] = None,
     cod_imp_reten: int = 15,            # 15 = IVA Retenido Total
     ind_agente: bool = False,           # True → <Retenedor><IndAgente>R</IndAgente></Retenedor> en cada línea afecta
@@ -116,11 +116,7 @@ def generar_factura_compra_xml(
     tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
     _imp_reten = '<ImptoReten>' + f'<TipoImp>{cod_imp_reten}</TipoImp>'
     if tasa_reten is not None:
-        # Tasa con 2 decimales: el motor 2026 del SII puede requerir el
-        # formato explícito "19.00" para reconocer la tasa de retención
-        # del código 15 (reparo HED-2-302 "Debe Indicar Tasa").
-        _tasa_fmt = f'{float(tasa_reten):.2f}'
-        _imp_reten += f'<TasaImp>{_tasa_fmt}</TasaImp>'
+        _imp_reten += f'<TasaImp>{tasa_reten}</TasaImp>'
     _imp_reten += f'<MontoImp>{mnt_reten}</MontoImp>' + '</ImptoReten>'
     tot_parts.append(_imp_reten)
     # IVANoRet solo en retención PARCIAL (MontoImp != IVA). En total, se omite.
@@ -128,7 +124,6 @@ def generar_factura_compra_xml(
     if iva_no_ret > 0:
         tot_parts.append(f'<IVANoRet>{iva_no_ret}</IVANoRet>')
     tot_parts.append(f'<MntTotal>{mnt_total}</MntTotal>')
-    tot_parts.append(f'<VlrPagar>{mnt_total}</VlrPagar>')
     totales_xml = '<Totales>' + ''.join(tot_parts) + '</Totales>'
 
     encabezado_xml = f'<Encabezado>{iddoc_xml}{emisor_xml}{receptor_xml}{totales_xml}</Encabezado>'
@@ -160,8 +155,9 @@ def generar_factura_compra_xml(
             linea_parts.append('<Retenedor><IndAgente>R</IndAgente></Retenedor>')
         linea_parts += [
             f'<NmbItem>{_escape_xml(nombre)}</NmbItem>',
-            f'<QtyItem>{qty:.1f}</QtyItem>',
-            f'<PrcItem>{prc:.1f}</PrcItem>',
+            f'<QtyItem>{_fmt_cantidad(qty)}</QtyItem>',
+            f'<UnmdItem>{_escape_xml(unidad)}</UnmdItem>',
+            f'<PrcItem>{_fmt_cantidad(prc)}</PrcItem>',
             f'<CodImpAdic>{cod_imp_reten}</CodImpAdic>',
             f'<MontoItem>{it["_monto_item"]}</MontoItem>',
         ]
