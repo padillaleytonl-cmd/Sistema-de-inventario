@@ -159,10 +159,12 @@ def generar_liquidacion_xml(
             com_norm[-1]['iva'] = val_com_iva - acum
 
     # MntTotal del DTE 43 descuenta la comisión del liquidador (neto + IVA).
-    # Además SUMA el ImptoReten (impuesto 14 = IVA Margen Comercialización):
-    # el SII valida MntTotal = MntNeto + MntExe + IVA + ImptoReten (HED-2-260).
+    # El ImptoReten (impuesto 14 = IVA Margen Comercialización) se suma al total.
+    # Si 'iva_en_impto_reten': el campo <IVA> va en 0 y el impuesto se cuenta
+    # SOLO vía ImptoReten (el 14 ES el IVA, no se duplica). Si no, se suman ambos.
     _imp_reten_total = sum(int(ir['monto']) for ir in (emisor.get('impto_reten') or []))
-    mnt_total = mnt_neto + mnt_exe + mnt_iva + _imp_reten_total - val_com_neto - val_com_iva
+    _iva_para_total = 0 if emisor.get('iva_en_impto_reten') else mnt_iva
+    mnt_total = mnt_neto + mnt_exe + _iva_para_total + _imp_reten_total - val_com_neto - val_com_iva
 
     # ── 1. IdDoc ──
     # TpoTranVenta=1 (ventas del giro): LibreDTE lo agrega siempre a los DTE que
@@ -213,14 +215,19 @@ def generar_liquidacion_xml(
     if mnt_exe != 0:
         tot_parts.append(f'<MntExe>{mnt_exe}</MntExe>')
     tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
-    tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
+    # Si el impuesto va declarado como ImptoReten (código 14 = IVA Margen
+    # Comercialización), el campo <IVA> normal va en 0: el 14 ES el IVA de la
+    # liquidación, no un impuesto adicional. Evita el doble cómputo.
+    _iva_en_reten = bool(emisor.get('iva_en_impto_reten'))
+    _iva_mostrado = 0 if _iva_en_reten else mnt_iva
+    tot_parts.append(f'<IVA>{_iva_mostrado}</IVA>')
     # En liquidación-factura, el IVA se separa en IVA Propio (el de las comisiones
     # del liquidador) e IVA de Terceros (el del mandante). Regla oficial (formato
     # DTE, tags 109/110): IVAProp < IVA e IVATerc < IVA, y IVAProp+IVATerc = IVA.
     # Ambos campos son OPCIONALES (obligatoriedad 3). Se pueden omitir con el flag
     # 'omitir_iva_prop_terc' (útil cuando las comisiones son negativas y el reparto
     # del SII no es el estándar). Orden XSD: IVA → IVAProp → IVATerc → ... → Comisiones.
-    omitir_ipt = bool(emisor.get('omitir_iva_prop_terc'))
+    omitir_ipt = bool(emisor.get('omitir_iva_prop_terc')) or bool(emisor.get('iva_en_impto_reten'))
     iva_terc_forzado = emisor.get('iva_terc_todo')
     if iva_terc_forzado and not com_norm and not omitir_ipt:
         # Liquidación de SOLO ventas por cuenta de tercero (sin comisiones del

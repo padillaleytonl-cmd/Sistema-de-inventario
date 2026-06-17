@@ -155,19 +155,19 @@ def admin_lusync_sii_test_set_liquidacion():
                     {'nombre': 'NETO FACTURAS ELECTRONICAS', 'cantidad': 46, 'monto': 100774, 'exento': False, 'tpo_doc_liq': 33},
                     {'nombre': 'EXENTO FACTURAS ELECTRONICAS', 'cantidad': 34, 'monto': 94722, 'exento': True, 'tpo_doc_liq': 33},
                 ], comisiones=None),
-                # CASO 2 — replica el ejemplo oficial dansanti que CERTIFICA:
-                # líneas afectas con CodImpAdic=14 (IVA Margen Comercialización),
-                # boleta tdl=39 con QtyItem real y MontoItem neto (sin bruto/subtot)
+                # CASO 2 — replica EXACTA del XML que genera la librería dansanti
+                # (verificado: produce el mismo XML que certifica el test oficial).
+                # IVA normal clásico, boleta neta tdl=39 con QtyItem real, NC tdl=61.
+                # SIN CodImpAdic, SIN ImptoReten, SIN IVAProp/IVATerc, SIN MontoPeriodo.
                 dict(items=[
-                    {'nombre': 'NETO FACTURA ELECTRÓNICA 4254', 'cantidad': 1, 'monto': 45443, 'exento': False, 'tpo_doc_liq': 33, 'cod_imp_adic': 14},
+                    {'nombre': 'NETO FACTURA ELECTRÓNICA 4254', 'cantidad': 1, 'monto': 45443, 'exento': False, 'tpo_doc_liq': 33},
                     {'nombre': 'EXENTO FACTURA ELECTRÓNICA 4254', 'cantidad': 1, 'monto': 22678, 'exento': True, 'tpo_doc_liq': 33},
-                    {'nombre': 'NETO FACTURA ELECTRÓNICA 4768', 'cantidad': 1, 'monto': 572671, 'exento': False, 'tpo_doc_liq': 33, 'cod_imp_adic': 14},
+                    {'nombre': 'NETO FACTURA ELECTRÓNICA 4768', 'cantidad': 1, 'monto': 572671, 'exento': False, 'tpo_doc_liq': 33},
                     {'nombre': 'EXENTO FACTURA ELECTRÓNICA 4768', 'cantidad': 1, 'monto': 335503, 'exento': True, 'tpo_doc_liq': 33},
-                    {'nombre': 'NETO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -47447, 'exento': False, 'tpo_doc_liq': 61, 'cod_imp_adic': 14},
+                    {'nombre': 'NETO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -47447, 'exento': False, 'tpo_doc_liq': 61},
                     {'nombre': 'EXENTO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -17332, 'exento': True, 'tpo_doc_liq': 61},
-                    {'nombre': 'BOLETAS', 'cantidad': 7565, 'monto': 5703687, 'exento': False, 'tpo_doc_liq': 39, 'cod_imp_adic': 14},
-                ], comisiones=None,
-                   impto_reten=[{'tipo': 14, 'tasa': 19, 'monto': 1192127}]),
+                    {'nombre': 'BOLETAS', 'cantidad': 7565, 'monto': 5703687, 'exento': False, 'tpo_doc_liq': 39},
+                ], comisiones=None),
                 # CASO 3 — con comisiones (set 4897592)
                 dict(items=[
                     {'nombre': 'NETO FACTURA ELECTRÓNICA 1515', 'cantidad': 1, 'monto': 342837, 'exento': False, 'tpo_doc_liq': 33},
@@ -204,6 +204,8 @@ def admin_lusync_sii_test_set_liquidacion():
                     emisor_caso["subtotales_info"] = caso["subtotales_info"]
                 if caso.get("impto_reten"):
                     emisor_caso["impto_reten"] = caso["impto_reten"]
+                if caso.get("iva_en_impto_reten"):
+                    emisor_caso["iva_en_impto_reten"] = True
                 r = generar_liquidacion_xml(
                     caf=caf43, folio=folio, fecha_emision=fecha,
                     emisor=emisor_caso, receptor=RECEPTOR_SET,
