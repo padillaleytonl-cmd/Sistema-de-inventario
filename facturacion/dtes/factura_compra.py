@@ -116,7 +116,11 @@ def generar_factura_compra_xml(
     tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
     _imp_reten = '<ImptoReten>' + f'<TipoImp>{cod_imp_reten}</TipoImp>'
     if tasa_reten is not None:
-        _imp_reten += f'<TasaImp>{tasa_reten}</TasaImp>'
+        # Tasa con 2 decimales: el motor 2026 del SII puede requerir el
+        # formato explícito "19.00" para reconocer la tasa de retención
+        # del código 15 (reparo HED-2-302 "Debe Indicar Tasa").
+        _tasa_fmt = f'{float(tasa_reten):.2f}'
+        _imp_reten += f'<TasaImp>{_tasa_fmt}</TasaImp>'
     _imp_reten += f'<MontoImp>{mnt_reten}</MontoImp>' + '</ImptoReten>'
     tot_parts.append(_imp_reten)
     # IVANoRet solo en retención PARCIAL (MontoImp != IVA). En total, se omite.
