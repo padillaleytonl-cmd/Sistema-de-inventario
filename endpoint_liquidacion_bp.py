@@ -155,8 +155,8 @@ def admin_lusync_sii_test_set_liquidacion():
                     {'nombre': 'NETO FACTURAS ELECTRONICAS', 'cantidad': 46, 'monto': 100774, 'exento': False, 'tpo_doc_liq': 33},
                     {'nombre': 'EXENTO FACTURAS ELECTRONICAS', 'cantidad': 34, 'monto': 94722, 'exento': True, 'tpo_doc_liq': 33},
                 ], comisiones=None),
-                # CASO 2 — boleta ÍNTEGRA a MntNeto (mismo esquema OK del proceso anterior)
-                # BOLETAS 5703687 bruto entra como monto íntegro; subtotales_info con iva(monto)
+                # CASO 2 — boleta BRUTA: el módulo descompone 5703687 en neto+IVA
+                # (boletas a consumidor final incluyen IVA). neto=4793014, IVA=910673
                 dict(items=[
                     {'nombre': 'NETO FACTURA ELECTRÓNICA 4254', 'cantidad': 1, 'monto': 45443, 'exento': False, 'tpo_doc_liq': 33},
                     {'nombre': 'EXENTO FACTURA ELECTRÓNICA 4254', 'cantidad': 1, 'monto': 22678, 'exento': True, 'tpo_doc_liq': 33},
@@ -164,9 +164,9 @@ def admin_lusync_sii_test_set_liquidacion():
                     {'nombre': 'EXENTO FACTURA ELECTRÓNICA 4768', 'cantidad': 1, 'monto': 335503, 'exento': True, 'tpo_doc_liq': 33},
                     {'nombre': 'NETO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -47447, 'exento': False, 'tpo_doc_liq': 60},
                     {'nombre': 'EXENTO NOTA DE CRÉDITO 328', 'cantidad': 1, 'monto': -17332, 'exento': True, 'tpo_doc_liq': 60},
-                    {'nombre': 'BOLETAS', 'cantidad': 1, 'monto': 5703687, 'exento': False, 'tpo_doc_liq': 39},
+                    {'nombre': 'BOLETAS', 'cantidad': 7565, 'monto': 5703687, 'exento': False, 'tpo_doc_liq': 39, 'bruto': True},
                 ], comisiones=None, iva_terc_todo=True,
-                   subtotales_info=[{'glosa': 'BOLETAS', 'neto': 5703687, 'iva': 1083701}]),
+                   subtotales_info=[{'glosa': 'BOLETAS', 'neto': 4793014, 'iva': 910673}]),
                 # CASO 3 — con comisiones (set 4897592)
                 dict(items=[
                     {'nombre': 'NETO FACTURA ELECTRÓNICA 1515', 'cantidad': 1, 'monto': 342837, 'exento': False, 'tpo_doc_liq': 33},
