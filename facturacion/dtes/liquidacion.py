@@ -71,17 +71,21 @@ def generar_liquidacion_xml(
             prc = float(it.get('precio_unitario', 0))
             monto = int(round(qty * prc))
         # Items afectos brutos (p.ej. línea resumen de BOLETAS a consumidor final):
-        # el monto del set incluye IVA. Para que el SII cuadre la línea con el
-        # encabezado, el MontoItem debe ser CONSISTENTE con lo que aporta a MntNeto:
-        # se muestra el NETO descompuesto (no el bruto). El IVA se acumula en el
-        # encabezado. Así: suma de MontoItem afectos == MntNeto (validación SII).
+        # el monto del set incluye IVA. Dos modos:
+        #  - 'bruto': la LÍNEA muestra el neto descompuesto (monto_linea=neto).
+        #  - 'bruto_en_linea': la LÍNEA muestra el BRUTO (el SII lo descompone con
+        #    tdl=39); el encabezado recibe el neto. Es como el SII trata boletas.
         monto_linea = monto          # lo que se muestra en <MontoItem>
         aporte_neto = monto          # lo que suma a MntNeto/MntExe
         iva_extra = 0
-        if es_bruto and not es_exe:
+        es_bruto_linea = bool(it.get('bruto_en_linea'))
+        if (es_bruto or es_bruto_linea) and not es_exe:
             aporte_neto = int(round(monto / (1 + IVA_PORCENTAJE / 100.0)))
             iva_extra = monto - aporte_neto
-            monto_linea = aporte_neto   # la LÍNEA muestra el neto, no el bruto
+            if es_bruto_linea:
+                monto_linea = monto          # la LÍNEA muestra el BRUTO
+            else:
+                monto_linea = aporte_neto    # la LÍNEA muestra el neto
         items_norm.append({
             'nombre': it.get('nombre', 'Item')[:80],
             'cantidad': qty, 'precio_unitario': prc,
