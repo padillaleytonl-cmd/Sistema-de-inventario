@@ -28597,10 +28597,15 @@ def admin_lusync_sii_test_set_fact_compra():
 
             # CASO 3: ND (56) anula la NC del C2. Regla REF-2-780: replica ítems
             # y montos de la NC (con retención), no va en 0.
+            # f61ref: si se pasa, la ND referencia una NC YA ACEPTADA en un envío
+            # previo (evita REF-2-783, que ocurre cuando NC y ND van en el mismo
+            # sobre y el SII procesa la ND antes de registrar la NC).
+            f61ref_param = (request.args.get("f61ref") or "").strip()
+            nc_ref_folio = int(f61ref_param) if f61ref_param.isdigit() else c2_folio
             r = generar_nota_debito_xml(
                 caf=cafs_dict[56], folio=folio_56, fecha_emision=fecha,
                 emisor=emisor, receptor=RECEPTOR_SET,
-                referencia={"folio_ref": c2_folio, "tipo_doc_ref": 61, "fecha_ref": fecha,
+                referencia={"folio_ref": nc_ref_folio, "tipo_doc_ref": 61, "fecha_ref": fecha,
                             "cod_ref": 1, "razon_ref": "ANULA NOTA DE CREDITO ELECTRONICA"},
                 items=[
                     {'nombre': 'Producto 1', 'cantidad': 374, 'precio_unitario': 8490},
