@@ -28562,38 +28562,48 @@ def admin_lusync_sii_test_set_fact_compra():
         if not error_fatal:
             paso("Folios a usar", True, f"46: {folio_46} · 61: {folio_61} · 56: {folio_56}")
 
+            # solo56: enviar SOLO la ND (caso 3), apuntando con f61ref a una NC
+            # YA ACEPTADA en envío previo. Evita REF-2-783 (timing de indexación
+            # cuando NC y ND van juntas en el mismo sobre).
+            solo_nd = (request.args.get("solo56") or "").strip() in ("1", "si", "true")
+            c1_folio = folio_46  # fallback para la referencia de la NC si se omite C1
+
             # CASO 1: Factura de Compra (46) con retención total
-            r = generar_factura_compra_xml(
-                caf=cafs_dict[46], folio=folio_46, fecha_emision=fecha,
-                emisor=emisor, receptor=RECEPTOR_SET,
-                items=[
-                    {'nombre': 'Producto 1', 'cantidad': 1122, 'precio_unitario': 8490},
-                    {'nombre': 'Producto 2', 'cantidad': 42, 'precio_unitario': 4732},
-                ],
-                referencias=[{"tpo_doc_ref": "SET", "folio_ref": SET, "fecha_ref": fecha, "razon_ref": f"CASO {SET}-1"}],
-                ind_agente=ind_agente,
-                mnt_base=mnt_base,
-                cod_imp_reten=cod_ret,
-                tasa_reten=(None if sin_tasa else 19))
-            c1_folio = r["folio"]; c1_total = r["totales"]["mnt_total"]
-            documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
-            detalles_casos.append(f"CASO-1 (FC46 f{c1_folio}): ${c1_total:,}".replace(",", "."))
+            if not solo_nd:
+                r = generar_factura_compra_xml(
+                    caf=cafs_dict[46], folio=folio_46, fecha_emision=fecha,
+                    emisor=emisor, receptor=RECEPTOR_SET,
+                    items=[
+                        {'nombre': 'Producto 1', 'cantidad': 1122, 'precio_unitario': 8490},
+                        {'nombre': 'Producto 2', 'cantidad': 42, 'precio_unitario': 4732},
+                    ],
+                    referencias=[{"tpo_doc_ref": "SET", "folio_ref": SET, "fecha_ref": fecha, "razon_ref": f"CASO {SET}-1"}],
+                    ind_agente=ind_agente,
+                    mnt_base=mnt_base,
+                    cod_imp_reten=cod_ret,
+                    tasa_reten=(None if sin_tasa else 19))
+                c1_folio = r["folio"]; c1_total = r["totales"]["mnt_total"]
+                documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
+                detalles_casos.append(f"CASO-1 (FC46 f{c1_folio}): ${c1_total:,}".replace(",", "."))
 
             # CASO 2: NC (61) devolución de items 1 y 2 (mismos precios + retención)
-            r = generar_nota_credito_xml(
-                caf=cafs_dict[61], folio=folio_61, fecha_emision=fecha,
-                emisor=emisor, receptor=RECEPTOR_SET,
-                referencia={"folio_ref": c1_folio, "tipo_doc_ref": 46, "fecha_ref": fecha,
-                            "cod_ref": 3, "razon_ref": "DEVOLUCION DE MERCADERIA ITEMS 1 Y 2"},
-                items=[
-                    {'nombre': 'Producto 1', 'cantidad': 374, 'precio_unitario': 8490},
-                    {'nombre': 'Producto 2', 'cantidad': 14, 'precio_unitario': 4732},
-                ],
-                impto_reten={"tipo_imp": cod_ret, "ind_agente": ind_agente, "sin_tasa": sin_tasa, "mnt_base": mnt_base},
-                set_referencia={"folio_ref": SET, "fecha_ref": fecha, "razon_ref": f"CASO {SET}-2"})
-            c2_folio = r["folio"]; c2_total = r["totales"]["mnt_total"]
-            documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
-            detalles_casos.append(f"CASO-2 (NC61 f{c2_folio}): ${c2_total:,}".replace(",", "."))
+            if not solo_nd:
+                r = generar_nota_credito_xml(
+                    caf=cafs_dict[61], folio=folio_61, fecha_emision=fecha,
+                    emisor=emisor, receptor=RECEPTOR_SET,
+                    referencia={"folio_ref": c1_folio, "tipo_doc_ref": 46, "fecha_ref": fecha,
+                                "cod_ref": 3, "razon_ref": "DEVOLUCION DE MERCADERIA ITEMS 1 Y 2"},
+                    items=[
+                        {'nombre': 'Producto 1', 'cantidad': 374, 'precio_unitario': 8490},
+                        {'nombre': 'Producto 2', 'cantidad': 14, 'precio_unitario': 4732},
+                    ],
+                    impto_reten={"tipo_imp": cod_ret, "ind_agente": ind_agente, "sin_tasa": sin_tasa, "mnt_base": mnt_base},
+                    set_referencia={"folio_ref": SET, "fecha_ref": fecha, "razon_ref": f"CASO {SET}-2"})
+                c2_folio = r["folio"]; c2_total = r["totales"]["mnt_total"]
+                documentos_sin_firma.append(r["xml"]); documento_ids.append(r["documento_id"])
+                detalles_casos.append(f"CASO-2 (NC61 f{c2_folio}): ${c2_total:,}".replace(",", "."))
+            else:
+                c2_folio = folio_61  # fallback (no se usa si hay f61ref)
 
             # CASO 3: ND (56) anula la NC del C2. Regla REF-2-780: replica ítems
             # y montos de la NC (con retención), no va en 0.
@@ -28622,7 +28632,7 @@ def admin_lusync_sii_test_set_fact_compra():
         if not error_fatal:
             from facturacion.dtes.envio_dte import armar_envio_dte
             set_id = "SetFactCompraDoc"
-            subtot = {46: 1, 61: 1, 56: 1}
+            subtot = {56: 1} if solo_nd else {46: 1, 61: 1, 56: 1}
             sobre = armar_envio_dte(
                 dtes_firmados=documentos_sin_firma,
                 rut_emisor=emisor["rut"],
