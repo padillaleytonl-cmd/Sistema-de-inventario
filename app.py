@@ -101,6 +101,10 @@ app.register_blueprint(comparador_precios_bp)
 from endpoint_liquidacion_bp import liquidacion_set_bp
 app.register_blueprint(liquidacion_set_bp)
 
+# Set de Simulación SII — 23 DTE de todos los tipos en un envío (etapa simulación)
+from endpoint_simulacion_bp import simulacion_bp
+app.register_blueprint(simulacion_bp)
+
 
 @app.route("/admin/lusync/stock/sync-log")
 def ver_sync_log():
