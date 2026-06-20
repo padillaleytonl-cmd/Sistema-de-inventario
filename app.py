@@ -105,6 +105,10 @@ app.register_blueprint(liquidacion_set_bp)
 from endpoint_simulacion_bp import simulacion_bp
 app.register_blueprint(simulacion_bp)
 
+# Muestras Impresas SII — PDFs con timbre PDF417 (etapa documentos impresos)
+from endpoint_muestras_bp import muestras_bp
+app.register_blueprint(muestras_bp)
+
 
 @app.route("/admin/lusync/stock/sync-log")
 def ver_sync_log():
