@@ -293,7 +293,8 @@ def admin_lusync_sii_test_simulacion():
                 caf=cafs[61], folio=fol[61], fecha_emision=fecha,
                 emisor=emisor, receptor=rece1,
                 referencia={"folio_ref": fe1, "tipo_doc_ref": 34, "fecha_ref": fecha,
-                            "cod_ref": 1, "razon_ref": "ANULA FACTURA EXENTA POR ERROR"},
+                            "cod_ref": 1, "razon_ref": "ANULA FACTURA EXENTA POR ERROR",
+                            "mnt_exe_anulacion": te1},
                 items=None, monto_anulacion=te1, es_exenta=True), "NC61")
             fol[61] += 1
 
