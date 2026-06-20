@@ -41,31 +41,35 @@ simulacion_bp = Blueprint("simulacion_bp", __name__)
 
 
 # ─────────────────────────────────────────────────────────────
-# Datos realistas del giro (programación informática / marketplace)
-# Receptores: RUT chilenos con dígito verificador VÁLIDO.
+# Receptores. En el ambiente de CERTIFICACIÓN/simulación el SII solo
+# acepta como receptor el RUT de pruebas 55555555-5 (los RUT inventados,
+# aunque tengan DV válido, dan HED-3-110 RUT Receptor Inválido).
+# Mantenemos razones sociales variadas (operación realista) pero todos
+# con RUT 55555555-5.
 # ─────────────────────────────────────────────────────────────
+RUT_PRUEBAS = "55555555-5"
 RECEPTORES = [
-    {"rut": "76264343-9", "razon_social": "COMERCIAL ECOMMERCE SUR SPA",
+    {"rut": RUT_PRUEBAS, "razon_social": "COMERCIAL ECOMMERCE SUR SPA",
      "giro": "Venta al por menor por internet", "direccion": "Av. Apoquindo 4501 of 1203", "comuna": "Las Condes"},
-    {"rut": "77598531-0", "razon_social": "DISTRIBUIDORA ANDINA DIGITAL LTDA",
+    {"rut": RUT_PRUEBAS, "razon_social": "DISTRIBUIDORA ANDINA DIGITAL LTDA",
      "giro": "Venta al por mayor de equipos informáticos", "direccion": "Av. Vicuña Mackenna 1865", "comuna": "Ñuñoa"},
-    {"rut": "78091624-5", "razon_social": "SERVICIOS GASTRONOMICOS BELLAVISTA SPA",
+    {"rut": RUT_PRUEBAS, "razon_social": "SERVICIOS GASTRONOMICOS BELLAVISTA SPA",
      "giro": "Restaurantes y servicios de comida", "direccion": "Pío Nono 145", "comuna": "Recoleta"},
-    {"rut": "76555011-K", "razon_social": "LOGISTICA Y BODEGAJE CENTRAL SA",
+    {"rut": RUT_PRUEBAS, "razon_social": "LOGISTICA Y BODEGAJE CENTRAL SA",
      "giro": "Almacenamiento y depósito", "direccion": "Camino a Melipilla 9871", "comuna": "Maipú"},
-    {"rut": "77123980-6", "razon_social": "BOUTIQUE MODA URBANA LIMITADA",
+    {"rut": RUT_PRUEBAS, "razon_social": "BOUTIQUE MODA URBANA LIMITADA",
      "giro": "Venta al por menor de prendas de vestir", "direccion": "Av. Providencia 2134 local 7", "comuna": "Providencia"},
 ]
 
 # Proveedor para la Factura de Compra (a quien se le retiene IVA)
 PROVEEDOR_FC = {
-    "rut": "13871547-8", "razon_social": "JUAN CARLOS MORALES PEREZ",
+    "rut": RUT_PRUEBAS, "razon_social": "JUAN CARLOS MORALES PEREZ",
     "giro": "Servicios de desarrollo de software", "direccion": "Los Alerces 234", "comuna": "La Florida",
 }
 
 # Mandante de la liquidación (consignación marketplace)
 MANDANTE_LIQ = {
-    "rut": "76264343-9", "razon_social": "COMERCIAL ECOMMERCE SUR SPA",
+    "rut": RUT_PRUEBAS, "razon_social": "COMERCIAL ECOMMERCE SUR SPA",
     "giro": "Venta al por menor por internet", "direccion": "Av. Apoquindo 4501 of 1203", "comuna": "Las Condes",
 }
 
