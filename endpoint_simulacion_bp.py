@@ -352,18 +352,25 @@ def admin_lusync_sii_test_simulacion():
             fol[46] += 1
 
             # ── Exportación: 110 (factura), luego 111 (ND) y 112 (NC) que la referencian ──
+            # Export de SERVICIOS (IndServicio=3) requiere referencia a la
+            # Resolución del SNA que califica el servicio como exportación
+            # (TpoDocRef=812), o el SII repara con REF-2-826.
             ADUANA = {
                 "cod_mod_venta": 1, "cod_clau_venta": 1, "tot_clau_venta": 1,
                 "cod_via_transp": 1, "cod_pto_embarque": 901, "cod_pto_desemb": 999,
                 "cod_pais_recep": 563, "cod_pais_destin": 563,
             }
+            REF_SNA = {"tpo_doc_ref": 812, "folio_ref": "RSNA1", "fecha_ref": fecha,
+                       "razon_ref": "RESOLUCION SNA EXPORTACION SERVICIOS"}
             r110 = add(generar_exportacion_xml(
                 caf=cafs[110], folio=fol[110], fecha_emision=fecha,
                 emisor=emisor, receptor=RECEPTOR_EXPORT,
                 items=[{'nombre': 'Software development services - SaaS platform', 'cantidad': 1, 'precio_unitario': 12000}],
                 moneda="DOLAR USA", tipo_cambio=945.0, aduana=ADUANA,
-                ind_servicio=3, tipo_dte=110), "EXP110")
+                ind_servicio=3, tipo_dte=110,
+                referencias=[dict(REF_SNA)]), "EXP110")
             export_folio = r110["folio"]
+            export_total = r110["totales"]["mnt_total"]
             fol[110] += 1
 
             # 111 ND Export — aumenta monto de la factura export
@@ -373,19 +380,21 @@ def admin_lusync_sii_test_simulacion():
                 items=[{'nombre': 'Additional development hours', 'cantidad': 1, 'precio_unitario': 1500}],
                 moneda="DOLAR USA", tipo_cambio=945.0, aduana=ADUANA,
                 ind_servicio=3, tipo_dte=111,
-                referencias=[{"tpo_doc_ref": 110, "folio_ref": export_folio, "fecha_ref": fecha,
+                referencias=[dict(REF_SNA),
+                             {"tpo_doc_ref": 110, "folio_ref": export_folio, "fecha_ref": fecha,
                               "cod_ref": 3, "razon_ref": "ADDITIONAL SERVICES"}]), "NDEXP111")
             fol[111] += 1
 
-            # 112 NC Export — anula parte de la factura export
+            # 112 NC Export — anula la factura export (CodRef=1 → monto = total de la 110)
             add(generar_exportacion_xml(
                 caf=cafs[112], folio=fol[112], fecha_emision=fecha,
                 emisor=emisor, receptor=RECEPTOR_EXPORT,
-                items=[{'nombre': 'Discount on software services', 'cantidad': 1, 'precio_unitario': 800}],
+                items=[{'nombre': 'Software development services - SaaS platform', 'cantidad': 1, 'precio_unitario': 12000}],
                 moneda="DOLAR USA", tipo_cambio=945.0, aduana=ADUANA,
                 ind_servicio=3, tipo_dte=112,
-                referencias=[{"tpo_doc_ref": 110, "folio_ref": export_folio, "fecha_ref": fecha,
-                              "cod_ref": 1, "razon_ref": "SERVICE ADJUSTMENT"}]), "NCEXP112")
+                referencias=[dict(REF_SNA),
+                             {"tpo_doc_ref": 110, "folio_ref": export_folio, "fecha_ref": fecha,
+                              "cod_ref": 1, "razon_ref": "ANULA FACTURA EXPORTACION"}]), "NCEXP112")
             fol[112] += 1
 
             paso(f"Generar 23 documentos", True,
