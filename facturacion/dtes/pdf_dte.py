@@ -51,21 +51,31 @@ from pdf417gen import encode as _pdf417_encode, render_image as _pdf417_render
 # receptor : si dibuja el bloque de receptor completo (giro/dir/comuna)
 # referencia: si dibuja el bloque de Referencia al documento modificado
 # es_boleta: si admite formato rollo y RUT genérico de consumidor
-# cedible  : si genera copia CEDIBLE (facturas y afines sí; boletas no)
+# cedible  : si genera copia CEDIBLE. Según Manual de Muestras Impresas:
+#            SÍ → factura(33), exenta(34), guía(52), fact compra(46), liquidación(43)
+#            NO → NC(61), ND(56), boletas, exportaciones
+# acuse    : si lleva el recuadro de Acuse de Recibo (Ley 19.983).
+#            Mismos que cedible (NC/ND NO llevan acuse).
+# leyenda_cedible: texto de destino en la copia cedible.
+#            Guía → "CEDIBLE CON SU FACTURA"; el resto → "CEDIBLE".
 DTE_INFO = {
-    33:  {"nombre": "FACTURA ELECTRÓNICA",                  "receptor": True,  "referencia": True,  "es_boleta": False, "cedible": True},
-    34:  {"nombre": "FACTURA EXENTA ELECTRÓNICA",           "receptor": True,  "referencia": True,  "es_boleta": False, "cedible": True},
-    39:  {"nombre": "BOLETA ELECTRÓNICA",                   "receptor": True,  "referencia": False, "es_boleta": True,  "cedible": False},
-    41:  {"nombre": "BOLETA EXENTA ELECTRÓNICA",            "receptor": True,  "referencia": False, "es_boleta": True,  "cedible": False},
-    43:  {"nombre": "LIQUIDACIÓN-FACTURA ELECTRÓNICA",      "receptor": True,  "referencia": True,  "es_boleta": False, "cedible": True},
-    46:  {"nombre": "FACTURA DE COMPRA ELECTRÓNICA",        "receptor": True,  "referencia": True,  "es_boleta": False, "cedible": True},
-    52:  {"nombre": "GUÍA DE DESPACHO ELECTRÓNICA",         "receptor": True,  "referencia": True,  "es_boleta": False, "cedible": True},
-    56:  {"nombre": "NOTA DE DÉBITO ELECTRÓNICA",           "receptor": True,  "referencia": True,  "es_boleta": False, "cedible": True},
-    61:  {"nombre": "NOTA DE CRÉDITO ELECTRÓNICA",          "receptor": True,  "referencia": True,  "es_boleta": False, "cedible": True},
-    110: {"nombre": "FACTURA DE EXPORTACIÓN ELECTRÓNICA",   "receptor": True,  "referencia": True,  "es_boleta": False, "cedible": True},
-    111: {"nombre": "NOTA DE DÉBITO EXPORTACIÓN ELECTRÓNICA","receptor": True, "referencia": True,  "es_boleta": False, "cedible": True},
-    112: {"nombre": "NOTA DE CRÉDITO EXPORTACIÓN ELECTRÓNICA","receptor": True,"referencia": True,  "es_boleta": False, "cedible": True},
+    33:  {"nombre": "FACTURA ELECTRÓNICA",                   "receptor": True,  "referencia": True,  "es_boleta": False, "cedible": True,  "acuse": True,  "leyenda_cedible": "CEDIBLE"},
+    34:  {"nombre": "FACTURA NO AFECTA O EXENTA ELECTRÓNICA","receptor": True,  "referencia": True,  "es_boleta": False, "cedible": True,  "acuse": True,  "leyenda_cedible": "CEDIBLE"},
+    39:  {"nombre": "BOLETA ELECTRÓNICA",                    "receptor": True,  "referencia": False, "es_boleta": True,  "cedible": False, "acuse": False, "leyenda_cedible": ""},
+    41:  {"nombre": "BOLETA EXENTA ELECTRÓNICA",             "receptor": True,  "referencia": False, "es_boleta": True,  "cedible": False, "acuse": False, "leyenda_cedible": ""},
+    43:  {"nombre": "LIQUIDACIÓN FACTURA ELECTRÓNICA",       "receptor": True,  "referencia": True,  "es_boleta": False, "cedible": True,  "acuse": True,  "leyenda_cedible": "CEDIBLE"},
+    46:  {"nombre": "FACTURA DE COMPRA ELECTRÓNICA",         "receptor": True,  "referencia": True,  "es_boleta": False, "cedible": True,  "acuse": True,  "leyenda_cedible": "CEDIBLE"},
+    52:  {"nombre": "GUÍA DE DESPACHO ELECTRÓNICA",          "receptor": True,  "referencia": True,  "es_boleta": False, "cedible": True,  "acuse": True,  "leyenda_cedible": "CEDIBLE CON SU FACTURA"},
+    56:  {"nombre": "NOTA DE DÉBITO ELECTRÓNICA",            "receptor": True,  "referencia": True,  "es_boleta": False, "cedible": False, "acuse": False, "leyenda_cedible": ""},
+    61:  {"nombre": "NOTA DE CRÉDITO ELECTRÓNICA",           "receptor": True,  "referencia": True,  "es_boleta": False, "cedible": False, "acuse": False, "leyenda_cedible": ""},
+    110: {"nombre": "FACTURA DE EXPORTACIÓN ELECTRÓNICA",    "receptor": True,  "referencia": True,  "es_boleta": False, "cedible": False, "acuse": False, "leyenda_cedible": ""},
+    111: {"nombre": "NOTA DE DÉBITO DE EXPORTACIÓN ELECTRÓNICA","receptor": True,"referencia": True, "es_boleta": False, "cedible": False, "acuse": False, "leyenda_cedible": ""},
+    112: {"nombre": "NOTA DE CRÉDITO DE EXPORTACIÓN ELECTRÓNICA","receptor": True,"referencia": True,"es_boleta": False, "cedible": False, "acuse": False, "leyenda_cedible": ""},
 }
+
+# Resolución que autoriza al emisor (en certificación es 0 del año vigente)
+RESOLUCION_NRO = 0
+RESOLUCION_ANIO = 2026
 
 # Glosa del código de referencia (para NC/ND)
 COD_REF_GLOSA = {
@@ -156,10 +166,58 @@ def parsear_dte_xml(dte_xml: bytes) -> dict:
         'telefono': _txt(encabezado, 'Telefono'),
         'correo': _txt(encabezado, 'CorreoEmisor'),
         'acteco': _txt(encabezado, 'Acteco'),
+        # Sucursal (si se informa)
+        'sucursal': _txt(encabezado, 'Sucursal'),
+        'cdg_sii_sucursal': _txt(encabezado, 'CdgSIISucur'),
     }
 
     folio = _txt(encabezado, 'Folio') or _txt(s, 'Folio')
     fch_emis = _txt(encabezado, 'FchEmis') or _txt(s, 'FchEmis')
+
+    # Guía de despacho: tipo de traslado y datos de transporte
+    IND_TRASLADO_GLOSA = {
+        "1": "Operación constituye venta", "2": "Ventas por efectuar",
+        "3": "Consignaciones", "4": "Entrega gratuita", "5": "Traslados internos",
+        "6": "Otros traslados no venta", "7": "Guía de devolución",
+        "8": "Traslado para exportación (no venta)", "9": "Venta para exportación",
+    }
+    ind_tras = _txt(encabezado, 'IndTraslado')
+    tipo_despacho = _txt(encabezado, 'TipoDespacho')
+    transporte_xml = _txt(s, 'Transporte')
+    TIPO_DESPACHO_GLOSA = {
+        "1": "Por cuenta del receptor",
+        "2": "Por cuenta del emisor a instalaciones del cliente",
+        "3": "Por cuenta del emisor a otras instalaciones",
+    }
+    # Bultos (pueden ser varios)
+    bultos = []
+    if transporte_xml:
+        for b in re.findall(r'<TipoBultos>(.*?)</TipoBultos>', transporte_xml, re.DOTALL):
+            bultos.append({
+                'cant': _txt(b, 'CantBultos'),
+                'tipo': _txt(b, 'CodTipoBultos'),
+                'marcas': _txt(b, 'Marcas'),
+                'id_container': _txt(b, 'IdContainer'),
+            })
+    patente = _txt(transporte_xml, 'Patente') if transporte_xml else ''
+    transporte = {
+        'ind_traslado': ind_tras,
+        'ind_traslado_glosa': IND_TRASLADO_GLOSA.get(ind_tras, ''),
+        'tipo_despacho': tipo_despacho,
+        'tipo_despacho_glosa': TIPO_DESPACHO_GLOSA.get(tipo_despacho, ''),
+        'patente': patente,
+        'rut_transportista': _txt(transporte_xml, 'RUTTrans') if transporte_xml else '',
+        'rut_chofer': _txt(transporte_xml, 'RUTChofer') if transporte_xml else '',
+        'nombre_chofer': _txt(transporte_xml, 'NombreChofer') if transporte_xml else '',
+        'dir_dest': _txt(transporte_xml, 'DirDest') if transporte_xml else '',
+        'cmna_dest': _txt(transporte_xml, 'CmnaDest') if transporte_xml else '',
+        'ciudad_dest': _txt(transporte_xml, 'CiudadDest') if transporte_xml else '',
+        'bultos': bultos,
+        # Hay transporte declarado (para decidir si dibujar el bloque)
+        'tiene_datos': bool(transporte_xml and (
+            patente or _txt(transporte_xml, 'NombreChofer') or
+            _txt(transporte_xml, 'RUTTrans') or _txt(transporte_xml, 'DirDest'))),
+    }
 
     # Receptor
     receptor = {
@@ -242,6 +300,7 @@ def parsear_dte_xml(dte_xml: bytes) -> dict:
         'totales': totales,
         'items': items,
         'referencias': referencias,
+        'transporte': transporte,
         'ted': ted,
     }
 
@@ -251,12 +310,17 @@ def parsear_dte_xml(dte_xml: bytes) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _generar_timbre_pdf417(ted: str) -> Optional[ImageReader]:
-    """Imagen del timbre PDF417 desde el TED. ECL=5, relación 3:1 (instructivo SII)."""
+    """Imagen del timbre PDF417 desde el TED.
+    Parámetros exigidos por el Instructivo Técnico del SII (Anexo 2):
+    18 columnas, ECL nivel 5, relación de módulo 3:1, encoding ISO-8859-1.
+    Con el TED real (~700 bytes) el código genera ~24 filas, dando una
+    figura compacta y legible (no excesivamente apaisada)."""
     if not ted:
         return None
     ted_bytes = ted.encode('iso-8859-1', errors='replace')
+    # 18 columnas y ECL 5 son obligatorios. scale alto = módulos grandes (nítido).
     codes = _pdf417_encode(ted_bytes, columns=18, security_level=5)
-    img = _pdf417_render(codes, scale=3, ratio=3, padding=2)
+    img = _pdf417_render(codes, scale=4, ratio=3, padding=2)
     buf = io.BytesIO()
     img.save(buf, format='PNG')
     buf.seek(0)
@@ -300,20 +364,23 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
     c.drawString(x, y, (em['razon_social'] or '')[:45])
     c.setFont("Helvetica", 9)
     y -= 0.6 * cm
-    for linea in [(em['giro'] or '')[:70],
-                  f"{em['direccion']}, {em['comuna']}".strip(', '),
-                  f"Tel: {em['telefono']}" if em['telefono'] else '']:
+    # Líneas del membrete: giro, dirección casa matriz, sucursal, contacto
+    lineas_emisor = [(em['giro'] or '')[:70],
+                     f"Casa Matriz: {em['direccion']}, {em['comuna']}".strip(', ')]
+    if em.get('sucursal'):
+        lineas_emisor.append(f"Sucursal: {em['sucursal']}"[:70])
+    # Contacto (teléfono / correo) en una línea si vienen
+    contacto = []
+    if em.get('telefono'):
+        contacto.append(f"Tel: {em['telefono']}")
+    if em.get('correo'):
+        contacto.append(em['correo'])
+    if contacto:
+        lineas_emisor.append("  ·  ".join(contacto)[:70])
+    for linea in lineas_emisor:
         if linea:
             c.drawString(x, y, linea)
             y -= 0.45 * cm
-
-    # ── Etiqueta de copia (CEDIBLE) ──
-    if etiqueta_copia:
-        c.setFont("Helvetica-Bold", 11)
-        c.setFillColorRGB(0.3, 0.3, 0.3)
-        c.drawString(x, y, f"— {etiqueta_copia} —")
-        c.setFillColorRGB(0, 0, 0)
-        y -= 0.5 * cm
 
     # ── Fecha de emisión ──
     y = rec_y - 0.8 * cm
@@ -340,6 +407,58 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
         for etq, val in datos_rec:
             c.setFont("Helvetica-Bold", 9); c.drawString(x, y, etq)
             c.setFont("Helvetica", 9); c.drawString(x + 2.2 * cm, y, val)
+            y -= 0.42 * cm
+
+    # ── Bloque TRANSPORTE (Guía de Despacho 52) — Res. Ex. SII 154/52 ──
+    # Desde 01-05-2026 es OBLIGATORIO en guías que trasladan bienes informar
+    # chofer, transportista, patente y destino. Si la patente no se conoce al
+    # emitir, la norma exige señalarlo expresamente.
+    tr = d.get('transporte', {})
+    if d['tipo_int'] == 52 and (tr.get('tiene_datos') or tr.get('ind_traslado_glosa')):
+        y -= 0.2 * cm
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(x, y, "Datos de Traslado y Transporte")
+        y -= 0.45 * cm
+        c.setFont("Helvetica", 9)
+        filas_tr = []
+        if tr.get('ind_traslado_glosa'):
+            filas_tr.append(("Tipo de traslado:", f"({tr['ind_traslado']}) {tr['ind_traslado_glosa']}"))
+        if tr.get('tipo_despacho_glosa'):
+            filas_tr.append(("Tipo de despacho:", tr['tipo_despacho_glosa']))
+        # Patente: si no se conoce, dejar constancia expresa (exigencia Res. 154)
+        if tr.get('patente'):
+            filas_tr.append(("Patente vehículo:", tr['patente']))
+        elif tr.get('tiene_datos'):
+            filas_tr.append(("Patente vehículo:", "No informada al momento de la emisión"))
+        if tr.get('rut_transportista'):
+            filas_tr.append(("RUT transportista:", _rut_con_miles(tr['rut_transportista'])))
+        if tr.get('nombre_chofer'):
+            chofer = tr['nombre_chofer']
+            if tr.get('rut_chofer'):
+                chofer += f"  (RUT {_rut_con_miles(tr['rut_chofer'])})"
+            filas_tr.append(("Chofer:", chofer[:55]))
+        dir_dest = f"{tr.get('dir_dest', '')}".strip()
+        cmna_ciudad = ", ".join([p for p in [tr.get('cmna_dest', ''), tr.get('ciudad_dest', '')] if p])
+        if dir_dest:
+            destino = dir_dest + (f", {cmna_ciudad}" if cmna_ciudad else "")
+            filas_tr.append(("Dirección destino:", destino[:60]))
+        elif cmna_ciudad:
+            filas_tr.append(("Destino:", cmna_ciudad[:60]))
+        # Bultos (cantidad, tipo, marcas)
+        if tr.get('bultos'):
+            for b in tr['bultos']:
+                partes = []
+                if b.get('cant'):
+                    partes.append(f"{b['cant']} bulto(s)")
+                if b.get('marcas'):
+                    partes.append(f"marcas: {b['marcas']}")
+                if b.get('id_container'):
+                    partes.append(f"container: {b['id_container']}")
+                if partes:
+                    filas_tr.append(("Bultos:", " · ".join(partes)[:60]))
+        for etq, val in filas_tr:
+            c.setFont("Helvetica-Bold", 9); c.drawString(x, y, etq)
+            c.setFont("Helvetica", 9); c.drawString(x + 3.4 * cm, y, val)
             y -= 0.42 * cm
 
     # ── Moneda (exportación) ──
@@ -421,12 +540,21 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
 
     # ── Bloque REFERENCIA ──
     if info['referencia'] and d['referencias']:
-        y_ref = 6.2 * cm
+        # El acuse de recibo ocupa la franja 6.4–9.0cm a lo ancho completo.
+        # La referencia va por encima de esa franja cuando hay acuse.
+        if info.get('acuse'):
+            y_ref = 11.0 * cm   # arranca bien arriba del acuse
+            tope = 9.4 * cm     # no bajar al acuse
+        else:
+            y_ref = 6.6 * cm
+            tope = 4.0 * cm
         c.setFont("Helvetica-Bold", 8)
         c.drawString(x, y_ref, "Referencia:")
         c.setFont("Helvetica", 8)
         y_ref -= 0.4 * cm
         for r in d['referencias']:
+            if y_ref < tope:
+                break
             linea = f"{r['tpo_doc_ref_nombre']} N° {r['folio_ref']}"
             if r['fecha_ref']:
                 linea += f" del {r['fecha_ref']}"
@@ -434,37 +562,89 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
                 linea += f" — {r['cod_ref_glosa']}"
             c.drawString(x, y_ref, linea[:90])
             y_ref -= 0.35 * cm
-            if r['razon_ref']:
+            if r['razon_ref'] and y_ref >= tope:
                 c.setFont("Helvetica-Oblique", 8)
                 c.drawString(x + 0.3 * cm, y_ref, f"Motivo: {r['razon_ref'][:80]}")
                 c.setFont("Helvetica", 8)
                 y_ref -= 0.35 * cm
 
+    # ── Recuadro ACUSE DE RECIBO (Ley 19.983) — ancho completo, estilo Lioren ──
+    # Solo en documentos que lo requieren (facturas, fact compra, liquidación,
+    # guía). NC/ND/boletas/exportaciones NO lo llevan.
+    if info.get('acuse'):
+        ar_x = x                      # margen izquierdo del contenido
+        ar_w = W - 4 * cm             # ancho completo (de margen a margen)
+        ar_h = 2.6 * cm
+        ar_y = 6.4 * cm               # por encima del timbre (timbre llega a ~5.8cm)
+        c.setStrokeColorRGB(0.35, 0.35, 0.35)
+        c.setLineWidth(0.8)
+        c.rect(ar_x, ar_y, ar_w, ar_h)
+        # Título
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(ar_x + 0.3 * cm, ar_y + ar_h - 0.5 * cm, "Acuse de Recibo")
+        # Texto legal (ancho completo, una/dos líneas)
+        c.setFont("Helvetica", 7)
+        texto_ley = ("El acuse de recibo que se declara en este acto, de acuerdo a lo dispuesto en la "
+                     "letra b) del Art. 4°, y la letra c) del Art. 5° de la Ley 19.983, acredita que la "
+                     "entrega de mercaderías o servicio(s) prestado(s) ha(n) sido recibido(s).")
+        palabras = texto_ley.split()
+        linea = ""
+        ty = ar_y + ar_h - 0.85 * cm
+        for pal in palabras:
+            if len(linea) + len(pal) + 1 > 120:
+                c.drawString(ar_x + 0.3 * cm, ty, linea)
+                ty -= 0.32 * cm
+                linea = pal
+            else:
+                linea = (linea + " " + pal).strip()
+        if linea:
+            c.drawString(ar_x + 0.3 * cm, ty, linea)
+        # Campos de firma distribuidos en el ancho
+        c.setFont("Helvetica", 8)
+        fy1 = ar_y + 0.8 * cm
+        fy2 = ar_y + 0.3 * cm
+        c.drawString(ar_x + 0.3 * cm, fy1, "Nombre: ______________________________")
+        c.drawString(ar_x + 8.5 * cm, fy1, "R.U.T.: __________________")
+        c.drawString(ar_x + 13.0 * cm, fy1, "Fecha: ____________")
+        c.drawString(ar_x + 0.3 * cm, fy2, "Recinto: ______________________________")
+        c.drawString(ar_x + 8.5 * cm, fy2, "Firma: ________________________________")
+        c.setStrokeColorRGB(0, 0, 0)
+
     # ── Timbre PDF417 (abajo a la izquierda, ≥2cm del borde) ──
+    # Norma SII: mínimo 2x5 cm, máximo 4x9 cm (alto x ancho), margen blanco
+    # alrededor, y bajo él la leyenda + Resolución + verifique www.sii.cl.
     timbre = _generar_timbre_pdf417(d['ted'])
     if timbre:
-        tw, th = 7 * cm, 2.6 * cm  # dentro del rango SII (2x5 a 4x9 cm)
-        c.drawImage(timbre, x, 2 * cm, width=tw, height=th, preserveAspectRatio=True, anchor='sw')
-        c.setFont("Helvetica", 7)
-        c.drawString(x, 1.7 * cm, "Timbre Electrónico SII")
-        c.drawString(x, 1.4 * cm, f"Verifique en {url_consulta}")
+        # Recuadro 8x4 cm: alto al máximo de norma (4cm) para que no se vea
+        # delgado; ancho 8cm dentro del máximo (9cm). preserveAspectRatio
+        # evita distorsionar el código (riesgo de ilegibilidad).
+        tw, th = 8 * cm, 4 * cm
+        c.drawImage(timbre, x, 1.9 * cm, width=tw, height=th,
+                    preserveAspectRatio=True, anchor='sw')
+        # Leyenda exigida (letra ≥ 6): rótulo + Resolución + verifique www.sii.cl
+        c.setFont("Helvetica", 7.5)
+        c.drawString(x, 1.55 * cm, "Timbre Electrónico SII")
+        c.setFont("Helvetica", 6.5)
+        c.drawString(x, 1.25 * cm, f"Res. {RESOLUCION_NRO} de {RESOLUCION_ANIO} - Verifique documento: www.sii.cl")
+        # Leyenda de destino (solo copia cedible), zona inferior derecha
         if etiqueta_copia:
-            c.setFont("Helvetica-Bold", 8)
-            c.drawString(x + 7.5 * cm, 2 * cm, etiqueta_copia)
+            c.setFont("Helvetica-Bold", 13)
+            c.drawRightString(W - 2 * cm, 2.6 * cm, etiqueta_copia)
     else:
-        tw, th = 7 * cm, 2.6 * cm
+        tw, th = 8 * cm, 4 * cm
         c.setStrokeColorRGB(0.7, 0.7, 0.7); c.setLineWidth(0.7)
         c.setDash(3, 3)
-        c.rect(x, 2 * cm, tw, th); c.setDash()
+        c.rect(x, 1.9 * cm, tw, th); c.setDash()
         c.setFillColorRGB(0.6, 0.6, 0.6); c.setFont("Helvetica-Oblique", 8)
-        c.drawCentredString(x + tw / 2, 2 * cm + th / 2 + 0.2 * cm, "VISTA PREVIA — BORRADOR")
-        c.drawCentredString(x + tw / 2, 2 * cm + th / 2 - 0.3 * cm, "El timbre electrónico se genera al emitir")
+        c.drawCentredString(x + tw / 2, 1.9 * cm + th / 2 + 0.2 * cm, "VISTA PREVIA — BORRADOR")
+        c.drawCentredString(x + tw / 2, 1.9 * cm + th / 2 - 0.3 * cm, "El timbre electrónico se genera al emitir")
         c.setFillColorRGB(0, 0, 0)
 
 
 def _pdf_carta(d: dict, url_consulta: str) -> bytes:
     """Genera el PDF carta. Si el documento es cedible, agrega una 2da página
-    con la copia CEDIBLE (exigida por el Manual de Muestras Impresas)."""
+    con la copia CEDIBLE (exigida por el Manual de Muestras Impresas).
+    La guía usa la leyenda 'CEDIBLE CON SU FACTURA'."""
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
 
@@ -472,9 +652,10 @@ def _pdf_carta(d: dict, url_consulta: str) -> bytes:
     _dibujar_copia_carta(c, d, url_consulta, etiqueta_copia="")
     c.showPage()
 
-    # Copia 2: CEDIBLE (solo para documentos que la requieren; no boletas)
+    # Copia 2: CEDIBLE (solo para documentos que la requieren; no NC/ND/boletas)
     if d['info'].get('cedible'):
-        _dibujar_copia_carta(c, d, url_consulta, etiqueta_copia="CEDIBLE")
+        leyenda = d['info'].get('leyenda_cedible', 'CEDIBLE')
+        _dibujar_copia_carta(c, d, url_consulta, etiqueta_copia=leyenda)
         c.showPage()
 
     c.save()
