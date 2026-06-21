@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import io
 import re
+import math
 from typing import Optional
 
 from reportlab.lib.pagesizes import letter
@@ -136,6 +137,24 @@ def _rut_con_miles(rut: str) -> str:
     except ValueError:
         cuerpo_fmt = cuerpo
     return f"{cuerpo_fmt}-{dv}"
+
+
+def _wrap(texto: str, max_chars: int) -> list:
+    """Parte un texto en líneas de hasta max_chars sin cortar palabras."""
+    if not texto:
+        return []
+    palabras = texto.split()
+    lineas, linea = [], ""
+    for pal in palabras:
+        if len(linea) + len(pal) + 1 > max_chars:
+            if linea:
+                lineas.append(linea)
+            linea = pal
+        else:
+            linea = (linea + " " + pal).strip()
+    if linea:
+        lineas.append(linea)
+    return lineas
 
 
 def parsear_dte_xml(dte_xml: bytes) -> dict:
@@ -363,12 +382,20 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
     c.setFont("Helvetica-Bold", 15)
     c.drawString(x, y, (em['razon_social'] or '')[:45])
     c.setFont("Helvetica", 9)
-    y -= 0.6 * cm
-    # Líneas del membrete: giro, dirección casa matriz, sucursal, contacto
-    lineas_emisor = [(em['giro'] or '')[:70],
-                     f"Casa Matriz: {em['direccion']}, {em['comuna']}".strip(', ')]
+    y -= 0.55 * cm
+    # Giro (puede ser largo, se parte en dos líneas si es necesario)
+    giro = (em['giro'] or '')
+    if giro:
+        c.setFont("Helvetica-Oblique", 9)
+        for linea_giro in _wrap(giro, 52)[:2]:
+            c.drawString(x, y, linea_giro)
+            y -= 0.42 * cm
+        c.setFont("Helvetica", 9)
+    # Dirección casa matriz con comuna y ciudad
+    dir_cm = ", ".join([p for p in [em['direccion'], em['comuna'], em.get('ciudad', '')] if p])
+    lineas_emisor = [f"Casa Matriz: {dir_cm}".strip(': ')]
     if em.get('sucursal'):
-        lineas_emisor.append(f"Sucursal: {em['sucursal']}"[:70])
+        lineas_emisor.append(f"Sucursal: {em['sucursal']}"[:75])
     # Contacto (teléfono / correo) en una línea si vienen
     contacto = []
     if em.get('telefono'):
@@ -376,90 +403,128 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
     if em.get('correo'):
         contacto.append(em['correo'])
     if contacto:
-        lineas_emisor.append("  ·  ".join(contacto)[:70])
+        lineas_emisor.append("  ·  ".join(contacto)[:75])
+    # Giro autorizado / actividad económica si viene
     for linea in lineas_emisor:
         if linea:
-            c.drawString(x, y, linea)
-            y -= 0.45 * cm
+            c.drawString(x, y, linea[:80])
+            y -= 0.42 * cm
 
     # ── Fecha de emisión ──
     y = rec_y - 0.8 * cm
     c.setFont("Helvetica-Bold", 9)
     c.drawString(x, y, f"Fecha Emisión: {d['fch_emis']}")
 
-    # ── Bloque RECEPTOR ──
+    # ── Bloque RECEPTOR (dentro de un recuadro) ──
     rec = d['receptor']
     if info['receptor'] and (rec.get('rut') or rec.get('razon_social')):
-        y -= 0.7 * cm
-        c.setFont("Helvetica-Bold", 9)
-        c.drawString(x, y, "SEÑOR(ES):")
-        c.setFont("Helvetica", 9)
-        c.drawString(x + 2.2 * cm, y, (rec.get('razon_social') or '')[:55])
-        y -= 0.42 * cm
+        y -= 0.6 * cm
+        # Preparar filas de datos
         datos_rec = []
         if rec.get('rut'):
             datos_rec.append(("R.U.T.:", _rut_con_miles(rec['rut'])))
         if rec.get('giro'):
-            datos_rec.append(("Giro:", rec['giro'][:50]))
+            datos_rec.append(("Giro:", rec['giro'][:55]))
         dir_rec = f"{rec.get('direccion', '')}, {rec.get('comuna', '')}".strip(', ')
+        if rec.get('ciudad'):
+            dir_rec = f"{dir_rec}, {rec['ciudad']}".strip(', ')
         if dir_rec:
-            datos_rec.append(("Dirección:", dir_rec[:55]))
+            datos_rec.append(("Dirección:", dir_rec[:60]))
+        # Altura del recuadro = línea del nombre + filas
+        box_h = 0.55 * cm + len(datos_rec) * 0.42 * cm + 0.25 * cm
+        box_w = W - 4 * cm
+        box_top = y + 0.35 * cm
+        c.setStrokeColorRGB(0.55, 0.55, 0.55)
+        c.setLineWidth(0.6)
+        c.rect(x, box_top - box_h, box_w, box_h)
+        # Contenido
+        ty = box_top - 0.5 * cm
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(x + 0.25 * cm, ty, "SEÑOR(ES):")
+        c.setFont("Helvetica", 9)
+        c.drawString(x + 2.5 * cm, ty, (rec.get('razon_social') or '')[:55])
+        ty -= 0.42 * cm
         for etq, val in datos_rec:
-            c.setFont("Helvetica-Bold", 9); c.drawString(x, y, etq)
-            c.setFont("Helvetica", 9); c.drawString(x + 2.2 * cm, y, val)
-            y -= 0.42 * cm
+            c.setFont("Helvetica-Bold", 9); c.drawString(x + 0.25 * cm, ty, etq)
+            c.setFont("Helvetica", 9); c.drawString(x + 2.5 * cm, ty, val)
+            ty -= 0.42 * cm
+        c.setStrokeColorRGB(0, 0, 0)
+        y = box_top - box_h
 
     # ── Bloque TRANSPORTE (Guía de Despacho 52) — Res. Ex. SII 154/52 ──
     # Desde 01-05-2026 es OBLIGATORIO en guías que trasladan bienes informar
     # chofer, transportista, patente y destino. Si la patente no se conoce al
     # emitir, la norma exige señalarlo expresamente.
+    # Se dibuja en DOS COLUMNAS para no consumir espacio vertical del detalle.
     tr = d.get('transporte', {})
     if d['tipo_int'] == 52 and (tr.get('tiene_datos') or tr.get('ind_traslado_glosa')):
-        y -= 0.2 * cm
-        c.setFont("Helvetica-Bold", 9)
-        c.drawString(x, y, "Datos de Traslado y Transporte")
         y -= 0.45 * cm
-        c.setFont("Helvetica", 9)
         filas_tr = []
         if tr.get('ind_traslado_glosa'):
-            filas_tr.append(("Tipo de traslado:", f"({tr['ind_traslado']}) {tr['ind_traslado_glosa']}"))
+            filas_tr.append(("Traslado:", f"({tr['ind_traslado']}) {tr['ind_traslado_glosa']}"))
         if tr.get('tipo_despacho_glosa'):
-            filas_tr.append(("Tipo de despacho:", tr['tipo_despacho_glosa']))
-        # Patente: si no se conoce, dejar constancia expresa (exigencia Res. 154)
+            filas_tr.append(("Despacho:", tr['tipo_despacho_glosa']))
         if tr.get('patente'):
-            filas_tr.append(("Patente vehículo:", tr['patente']))
+            filas_tr.append(("Patente:", tr['patente']))
         elif tr.get('tiene_datos'):
-            filas_tr.append(("Patente vehículo:", "No informada al momento de la emisión"))
+            filas_tr.append(("Patente:", "No informada a la emisión"))
         if tr.get('rut_transportista'):
-            filas_tr.append(("RUT transportista:", _rut_con_miles(tr['rut_transportista'])))
+            filas_tr.append(("Transportista:", _rut_con_miles(tr['rut_transportista'])))
         if tr.get('nombre_chofer'):
             chofer = tr['nombre_chofer']
             if tr.get('rut_chofer'):
-                chofer += f"  (RUT {_rut_con_miles(tr['rut_chofer'])})"
-            filas_tr.append(("Chofer:", chofer[:55]))
+                chofer += f" ({_rut_con_miles(tr['rut_chofer'])})"
+            filas_tr.append(("Chofer:", chofer[:42]))
         dir_dest = f"{tr.get('dir_dest', '')}".strip()
         cmna_ciudad = ", ".join([p for p in [tr.get('cmna_dest', ''), tr.get('ciudad_dest', '')] if p])
         if dir_dest:
             destino = dir_dest + (f", {cmna_ciudad}" if cmna_ciudad else "")
-            filas_tr.append(("Dirección destino:", destino[:60]))
+            filas_tr.append(("Destino:", destino[:42]))
         elif cmna_ciudad:
-            filas_tr.append(("Destino:", cmna_ciudad[:60]))
-        # Bultos (cantidad, tipo, marcas)
+            filas_tr.append(("Destino:", cmna_ciudad[:42]))
         if tr.get('bultos'):
             for b in tr['bultos']:
                 partes = []
                 if b.get('cant'):
                     partes.append(f"{b['cant']} bulto(s)")
                 if b.get('marcas'):
-                    partes.append(f"marcas: {b['marcas']}")
+                    partes.append(f"marcas {b['marcas']}")
                 if b.get('id_container'):
-                    partes.append(f"container: {b['id_container']}")
+                    partes.append(f"cont. {b['id_container']}")
                 if partes:
-                    filas_tr.append(("Bultos:", " · ".join(partes)[:60]))
-        for etq, val in filas_tr:
-            c.setFont("Helvetica-Bold", 9); c.drawString(x, y, etq)
-            c.setFont("Helvetica", 9); c.drawString(x + 3.4 * cm, y, val)
-            y -= 0.42 * cm
+                    filas_tr.append(("Bultos:", " · ".join(partes)[:42]))
+        # Repartir en dos columnas
+        n = len(filas_tr)
+        mitad = math.ceil(n / 2)
+        col_izq = filas_tr[:mitad]
+        col_der = filas_tr[mitad:]
+        n_filas = max(len(col_izq), len(col_der))
+        # Recuadro: título + filas
+        box_w = W - 4 * cm
+        box_h = 0.55 * cm + n_filas * 0.38 * cm + 0.2 * cm
+        box_top = y + 0.35 * cm
+        c.setStrokeColorRGB(0.55, 0.55, 0.55)
+        c.setLineWidth(0.6)
+        c.rect(x, box_top - box_h, box_w, box_h)
+        # Título dentro del recuadro
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(x + 0.25 * cm, box_top - 0.45 * cm, "Datos de Traslado y Transporte")
+        c.setStrokeColorRGB(0, 0, 0)
+        # Columnas
+        col1_x = x + 0.25 * cm
+        col2_x = x + 9.25 * cm
+        ty_base = box_top - 0.9 * cm
+        ty = ty_base
+        for etq, val in col_izq:
+            c.setFont("Helvetica-Bold", 8.5); c.drawString(col1_x, ty, etq)
+            c.setFont("Helvetica", 8.5); c.drawString(col1_x + 2.4 * cm, ty, val)
+            ty -= 0.38 * cm
+        ty = ty_base
+        for etq, val in col_der:
+            c.setFont("Helvetica-Bold", 8.5); c.drawString(col2_x, ty, etq)
+            c.setFont("Helvetica", 8.5); c.drawString(col2_x + 2.4 * cm, ty, val)
+            ty -= 0.38 * cm
+        y = box_top - box_h
 
     # ── Moneda (exportación) ──
     t = d['totales']
@@ -625,7 +690,7 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
         c.setFont("Helvetica", 7.5)
         c.drawString(x, 1.55 * cm, "Timbre Electrónico SII")
         c.setFont("Helvetica", 6.5)
-        c.drawString(x, 1.25 * cm, f"Res. {RESOLUCION_NRO} de {RESOLUCION_ANIO} - Verifique documento: www.sii.cl")
+        c.drawString(x, 1.25 * cm, f"Res. {d.get('nro_resol', RESOLUCION_NRO)} de {d.get('anio_resol', RESOLUCION_ANIO)} - Verifique documento: www.sii.cl")
         # Leyenda de destino (solo copia cedible), zona inferior derecha
         if etiqueta_copia:
             c.setFont("Helvetica-Bold", 13)
@@ -770,19 +835,28 @@ def _pdf_rollo(d: dict, url_consulta: str) -> bytes:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def generar_pdf_dte(dte_xml: bytes, formato: str = "carta",
-                    url_consulta: str = "www.sii.cl") -> bytes:
+                    url_consulta: str = "www.sii.cl",
+                    nro_resol: int = None, anio_resol: int = None) -> bytes:
     """Genera el PDF de la representación gráfica de cualquier DTE.
 
     Args:
         dte_xml: XML del documento firmado (con TED).
         formato: "carta" (hoja, todos los tipos) o "rollo" (ticket 80mm, boletas).
-        url_consulta: sitio donde el receptor verifica el documento.
+        url_consulta: sitio donde el receptor verifica el documento (opcional;
+            la norma exige www.sii.cl, que siempre se imprime).
+        nro_resol: número de la resolución que autoriza al emisor como
+            facturador electrónico. En certificación es 0; en producción es el
+            número real que el SII asigna a cada empresa (configurable por tenant).
+        anio_resol: año de esa resolución. Por defecto el año vigente.
 
     Returns:
         bytes del PDF. Para documentos cedibles incluye 2 páginas
         (copia tributaria + copia CEDIBLE).
     """
     d = parsear_dte_xml(dte_xml)
+    # Resolución del emisor (configurable; default = certificación)
+    d['nro_resol'] = nro_resol if nro_resol is not None else RESOLUCION_NRO
+    d['anio_resol'] = anio_resol if anio_resol is not None else RESOLUCION_ANIO
     if formato == "rollo" and d['info']['es_boleta']:
         return _pdf_rollo(d, url_consulta)
     return _pdf_carta(d, url_consulta)
