@@ -77,6 +77,35 @@ def _leer_sobre_del_request():
     return xml or None
 
 
+def _resolucion_del_tenant(tenant_id):
+    """Lee el número y año de la resolución SII del tenant desde su configuración.
+    En certificación devuelve (0, año vigente). En producción, el número real
+    que el SII asignó a la empresa, para mostrarlo en la leyenda del timbre."""
+    from datetime import date
+    anio_default = date.today().year
+    try:
+        from inventario import get_conn, release_conn
+        from facturacion.db import obtener_config_facturacion
+        config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+        if not config:
+            return 0, anio_default
+        nro = config.get("resolucion_sii_numero")
+        fch = config.get("resolucion_sii_fecha")
+        # Año desde la fecha de resolución (si existe)
+        anio = anio_default
+        if fch:
+            try:
+                anio = int(str(fch)[:4])
+            except (ValueError, TypeError):
+                anio = anio_default
+        if nro is None:
+            nro = 0
+        return int(nro), anio
+    except Exception:
+        # Ante cualquier problema, default de certificación
+        return 0, anio_default
+
+
 @muestras_bp.route("/admin/lusync/sii/muestras-impresas", methods=["GET", "POST"])
 def muestras_impresas():
     if not session.get("logged"):
@@ -90,6 +119,11 @@ def muestras_impresas():
     formato = request.args.get("formato", default="carta")
     uno_por_tipo = request.args.get("uno_por_tipo", default="") == "si"
     preview = request.args.get("preview", default="")
+
+    # ─── Resolución SII del tenant (para la leyenda del timbre) ───
+    # En certificación es 0; en producción es el número real que el SII asigna
+    # a cada empresa. Se lee de la configuración del tenant y se pasa al PDF.
+    nro_resol_tenant, anio_resol_tenant = _resolucion_del_tenant(tenant_id)
 
     # ─── GET: formulario ───
     if request.method == "GET":
@@ -145,7 +179,8 @@ Para el Set de Pruebas: sube cada sobre de set completo.</p>
         if not doc:
             return jsonify({"ok": False, "error": f"No existe DTE tipo {t_q} folio {f_q}"}), 404
         pdf = generar_pdf_dte(doc["xml"].encode("iso-8859-1", errors="replace"),
-                              formato=formato, url_consulta=URL_CONSULTA)
+                              formato=formato, url_consulta=URL_CONSULTA,
+                              nro_resol=nro_resol_tenant, anio_resol=anio_resol_tenant)
         return Response(pdf, mimetype="application/pdf",
                         headers={"Content-Disposition": f'inline; filename="{_slug_tipo(doc["tipo"])}_folio{doc["folio"]}.pdf"'})
 
@@ -167,7 +202,8 @@ Para el Set de Pruebas: sube cada sobre de set completo.</p>
         for d in docs_sel:
             try:
                 pdf = generar_pdf_dte(d["xml"].encode("iso-8859-1", errors="replace"),
-                                      formato=formato, url_consulta=URL_CONSULTA)
+                                      formato=formato, url_consulta=URL_CONSULTA,
+                                      nro_resol=nro_resol_tenant, anio_resol=anio_resol_tenant)
                 zf.writestr(f"{_slug_tipo(d['tipo'])}_folio{d['folio']}.pdf", pdf)
                 generados += 1
             except Exception as e:
