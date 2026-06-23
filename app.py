@@ -22544,6 +22544,8 @@ def facturacion_boleta_emitir():
         "giro": config.get("giro", "Venta al por menor"),
         "dir_origen": config.get("direccion", "Sin dirección"),
         "cmna_origen": config.get("comuna", "Santiago"),
+        "telefono": config.get("telefono"),
+        "correo": config.get("email"),
     }
 
     nro_resol = config.get("resolucion_sii_numero")
@@ -22778,6 +22780,8 @@ def facturacion_nota_credito_emitir():
         "giro": config.get("giro", "Venta al por menor"),
         "dir_origen": config.get("direccion", "Sin dirección"),
         "cmna_origen": config.get("comuna", "Santiago"),
+        "telefono": config.get("telefono"),
+        "correo": config.get("email"),
     }
     nro_resol = config.get("resolucion_sii_numero")
     fch_resol = config.get("resolucion_sii_fecha")
@@ -26014,6 +26018,8 @@ def admin_lusync_sii_test_firma():
                     "giro": config.get("giro", ""),
                     "dir_origen": config.get("direccion", ""),
                     "cmna_origen": config.get("comuna", ""),
+                    "telefono": config.get("telefono"),
+                    "correo": config.get("email"),
                 }
                 paso("Leer datos del emisor", True,
                      f"{emisor['razon_social']} · {emisor['rut']}")
@@ -26324,6 +26330,8 @@ def admin_lusync_sii_test_envio():
                 "giro": config.get("giro", "Venta al por menor"),
                 "dir_origen": config.get("direccion", "Sin dirección"),
                 "cmna_origen": config.get("comuna", "Santiago"),
+                "telefono": config.get("telefono"),
+                "correo": config.get("email"),
             }
             paso("Leer datos del emisor", True,
                  f"{emisor['razon_social']} · {emisor['rut']}")
@@ -26778,6 +26786,8 @@ def admin_lusync_sii_test_set_basico():
                 "giro": config.get("giro", "Venta al por menor"),
                 "dir_origen": config.get("direccion", "Sin dirección"),
                 "cmna_origen": config.get("comuna", "Santiago"),
+                "telefono": config.get("telefono"),
+                "correo": config.get("email"),
             }
             if config.get("acteco"):
                 emisor["acteco"] = config["acteco"]
@@ -27229,6 +27239,8 @@ def admin_lusync_sii_test_set_guias():
                 "giro": config.get("giro", "Venta al por menor"),
                 "dir_origen": config.get("direccion", "Sin dirección"),
                 "cmna_origen": config.get("comuna", "Santiago"),
+                "telefono": config.get("telefono"),
+                "correo": config.get("email"),
             }
             if config.get("acteco"):
                 emisor["acteco"] = config["acteco"]
@@ -27522,6 +27534,8 @@ def admin_lusync_sii_test_set_fact_exenta():
                 "giro": config.get("giro", "Venta al por menor"),
                 "dir_origen": config.get("direccion", "Sin dirección"),
                 "cmna_origen": config.get("comuna", "Santiago"),
+                "telefono": config.get("telefono"),
+                "correo": config.get("email"),
             }
             if config.get("acteco"):
                 emisor["acteco"] = config["acteco"]
@@ -28510,6 +28524,8 @@ def admin_lusync_sii_test_set_fact_compra():
                 "giro": config.get("giro", "Venta al por menor"),
                 "dir_origen": config.get("direccion", "Sin dirección"),
                 "cmna_origen": config.get("comuna", "Santiago"),
+                "telefono": config.get("telefono"),
+                "correo": config.get("email"),
             }
             if config.get("acteco"):
                 emisor["acteco"] = config["acteco"]
@@ -28776,6 +28792,8 @@ def admin_lusync_sii_test_set_exportacion():
                 "giro": config.get("giro", "Exportacion"),
                 "dir_origen": config.get("direccion", "Santiago"),
                 "cmna_origen": config.get("comuna", "Santiago"),
+                "telefono": config.get("telefono"),
+                "correo": config.get("email"),
             }
             if config.get("acteco"):
                 emisor["acteco"] = config["acteco"]
@@ -29022,6 +29040,8 @@ def admin_lusync_sii_test_set_exportacion2():
                 "giro": config.get("giro", "Exportacion"),
                 "dir_origen": config.get("direccion", "Santiago"),
                 "cmna_origen": config.get("comuna", "Santiago"),
+                "telefono": config.get("telefono"),
+                "correo": config.get("email"),
             }
             if config.get("acteco"):
                 emisor["acteco"] = config["acteco"]
@@ -29279,6 +29299,8 @@ def admin_lusync_sii_test_set_boletas():
                 "giro": config.get("giro", "Venta al por menor"),
                 "dir_origen": config.get("direccion", "Sin dirección"),
                 "cmna_origen": config.get("comuna", "Santiago"),
+                "telefono": config.get("telefono"),
+                "correo": config.get("email"),
             }
             paso("Leer datos del emisor", True, f"{emisor['razon_social']} · {emisor['rut']}")
 
@@ -29510,6 +29532,8 @@ def admin_lusync_sii_test_pdf_boleta():
             "giro": config.get("giro", ""),
             "dir_origen": config.get("direccion", ""),
             "cmna_origen": config.get("comuna", "Santiago"),
+            "telefono": config.get("telefono"),
+            "correo": config.get("email"),
         }
         # Usa el CASO-1 del Set como muestra
         res_bol = generar_boleta_xml(
