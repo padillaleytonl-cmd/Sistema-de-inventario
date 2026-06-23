@@ -675,7 +675,10 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
     if info['referencia'] and d['referencias']:
         # El acuse de recibo ocupa la franja 6.4–9.0cm a lo ancho completo.
         # La referencia va por encima de esa franja cuando hay acuse.
-        if info.get('acuse'):
+        # El acuse SOLO existe en la copia cedible (Manual Muestras: prohibido
+        # en muestras no cedibles), así que solo reservamos espacio si esta
+        # copia es cedible.
+        if info.get('acuse') and etiqueta_copia:
             y_ref = 11.0 * cm   # arranca bien arriba del acuse
             tope = 9.4 * cm     # no bajar al acuse
         else:
@@ -704,7 +707,10 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
     # ── Recuadro ACUSE DE RECIBO (Ley 19.983) — ancho completo, estilo Lioren ──
     # Solo en documentos que lo requieren (facturas, fact compra, liquidación,
     # guía). NC/ND/boletas/exportaciones NO lo llevan.
-    if info.get('acuse'):
+    # IMPORTANTE (Manual Muestras Impresas): el cuadro de acuse de recibo NO
+    # debe agregarse en las muestras NO cedibles. Por eso solo se dibuja cuando
+    # esta copia es la CEDIBLE (etiqueta_copia con valor).
+    if info.get('acuse') and etiqueta_copia:
         ar_x = x                      # margen izquierdo del contenido
         ar_w = W - 4 * cm             # ancho completo (de margen a margen)
         ar_h = 2.6 * cm
@@ -774,22 +780,38 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
         c.setFillColorRGB(0, 0, 0)
 
 
-def _pdf_carta(d: dict, url_consulta: str) -> bytes:
-    """Genera el PDF carta. Si el documento es cedible, agrega una 2da página
-    con la copia CEDIBLE (exigida por el Manual de Muestras Impresas).
-    La guía usa la leyenda 'CEDIBLE CON SU FACTURA'."""
+def _pdf_carta(d: dict, url_consulta: str, solo_copia: str = None) -> bytes:
+    """Genera el PDF carta.
+
+    solo_copia controla qué copia(s) incluir:
+      None        -> comportamiento normal: tributaria + cedible (2 páginas)
+      'tributaria'-> SOLO la copia tributaria (1 página, sin acuse ni leyenda)
+      'cedible'   -> SOLO la copia cedible (1 página, con acuse y 'CEDIBLE')
+
+    Para el Upload de Muestras Impresas del SII cada archivo debe tener UNA
+    sola página, por lo que el endpoint genera tributaria y cedible por separado.
+    """
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
+    leyenda = d['info'].get('leyenda_cedible', 'CEDIBLE')
+    es_cedible_doc = d['info'].get('cedible')
 
-    # Copia 1: tributaria (sin leyenda de destino)
-    _dibujar_copia_carta(c, d, url_consulta, etiqueta_copia="")
-    c.showPage()
-
-    # Copia 2: CEDIBLE (solo para documentos que la requieren; no NC/ND/boletas)
-    if d['info'].get('cedible'):
-        leyenda = d['info'].get('leyenda_cedible', 'CEDIBLE')
-        _dibujar_copia_carta(c, d, url_consulta, etiqueta_copia=leyenda)
+    if solo_copia == 'tributaria':
+        _dibujar_copia_carta(c, d, url_consulta, etiqueta_copia="")
         c.showPage()
+    elif solo_copia == 'cedible':
+        # Si el documento no es cedible, no hay copia cedible que generar:
+        # se devuelve la tributaria para no romper el flujo.
+        et = leyenda if es_cedible_doc else ""
+        _dibujar_copia_carta(c, d, url_consulta, etiqueta_copia=et)
+        c.showPage()
+    else:
+        # Comportamiento normal (2 páginas si es cedible)
+        _dibujar_copia_carta(c, d, url_consulta, etiqueta_copia="")
+        c.showPage()
+        if es_cedible_doc:
+            _dibujar_copia_carta(c, d, url_consulta, etiqueta_copia=leyenda)
+            c.showPage()
 
     c.save()
     buf.seek(0)
@@ -904,7 +926,8 @@ def _pdf_rollo(d: dict, url_consulta: str) -> bytes:
 
 def generar_pdf_dte(dte_xml: bytes, formato: str = "carta",
                     url_consulta: str = "www.sii.cl",
-                    nro_resol: int = None, anio_resol: int = None) -> bytes:
+                    nro_resol: int = None, anio_resol: int = None,
+                    solo_copia: str = None) -> bytes:
     """Genera el PDF de la representación gráfica de cualquier DTE.
 
     Args:
@@ -916,10 +939,12 @@ def generar_pdf_dte(dte_xml: bytes, formato: str = "carta",
             facturador electrónico. En certificación es 0; en producción es el
             número real que el SII asigna a cada empresa (configurable por tenant).
         anio_resol: año de esa resolución. Por defecto el año vigente.
+        solo_copia: None = tributaria + cedible (2 páginas). 'tributaria' o
+            'cedible' = una sola copia en 1 página (para el Upload de Muestras
+            Impresas del SII, que exige un documento de una página por archivo).
 
     Returns:
-        bytes del PDF. Para documentos cedibles incluye 2 páginas
-        (copia tributaria + copia CEDIBLE).
+        bytes del PDF.
     """
     d = parsear_dte_xml(dte_xml)
     # Resolución del emisor (configurable; default = certificación)
@@ -927,7 +952,7 @@ def generar_pdf_dte(dte_xml: bytes, formato: str = "carta",
     d['anio_resol'] = anio_resol if anio_resol is not None else RESOLUCION_ANIO
     if formato == "rollo" and d['info']['es_boleta']:
         return _pdf_rollo(d, url_consulta)
-    return _pdf_carta(d, url_consulta)
+    return _pdf_carta(d, url_consulta, solo_copia=solo_copia)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

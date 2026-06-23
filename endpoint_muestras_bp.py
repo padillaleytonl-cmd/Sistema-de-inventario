@@ -194,6 +194,10 @@ Para el Set de Pruebas: sube cada sobre de set completo.</p>
     else:
         docs_sel = docs
 
+    # Tipos que llevan copia cedible (Manual Muestras Impresas): factura (33),
+    # exenta (34), liquidación (43), factura de compra (46), guía (52).
+    TIPOS_CEDIBLES = {33, 34, 43, 46, 52}
+
     # Armar ZIP
     zip_buf = io.BytesIO()
     errores = []
@@ -201,11 +205,27 @@ Para el Set de Pruebas: sube cada sobre de set completo.</p>
     with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for d in docs_sel:
             try:
-                pdf = generar_pdf_dte(d["xml"].encode("iso-8859-1", errors="replace"),
-                                      formato=formato, url_consulta=URL_CONSULTA,
-                                      nro_resol=nro_resol_tenant, anio_resol=anio_resol_tenant)
-                zf.writestr(f"{_slug_tipo(d['tipo'])}_folio{d['folio']}.pdf", pdf)
+                xml_bytes = d["xml"].encode("iso-8859-1", errors="replace")
+                tipo = int(d["tipo"])
+                slug = _slug_tipo(d["tipo"])
+                # El Upload de Muestras Impresas exige UN documento de UNA página
+                # por archivo PDF. Por eso la copia tributaria y la cedible se
+                # generan como archivos PDF separados.
+                pdf_trib = generar_pdf_dte(xml_bytes, formato=formato,
+                                           url_consulta=URL_CONSULTA,
+                                           nro_resol=nro_resol_tenant,
+                                           anio_resol=anio_resol_tenant,
+                                           solo_copia="tributaria")
+                zf.writestr(f"{slug}_folio{d['folio']}_tributaria.pdf", pdf_trib)
                 generados += 1
+                if tipo in TIPOS_CEDIBLES:
+                    pdf_ced = generar_pdf_dte(xml_bytes, formato=formato,
+                                              url_consulta=URL_CONSULTA,
+                                              nro_resol=nro_resol_tenant,
+                                              anio_resol=anio_resol_tenant,
+                                              solo_copia="cedible")
+                    zf.writestr(f"{slug}_folio{d['folio']}_cedible.pdf", pdf_ced)
+                    generados += 1
             except Exception as e:
                 errores.append(f"tipo {d['tipo']} folio {d['folio']}: {e}")
         manifiesto = [f"Muestras impresas — {generados} PDF generados", ""]
