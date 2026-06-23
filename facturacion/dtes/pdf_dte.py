@@ -546,9 +546,27 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
         mitad = math.ceil(n / 2)
         col_izq = filas_tr[:mitad]
         col_der = filas_tr[mitad:]
-        n_filas = max(len(col_izq), len(col_der))
-        # Recuadro: título + filas
         box_w = W - 4 * cm
+        col1_x = x + 0.25 * cm
+        col2_x = x + 9.25 * cm
+        etq_w = 2.4 * cm                          # ancho reservado a la etiqueta
+        val_w = (box_w / 2) - etq_w - 0.4 * cm    # ancho útil para el valor
+
+        # Pre-calcular cuántas líneas ocupa cada columna (con envoltura de valores)
+        def _envolver_filas(filas):
+            out = []
+            for etq, val in filas:
+                lineas = _wrap_ancho(str(val), val_w, "Helvetica", 8.5) or [""]
+                out.append((etq, lineas))
+            return out
+
+        col_izq_w = _envolver_filas(col_izq)
+        col_der_w = _envolver_filas(col_der)
+        lineas_izq = sum(len(l) for _, l in col_izq_w)
+        lineas_der = sum(len(l) for _, l in col_der_w)
+        n_filas = max(lineas_izq, lineas_der, 1)
+
+        # Recuadro: título + filas (altura según las líneas reales, ya envueltas)
         box_h = 0.55 * cm + n_filas * 0.38 * cm + 0.2 * cm
         box_top = y + 0.35 * cm
         c.setStrokeColorRGB(0.55, 0.55, 0.55)
@@ -558,20 +576,22 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
         c.setFont("Helvetica-Bold", 9)
         c.drawString(x + 0.25 * cm, box_top - 0.45 * cm, "Datos de Traslado y Transporte")
         c.setStrokeColorRGB(0, 0, 0)
-        # Columnas
-        col1_x = x + 0.25 * cm
-        col2_x = x + 9.25 * cm
         ty_base = box_top - 0.9 * cm
-        ty = ty_base
-        for etq, val in col_izq:
-            c.setFont("Helvetica-Bold", 8.5); c.drawString(col1_x, ty, etq)
-            c.setFont("Helvetica", 8.5); c.drawString(col1_x + 2.4 * cm, ty, val)
-            ty -= 0.38 * cm
-        ty = ty_base
-        for etq, val in col_der:
-            c.setFont("Helvetica-Bold", 8.5); c.drawString(col2_x, ty, etq)
-            c.setFont("Helvetica", 8.5); c.drawString(col2_x + 2.4 * cm, ty, val)
-            ty -= 0.38 * cm
+
+        def _dibujar_columna(filas_env, base_x):
+            ty = ty_base
+            for etq, lineas_val in filas_env:
+                c.setFont("Helvetica-Bold", 8.5)
+                c.drawString(base_x, ty, etq)
+                c.setFont("Helvetica", 8.5)
+                c.drawString(base_x + etq_w, ty, lineas_val[0])
+                ty -= 0.38 * cm
+                for extra in lineas_val[1:]:
+                    c.drawString(base_x + etq_w, ty, extra)
+                    ty -= 0.38 * cm
+
+        _dibujar_columna(col_izq_w, col1_x)
+        _dibujar_columna(col_der_w, col2_x)
         y = box_top - box_h
 
     # ── Moneda (exportación) ──
