@@ -180,6 +180,14 @@ def generar_factura_xml(
         f'<RznSoc>{_escape_xml(emisor["razon_social"])}</RznSoc>',
         f'<GiroEmis>{_escape_xml(emisor.get("giro", "")[:80])}</GiroEmis>',
     ]
+    # Telefono y CorreoEmisor (opcionales) van DESPUÉS de GiroEmis y ANTES de
+    # Acteco, según el orden del XSD del SII. Solo se incluyen si vienen.
+    _tel = (emisor.get('telefono') or '').strip()
+    if _tel:
+        emisor_parts.append(f'<Telefono>{_escape_xml(_tel[:20])}</Telefono>')
+    _correo = (emisor.get('correo') or emisor.get('email') or '').strip()
+    if _correo:
+        emisor_parts.append(f'<CorreoEmisor>{_escape_xml(_correo[:80])}</CorreoEmisor>')
     # Acteco OBLIGATORIO en facturas/NC/ND. Si no se pasa, usar 620100
     # (Actividades de programación informática). Puede pasarse uno o varios.
     actecos = emisor.get('acteco') or emisor.get('actecos') or [620100]

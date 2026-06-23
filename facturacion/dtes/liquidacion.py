@@ -185,6 +185,13 @@ def generar_liquidacion_xml(
         f'<RznSoc>{_escape_xml(emisor["razon_social"])}</RznSoc>',
         f'<GiroEmis>{_escape_xml(emisor.get("giro", "")[:80])}</GiroEmis>',
     ]
+    # Telefono y CorreoEmisor (opcionales) entre GiroEmis y Acteco (orden XSD SII)
+    _tel = (emisor.get('telefono') or '').strip()
+    if _tel:
+        emisor_parts.append(f'<Telefono>{_escape_xml(_tel[:20])}</Telefono>')
+    _correo = (emisor.get('correo') or emisor.get('email') or '').strip()
+    if _correo:
+        emisor_parts.append(f'<CorreoEmisor>{_escape_xml(_correo[:80])}</CorreoEmisor>')
     actecos = emisor.get('acteco') or emisor.get('actecos') or [620100]
     if not isinstance(actecos, (list, tuple)):
         actecos = [actecos]

@@ -160,6 +160,16 @@ def admin_lusync_sii_test_simulacion():
             }
             if config.get("acteco"):
                 emisor["acteco"] = config["acteco"]
+            # Teléfono y correo del emisor (van en el XML entre Giro y Acteco).
+            # Se buscan con varios nombres por compatibilidad con la config/BD.
+            _tel = (config.get("telefono") or config.get("fono")
+                    or config.get("telefono_emisor") or "")
+            _correo = (config.get("correo") or config.get("email")
+                       or config.get("email_contacto") or config.get("correo_emisor") or "")
+            if _tel:
+                emisor["telefono"] = str(_tel).strip()
+            if _correo:
+                emisor["correo"] = str(_correo).strip()
             paso("Datos del emisor", True, f"{emisor['razon_social']} · {emisor['rut']}")
 
             from facturacion.dtes.caf_parser import parsear_caf_xml
