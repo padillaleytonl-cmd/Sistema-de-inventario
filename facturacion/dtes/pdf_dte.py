@@ -35,12 +35,14 @@ from __future__ import annotations
 import io
 import re
 import math
+from html import unescape as _html_unescape
 from typing import Optional
 
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import mm, cm
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase.pdfmetrics import stringWidth
 
 from pdf417gen import encode as _pdf417_encode, render_image as _pdf417_render
 
@@ -110,9 +112,22 @@ TPO_DOC_REF_NOMBRE = {
 
 def _txt(xml: str, tag: str) -> str:
     """Devuelve el contenido del primer <tag>...</tag>, o '' si no existe.
-    Tolera atributos en la etiqueta de apertura (ej <TED version="1.0">)."""
+    Tolera atributos en la etiqueta de apertura (ej <TED version="1.0">).
+    Des-escapa las entidades XML (&quot; &amp; &lt; &gt; &apos; y numéricas)
+    para que comillas, ampersands y acentos se impriman como caracteres reales
+    en el PDF y no como su entidad literal."""
     m = re.search(rf'<{tag}(?:\s[^>]*)?>(.*?)</{tag}>', xml, re.DOTALL)
-    return m.group(1).strip() if m else ''
+    if not m:
+        return ''
+    return _unescape_xml(m.group(1).strip())
+
+
+def _unescape_xml(s: str) -> str:
+    """Convierte entidades XML a su carácter real. Útil porque el texto se
+    extrae con regex (no con un parser que lo haría automáticamente)."""
+    if not s or '&' not in s:
+        return s
+    return _html_unescape(s)
 
 
 def _miles(valor) -> str:
@@ -152,6 +167,28 @@ def _wrap(texto: str, max_chars: int) -> list:
             linea = pal
         else:
             linea = (linea + " " + pal).strip()
+    if linea:
+        lineas.append(linea)
+    return lineas
+
+
+def _wrap_ancho(texto: str, max_ancho: float, font: str, size: float) -> list:
+    """Parte un texto en líneas que no superen max_ancho (en puntos), midiendo
+    el ancho real de cada palabra con la fuente y tamaño dados. Evita que el
+    texto del emisor invada el recuadro rojo del SII. Si una palabra sola es
+    más ancha que el máximo, la deja igual (no la corta a la mitad)."""
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+    if not texto:
+        return []
+    palabras = str(texto).split()
+    lineas, linea = [], ""
+    for pal in palabras:
+        prueba = (linea + " " + pal).strip()
+        if stringWidth(prueba, font, size) > max_ancho and linea:
+            lineas.append(linea)
+            linea = pal
+        else:
+            linea = prueba
     if linea:
         lineas.append(linea)
     return lineas
@@ -377,17 +414,26 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
     c.setFillColorRGB(0, 0, 0)
 
     # ── Datos del emisor (arriba a la izquierda). Razón social DESTACADA ──
+    # El texto NO debe invadir el recuadro rojo del SII. El ancho útil va
+    # desde x hasta el borde izquierdo del recuadro, menos un margen de 0.4cm.
     x = 2 * cm
     y = H - 2.4 * cm
-    c.setFont("Helvetica-Bold", 15)
-    c.drawString(x, y, (em['razon_social'] or '')[:45])
+    ancho_util = rec_x - x - 0.4 * cm
+    # Razón social destacada: si es muy ancha, se reduce el tamaño para que
+    # quepa antes del recuadro (nunca se mete debajo del RUT).
+    razon = (em['razon_social'] or '')
+    rs_size = 15
+    while rs_size > 9 and stringWidth(razon, "Helvetica-Bold", rs_size) > ancho_util:
+        rs_size -= 0.5
+    c.setFont("Helvetica-Bold", rs_size)
+    c.drawString(x, y, razon)
     c.setFont("Helvetica", 9)
     y -= 0.55 * cm
-    # Giro (puede ser largo, se parte en dos líneas si es necesario)
+    # Giro (se parte por ANCHO real, máx 2 líneas)
     giro = (em['giro'] or '')
     if giro:
         c.setFont("Helvetica-Oblique", 9)
-        for linea_giro in _wrap(giro, 52)[:2]:
+        for linea_giro in _wrap_ancho(giro, ancho_util, "Helvetica-Oblique", 9)[:2]:
             c.drawString(x, y, linea_giro)
             y -= 0.42 * cm
         c.setFont("Helvetica", 9)
@@ -395,7 +441,7 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
     dir_cm = ", ".join([p for p in [em['direccion'], em['comuna'], em.get('ciudad', '')] if p])
     lineas_emisor = [f"Casa Matriz: {dir_cm}".strip(': ')]
     if em.get('sucursal'):
-        lineas_emisor.append(f"Sucursal: {em['sucursal']}"[:75])
+        lineas_emisor.append(f"Sucursal: {em['sucursal']}")
     # Contacto (teléfono / correo) en una línea si vienen
     contacto = []
     if em.get('telefono'):
@@ -403,11 +449,13 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
     if em.get('correo'):
         contacto.append(em['correo'])
     if contacto:
-        lineas_emisor.append("  ·  ".join(contacto)[:75])
-    # Giro autorizado / actividad económica si viene
+        lineas_emisor.append("  ·  ".join(contacto))
+    # Cada línea del emisor se envuelve por ancho real para no tocar el recuadro
     for linea in lineas_emisor:
-        if linea:
-            c.drawString(x, y, linea[:80])
+        if not linea:
+            continue
+        for sub in _wrap_ancho(linea, ancho_util, "Helvetica", 9):
+            c.drawString(x, y, sub)
             y -= 0.42 * cm
 
     # ── Fecha de emisión ──
@@ -529,7 +577,7 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
     # ── Moneda (exportación) ──
     t = d['totales']
     if t.get('moneda') and t['moneda'] not in ('', 'PESO CL'):
-        y -= 0.65 * cm   # separación del recuadro del cliente que cierra arriba
+        y -= 0.2 * cm
         c.setFont("Helvetica-Bold", 9)
         c.drawString(x, y, f"Moneda: {t['moneda']}")
         if t.get('tipo_cambio'):
