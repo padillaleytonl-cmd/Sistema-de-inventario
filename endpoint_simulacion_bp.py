@@ -160,16 +160,6 @@ def admin_lusync_sii_test_simulacion():
             }
             if config.get("acteco"):
                 emisor["acteco"] = config["acteco"]
-            # Teléfono y correo del emisor (van en el XML entre Giro y Acteco).
-            # Se buscan con varios nombres por compatibilidad con la config/BD.
-            _tel = (config.get("telefono") or config.get("fono")
-                    or config.get("telefono_emisor") or "")
-            _correo = (config.get("correo") or config.get("email")
-                       or config.get("email_contacto") or config.get("correo_emisor") or "")
-            if _tel:
-                emisor["telefono"] = str(_tel).strip()
-            if _correo:
-                emisor["correo"] = str(_correo).strip()
             paso("Datos del emisor", True, f"{emisor['razon_social']} · {emisor['rut']}")
 
             from facturacion.dtes.caf_parser import parsear_caf_xml
@@ -262,17 +252,34 @@ def admin_lusync_sii_test_simulacion():
                 fol[34] += 1
 
             # ── 3 Guías de Despacho (52) — traslado por venta a clientes ──
+            # Res. 154/2025 (vigente desde 01-05-2026): las guías que trasladan
+            # bienes deben informar transportista, patente, chofer y destino.
             CATALOGO_52 = [
                 (1, 2, [{'nombre': 'Servidor físico marca Dell PowerEdge', 'cantidad': 2, 'precio_unitario': 1450000, 'exento': False}]),
                 (1, 2, [{'nombre': 'Notebook corporativo (unidades)', 'cantidad': 8, 'precio_unitario': 720000, 'exento': False}]),
                 (1, 2, [{'nombre': 'Equipos de red y switches', 'cantidad': 6, 'precio_unitario': 340000, 'exento': False}]),
             ]
+            # Datos de transporte por guía (cumplen Res. 154). El destino se toma
+            # de la dirección del receptor de cada guía.
+            TRANSPORTE_52 = [
+                {'patente': 'KXGZ45', 'rut_transportista': '76555444-2',
+                 'rut_chofer': '15333222-1', 'nombre_chofer': 'JUAN PEREZ SOTO'},
+                {'patente': 'LBRT89', 'rut_transportista': '77888999-1',
+                 'rut_chofer': '16444555-2', 'nombre_chofer': 'MARIA GONZALEZ ROJAS'},
+                {'patente': 'PJWX12', 'rut_transportista': '78222333-4',
+                 'rut_chofer': '17555666-3', 'nombre_chofer': 'PEDRO SOTO LAGOS'},
+            ]
             for i, (ind_tras, tipo_desp, items) in enumerate(CATALOGO_52):
                 recep = RECEPTORES[i % len(RECEPTORES)]
+                transp = dict(TRANSPORTE_52[i % len(TRANSPORTE_52)])
+                # El destino del transporte es la dirección del receptor
+                transp['dir_dest'] = recep.get('direccion', '')
+                transp['cmna_dest'] = recep.get('comuna', '')
                 add(generar_guia_despacho_xml(
                     caf=cafs[52], folio=fol[52], fecha_emision=fecha,
                     emisor=emisor, receptor=recep,
-                    ind_traslado=ind_tras, tipo_despacho=tipo_desp, items=items), f"GUI52")
+                    ind_traslado=ind_tras, tipo_despacho=tipo_desp, items=items,
+                    transporte=transp), f"GUI52")
                 fol[52] += 1
 
             # ── 3 Notas de Crédito (61) — referencian facturas del lote ──
