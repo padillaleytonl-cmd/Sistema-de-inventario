@@ -185,13 +185,19 @@ def generar_exportacion_xml(
     em = [f'<RUTEmisor>{_limpiar_rut(emisor["rut"])}</RUTEmisor>',
           f'<RznSoc>{_escape_xml(emisor["razon_social"])}</RznSoc>',
           f'<GiroEmis>{_escape_xml(emisor.get("giro", "Exportacion"))}</GiroEmis>']
-    # Telefono y CorreoEmisor (opcionales) entre GiroEmis y Acteco (orden XSD SII)
-    _tel = (emisor.get('telefono') or '').strip()
-    if _tel:
-        em.append(f'<Telefono>{_escape_xml(_tel[:20])}</Telefono>')
-    _correo = (emisor.get('correo') or emisor.get('email') or '').strip()
-    if _correo:
-        em.append(f'<CorreoEmisor>{_escape_xml(_correo[:80])}</CorreoEmisor>')
+    # Teléfono y correo del emisor (opcionales). Schema SII: van DESPUÉS de
+    # GiroEmis y ANTES de Acteco. Sin esto, el membrete del PDF sale sin contacto.
+    tel_em = emisor.get('telefono') or emisor.get('fono')
+    if tel_em:
+        if not isinstance(tel_em, (list, tuple)):
+            tel_em = [tel_em]
+        for t in tel_em[:2]:
+            t = str(t).strip()[:20]
+            if t:
+                em.append(f'<Telefono>{_escape_xml(t)}</Telefono>')
+    correo_em = emisor.get('correo') or emisor.get('correo_emisor') or emisor.get('email')
+    if correo_em:
+        em.append(f'<CorreoEmisor>{_escape_xml(str(correo_em).strip()[:80])}</CorreoEmisor>')
     # Acteco es OBLIGATORIO en exportación (debe ir antes de DirOrigen)
     acteco_val = emisor.get('acteco') or 620100
     em.append(f'<Acteco>{acteco_val}</Acteco>')

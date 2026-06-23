@@ -577,7 +577,7 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
     # ── Moneda (exportación) ──
     t = d['totales']
     if t.get('moneda') and t['moneda'] not in ('', 'PESO CL'):
-        y -= 0.2 * cm
+        y -= 0.6 * cm   # separación suficiente para no pisar el borde del recuadro
         c.setFont("Helvetica-Bold", 9)
         c.drawString(x, y, f"Moneda: {t['moneda']}")
         if t.get('tipo_cambio'):

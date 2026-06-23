@@ -305,13 +305,19 @@ def generar_guia_despacho_xml(
         f'<RznSoc>{_escape_xml(emisor["razon_social"])}</RznSoc>',
         f'<GiroEmis>{_escape_xml(emisor.get("giro", "")[:80])}</GiroEmis>',
     ]
-    # Telefono y CorreoEmisor (opcionales) entre GiroEmis y Acteco (orden XSD SII)
-    _tel = (emisor.get('telefono') or '').strip()
+    # Teléfono y correo del emisor (opcionales). Schema SII: después de GiroEmis
+    # y antes de Acteco. Sin esto el membrete del PDF sale sin línea de contacto.
+    _tel = emisor.get('telefono') or emisor.get('fono')
     if _tel:
-        emisor_parts.append(f'<Telefono>{_escape_xml(_tel[:20])}</Telefono>')
-    _correo = (emisor.get('correo') or emisor.get('email') or '').strip()
+        if not isinstance(_tel, (list, tuple)):
+            _tel = [_tel]
+        for _t in _tel[:2]:
+            _t = str(_t).strip()[:20]
+            if _t:
+                emisor_parts.append(f'<Telefono>{_escape_xml(_t)}</Telefono>')
+    _correo = emisor.get('correo') or emisor.get('correo_emisor') or emisor.get('email')
     if _correo:
-        emisor_parts.append(f'<CorreoEmisor>{_escape_xml(_correo[:80])}</CorreoEmisor>')
+        emisor_parts.append(f'<CorreoEmisor>{_escape_xml(str(_correo).strip()[:80])}</CorreoEmisor>')
     actecos = emisor.get('acteco') or emisor.get('actecos') or [620100]
     if not isinstance(actecos, (list, tuple)):
         actecos = [actecos]
