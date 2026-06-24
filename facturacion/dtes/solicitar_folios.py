@@ -56,6 +56,57 @@ def _headers(token: str, host: str):
     }
 
 
+def _crear_cert_temporal(pfx_bytes: bytes, password: str):
+    """Extrae cert+llave del .pfx a un archivo PEM temporal para mTLS.
+
+    El CGI of_solicita_folios puede exigir el certificado cliente en la
+    conexión TLS (no solo el token). Esta función crea un PEM temporal que
+    `requests` puede usar con el parámetro cert=. Devuelve la ruta del archivo
+    (hay que borrarlo después con os.unlink).
+
+    Devuelve None si no se pudo (en ese caso se intenta solo con token).
+    """
+    try:
+        import tempfile
+        from cryptography.hazmat.primitives.serialization import (
+            Encoding, PrivateFormat, NoEncryption, pkcs12)
+        pwd = password.encode("utf-8") if isinstance(password, str) else password
+        key, cert, _ = pkcs12.load_key_and_certificates(pfx_bytes, pwd)
+        key_pem = key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption())
+        cert_pem = cert.public_bytes(Encoding.PEM)
+        f = tempfile.NamedTemporaryFile(mode="wb", suffix=".pem", delete=False)
+        f.write(cert_pem + b"\n" + key_pem)
+        f.close()
+        return f.name
+    except Exception:
+        return None
+
+
+def _post_cgi(url, data, token, host, pfx_bytes=None, password=None, usar_mtls=False):
+    """POST al CGI. Si usar_mtls=True, adjunta el certificado cliente al TLS.
+
+    Devuelve (texto_respuesta, error_str). error_str es None si fue bien.
+    """
+    import os
+    cert_file = None
+    try:
+        kwargs = {"headers": _headers(token, host), "data": data, "timeout": TIMEOUT}
+        if usar_mtls and pfx_bytes:
+            cert_file = _crear_cert_temporal(pfx_bytes, password)
+            if cert_file:
+                kwargs["cert"] = cert_file
+        resp = requests.post(url, **kwargs)
+        return resp.text or "", None
+    except Exception as e:
+        return "", str(e)
+    finally:
+        if cert_file:
+            try:
+                os.unlink(cert_file)
+            except Exception:
+                pass
+
+
 def solicitar_folios(
     pfx_bytes: bytes,
     password: str,
@@ -65,6 +116,7 @@ def solicitar_folios(
     ambiente: str = "certificacion",
     rut_solicitante: str = None,
     token: str = None,
+    usar_mtls: bool = False,
 ) -> dict:
     """Solicita `cantidad` folios del `tipo_dte` al SII y devuelve el CAF XML.
 
@@ -76,6 +128,8 @@ def solicitar_folios(
         ambiente: 'certificacion' o 'produccion'.
         rut_solicitante: RUT del representante legal (default = rut_emisor).
         token: si ya tienes uno, evita re-autenticar.
+        usar_mtls: si el CGI exige certificado cliente en el TLS (no solo token),
+                   activar esto para adjuntar el certificado a la conexión.
 
     Returns:
         dict {ok, caf_xml, folio_desde, folio_hasta, respuesta_cruda, error}
@@ -113,13 +167,12 @@ def solicitar_folios(
         "ACEPTAR": "Solicitar numeración",
     }
 
-    try:
-        resp = requests.post(url, headers=_headers(token, host), data=data, timeout=TIMEOUT)
-    except Exception as e:
-        return {"ok": False, "error": f"No se pudo conectar a {url}: {e}",
+    texto, err_conn = _post_cgi(url, data, token, host,
+                                pfx_bytes=pfx_bytes, password=password,
+                                usar_mtls=usar_mtls)
+    if err_conn:
+        return {"ok": False, "error": f"No se pudo conectar a {url}: {err_conn}",
                 "caf_xml": None, "respuesta_cruda": ""}
-
-    texto = resp.text or ""
 
     # 3. Extraer el CAF de la respuesta.
     # El CGI devuelve HTML; el CAF puede venir embebido como <AUTORIZACION>...

@@ -108,6 +108,10 @@ app.register_blueprint(simulacion_bp)
 # Muestras Impresas SII — PDFs con timbre PDF417 (etapa documentos impresos)
 from endpoint_muestras_bp import muestras_bp
 app.register_blueprint(muestras_bp)
+from admin_ambiente_bp import admin_ambiente_bp
+app.register_blueprint(admin_ambiente_bp)
+from test_folios_bp import test_folios_bp
+app.register_blueprint(test_folios_bp)
 
 
 @app.route("/admin/lusync/stock/sync-log")
