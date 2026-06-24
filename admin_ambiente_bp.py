@@ -97,6 +97,10 @@ def admin_tenant_ambiente(tenant_id):
   .badge{{display:inline-block;padding:6px 14px;border-radius:999px;font-weight:700;font-size:13px;color:#fff;background:{color}}}
   .row{{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #f1f5f9;font-size:14px}}
   .row b{{color:#334155}}
+  .row.activo{{background:#f0fdf4;border-radius:8px;padding:10px 12px;border-bottom:0}}
+  .row.activo b{{color:#15803d}}
+  .row.inactivo{{opacity:.45}}
+  .tag-activo{{font-size:11px;font-weight:700;color:#16a34a;margin-left:6px}}
   button{{width:100%;padding:13px;border:0;border-radius:10px;font-weight:700;font-size:15px;cursor:pointer;margin-top:18px}}
   .toprod{{background:#16a34a;color:#fff}} .tocert{{background:#d97706;color:#fff}}
   a.back{{display:inline-block;margin-bottom:14px;color:#2563eb;text-decoration:none;font-size:13px}}
@@ -107,8 +111,10 @@ def admin_tenant_ambiente(tenant_id):
   <div class="sub">RUT {est['rut']} · Tenant #{tenant_id}</div>
   <div>Ambiente actual: <span class="badge">{estado_txt}</span></div>
   <div style="margin-top:18px">
-    <div class="row"><b>CAF certificación</b><span>{_resumen(cafs_cert)}</span></div>
-    <div class="row"><b>CAF producción</b><span>{_resumen(cafs_prod)}</span></div>
+    <div class="row activo">
+      <b>CAF {'producción' if es_prod else 'certificación'} <span class=tag-activo>(en uso)</span></b>
+      <span>{_resumen(cafs_prod if es_prod else cafs_cert)}</span>
+    </div>
   </div>
   {aviso_prod}
   <button class="{'tocert' if es_prod else 'toprod'}"
