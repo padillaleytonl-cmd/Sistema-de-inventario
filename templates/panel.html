@@ -3424,6 +3424,10 @@ tbody td {
 
       <!-- TAB: FOLIOS -->
       <div id="dt-pane-folios" class="dt-pane" style="padding:22px;display:none;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
+          <div style="font-size:15px;font-weight:600;color:var(--text);">🎫 Tus folios disponibles</div>
+          <button onclick="cliSolicitarFolios()" style="background:#EEEDFE;color:#534AB7;border:1px solid #534AB7;padding:8px 16px;border-radius:9px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">+ Solicitar más folios</button>
+        </div>
         <div id="dtFoliosCont" style="color:var(--muted);font-size:13px;">Cargando uso de folios…</div>
       </div>
 
@@ -3549,18 +3553,6 @@ tbody td {
     <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:8px;">Tus certificados</div>
     <div id="listaCertificados" style="margin-bottom:24px;">
       <div style="text-align:center;color:var(--hint);font-size:12px;padding:20px;">Cargando...</div>
-    </div>
-
-    <!-- Folios disponibles + solicitar más -->
-    <div style="background:var(--bg);border:0.5px solid var(--border);border-radius:12px;padding:18px 20px;margin-bottom:18px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
-        <div style="font-size:15px;font-weight:600;color:var(--text);">🎫 Folios disponibles</div>
-        <button onclick="cliSolicitarFolios()" style="background:#EEEDFE;color:#534AB7;border:1px solid #534AB7;padding:8px 16px;border-radius:9px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">+ Solicitar más folios</button>
-      </div>
-      <div id="cliFoliosLista" style="display:flex;gap:10px;flex-wrap:wrap;">
-        <div style="color:var(--hint);font-size:12px;padding:8px;">Cargando folios…</div>
-      </div>
-      <div id="cliFoliosMsg" style="margin-top:10px;font-size:12px;"></div>
     </div>
 
     <!-- Modal del sistema: solicitar folios -->
@@ -13747,28 +13739,6 @@ async function dtCargarFolios(){
 }
 
 // ── Folios en la sección Configuración (versión compacta) ──
-async function cliCargarFolios(){
-  const cont=document.getElementById('cliFoliosLista');
-  if(!cont) return;
-  try{
-    const r=await fetch('/facturacion/folios/resumen'); const d=await r.json();
-    if(!d.ok || !d.folios || !d.folios.length){
-      cont.innerHTML='<div style="color:var(--muted);font-size:12px;padding:6px;">Aún no tienes folios cargados. Solicítalos con el botón de arriba.</div>';
-      return;
-    }
-    cont.innerHTML = d.folios.map(g=>{
-      const libres = (g.libres!=null?g.libres:0).toLocaleString('es-CL');
-      return `<div style="flex:1;min-width:150px;padding:12px 14px;background:var(--bg2);border-radius:10px;">
-        <div style="font-size:12px;color:var(--muted);">${g.nombre}</div>
-        <div style="font-size:20px;font-weight:700;color:var(--text);margin-top:2px;">${libres}</div>
-        <div style="font-size:11px;color:var(--muted);">disponibles</div>
-      </div>`;
-    }).join('');
-  }catch(e){
-    cont.innerHTML='<div style="color:#dc2626;font-size:12px;">Error cargando folios.</div>';
-  }
-}
-
 function cliSolicitarFolios(){
   // Abrir el modal del sistema (ya no usamos prompt feo del navegador)
   const m=document.getElementById('cliFoliosModal');
@@ -13801,9 +13771,7 @@ async function cliConfirmarFolios(){
     const d=await r.json().catch(()=>({ok:false}));
     if(d.ok){
       if(msg){ msg.style.color='#059669'; msg.textContent='✓ Folios '+d.folio_desde+'–'+d.folio_hasta+' agregados a tu cuenta.'; }
-      cliCargarFolios();  // refrescar la lista de disponibles
-      const m2=document.getElementById('cliFoliosMsg');
-      if(m2){ m2.style.color='#059669'; m2.textContent='✓ '+(d.folio_hasta-d.folio_desde+1)+' folios nuevos disponibles.'; }
+      if(typeof dtCargarFolios==='function') dtCargarFolios();  // refrescar la sección de uso de folios
       setTimeout(cliCerrarModalFolios, 1400);
     }else{
       // Mensaje amigable: nunca mostramos jerga técnica del SII al cliente
@@ -14076,9 +14044,6 @@ function facNav(pane, btn){
     }
     // Cargar el listado automáticamente, sin tener que pulsar Buscar
     if(typeof conBuscar==='function') conBuscar();
-  }
-  if(pane==='config'){
-    if(typeof cliCargarFolios==='function') cliCargarFolios();
   }
 }
 
