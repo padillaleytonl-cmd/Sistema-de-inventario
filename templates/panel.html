@@ -3301,8 +3301,8 @@ tbody td {
       <div id="facturacionAmbiente" style="font-size:11px;padding:6px 12px;border-radius:8px;background:#FAEEDA;color:#854F0B;font-weight:500;">— Cargando —</div>
     </div>
 
-    <!-- Estado actual: 4 cards -->
-    <div id="facturacionEstado" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px;">
+    <!-- Estado actual: 4 cards (ocultas — la info ahora vive en Configuración) -->
+    <div id="facturacionEstado" style="display:none;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px;">
       <div style="text-align:center;color:var(--hint);padding:20px;grid-column:1/-1;">Cargando estado...</div>
     </div>
 
@@ -3549,6 +3549,18 @@ tbody td {
     <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:8px;">Tus certificados</div>
     <div id="listaCertificados" style="margin-bottom:24px;">
       <div style="text-align:center;color:var(--hint);font-size:12px;padding:20px;">Cargando...</div>
+    </div>
+
+    <!-- Folios disponibles + solicitar más -->
+    <div style="background:var(--bg);border:0.5px solid var(--border);border-radius:12px;padding:18px 20px;margin-bottom:18px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
+        <div style="font-size:15px;font-weight:600;color:var(--text);">🎫 Folios disponibles</div>
+        <button onclick="cliSolicitarFolios()" style="background:#EEEDFE;color:#534AB7;border:1px solid #534AB7;padding:8px 16px;border-radius:9px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">+ Solicitar más folios</button>
+      </div>
+      <div id="cliFoliosLista" style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div style="color:var(--hint);font-size:12px;padding:8px;">Cargando folios…</div>
+      </div>
+      <div id="cliFoliosMsg" style="margin-top:10px;font-size:12px;"></div>
     </div>
 
     <!-- Suscripción tributaria — interactiva, el cliente activa/desactiva -->
@@ -13706,6 +13718,48 @@ async function dtCargarFolios(){
   }catch(e){cont.innerHTML='<div style="color:#dc2626;">Error cargando folios: '+e.message+'</div>';}
 }
 
+// ── Folios en la sección Configuración (versión compacta) ──
+async function cliCargarFolios(){
+  const cont=document.getElementById('cliFoliosLista');
+  if(!cont) return;
+  try{
+    const r=await fetch('/facturacion/folios/resumen'); const d=await r.json();
+    if(!d.ok || !d.folios || !d.folios.length){
+      cont.innerHTML='<div style="color:var(--muted);font-size:12px;padding:6px;">Aún no tienes folios cargados. Solicítalos con el botón de arriba.</div>';
+      return;
+    }
+    cont.innerHTML = d.folios.map(g=>{
+      const libres = (g.libres!=null?g.libres:0).toLocaleString('es-CL');
+      return `<div style="flex:1;min-width:150px;padding:12px 14px;background:var(--bg2);border-radius:10px;">
+        <div style="font-size:12px;color:var(--muted);">${g.nombre}</div>
+        <div style="font-size:20px;font-weight:700;color:var(--text);margin-top:2px;">${libres}</div>
+        <div style="font-size:11px;color:var(--muted);">disponibles</div>
+      </div>`;
+    }).join('');
+  }catch(e){
+    cont.innerHTML='<div style="color:#dc2626;font-size:12px;">Error cargando folios.</div>';
+  }
+}
+
+async function cliSolicitarFolios(){
+  const msg=document.getElementById('cliFoliosMsg');
+  if(!confirm('¿Solicitar más folios al equipo Lusync?\n\nLusync gestiona y carga tus folios autorizados por el SII. Te avisaremos cuando estén disponibles.')) return;
+  if(msg){ msg.style.color='var(--muted)'; msg.textContent='Enviando solicitud…'; }
+  try{
+    const r=await fetch('/facturacion/folios/solicitar',{
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})});
+    const d=await r.json().catch(()=>({ok:false}));
+    if(d.ok){
+      if(msg){ msg.style.color='#059669'; msg.textContent='✓ Solicitud enviada. El equipo Lusync cargará tus folios pronto.'; }
+    }else{
+      // Fallback: si el endpoint no existe aún, mostrar instrucción de contacto
+      if(msg){ msg.style.color='#059669'; msg.textContent='✓ Para más folios, contáctanos a soporte@lusync.cl y los cargamos a tu cuenta.'; }
+    }
+  }catch(e){
+    if(msg){ msg.style.color='#059669'; msg.textContent='✓ Para más folios, contáctanos a soporte@lusync.cl y los cargamos a tu cuenta.'; }
+  }
+}
+
 const DT_ESTADO = {
   generado:        {bg:'#f1efe8', color:'#6b6880', label:'Generado'},
   enviado:         {bg:'#e7eefb', color:'#2563eb', label:'Enviado al SII'},
@@ -13966,6 +14020,9 @@ function facNav(pane, btn){
     }
     // Cargar el listado automáticamente, sin tener que pulsar Buscar
     if(typeof conBuscar==='function') conBuscar();
+  }
+  if(pane==='config'){
+    if(typeof cliCargarFolios==='function') cliCargarFolios();
   }
 }
 

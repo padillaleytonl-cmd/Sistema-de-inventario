@@ -23575,6 +23575,49 @@ def facturacion_boletas_zip():
 
 
 
+@app.route("/facturacion/folios/solicitar", methods=["POST"])
+def facturacion_folios_solicitar():
+    """El cliente solicita más folios. Registra la solicitud para que el
+    equipo Lusync (admin master) la gestione y cargue los folios reales.
+    """
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    tenant_id = session.get("tenant_id") or 1
+
+    from inventario import get_conn, release_conn
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS facturacion_solicitudes_folios (
+                    id SERIAL PRIMARY KEY,
+                    tenant_id INTEGER NOT NULL,
+                    tipo_dte INTEGER,
+                    cantidad INTEGER,
+                    estado TEXT DEFAULT 'pendiente',
+                    fecha_solicitud TIMESTAMP DEFAULT NOW(),
+                    fecha_resolucion TIMESTAMP
+                )
+            """)
+            data = request.get_json(silent=True) or {}
+            tipo_dte = data.get("tipo_dte")
+            cantidad = data.get("cantidad")
+            cur.execute("""
+                INSERT INTO facturacion_solicitudes_folios (tenant_id, tipo_dte, cantidad)
+                VALUES (%s, %s, %s) RETURNING id
+            """, (tenant_id, tipo_dte, cantidad))
+            sol_id = cur.fetchone()[0]
+            conn.commit()
+    except Exception as e:
+        print(f"[Facturación] Error solicitar folios: {e}")
+        return jsonify({"ok": False, "error": "No se pudo registrar la solicitud"}), 500
+    finally:
+        release_conn(conn)
+
+    return jsonify({"ok": True, "solicitud_id": sol_id,
+                    "mensaje": "Solicitud registrada. El equipo Lusync cargará tus folios pronto."})
+
+
 @app.route("/facturacion/folios/resumen", methods=["GET"])
 def facturacion_folios_resumen():
     """Resumen de uso de folios por tipo de DTE (estilo dashboard tributario):
