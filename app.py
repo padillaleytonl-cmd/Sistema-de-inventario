@@ -23475,7 +23475,7 @@ def facturacion_folios_resumen():
     from facturacion.utils import TIPOS_DTE
     from datetime import date, timedelta
 
-    cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id)
+    cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id, ambiente="produccion")
 
     # Consumo promedio diario por tipo (últimos 30 días) desde facturacion_dtes
     consumo = {}
@@ -24761,7 +24761,10 @@ def facturacion_caf_subir():
 
 @app.route("/facturacion/caf/listar", methods=["GET"])
 def facturacion_caf_listar():
-    """Cliente: ver folios disponibles (read-only, sin XML completo)."""
+    """Cliente: ver folios disponibles (read-only, sin XML completo).
+    Solo muestra folios de PRODUCCIÓN — los de certificación son internos
+    (visibles solo para el admin master de Lusync).
+    """
     if not session.get("logged"):
         return jsonify({"error": "no autenticado"}), 401
 
@@ -24769,7 +24772,7 @@ def facturacion_caf_listar():
     from facturacion import listar_cafs_tenant
     from inventario import get_conn, release_conn
 
-    cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id)
+    cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id, ambiente="produccion")
     return jsonify({"cafs": cafs})
 
 
@@ -24915,7 +24918,7 @@ def facturacion_debug():
 
     # Step 9: listar_cafs_tenant
     try:
-        cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id)
+        cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id, ambiente="produccion")
         diagnostico["steps"].append({"step": "listar_cafs", "ok": True, "cantidad": len(cafs)})
     except Exception as e:
         import traceback
@@ -24964,7 +24967,7 @@ def facturacion_dashboard():
             certs = []
 
         try:
-            cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id)
+            cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id, ambiente="produccion")
         except Exception as e:
             print(f"[Facturación] Error listar_cafs_tenant: {e}")
             cafs = []

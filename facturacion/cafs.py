@@ -196,9 +196,15 @@ def subir_caf(get_conn_func, release_conn_func, tenant_id, xml_caf,
         release_conn_func(conn)
 
 
-def listar_cafs_tenant(get_conn_func, release_conn_func, tenant_id):
+def listar_cafs_tenant(get_conn_func, release_conn_func, tenant_id, ambiente=None):
     """Lista CAFs de un tenant para UI. No expone el XML completo.
     Resiliente a tabla faltante.
+
+    Args:
+        ambiente: si se pasa ('certificacion' o 'produccion'), devuelve SOLO
+                  los CAF de ese ambiente. Si es None (default), devuelve todos.
+                  El cliente/tenant debe llamar con ambiente='produccion' para
+                  no exponer los folios de prueba; el admin master usa None.
     """
     conn = get_conn_func(); cur = conn.cursor()
     try:
@@ -210,14 +216,24 @@ def listar_cafs_tenant(get_conn_func, release_conn_func, tenant_id):
         if not cur.fetchone():
             return []
 
-        cur.execute("""
-            SELECT id, tipo_dte, folio_desde, folio_hasta, folio_actual,
-                   rut_emisor_caf, fecha_autorizacion, ambiente, agotado,
-                   fecha_subida, fecha_agotamiento
-            FROM facturacion_cafs
-            WHERE tenant_id = %s
-            ORDER BY tipo_dte ASC, fecha_autorizacion DESC
-        """, (tenant_id,))
+        if ambiente in ("certificacion", "produccion"):
+            cur.execute("""
+                SELECT id, tipo_dte, folio_desde, folio_hasta, folio_actual,
+                       rut_emisor_caf, fecha_autorizacion, ambiente, agotado,
+                       fecha_subida, fecha_agotamiento
+                FROM facturacion_cafs
+                WHERE tenant_id = %s AND ambiente = %s
+                ORDER BY tipo_dte ASC, fecha_autorizacion DESC
+            """, (tenant_id, ambiente))
+        else:
+            cur.execute("""
+                SELECT id, tipo_dte, folio_desde, folio_hasta, folio_actual,
+                       rut_emisor_caf, fecha_autorizacion, ambiente, agotado,
+                       fecha_subida, fecha_agotamiento
+                FROM facturacion_cafs
+                WHERE tenant_id = %s
+                ORDER BY tipo_dte ASC, fecha_autorizacion DESC
+            """, (tenant_id,))
 
         from .utils import TIPOS_DTE
         cafs = []
