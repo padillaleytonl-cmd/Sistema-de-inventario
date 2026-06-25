@@ -178,6 +178,10 @@ def init_facturacion_tables(get_conn_func, release_conn_func=None, enable_rls_fu
             CREATE INDEX IF NOT EXISTS idx_facturacion_dte_orden
             ON facturacion_dtes(tenant_id, orden_id)
         """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_facturacion_dte_canal
+            ON facturacion_dtes(tenant_id, canal)
+        """)
 
         # ─────────────────────────────────────────────────────────────────
         # 5. ACTIVACIONES de DTE: registro de cuándo se activó/desactivó cada tipo
@@ -201,57 +205,6 @@ def init_facturacion_tables(get_conn_func, release_conn_func=None, enable_rls_fu
             CREATE INDEX IF NOT EXISTS idx_dte_activaciones_tenant
             ON facturacion_dte_activaciones(tenant_id, tipo_dte, activo)
         """)
-
-        # ─────────────────────────────────────────────────────────────────
-        # 5. TIPOS DE DTE EDITABLES (precios UF, etiquetas, visibilidad)
-        # Tabla maestra que controla los DTEs ofrecidos a los clientes.
-        # El admin Lusync puede editar precios, descripciones, etc.
-        # ─────────────────────────────────────────────────────────────────
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS facturacion_tipos_dte (
-                tipo_dte INTEGER PRIMARY KEY,
-                nombre TEXT NOT NULL,
-                campo_bd TEXT NOT NULL UNIQUE,
-                precio_uf NUMERIC(4, 2) NOT NULL DEFAULT 0,
-                afecto_iva BOOLEAN DEFAULT TRUE,
-                categoria TEXT DEFAULT 'venta',
-                es_gratuito BOOLEAN DEFAULT FALSE,
-                activo_default BOOLEAN DEFAULT FALSE,
-                visible BOOLEAN DEFAULT TRUE,
-                orden_visual INTEGER DEFAULT 99,
-                descripcion TEXT,
-                fecha_actualizacion TIMESTAMP DEFAULT NOW(),
-                actualizado_por TEXT
-            )
-        """)
-
-        # Seed inicial: poblamos con los valores hardcoded actuales SI la tabla está vacía
-        cur.execute("SELECT COUNT(*) FROM facturacion_tipos_dte")
-        if cur.fetchone()[0] == 0:
-            seeds = [
-                # tipo_dte, nombre, campo_bd, precio_uf, afecto_iva, categoria, gratuito, activo_default, visible, orden
-                (39,  'Boleta Electrónica',           'emite_boleta',           0.0, True,  'venta', True,  True,  True, 1),
-                (61,  'Nota de Crédito',              'emite_nota_credito',     0.0, True,  'nota',  True,  True,  True, 2),
-                (33,  'Factura Electrónica',          'emite_factura',          0.2, True,  'venta', False, False, True, 3),
-                (34,  'Factura Exenta',               'emite_factura_exenta',   0.2, False, 'venta', False, False, True, 4),
-                (41,  'Boleta Exenta',                'emite_boleta_exenta',    0.1, False, 'venta', False, False, True, 5),
-                (56,  'Nota de Débito',               'emite_nota_debito',      0.1, True,  'nota',  False, False, True, 6),
-                (52,  'Guía de Despacho',             'emite_guia_despacho',    0.1, True,  'guia',  False, False, True, 7),
-                (43,  'Liquidación de Factura',       'emite_liquidacion',      0.1, True,  'venta', False, False, True, 8),
-                (46,  'Factura de Compra',            'emite_factura_compra',   0.1, True,  'compra',False, False, True, 9),
-                (110, 'Factura de Exportación',       'emite_fact_exportacion', 0.4, False, 'venta', False, False, True, 10),
-                (112, 'Nota de Crédito Exportación',  'emite_nc_exportacion',   0.2, False, 'nota',  False, False, True, 11),
-                (111, 'Nota de Débito Exportación',   'emite_nd_exportacion',   0.2, False, 'nota',  False, False, True, 12),
-            ]
-            for seed in seeds:
-                cur.execute("""
-                    INSERT INTO facturacion_tipos_dte
-                    (tipo_dte, nombre, campo_bd, precio_uf, afecto_iva, categoria,
-                     es_gratuito, activo_default, visible, orden_visual, actualizado_por)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'seed_inicial')
-                    ON CONFLICT (tipo_dte) DO NOTHING
-                """, seed)
-            print(f"[Facturación] Tabla facturacion_tipos_dte poblada con {len(seeds)} DTEs")
 
         # ─────────────────────────────────────────────────────────────────
         # MIGRACIÓN CORRECTIVA (2026-05-18):
@@ -406,12 +359,8 @@ def calcular_mrr_tributario(get_conn_func, release_conn_func, tenant_id, uf_clp=
 
     Si el tenant no tiene config, devuelve un cálculo con defaults
     (boleta y NC activadas como gratis).
-    
-    Los precios se leen DINÁMICAMENTE desde facturacion_tipos_dte (BD),
-    permitiendo al admin Lusync cambiar precios sin tocar código.
-    Si la tabla no existe o está vacía, hace fallback al hardcode TIPOS_DTE.
     """
-    from .utils import TIPOS_DTE, CAMPO_BD_A_TIPO_DTE, obtener_tipos_dte_dinamicos
+    from .utils import TIPOS_DTE, CAMPO_BD_A_TIPO_DTE
     from .uf import obtener_uf_actual
 
     config = obtener_config_facturacion(get_conn_func, release_conn_func, tenant_id) or {
@@ -429,14 +378,11 @@ def calcular_mrr_tributario(get_conn_func, release_conn_func, tenant_id, uf_clp=
             print(f"[MRR] Error obteniendo UF, usando fallback: {e}")
             uf_clp = 37000.0
 
-    # 🆕 Leer tipos DTE dinámicos desde BD (con fallback a hardcode)
-    tipos_dte_db = obtener_tipos_dte_dinamicos(get_conn_func, release_conn_func)
-
     desglose = []
     total_uf = 0.0
 
     for campo_bd, tipo_dte in CAMPO_BD_A_TIPO_DTE.items():
-        info = tipos_dte_db.get(tipo_dte, {})
+        info = TIPOS_DTE.get(tipo_dte, {})
         precio = float(info.get("precio_uf", 0))
         # Default para Boleta y NC: TRUE; resto: lo que diga la config (FALSE si no existe)
         if tipo_dte in (39, 61):
@@ -540,8 +486,7 @@ def registrar_desactivacion_dte(get_conn_func, release_conn_func, tenant_id, tip
 
 def obtener_historial_activaciones(get_conn_func, release_conn_func, tenant_id):
     """Devuelve histórico de activaciones del tenant (para auditoría / mostrar al cliente)."""
-    from .utils import obtener_tipos_dte_dinamicos
-    tipos_dte_db = obtener_tipos_dte_dinamicos(get_conn_func, release_conn_func)
+    from .utils import TIPOS_DTE
     conn = get_conn_func(); cur = conn.cursor()
     try:
         cur.execute("""
@@ -554,7 +499,7 @@ def obtener_historial_activaciones(get_conn_func, release_conn_func, tenant_id):
         rows = cur.fetchall()
         result = []
         for r in rows:
-            info = tipos_dte_db.get(r[1], {})
+            info = TIPOS_DTE.get(r[1], {})
             result.append({
                 "id": r[0],
                 "tipo_dte": r[1],

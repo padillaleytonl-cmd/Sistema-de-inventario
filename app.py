@@ -23460,6 +23460,120 @@ def facturacion_boleta_pdf(boleta_id):
                     headers={"Content-Disposition": 'inline; filename="boleta_' + str(boleta_id) + '.pdf"'})
 
 
+@app.route("/facturacion/productos/buscar", methods=["GET"])
+def facturacion_productos_buscar():
+    """Busca productos del inventario para armar el detalle de una boleta.
+
+    Query: ?q=texto  (busca por nombre o SKU). Devuelve hasta 15 resultados
+    con nombre, sku, precio (oferta si existe, si no normal) y stock.
+    """
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+
+    q = (request.args.get("q") or "").strip()
+    if len(q) < 2:
+        return jsonify({"ok": True, "productos": []})
+
+    from inventario import get_conn, release_conn
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT sku, nombre, stock, precio_normal, precio_oferta "
+                "FROM productos "
+                "WHERE nombre ILIKE %s OR sku ILIKE %s "
+                "ORDER BY nombre LIMIT 15",
+                ("%" + q + "%", "%" + q + "%"))
+            rows = cur.fetchall()
+    finally:
+        release_conn(conn)
+
+    productos = []
+    for r in rows:
+        sku, nombre, stock, p_normal, p_oferta = r
+        # Precio de venta: oferta si es > 0, si no el normal
+        precio = int(p_oferta) if (p_oferta and float(p_oferta) > 0) else int(p_normal or 0)
+        productos.append({
+            "sku": sku or "",
+            "nombre": nombre or "(sin nombre)",
+            "stock": int(stock) if stock is not None else 0,
+            "precio": precio,
+        })
+    return jsonify({"ok": True, "productos": productos})
+
+
+@app.route("/facturacion/boletas/zip", methods=["POST"])
+def facturacion_boletas_zip():
+    """Descarga en lote: recibe IDs y un formato, devuelve un .zip.
+
+    Body JSON: {"ids": [1,2,3], "formato": "carta"|"rollo"|"xml"}
+    - carta/rollo → un PDF por boleta dentro del zip
+    - xml         → el XML firmado de cada boleta
+    """
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+
+    tenant_id = session.get("tenant_id") or 1
+    data = request.get_json(silent=True) or {}
+    ids = data.get("ids") or []
+    formato = (data.get("formato") or "carta").lower()
+    if not ids:
+        return jsonify({"ok": False, "error": "No hay boletas seleccionadas"}), 400
+    if len(ids) > 500:
+        return jsonify({"ok": False, "error": "Máximo 500 boletas por descarga"}), 400
+    # Solo enteros válidos
+    try:
+        ids = [int(x) for x in ids]
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "IDs inválidos"}), 400
+
+    import io
+    import zipfile
+    from inventario import get_conn, release_conn
+    from flask import Response
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, folio, tipo_dte, xml_firmado FROM facturacion_dtes "
+                "WHERE tenant_id = %s AND id = ANY(%s)",
+                (tenant_id, ids))
+            rows = cur.fetchall()
+    finally:
+        release_conn(conn)
+
+    if not rows:
+        return jsonify({"ok": False, "error": "No se encontraron boletas"}), 404
+
+    buf = io.BytesIO()
+    es_xml = formato == "xml"
+    if not es_xml:
+        from facturacion.dtes.pdf_dte import generar_pdf_dte
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for r in rows:
+            doc_id, folio, tipo_dte, xml_firmado = r
+            if not xml_firmado:
+                continue
+            xml_bytes = (xml_firmado.encode("iso-8859-1", errors="replace")
+                         if isinstance(xml_firmado, str) else xml_firmado)
+            base = "boleta_%s_folio_%s" % (tipo_dte, folio)
+            if es_xml:
+                zf.writestr(base + ".xml", xml_bytes)
+            else:
+                try:
+                    pdf = generar_pdf_dte(xml_bytes, formato=formato,
+                                          url_consulta="lusync.cl/consultadte")
+                    zf.writestr(base + ".pdf", pdf)
+                except Exception:
+                    # Si una falla, no abortamos todo el lote
+                    continue
+    buf.seek(0)
+    nombre = "boletas_%s.zip" % formato
+    return Response(buf.getvalue(), mimetype="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="' + nombre + '"'})
+
+
 
 @app.route("/facturacion/folios/resumen", methods=["GET"])
 def facturacion_folios_resumen():
@@ -23683,17 +23797,31 @@ def facturacion_descargar_zip():
 
 @app.route("/facturacion/documentos", methods=["GET"])
 def facturacion_documentos_listar():
-    """Lista los DTEs emitidos por el tenant.
-    Query: ?tipo=39 (opc), ?limite=50, ?desde=YYYY-MM-DD, ?hasta=YYYY-MM-DD, ?q=texto
+    """Lista los DTEs emitidos por el tenant, con PAGINACIÓN EN SERVIDOR.
+
+    Query params:
+      ?tipo=39           filtra por tipo de DTE
+      ?desde / ?hasta    rango de fechas (YYYY-MM-DD)
+      ?q=texto           busca por nombre, RUT, folio u orden
+      ?canal=falabella   filtra por canal de emisión
+      ?afecta=1|0        1=solo afectas, 0=solo exentas
+      ?pagina=1          página (1-based)
+      ?por_pagina=25     filas por página (máx 100)
+
+    Devuelve solo la página solicitada + el total para paginar en el cliente.
     """
     if not session.get("logged"):
         return jsonify({"ok": False, "error": "no autenticado"}), 401
     tenant_id = session.get("tenant_id") or 1
     tipo = request.args.get("tipo", type=int)
-    limite = min(request.args.get("limite", default=50, type=int), 500)
     desde = request.args.get("desde")
     hasta = request.args.get("hasta")
     q = (request.args.get("q") or "").strip()
+    canal = (request.args.get("canal") or "").strip()
+    afecta = request.args.get("afecta")
+    pagina = max(request.args.get("pagina", default=1, type=int), 1)
+    por_pagina = min(max(request.args.get("por_pagina", default=25, type=int), 1), 100)
+    offset = (pagina - 1) * por_pagina
 
     from inventario import get_conn, release_conn
     from facturacion.utils import TIPOS_DTE
@@ -23706,43 +23834,75 @@ def facturacion_documentos_listar():
         where.append("DATE(fecha_emision) >= %s"); params.append(desde)
     if hasta:
         where.append("DATE(fecha_emision) <= %s"); params.append(hasta)
+    if canal:
+        where.append("canal ILIKE %s"); params.append(canal)
+    if afecta in ("1", "0"):
+        # Afecta = tipos 33/39 (con IVA); Exenta = 34/41
+        if afecta == "1":
+            where.append("tipo_dte IN (33, 39)")
+        else:
+            where.append("tipo_dte IN (34, 41)")
     if q:
-        where.append("(razon_social_receptor ILIKE %s OR rut_receptor ILIKE %s OR CAST(folio AS TEXT) = %s)")
-        params.extend(["%" + q + "%", "%" + q + "%", q])
-    params.append(limite)
+        where.append("(razon_social_receptor ILIKE %s OR rut_receptor ILIKE %s "
+                     "OR CAST(folio AS TEXT) = %s OR orden_id ILIKE %s)")
+        params.extend(["%" + q + "%", "%" + q + "%", q, "%" + q + "%"])
 
+    where_sql = " AND ".join(where)
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT id, tipo_dte, folio, rut_receptor, razon_social_receptor,
-                       monto_total, estado, track_id_sii, estado_sii, fecha_emision
-                FROM facturacion_dtes
-                WHERE """ + " AND ".join(where) + """
-                ORDER BY fecha_emision DESC LIMIT %s
-            """, params)
+            # 1. Total de filas que matchean (para paginar) + suma del período
+            cur.execute(
+                "SELECT COUNT(*), COALESCE(SUM(monto_total), 0) "
+                "FROM facturacion_dtes WHERE " + where_sql, params)
+            total_filas, total_periodo = cur.fetchone()
+            total_filas = int(total_filas or 0)
+            total_periodo = int(total_periodo or 0)
+
+            # 2. Solo la página pedida (rápido: usa índice tenant_id+fecha)
+            cur.execute(
+                "SELECT id, tipo_dte, folio, rut_receptor, razon_social_receptor, "
+                "       monto_total, monto_iva, estado, track_id_sii, estado_sii, "
+                "       canal, orden_id, fecha_emision "
+                "FROM facturacion_dtes WHERE " + where_sql +
+                " ORDER BY fecha_emision DESC, id DESC LIMIT %s OFFSET %s",
+                params + [por_pagina, offset])
             rows = cur.fetchall()
     finally:
         release_conn(conn)
 
     docs = []
-    total_periodo = 0
     for r in rows:
         monto = int(r[5]) if r[5] is not None else 0
-        total_periodo += monto
+        iva = int(r[6]) if r[6] is not None else 0
+        tipo_dte = r[1]
+        es_afecta = tipo_dte in (33, 39)
         docs.append({
-            "id": r[0], "tipo_dte": r[1],
-            "tipo_nombre": TIPOS_DTE.get(r[1], {}).get("nombre", f"Tipo {r[1]}"),
+            "id": r[0], "tipo_dte": tipo_dte,
+            "tipo_nombre": TIPOS_DTE.get(tipo_dte, {}).get("nombre", f"Tipo {tipo_dte}"),
             "folio": r[2], "rut_receptor": r[3], "razon_social_receptor": r[4],
-            "monto_total": monto,
-            "estado": r[6], "track_id": r[7], "estado_sii": r[8],
-            "fecha_emision": r[9].isoformat() if r[9] else None,
+            "monto_total": monto, "monto_iva": iva,
+            "afecta": es_afecta,
+            "afecta_label": "Afecta" if es_afecta else "Exenta",
+            "estado": r[7], "track_id": r[8], "estado_sii": r[9],
+            "canal": r[10] or "", "orden_id": r[11] or "",
+            "fecha_emision": r[12].isoformat() if r[12] else None,
             "pdf_url": f"/facturacion/boleta/{r[0]}/pdf",
             "xml_url": f"/facturacion/boleta/{r[0]}/xml",
             "xml_receptor_url": f"/facturacion/boleta/{r[0]}/xml-receptor",
         })
-    return jsonify({"ok": True, "documentos": docs,
-                    "total_periodo": total_periodo, "cantidad": len(docs)})
+
+    total_paginas = (total_filas + por_pagina - 1) // por_pagina if total_filas else 1
+    return jsonify({
+        "ok": True,
+        "documentos": docs,
+        "total_periodo": total_periodo,
+        "cantidad": len(docs),
+        "total_filas": total_filas,
+        "pagina": pagina,
+        "por_pagina": por_pagina,
+        "total_paginas": total_paginas,
+    })
 
 
 def _fact_mapear_estado_sii(estado_sii):
