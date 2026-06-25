@@ -113,6 +113,10 @@ app.register_blueprint(admin_ambiente_bp)
 from test_folios_bp import test_folios_bp
 app.register_blueprint(test_folios_bp)
 
+# Descarga automática de folios CAF desde el SII (AUT2000 + requests, sin navegador)
+from folios_auto_bp import folios_auto_bp
+app.register_blueprint(folios_auto_bp)
+
 
 @app.route("/admin/lusync/stock/sync-log")
 def ver_sync_log():

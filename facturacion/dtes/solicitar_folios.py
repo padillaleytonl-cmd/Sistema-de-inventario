@@ -1,286 +1,280 @@
 # -*- coding: utf-8 -*-
 """
-Solicitud automática de folios (CAF) al SII, directamente desde Lusync.
+Descarga automática de folios (CAF) desde el SII — estilo "un clic", sin navegador.
 
-Replica lo que hace un humano en
-  https://palena.sii.cl/cvc_cgi/dte/of_solicita_folios   (producción)
-  https://maullin.sii.cl/cvc_cgi/dte/of_solicita_folios  (certificación)
-pero de forma programática, reutilizando la autenticación que ya tiene el
-sistema (obtener_token_dte → cookie TOKEN).
+Replica exactamente el flujo del portal de Timbraje Electrónico del SII usando
+requests puro. NO usa Playwright, NO usa servicios de terceros, NO envía el
+certificado del contribuyente a nadie: todo ocurre en este servidor.
 
-⚠️ IMPORTANTE — leer antes de usar en producción:
-El endpoint of_solicita_folios es un CGI antiguo (no una API REST). Espera los
-campos de un formulario web y responde HTML. Los nombres de campo aquí están
-basados en el comportamiento conocido del CGI, pero el SII NO los documenta
-públicamente; el primer test real contra palena/maullin puede requerir ajustar
-los nombres de los campos del POST (ver TODO abajo). Por eso este módulo:
-  • Separa cada paso (token, consulta de máximo, solicitud, descarga CAF).
-  • Devuelve siempre la respuesta cruda para diagnóstico.
-  • NO asume éxito: valida que la respuesta contenga un CAF (<AUTORIZACION>).
+────────────────────────────────────────────────────────────────────────────
+LA CLAVE TÉCNICA (lo que lo hace funcionar):
+Los servidores del SII negocian TLS con cifrados antiguos (SECLEVEL bajo).
+Python moderno (3.12+) los rechaza por defecto con SSLV3_ALERT_HANDSHAKE_FAILURE,
+y entonces el certificado cliente nunca se presenta y el SII redirige a su home.
+La solución es un HTTPAdapter con un SSLContext que use 'DEFAULT@SECLEVEL=1' y
+cargue el certificado del tenant (cert+llave en PEM) en el contexto. Con eso el
+handshake mTLS se completa, el SII autentica al representante legal vía AUT2000
+y entrega cookies de sesión.
 
-Flujo:
-  1. obtener_token_dte(pfx, pass, ambiente)   → token (ya existe en sii_client)
-  2. consultar_folios_disponibles(...)         → máximo autorizado por el SII
-  3. solicitar_folios(...)                      → POST al CGI, devuelve el CAF XML
+FLUJO COMPLETO (7 pasos, verificados funcionando en maullin):
+  1. POST  herculesr.sii.cl/cgi_AUT2000/CAutInicio.cgi   -> login AUT2000 (cookies+TOKEN)
+  2. GET   {host}/cvc_cgi/dte/of_solicita_folios          -> form RUT empresa
+  3. POST  {host}/cvc_cgi/dte/of_solicita_folios_dcto     -> (RUT) form selector tipo
+  4. POST  {host}/cvc_cgi/dte/of_solicita_folios_dcto     -> (tipo) form cantidad + hidden
+  5. POST  {host}/cvc_cgi/dte/of_confirma_folio           -> (cantidad) pantalla confirmación
+  6. POST  {host}/cvc_cgi/dte/of_genera_folio             -> genera rango, form descarga
+  7. POST  {host}/cvc_cgi/dte/of_genera_archivo           -> devuelve el CAF XML <AUTORIZACION>
+
+host = maullin.sii.cl (certificación) | palena.sii.cl (producción)
+El autenticador AUT2000 (herculesr) es el mismo para ambos ambientes.
+
+ADVERTENCIA: En PRODUCCIÓN (palena) los folios son REALES y se consumen del
+rango autorizado. En certificación (maullin) son de prueba y cada corrida
+avanza el rango.
 """
+from __future__ import annotations
+import ssl
+import tempfile
+import os
 import re
+
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.ssl_ import create_urllib3_context
 
-from .sii_client import obtener_token_dte, USER_AGENT
+from cryptography.hazmat.primitives.serialization import (
+    Encoding, PrivateFormat, NoEncryption, pkcs12)
 
-TIMEOUT = 60
 
-# Hosts del CGI de timbraje por ambiente
-CGI_HOST = {
+HOST = {
     "certificacion": "maullin.sii.cl",
     "produccion": "palena.sii.cl",
 }
+AUTENTICADOR = "herculesr.sii.cl"   # AUT2000, común a ambos ambientes
+TIPOS_VALIDOS = {33, 34, 39, 41, 43, 46, 52, 56, 61, 110, 111, 112}
 
 
-class FoliosError(Exception):
-    pass
+class SolicitarFoliosError(Exception):
+    """Error en el proceso de solicitud de folios."""
 
 
-def _split_rut(rut: str):
-    rut = (rut or "").replace(".", "").replace("-", "").strip().upper()
-    return rut[:-1], rut[-1]
+class _SIIAdapter(HTTPAdapter):
+    """HTTPAdapter que baja el SECLEVEL y monta el cert del tenant en el TLS.
 
-
-def _headers(token: str, host: str):
-    return {
-        "User-Agent": USER_AGENT,
-        "Cookie": f"TOKEN={token}",
-        "Host": host,
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "text/html,application/xhtml+xml",
-    }
-
-
-def _crear_cert_temporal(pfx_bytes: bytes, password: str):
-    """Extrae cert+llave del .pfx a un archivo PEM temporal para mTLS.
-
-    El CGI of_solicita_folios puede exigir el certificado cliente en la
-    conexión TLS (no solo el token). Esta función crea un PEM temporal que
-    `requests` puede usar con el parámetro cert=. Devuelve la ruta del archivo
-    (hay que borrarlo después con os.unlink).
-
-    Devuelve None si no se pudo (en ese caso se intenta solo con token).
+    Es lo que permite el handshake mTLS contra los servidores antiguos del SII.
     """
-    try:
-        import tempfile
-        from cryptography.hazmat.primitives.serialization import (
-            Encoding, PrivateFormat, NoEncryption, pkcs12)
-        pwd = password.encode("utf-8") if isinstance(password, str) else password
-        key, cert, _ = pkcs12.load_key_and_certificates(pfx_bytes, pwd)
-        key_pem = key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption())
-        cert_pem = cert.public_bytes(Encoding.PEM)
-        f = tempfile.NamedTemporaryFile(mode="wb", suffix=".pem", delete=False)
-        f.write(cert_pem + b"\n" + key_pem)
-        f.close()
-        return f.name
-    except Exception:
-        return None
+    def __init__(self, pem_path, *args, **kwargs):
+        self._pem_path = pem_path
+        super().__init__(*args, **kwargs)
+
+    def init_poolmanager(self, *args, **kwargs):
+        ctx = create_urllib3_context()
+        ctx.set_ciphers("DEFAULT@SECLEVEL=1")
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        ctx.load_cert_chain(self._pem_path)
+        kwargs["ssl_context"] = ctx
+        return super().init_poolmanager(*args, **kwargs)
 
 
-def _post_cgi(url, data, token, host, pfx_bytes=None, password=None, usar_mtls=False):
-    """POST al CGI. Si usar_mtls=True, adjunta el certificado cliente al TLS.
+def _pfx_a_pem_temporal(pfx_bytes, password):
+    """Extrae cert+llave del .pfx a un PEM temporal (cert seguido de llave).
 
-    Devuelve (texto_respuesta, error_str). error_str es None si fue bien.
+    Devuelve la ruta del PEM. El llamador DEBE borrarlo (os.unlink) al terminar.
     """
-    import os
-    cert_file = None
+    pwd = password.encode("utf-8") if isinstance(password, str) else password
+    key, cert, _ = pkcs12.load_key_and_certificates(pfx_bytes, pwd)
+    pem = tempfile.NamedTemporaryFile(suffix=".pem", delete=False, mode="wb")
+    pem.write(cert.public_bytes(Encoding.PEM))
+    pem.write(b"\n")
+    pem.write(key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()))
+    pem.close()
+    return pem.name
+
+
+def _inputs(html):
+    """Extrae todos los <INPUT name="..." value="..."> de un HTML como dict."""
+    return dict(re.findall(
+        r'<INPUT[^>]+NAME="([^"]+)"[^>]*VALUE="([^"]*)"', html, re.IGNORECASE))
+
+
+def _max_autorizado(html):
+    """Lee el valor del campo MAX_AUTOR (rango máximo autorizado) del form."""
+    m = re.search(r'NAME="MAX_AUTOR"[^>]*VALUE\s*=\s*"?(\d+)', html, re.IGNORECASE)
+    return m.group(1) if m else ""
+
+
+def _mensaje_sii(html):
+    """Intenta extraer un mensaje de error legible de la respuesta del SII."""
+    texto = re.sub(r"<[^>]+>", " ", html)
+    texto = re.sub(r"\s+", " ", texto).strip()
+    for clave in ["situaciones pendientes", "no se encuentra autorizado",
+                  "excede", "máximo", "no posee", "error"]:
+        i = texto.lower().find(clave)
+        if i >= 0:
+            return "SII: " + texto[max(0, i - 20):i + 120]
+    return ""
+
+
+def descargar_caf(pfx_bytes, password, rut_emisor, tipo_dte, cantidad,
+                  ambiente="certificacion", timeout=60):
+    """Descarga `cantidad` folios del `tipo_dte` desde el SII para `rut_emisor`.
+
+    Returns dict {ok, caf_xml, folio_desde, folio_hasta, max_autorizado, error, traza}.
+    """
+    if ambiente not in HOST:
+        return {"ok": False, "error": "Ambiente inválido: %s" % ambiente, "caf_xml": None}
+    if int(tipo_dte) not in TIPOS_VALIDOS:
+        return {"ok": False, "error": "Tipo DTE no válido: %s" % tipo_dte, "caf_xml": None}
+    if int(cantidad) < 1:
+        return {"ok": False, "error": "La cantidad debe ser >= 1", "caf_xml": None}
+
+    host = HOST[ambiente]
+    base = "https://%s/cvc_cgi/dte" % host
+    referencia = "%s/of_solicita_folios" % base
+
+    rut_limpio = rut_emisor.replace(".", "").replace(" ", "").upper()
+    if "-" in rut_limpio:
+        cuerpo, dv = rut_limpio.split("-", 1)
+    else:
+        cuerpo, dv = rut_limpio[:-1], rut_limpio[-1]
+
+    pem_path = None
+    traza = []
     try:
-        kwargs = {"headers": _headers(token, host), "data": data, "timeout": TIMEOUT}
-        if usar_mtls and pfx_bytes:
-            cert_file = _crear_cert_temporal(pfx_bytes, password)
-            if cert_file:
-                kwargs["cert"] = cert_file
-        resp = requests.post(url, **kwargs)
-        return resp.text or "", None
+        pem_path = _pfx_a_pem_temporal(pfx_bytes, password)
+        s = requests.Session()
+        s.mount("https://", _SIIAdapter(pem_path))
+
+        # 1. Login AUT2000
+        s.post("https://%s/cgi_AUT2000/CAutInicio.cgi" % AUTENTICADOR,
+               data={"referencia": referencia}, timeout=timeout)
+        token = s.cookies.get("TOKEN")
+        if not token:
+            return {"ok": False, "caf_xml": None,
+                    "error": "AUT2000 no autenticó el certificado (sin TOKEN). "
+                             "Verifica que el certificado sea del representante "
+                             "legal y esté vigente.",
+                    "traza": traza}
+        traza.append("1. AUT2000 OK, TOKEN=%s" % token)
+
+        # 2. Form RUT empresa
+        s.get(referencia, timeout=timeout)
+        traza.append("2. form RUT cargado")
+
+        # 3. POST RUT -> selector de tipo
+        s.post("%s/of_solicita_folios_dcto" % base,
+               data={"RUT_EMP": cuerpo, "DV_EMP": dv, "ACEPTAR": "Continuar"},
+               timeout=timeout)
+        traza.append("3. RUT empresa enviado")
+
+        # 4. POST tipo -> form cantidad
+        r4 = s.post("%s/of_solicita_folios_dcto" % base,
+                    data={"RUT_EMP": cuerpo, "DV_EMP": dv,
+                          "FOLIO_INICIAL": "0", "COD_DOCTO": str(tipo_dte)},
+                    timeout=timeout)
+        if "CANT_DOCTOS" not in r4.text:
+            return {"ok": False, "caf_xml": None,
+                    "error": "El SII no ofreció el formulario de cantidad para el "
+                             "tipo %s. Puede que el contribuyente no tenga ese "
+                             "documento autorizado o tenga situaciones pendientes."
+                             % tipo_dte,
+                    "traza": traza}
+        max_aut = _max_autorizado(r4.text)
+        traza.append("4. form cantidad, MAX_AUTOR=%s" % max_aut)
+
+        # 5. POST cantidad -> confirmación
+        d5 = _inputs(r4.text)
+        d5.update({
+            "RUT_EMP": cuerpo, "DV_EMP": dv, "FOLIO_INICIAL": "0",
+            "COD_DOCTO": str(tipo_dte), "CANT_DOCTOS": str(cantidad),
+            "ACEPTAR": "Solicitar",
+        })
+        r5 = s.post("%s/of_confirma_folio" % base, data=d5, timeout=timeout)
+        if "Obtener Folios" not in r5.text and "btener" not in r5.text:
+            motivo = _mensaje_sii(r5.text)
+            return {"ok": False, "caf_xml": None,
+                    "error": ("El SII no confirmó la solicitud. %s" % motivo).strip(),
+                    "max_autorizado": max_aut, "traza": traza}
+        traza.append("5. confirmación OK")
+
+        # 6. POST generar -> reserva rango, form descarga
+        d6 = _inputs(r5.text)
+        d6["ACEPTAR"] = "Obtener Folios"
+        r6 = s.post("%s/of_genera_folio" % base, data=d6, timeout=timeout)
+        d7 = _inputs(r6.text)
+        if "FOLIO_INI" not in d7:
+            return {"ok": False, "caf_xml": None,
+                    "error": "El SII no entregó el formulario de descarga del CAF.",
+                    "traza": traza}
+        traza.append("6. rango reservado %s-%s" % (d7.get("FOLIO_INI"), d7.get("FOLIO_FIN")))
+
+        # 7. POST descargar -> CAF XML
+        d7["ACEPTAR"] = "AQUI"
+        r7 = s.post("%s/of_genera_archivo" % base, data=d7, timeout=timeout)
+        if "<AUTORIZACION>" not in r7.text:
+            return {"ok": False, "caf_xml": None,
+                    "error": "El SII no devolvió el XML del CAF en el paso final.",
+                    "traza": traza}
+
+        m = re.search(r"<AUTORIZACION>.*?</AUTORIZACION>", r7.text, re.DOTALL)
+        caf_xml = m.group(0)
+        if not caf_xml.lstrip().startswith("<?xml"):
+            caf_xml = '<?xml version="1.0"?>\n' + caf_xml
+        d = re.search(r"<D>(\d+)</D>", caf_xml)
+        h = re.search(r"<H>(\d+)</H>", caf_xml)
+        traza.append("7. CAF XML descargado")
+
+        return {
+            "ok": True,
+            "caf_xml": caf_xml,
+            "folio_desde": int(d.group(1)) if d else None,
+            "folio_hasta": int(h.group(1)) if h else None,
+            "max_autorizado": max_aut,
+            "error": None,
+            "traza": traza,
+        }
+
     except Exception as e:
-        return "", str(e)
+        import traceback
+        return {"ok": False, "caf_xml": None,
+                "error": "%s: %s" % (type(e).__name__, e),
+                "traza": traza + [traceback.format_exc()[:500]]}
     finally:
-        if cert_file:
+        if pem_path:
             try:
-                os.unlink(cert_file)
+                os.unlink(pem_path)
             except Exception:
                 pass
 
 
-def solicitar_folios(
-    pfx_bytes: bytes,
-    password: str,
-    rut_emisor: str,
-    tipo_dte: int,
-    cantidad: int,
-    ambiente: str = "certificacion",
-    rut_solicitante: str = None,
-    token: str = None,
-    usar_mtls: bool = False,
-) -> dict:
-    """Solicita `cantidad` folios del `tipo_dte` al SII y devuelve el CAF XML.
+def descargar_y_guardar(get_conn, release_conn, tenant_id, pfx_bytes, password,
+                        rut_emisor, tipo_dte, cantidad, ambiente="certificacion"):
+    """Descarga el CAF del SII y lo guarda en facturacion_cafs (vía cafs.subir_caf).
 
-    Args:
-        pfx_bytes, password: certificado digital del TENANT (no de Lusync).
-        rut_emisor: RUT de la empresa (ej '76922862-4').
-        tipo_dte: 33, 34, 39, 52, 56, 61, etc.
-        cantidad: cuántos folios pedir.
-        ambiente: 'certificacion' o 'produccion'.
-        rut_solicitante: RUT del representante legal (default = rut_emisor).
-        token: si ya tienes uno, evita re-autenticar.
-        usar_mtls: si el CGI exige certificado cliente en el TLS (no solo token),
-                   activar esto para adjuntar el certificado a la conexión.
-
-    Returns:
-        dict {ok, caf_xml, folio_desde, folio_hasta, respuesta_cruda, error}
+    Returns dict {ok, caf_id, folio_desde, folio_hasta, error, traza}.
     """
-    if ambiente not in CGI_HOST:
-        raise FoliosError(f"Ambiente inválido: {ambiente}")
-    host = CGI_HOST[ambiente]
-    url = f"https://{host}/cvc_cgi/dte/of_solicita_folios"
+    res = descargar_caf(pfx_bytes, password, rut_emisor, tipo_dte, cantidad, ambiente)
+    if not res["ok"]:
+        return res
 
-    # 1. Token (reutiliza la autenticación ya probada del sistema)
-    if not token:
-        try:
-            token = obtener_token_dte(pfx_bytes, password, ambiente)
-        except Exception as e:
-            return {"ok": False, "error": f"No se pudo autenticar al SII: {e}",
-                    "caf_xml": None, "respuesta_cruda": ""}
+    from facturacion.cafs import subir_caf
+    guardado = subir_caf(get_conn, release_conn, tenant_id, res["caf_xml"],
+                         rut_emisor_esperado=rut_emisor, ambiente=ambiente)
+    if not guardado.get("ok"):
+        return {"ok": False, "caf_xml": res["caf_xml"],
+                "error": "CAF descargado pero no se pudo guardar: "
+                         + guardado.get("error", "?"),
+                "folio_desde": res.get("folio_desde"),
+                "folio_hasta": res.get("folio_hasta"),
+                "traza": res.get("traza")}
 
-    rut_e_num, rut_e_dv = _split_rut(rut_emisor)
-    rut_sol = rut_solicitante or rut_emisor
-    rut_s_num, rut_s_dv = _split_rut(rut_sol)
-
-    # 2. POST de solicitud.
-    # TODO(primer test real): confirmar los nombres EXACTOS de estos campos
-    # inspeccionando el formulario real del CGI. Los habituales son:
-    #   RUT_EMP / DV_EMP, COD_DOCTO (tipo dte), FOLIO_INI implícito, NUM_DOC (cantidad)
-    # Si el SII responde con el formulario en vez del CAF, ajustar aquí.
-    data = {
-        "RUT_EMP": rut_e_num,
-        "DV_EMP": rut_e_dv,
-        "RUT_REQ": rut_s_num,
-        "DV_REQ": rut_s_dv,
-        "COD_DOCTO": str(tipo_dte),
-        "FOLIO_INICIAL": "",          # el SII asigna el siguiente disponible
-        "CONT": str(cantidad),         # cantidad de folios
-        "ACEPTAR": "Solicitar numeración",
+    return {
+        "ok": True,
+        "caf_id": guardado.get("caf_id"),
+        "folio_desde": res.get("folio_desde"),
+        "folio_hasta": res.get("folio_hasta"),
+        "max_autorizado": res.get("max_autorizado"),
+        "ambiente": ambiente,
+        "error": None,
     }
-
-    texto, err_conn = _post_cgi(url, data, token, host,
-                                pfx_bytes=pfx_bytes, password=password,
-                                usar_mtls=usar_mtls)
-    if err_conn:
-        return {"ok": False, "error": f"No se pudo conectar a {url}: {err_conn}",
-                "caf_xml": None, "respuesta_cruda": ""}
-
-    # 3. Extraer el CAF de la respuesta.
-    # El CGI devuelve HTML; el CAF puede venir embebido como <AUTORIZACION>...
-    # o requerir una segunda llamada de descarga. Intentamos extraerlo directo.
-    caf = _extraer_caf(texto)
-    if caf:
-        desde, hasta = _rango_caf(caf)
-        return {"ok": True, "caf_xml": caf, "folio_desde": desde,
-                "folio_hasta": hasta, "respuesta_cruda": texto[:1000], "error": None}
-
-    # Si no vino el CAF, puede que el CGI haya devuelto un link/ID de descarga.
-    # Intentar localizar un enlace de descarga del XML.
-    link = _buscar_link_descarga(texto, host)
-    if link:
-        try:
-            r2 = requests.get(link, headers=_headers(token, host), timeout=TIMEOUT)
-            caf2 = _extraer_caf(r2.text)
-            if caf2:
-                desde, hasta = _rango_caf(caf2)
-                return {"ok": True, "caf_xml": caf2, "folio_desde": desde,
-                        "folio_hasta": hasta, "respuesta_cruda": r2.text[:1000], "error": None}
-        except Exception as e:
-            return {"ok": False, "error": f"CAF no descargable: {e}",
-                    "caf_xml": None, "respuesta_cruda": texto[:1500]}
-
-    # No se pudo extraer: devolver crudo para diagnóstico (errores típicos:
-    # situaciones pendientes, tipo no autorizado, sin folios disponibles).
-    return {"ok": False,
-            "error": _detectar_error(texto) or "No se encontró CAF en la respuesta del SII",
-            "caf_xml": None, "respuesta_cruda": texto[:2000]}
-
-
-def _extraer_caf(texto: str):
-    """Busca un bloque <AUTORIZACION>...</AUTORIZACION> (el CAF) en el texto."""
-    if not texto:
-        return None
-    m = re.search(r"<AUTORIZACION>.*?</AUTORIZACION>", texto, re.DOTALL)
-    return m.group(0) if m else None
-
-
-def _rango_caf(caf_xml: str):
-    """Extrae folio desde (D) y hasta (H) del CAF."""
-    d = re.search(r"<D>(\d+)</D>", caf_xml)
-    h = re.search(r"<H>(\d+)</H>", caf_xml)
-    return (int(d.group(1)) if d else None, int(h.group(1)) if h else None)
-
-
-def _buscar_link_descarga(texto: str, host: str):
-    """Busca un enlace de descarga del XML del CAF en el HTML de respuesta."""
-    if not texto:
-        return None
-    m = re.search(r'href=["\']([^"\']*(?:caf|xml|genera_folios)[^"\']*)["\']', texto, re.IGNORECASE)
-    if not m:
-        return None
-    href = m.group(1)
-    if href.startswith("http"):
-        return href
-    if href.startswith("/"):
-        return f"https://{host}{href}"
-    return f"https://{host}/cvc_cgi/dte/{href}"
-
-
-def _detectar_error(texto: str):
-    """Detecta mensajes de error típicos del SII en el HTML."""
-    if not texto:
-        return None
-    t = texto.lower()
-    if "situaciones pendientes" in t or "situacion pendiente" in t:
-        return "El contribuyente tiene situaciones pendientes con el SII (timbraje bloqueado)."
-    if "no autorizado" in t or "no se encuentra autorizado" in t:
-        return "El tipo de documento no está autorizado/certificado para este RUT."
-    if "verificaci" in t and "actividad" in t:
-        return "Falta verificación de actividades ante el SII."
-    if "token" in t and ("venc" in t or "inv" in t):
-        return "Token vencido o inválido; reintentar autenticación."
-    return None
-
-
-def consultar_folios_disponibles(
-    pfx_bytes: bytes, password: str, rut_emisor: str,
-    tipo_dte: int, ambiente: str = "certificacion", token: str = None,
-) -> dict:
-    """Consulta el máximo de folios que el SII autoriza para ese tipo de documento.
-    Útil para mostrar al usuario cuántos puede pedir antes de solicitar.
-
-    Returns: dict {ok, maximo, respuesta_cruda, error}
-    """
-    if ambiente not in CGI_HOST:
-        raise FoliosError(f"Ambiente inválido: {ambiente}")
-    host = CGI_HOST[ambiente]
-    url = f"https://{host}/cvc_cgi/dte/of_solicita_folios"
-
-    if not token:
-        try:
-            token = obtener_token_dte(pfx_bytes, password, ambiente)
-        except Exception as e:
-            return {"ok": False, "error": f"No se pudo autenticar: {e}", "maximo": None}
-
-    rut_num, rut_dv = _split_rut(rut_emisor)
-    data = {"RUT_EMP": rut_num, "DV_EMP": rut_dv, "COD_DOCTO": str(tipo_dte)}
-    try:
-        resp = requests.post(url, headers=_headers(token, host), data=data, timeout=TIMEOUT)
-    except Exception as e:
-        return {"ok": False, "error": str(e), "maximo": None}
-
-    # Buscar el "máximo autorizado" en la respuesta (formato variable).
-    m = re.search(r"(?:m[áa]ximo|autoriza)[^\d]*(\d+)", resp.text, re.IGNORECASE)
-    maximo = int(m.group(1)) if m else None
-    return {"ok": maximo is not None, "maximo": maximo,
-            "respuesta_cruda": resp.text[:1500],
-            "error": None if maximo else "No se pudo determinar el máximo autorizado"}
