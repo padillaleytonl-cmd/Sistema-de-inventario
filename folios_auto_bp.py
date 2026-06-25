@@ -205,7 +205,7 @@ def panel_folios_tenant(tenant_id):
   #msg{margin-top:12px;font-size:13px}
 </style></head><body>
 <div class="card">
-  <a class="back" href="/admin/lusync/tenant/%(tid)s/inspeccionar">← Volver al tenant</a>
+  <a class="back" href="/admin/lusync/tenant/%(tid)s">← Volver al tenant</a>
   <h1>%(razon)s</h1>
   <div class="sub">RUT %(rut)s · Tenant #%(tid)s · <span class="badge">%(amb_txt)s</span></div>
   %(aviso_prod)s
