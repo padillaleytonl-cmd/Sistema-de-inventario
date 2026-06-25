@@ -23621,7 +23621,12 @@ def facturacion_folios_solicitar():
         tipo_dte, cantidad, ambiente)
 
     if not res.get("ok"):
-        return jsonify({"ok": False, "error": res.get("error") or "No se pudieron descargar los folios"}), 400
+        # El cliente nunca ve jerga técnica del SII; se registra en el log para soporte
+        print("[Facturación] Descarga folios falló tenant=%s tipo=%s: %s" % (
+            tenant_id, tipo_dte, res.get("error")))
+        return jsonify({"ok": False,
+                        "error": "No se pudo completar la descarga en este momento. "
+                                 "Intenta nuevamente en unos minutos."}), 400
 
     return jsonify({
         "ok": True,
