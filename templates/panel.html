@@ -3450,7 +3450,11 @@ tbody td {
     <!-- ═══════════ SUB-SECCIÓN: CONSULTAR BOLETA ═══════════ -->
     <div id="fac-pane-consultar" class="fac-pane" style="display:none;">
       <div style="background:var(--card);border:1px solid var(--border);border-radius:14px;padding:22px;margin-bottom:20px;">
-        <div style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:18px;">
+        <div style="position:relative;margin-bottom:14px;">
+          <input id="conQ" placeholder="Buscar por nombre, RUT, N° de orden o folio…" oninput="conBuscarDebounced()" style="width:100%;padding:11px 14px 11px 38px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);box-sizing:border-box;">
+          <span style="position:absolute;left:13px;top:11px;font-size:15px;color:var(--muted);">🔍</span>
+        </div>
+        <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;">
           <div>
             <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Desde</label>
             <input id="conDesde" type="date" style="padding:9px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
@@ -3459,15 +3463,30 @@ tbody td {
             <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Hasta</label>
             <input id="conHasta" type="date" style="padding:9px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
           </div>
-          <div style="flex:1;min-width:160px;">
-            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Buscar (folio, RUT o nombre)</label>
-            <input id="conQ" placeholder="Ej: 16, Juan, 12345678" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+          <div>
+            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Canal</label>
+            <select id="conCanal" onchange="conBuscar()" style="padding:9px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+              <option value="">Todos</option>
+              <option value="pos">POS local</option>
+              <option value="mercadolibre">Mercado Libre</option>
+              <option value="falabella">Falabella</option>
+              <option value="paris">Paris</option>
+              <option value="ripley">Ripley</option>
+              <option value="walmart">Walmart</option>
+            </select>
+          </div>
+          <div>
+            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Formato descarga</label>
+            <select id="conFormato" style="padding:9px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+              <option value="carta">Carta (PDF)</option>
+              <option value="rollo">Rollo 80mm (PDF)</option>
+              <option value="xml">XML</option>
+            </select>
           </div>
           <button onclick="conBuscar()" style="background:#534AB7;color:#fff;border:none;padding:10px 22px;border-radius:9px;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;">Buscar</button>
-          <button onclick="conDescargarZip()" title="Descarga los PDF del rango filtrado (máx 30)" style="background:var(--card);color:#534AB7;border:1px solid #534AB7;padding:10px 18px;border-radius:9px;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;">📥 Descargar PDF (ZIP)</button>
         </div>
-        <div id="conResumen" style="display:none;font-size:13px;color:var(--muted);margin-bottom:12px;padding:10px 14px;background:var(--bg2);border-radius:9px;"></div>
-        <div id="conResultados" style="color:var(--muted);font-size:13px;">Selecciona un rango de fechas y pulsa Buscar.</div>
+        <div id="conResumen" style="display:none;font-size:13px;color:var(--muted);margin:14px 0 12px;padding:10px 14px;background:var(--bg2);border-radius:9px;"></div>
+        <div id="conResultados" style="color:var(--muted);font-size:13px;margin-top:14px;">Cargando boletas…</div>
       </div>
     </div>
 
@@ -13959,91 +13978,136 @@ function facRestaurarPane(){
 }
 
 // ═══════════ CONSULTAR BOLETA (filtro por fechas) ═══════════
-let _conDocs = [];      // resultados actuales
+let _conDocs = [];      // documentos de la página actual
 let _conPag = 1;        // página actual
-const _CON_POR_PAG = 20;
+let _conTotalPaginas = 1;
+let _conTotalFilas = 0;
+const _CON_POR_PAG = 25;
+let _conBuscarTimer = null;
 
-async function conBuscar(){
+function conBuscarDebounced(){
+  clearTimeout(_conBuscarTimer);
+  _conBuscarTimer = setTimeout(()=>{ _conPag=1; conBuscar(); }, 350);
+}
+
+async function conBuscar(pagina){
   const cont=document.getElementById('conResultados');
   const resumen=document.getElementById('conResumen');
   const desde=document.getElementById('conDesde').value;
   const hasta=document.getElementById('conHasta').value;
-  const q=document.getElementById('conQ').value.trim();
+  const q=(document.getElementById('conQ').value||'').trim();
+  const canal=document.getElementById('conCanal') ? document.getElementById('conCanal').value : '';
+  if(typeof pagina==='number') _conPag=pagina;
   cont.innerHTML='<div style="padding:20px;text-align:center;color:var(--muted);">Buscando…</div>';
-  let url='/facturacion/documentos?limite=500';
+  let url='/facturacion/documentos?pagina='+_conPag+'&por_pagina='+_CON_POR_PAG;
   if(desde) url+='&desde='+desde;
   if(hasta) url+='&hasta='+hasta;
   if(q) url+='&q='+encodeURIComponent(q);
+  if(canal) url+='&canal='+encodeURIComponent(canal);
   try{
     const r=await fetch(url); const d=await r.json();
     if(!d.ok){ cont.innerHTML='<div style="color:#dc2626;">'+(d.error||'Error')+'</div>'; return; }
     _conDocs = d.documentos||[];
-    _conPag = 1;
-    if(!_conDocs.length){ resumen.style.display='none'; cont.innerHTML='<div style="color:var(--muted);padding:14px;">No se encontraron boletas en ese rango.</div>'; return; }
+    _conTotalPaginas = d.total_paginas||1;
+    _conTotalFilas = d.total_filas||0;
+    _conPag = d.pagina||1;
+    if(!_conDocs.length && _conTotalFilas===0){ resumen.style.display='none'; cont.innerHTML='<div style="color:var(--muted);padding:14px;">No se encontraron boletas con esos filtros.</div>'; return; }
     resumen.style.display='block';
-    resumen.innerHTML='<b>'+d.cantidad+'</b> documento(s) · Total del período: <b>'+_dtCLP(d.total_periodo)+'</b>';
+    resumen.innerHTML='<b>'+_conTotalFilas+'</b> documento(s) · Total del período: <b>'+_dtCLP(d.total_periodo)+'</b>';
     conRenderPagina();
   }catch(e){ cont.innerHTML='<div style="color:#dc2626;">Error: '+e.message+'</div>'; }
 }
 
 function conRenderPagina(){
   const cont=document.getElementById('conResultados');
-  // Orden por creación (id desc = más nuevo primero)
-  _conDocs.sort((a,b)=> (b.id||0)-(a.id||0));
-  const total=_conDocs.length;
-  const paginas=Math.ceil(total/_CON_POR_PAG);
-  if(_conPag>paginas) _conPag=paginas;
-  if(_conPag<1) _conPag=1;
-  const ini=(_conPag-1)*_CON_POR_PAG;
-  const pagina=_conDocs.slice(ini, ini+_CON_POR_PAG);
 
-  // Leyenda de estados (puntos de color) + barra de acciones de selección
-  let h='<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-bottom:12px;font-size:11.5px;color:var(--muted);">';
-  h+='<span style="font-weight:600;">Estados:</span>';
-  [['aceptado','Aceptada'],['en_proceso','En proceso'],['revisar','Revisar'],['rechazado','Rechazada'],['error_envio','Error envío']].forEach(([k,lbl])=>{
-    const c=(DT_ESTADO[k]||{}).color||'#6b6880';
-    h+=`<span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:9px;height:9px;border-radius:50%;background:${c};display:inline-block;"></span>${lbl}</span>`;
-  });
-  h+='</div>';
-
-  // Barra de selección
-  h+=`<div id="conSelBar" style="display:none;align-items:center;gap:12px;margin-bottom:10px;padding:8px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:9px;">
-    <span id="conSelCount" style="font-size:13px;font-weight:600;color:var(--text);">0 seleccionados</span>
-    <button onclick="conDescargarSeleccion()" style="background:#534AB7;color:#fff;border:none;padding:8px 14px;border-radius:8px;font-family:inherit;font-weight:600;font-size:12.5px;cursor:pointer;">⬇ Descargar ZIP seleccionados</button>
-    <button onclick="conLimpiarSeleccion()" style="background:transparent;border:none;color:var(--muted);font-size:12.5px;cursor:pointer;text-decoration:underline;">Limpiar</button>
+  // Barra de selección (acciones en lote)
+  let h=`<div id="conSelBar" style="display:none;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;padding:9px 14px;background:#EEEDFE;border:1px solid #534AB7;border-radius:9px;">
+    <span id="conSelCount" style="font-size:13px;font-weight:600;color:#534AB7;">0 seleccionadas</span>
+    <span>
+      <button onclick="conDescargarSeleccion()" style="background:#534AB7;color:#fff;border:none;padding:7px 14px;border-radius:8px;font-family:inherit;font-weight:600;font-size:12.5px;cursor:pointer;">📦 Descargar ZIP</button>
+      <button onclick="conLimpiarSeleccion()" style="background:transparent;border:none;color:#534AB7;font-size:12.5px;cursor:pointer;text-decoration:underline;margin-left:8px;">Limpiar</button>
+    </span>
   </div>`;
 
   h+='<table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr style="text-align:left;color:var(--muted);font-size:11px;">'
-    +'<th style="padding:8px;width:30px;"><input type="checkbox" id="conSelAll" onchange="conToggleAll(this)" style="cursor:pointer;"></th>'
-    +'<th style="padding:8px;">Tipo</th><th style="padding:8px;">Folio</th><th style="padding:8px;">Cliente</th><th style="padding:8px;text-align:right;">Total</th><th style="padding:8px;">Fecha</th><th style="padding:8px;">Estado</th><th style="padding:8px;text-align:right;">Acciones</th></tr></thead><tbody>';
-  pagina.forEach(doc=>{
+    +'<th style="padding:8px;width:28px;"><input type="checkbox" id="conSelAll" onchange="conToggleAll(this)" style="cursor:pointer;"></th>'
+    +'<th style="padding:8px;width:44px;">Folio</th>'
+    +'<th style="padding:8px;">Cliente</th>'
+    +'<th style="padding:8px;">Canal</th>'
+    +'<th style="padding:8px;text-align:right;">Total</th>'
+    +'<th style="padding:8px;text-align:center;" title="Afecta / Exenta">A/E</th>'
+    +'<th style="padding:8px;text-align:center;">Estado</th>'
+    +'<th style="padding:8px;text-align:right;">Acciones</th></tr></thead><tbody>';
+  _conDocs.forEach(doc=>{
     const f=doc.fecha_emision?doc.fecha_emision.slice(0,10):'—';
-    const ab=dtTipoAbrev(doc.tipo_dte);
     const pt=dtEstadoPunto(doc.estado);
     const checked = _conSel.has(doc.id) ? 'checked' : '';
+    const cliente = doc.razon_social_receptor || 'Boleta simple';
+    const sub = [doc.rut_receptor, doc.orden_id].filter(Boolean).join(' · ');
+    const canalTxt = doc.canal ? conCanalLabel(doc.canal) : 'POS local';
+    const ae = doc.afecta
+      ? '<span title="Venta afecta (con IVA)" style="font-size:12px;font-weight:700;display:inline-block;width:22px;height:22px;line-height:22px;border-radius:6px;background:#E6F1FB;color:#185FA5;cursor:default;">A</span>'
+      : '<span title="Venta exenta (sin IVA)" style="font-size:12px;font-weight:700;display:inline-block;width:22px;height:22px;line-height:22px;border-radius:6px;background:#FAEEDA;color:#854F0B;cursor:default;">E</span>';
     h+=`<tr style="border-top:1px solid var(--border);">
       <td style="padding:9px 8px;"><input type="checkbox" class="conSelChk" data-id="${doc.id}" ${checked} onchange="conToggleOne(${doc.id},this)" style="cursor:pointer;"></td>
-      <td style="padding:9px 8px;color:var(--text);font-weight:600;" title="${ab.nombre}">${ab.sigla}</td>
       <td style="padding:9px 8px;color:var(--text);font-weight:600;">${doc.folio}</td>
-      <td style="padding:9px 8px;color:var(--muted);">${doc.razon_social_receptor||'Cliente General'}</td>
+      <td style="padding:9px 8px;"><div style="color:var(--text);font-weight:500;">${cliente}</div>${sub?'<div style="font-size:11px;color:var(--muted);">'+sub+'</div>':''}</td>
+      <td style="padding:9px 8px;"><span style="font-size:11px;padding:2px 8px;border-radius:999px;background:var(--bg2);border:1px solid var(--border);color:var(--muted);">${canalTxt}</span></td>
       <td style="padding:9px 8px;text-align:right;color:var(--text);font-weight:600;">${_dtCLP(doc.monto_total)}</td>
-      <td style="padding:9px 8px;color:var(--muted);">${f}</td>
-      <td style="padding:9px 8px;"><span title="${pt.label}" style="display:inline-flex;align-items:center;gap:6px;"><span style="width:10px;height:10px;border-radius:50%;background:${pt.color};display:inline-block;flex-shrink:0;"></span><span style="font-size:11.5px;color:var(--muted);">${pt.label}</span></span></td>
+      <td style="padding:9px 8px;text-align:center;">${ae}</td>
+      <td style="padding:9px 8px;text-align:center;"><span title="${pt.label}" style="display:inline-flex;align-items:center;gap:5px;"><span style="width:9px;height:9px;border-radius:50%;background:${pt.color};display:inline-block;flex-shrink:0;"></span><span style="font-size:11px;color:var(--muted);">${pt.label}</span></span></td>
       <td style="padding:9px 8px;text-align:right;white-space:nowrap;">
-        <button onclick="dtVerDoc(${doc.id},'${doc.pdf_url}')" style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:7px;font-size:12px;cursor:pointer;font-weight:600;">👁 Ver</button>
-        ${dtMenuPuntitos(doc)}
+        <span style="position:relative;display:inline-block;">
+          <button onclick="conMenuImprimir(${doc.id},this)" title="Imprimir" style="background:var(--bg2);border:1px solid var(--border);color:#534AB7;padding:6px 9px;border-radius:7px;font-size:13px;cursor:pointer;">🖨</button>
+        </span>
+        <button onclick="conDescargarUno(${doc.id},'carta')" title="Descargar PDF carta" style="background:var(--bg2);border:1px solid var(--border);color:#534AB7;padding:6px 9px;border-radius:7px;font-size:13px;cursor:pointer;margin-left:4px;">📄</button>
+        <button onclick="conDescargarUno(${doc.id},'xml')" title="Descargar XML" style="background:var(--bg2);border:1px solid var(--border);color:#534AB7;padding:6px 9px;border-radius:7px;font-size:13px;cursor:pointer;margin-left:4px;">&lt;/&gt;</button>
       </td></tr>`;
   });
   h+='</tbody></table>';
-  if(paginas>1){
+  if(_conTotalPaginas>1){
     h+=`<div style="display:flex;justify-content:center;align-items:center;gap:12px;margin-top:16px;">
       <button onclick="conPag(-1)" ${_conPag<=1?'disabled':''} style="padding:7px 14px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;cursor:${_conPag<=1?'not-allowed':'pointer'};font-family:inherit;font-size:13px;opacity:${_conPag<=1?'.5':'1'};">← Anterior</button>
-      <span style="font-size:13px;color:var(--muted);">Página ${_conPag} de ${paginas}</span>
-      <button onclick="conPag(1)" ${_conPag>=paginas?'disabled':''} style="padding:7px 14px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;cursor:${_conPag>=paginas?'not-allowed':'pointer'};font-family:inherit;font-size:13px;opacity:${_conPag>=paginas?'.5':'1'};">Siguiente →</button>
+      <span style="font-size:13px;color:var(--muted);">Página ${_conPag} de ${_conTotalPaginas}</span>
+      <button onclick="conPag(1)" ${_conPag>=_conTotalPaginas?'disabled':''} style="padding:7px 14px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;cursor:${_conPag>=_conTotalPaginas?'not-allowed':'pointer'};font-family:inherit;font-size:13px;opacity:${_conPag>=_conTotalPaginas?'.5':'1'};">Siguiente →</button>
     </div>`;
   }
+  h+='<div style="margin-top:12px;font-size:11px;color:var(--muted);display:flex;gap:16px;flex-wrap:wrap;"><span><span style="font-weight:700;padding:1px 6px;border-radius:5px;background:#E6F1FB;color:#185FA5;">A</span> venta afecta (con IVA)</span><span><span style="font-weight:700;padding:1px 6px;border-radius:5px;background:#FAEEDA;color:#854F0B;">E</span> venta exenta (sin IVA)</span><span>🖨 imprimir · 📄 PDF carta · &lt;/&gt; XML</span></div>';
   cont.innerHTML=h;
   conActualizarSelBar();
+}
+
+function conCanalLabel(c){
+  const m={pos:'POS local',mercadolibre:'M. Libre',meli:'M. Libre',falabella:'Falabella',paris:'Paris',ripley:'Ripley',walmart:'Walmart'};
+  return m[(c||'').toLowerCase()] || c;
+}
+
+// ── Menú de impresión rollo/carta por fila ──
+function conMenuImprimir(id, btn){
+  // Cerrar cualquier menú abierto
+  document.querySelectorAll('.conPrintMenu').forEach(m=>m.remove());
+  const menu=document.createElement('div');
+  menu.className='conPrintMenu';
+  menu.style.cssText='position:absolute;right:0;top:32px;background:var(--card);border:1px solid var(--border);border-radius:9px;padding:5px;z-index:50;min-width:150px;box-shadow:0 4px 14px rgba(0,0,0,.12);';
+  menu.innerHTML=`<div style="font-size:10px;color:var(--muted);padding:4px 10px;font-weight:600;">IMPRIMIR EN</div>
+    <div onclick="conImprimir(${id},'carta')" style="font-size:13px;padding:8px 10px;border-radius:7px;cursor:pointer;" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'">📄 Carta (hoja)</div>
+    <div onclick="conImprimir(${id},'rollo')" style="font-size:13px;padding:8px 10px;border-radius:7px;cursor:pointer;" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'">🧾 Rollo 80mm (ticket)</div>`;
+  btn.parentNode.appendChild(menu);
+  setTimeout(()=>{
+    document.addEventListener('click', function cerrar(e){
+      if(!menu.contains(e.target) && e.target!==btn){ menu.remove(); document.removeEventListener('click',cerrar); }
+    });
+  },10);
+}
+function conImprimir(id, formato){
+  document.querySelectorAll('.conPrintMenu').forEach(m=>m.remove());
+  // Abrir el PDF en el formato elegido para imprimir
+  window.open('/facturacion/boleta/'+id+'/pdf?formato='+formato, '_blank');
+}
+function conDescargarUno(id, formato){
+  if(formato==='xml'){ window.open('/facturacion/boleta/'+id+'/xml', '_blank'); }
+  else { window.open('/facturacion/boleta/'+id+'/pdf?formato='+formato, '_blank'); }
 }
 
 // ── Selección múltiple para descarga ZIP ──
@@ -14070,16 +14134,31 @@ function conActualizarSelBar(){
   const bar=document.getElementById('conSelBar');
   const cnt=document.getElementById('conSelCount');
   if(!bar) return;
-  if(_conSel.size>0){ bar.style.display='flex'; if(cnt) cnt.textContent=_conSel.size+' seleccionado(s)'; }
+  if(_conSel.size>0){ bar.style.display='flex'; if(cnt) cnt.textContent=_conSel.size+' seleccionada(s)'; }
   else { bar.style.display='none'; }
 }
-function conDescargarSeleccion(){
-  if(_conSel.size===0){ alert('Selecciona al menos un documento.'); return; }
-  const ids=[..._conSel].join(',');
-  // Descargar ZIP solo de los seleccionados
-  window.open('/facturacion/boletas/descargar-zip?ids='+encodeURIComponent(ids), '_blank');
+async function conDescargarSeleccion(){
+  if(_conSel.size===0){ alert('Selecciona al menos una boleta.'); return; }
+  const formato=document.getElementById('conFormato') ? document.getElementById('conFormato').value : 'carta';
+  const ids=[..._conSel];
+  try{
+    const r=await fetch('/facturacion/boletas/zip',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ids:ids, formato:formato})});
+    if(!r.ok){ let m='No se pudo generar el ZIP'; try{const e=await r.json();m=e.error||m;}catch(_){} alert(m); return; }
+    const blob=await r.blob();
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='boletas_'+formato+'.zip';
+    document.body.appendChild(a); a.click(); a.remove();
+  }catch(e){ alert('Error: '+e.message); }
 }
-function conPag(delta){ _conPag+=delta; conRenderPagina(); window.scrollTo({top:document.getElementById('conResultados').offsetTop-120,behavior:'smooth'}); }
+function conPag(delta){
+  const nueva=_conPag+delta;
+  if(nueva<1 || nueva>_conTotalPaginas) return;
+  conBuscar(nueva);
+  window.scrollTo({top:document.getElementById('conResultados').offsetTop-120,behavior:'smooth'});
+}
 
 // ═══════════ MENÚ 3 PUNTITOS (descargas) ═══════════
 function dtMenuPuntitos(doc){
