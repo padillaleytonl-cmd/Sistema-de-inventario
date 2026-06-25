@@ -3556,33 +3556,6 @@ tbody td {
     </div>
 
     <!-- Modal del sistema: solicitar folios -->
-    <div id="cliFoliosModal" onclick="if(event.target===this)cliCerrarModalFolios()" style="display:none;position:fixed;inset:0;background:rgba(15,12,30,.65);backdrop-filter:blur(2px);z-index:100000;align-items:center;justify-content:center;padding:20px;">
-      <div onclick="event.stopPropagation()" style="background:#ffffff;border-radius:16px;width:100%;max-width:440px;box-shadow:0 24px 70px rgba(0,0,0,.45);overflow:hidden;">
-        <div style="padding:18px 22px;border-bottom:1px solid #e3e1ee;display:flex;gap:10px;align-items:center;background:#f7f6fb;">
-          <span style="font-size:20px;">🎫</span>
-          <div style="flex:1;font-size:16px;font-weight:700;color:#1d1b2e;">Solicitar folios al SII</div>
-          <button onclick="cliCerrarModalFolios()" style="background:#eceaf5;border:none;width:32px;height:32px;border-radius:8px;font-size:19px;color:#6b6880;cursor:pointer;line-height:1;">×</button>
-        </div>
-        <div style="padding:22px;">
-          <div style="font-size:12.5px;color:#6b6880;line-height:1.5;margin-bottom:18px;">Los folios se descargan directamente del SII y quedan disponibles al instante para emitir.</div>
-          <label style="display:block;font-size:12px;font-weight:600;color:#6b6880;margin-bottom:6px;">Tipo de documento</label>
-          <select id="cliFoliosTipo" style="width:100%;padding:11px 12px;border:1px solid #d9d6ea;border-radius:10px;font-family:inherit;font-size:14px;background:#fff;color:#1d1b2e;margin-bottom:16px;box-sizing:border-box;">
-            <option value="39">Boleta electrónica</option>
-            <option value="41">Boleta exenta</option>
-            <option value="33">Factura electrónica</option>
-            <option value="34">Factura exenta</option>
-            <option value="61">Nota de crédito</option>
-            <option value="56">Nota de débito</option>
-            <option value="52">Guía de despacho</option>
-          </select>
-          <label style="display:block;font-size:12px;font-weight:600;color:#6b6880;margin-bottom:6px;">Cantidad de folios</label>
-          <input id="cliFoliosCantidad" type="number" min="1" max="1000" value="10" style="width:100%;padding:11px 12px;border:1px solid #d9d6ea;border-radius:10px;font-family:inherit;font-size:14px;background:#fff;color:#1d1b2e;margin-bottom:6px;box-sizing:border-box;">
-          <div id="cliFoliosModalMsg" style="font-size:12.5px;min-height:18px;margin:8px 0 4px;"></div>
-          <button id="cliFoliosModalBtn" onclick="cliConfirmarFolios()" style="width:100%;background:#534AB7;color:#fff;border:none;padding:13px;border-radius:10px;font-family:inherit;font-weight:600;font-size:15px;cursor:pointer;margin-top:8px;">Descargar folios</button>
-        </div>
-      </div>
-    </div>
-
     <!-- Suscripción tributaria — interactiva, el cliente activa/desactiva -->
     <div id="suscripcionTributaria" style="background:var(--bg);border:0.5px solid var(--border);border-radius:12px;padding:18px 20px;margin-bottom:18px;">
       <div style="display:flex;justify-content:space-between;align-items:start;gap:16px;flex-wrap:wrap;margin-bottom:16px;">
@@ -3656,6 +3629,34 @@ tbody td {
     </div><!-- /fac-pane-config -->
 
   <!-- ═══════════ FIN SECCIÓN FACTURACIÓN CLIENTE ═══════════ -->
+
+  <!-- Modal del sistema: solicitar folios (fuera de los tabs para que abra desde cualquiera) -->
+  <div id="cliFoliosModal" onclick="if(event.target===this)cliCerrarModalFolios()" style="display:none;position:fixed;inset:0;background:rgba(15,12,30,.65);backdrop-filter:blur(2px);z-index:100000;align-items:center;justify-content:center;padding:20px;">
+    <div onclick="event.stopPropagation()" style="background:#ffffff;border-radius:16px;width:100%;max-width:440px;box-shadow:0 24px 70px rgba(0,0,0,.45);overflow:hidden;">
+      <div style="padding:18px 22px;border-bottom:1px solid #e3e1ee;display:flex;gap:10px;align-items:center;background:#f7f6fb;">
+        <span style="font-size:20px;">🎫</span>
+        <div style="flex:1;font-size:16px;font-weight:700;color:#1d1b2e;">Solicitar folios al SII</div>
+        <button onclick="cliCerrarModalFolios()" style="background:#eceaf5;border:none;width:32px;height:32px;border-radius:8px;font-size:19px;color:#6b6880;cursor:pointer;line-height:1;">×</button>
+      </div>
+      <div style="padding:22px;">
+        <div style="font-size:12.5px;color:#6b6880;line-height:1.5;margin-bottom:18px;">Los folios se descargan directamente del SII y quedan disponibles al instante para emitir.</div>
+        <label style="display:block;font-size:12px;font-weight:600;color:#6b6880;margin-bottom:6px;">Tipo de documento</label>
+        <select id="cliFoliosTipo" style="width:100%;padding:11px 12px;border:1px solid #d9d6ea;border-radius:10px;font-family:inherit;font-size:14px;background:#fff;color:#1d1b2e;margin-bottom:16px;box-sizing:border-box;">
+          <option value="39">Boleta electrónica</option>
+          <option value="41">Boleta exenta</option>
+          <option value="33">Factura electrónica</option>
+          <option value="34">Factura exenta</option>
+          <option value="61">Nota de crédito</option>
+          <option value="56">Nota de débito</option>
+          <option value="52">Guía de despacho</option>
+        </select>
+        <label style="display:block;font-size:12px;font-weight:600;color:#6b6880;margin-bottom:6px;">Cantidad de folios</label>
+        <input id="cliFoliosCantidad" type="number" min="1" max="1000" value="10" style="width:100%;padding:11px 12px;border:1px solid #d9d6ea;border-radius:10px;font-family:inherit;font-size:14px;background:#fff;color:#1d1b2e;margin-bottom:6px;box-sizing:border-box;">
+        <div id="cliFoliosModalMsg" style="font-size:12.5px;min-height:18px;margin:8px 0 4px;"></div>
+        <button id="cliFoliosModalBtn" onclick="cliConfirmarFolios()" style="width:100%;background:#534AB7;color:#fff;border:none;padding:13px;border-radius:10px;font-family:inherit;font-weight:600;font-size:15px;cursor:pointer;margin-top:8px;">Descargar folios</button>
+      </div>
+    </div>
+  </div>
 
   <div id="sec-configuracion" class="main" style="display:none;">
     <div class="page-header">
