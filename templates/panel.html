@@ -13743,20 +13743,32 @@ async function cliCargarFolios(){
 
 async function cliSolicitarFolios(){
   const msg=document.getElementById('cliFoliosMsg');
-  if(!confirm('¿Solicitar más folios al equipo Lusync?\n\nLusync gestiona y carga tus folios autorizados por el SII. Te avisaremos cuando estén disponibles.')) return;
-  if(msg){ msg.style.color='var(--muted)'; msg.textContent='Enviando solicitud…'; }
+  // Tipos de documento más comunes para boletas/facturas
+  const tipos={39:'Boleta electrónica',41:'Boleta exenta',33:'Factura electrónica',34:'Factura exenta',61:'Nota de crédito',56:'Nota de débito',52:'Guía de despacho'};
+  let opciones=Object.entries(tipos).map(([k,v])=>k+' = '+v).join('\n');
+  const tipoStr=prompt('¿Qué tipo de documento?\n\n'+opciones+'\n\nEscribe el número (ej: 39):','39');
+  if(tipoStr===null) return;
+  const tipo=parseInt(tipoStr,10);
+  if(!tipos[tipo]){ if(msg){msg.style.color='#dc2626';msg.textContent='Tipo de documento no válido.';} return; }
+  const cantStr=prompt('¿Cuántos folios de '+tipos[tipo]+' quieres descargar?','10');
+  if(cantStr===null) return;
+  const cantidad=parseInt(cantStr,10);
+  if(!cantidad||cantidad<1){ if(msg){msg.style.color='#dc2626';msg.textContent='Cantidad no válida.';} return; }
+
+  if(msg){ msg.style.color='var(--muted)'; msg.textContent='Descargando '+cantidad+' folios del SII… (esto toma unos segundos)'; }
   try{
     const r=await fetch('/facturacion/folios/solicitar',{
-      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})});
-    const d=await r.json().catch(()=>({ok:false}));
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({tipo_dte:tipo, cantidad:cantidad})});
+    const d=await r.json().catch(()=>({ok:false,error:'Respuesta inválida'}));
     if(d.ok){
-      if(msg){ msg.style.color='#059669'; msg.textContent='✓ Solicitud enviada. El equipo Lusync cargará tus folios pronto.'; }
+      if(msg){ msg.style.color='#059669'; msg.textContent='✓ Folios '+d.folio_desde+'–'+d.folio_hasta+' descargados y disponibles.'; }
+      cliCargarFolios();  // refrescar la lista
     }else{
-      // Fallback: si el endpoint no existe aún, mostrar instrucción de contacto
-      if(msg){ msg.style.color='#059669'; msg.textContent='✓ Para más folios, contáctanos a soporte@lusync.cl y los cargamos a tu cuenta.'; }
+      if(msg){ msg.style.color='#dc2626'; msg.textContent='✗ '+(d.error||'No se pudieron descargar los folios'); }
     }
   }catch(e){
-    if(msg){ msg.style.color='#059669'; msg.textContent='✓ Para más folios, contáctanos a soporte@lusync.cl y los cargamos a tu cuenta.'; }
+    if(msg){ msg.style.color='#dc2626'; msg.textContent='✗ Error: '+e.message; }
   }
 }
 

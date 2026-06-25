@@ -23577,45 +23577,59 @@ def facturacion_boletas_zip():
 
 @app.route("/facturacion/folios/solicitar", methods=["POST"])
 def facturacion_folios_solicitar():
-    """El cliente solicita más folios. Registra la solicitud para que el
-    equipo Lusync (admin master) la gestione y cargue los folios reales.
+    """El cliente descarga folios automáticamente del SII y se guardan al tiro
+    en sus folios disponibles. Reusa el mismo motor que el panel master.
+
+    Body JSON: {"tipo_dte": 39, "cantidad": 10}
+    El ambiente sale de la config del tenant (producción para clientes reales).
     """
     if not session.get("logged"):
         return jsonify({"ok": False, "error": "no autenticado"}), 401
     tenant_id = session.get("tenant_id") or 1
 
-    from inventario import get_conn, release_conn
-    conn = get_conn()
+    data = request.get_json(silent=True) or {}
     try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS facturacion_solicitudes_folios (
-                    id SERIAL PRIMARY KEY,
-                    tenant_id INTEGER NOT NULL,
-                    tipo_dte INTEGER,
-                    cantidad INTEGER,
-                    estado TEXT DEFAULT 'pendiente',
-                    fecha_solicitud TIMESTAMP DEFAULT NOW(),
-                    fecha_resolucion TIMESTAMP
-                )
-            """)
-            data = request.get_json(silent=True) or {}
-            tipo_dte = data.get("tipo_dte")
-            cantidad = data.get("cantidad")
-            cur.execute("""
-                INSERT INTO facturacion_solicitudes_folios (tenant_id, tipo_dte, cantidad)
-                VALUES (%s, %s, %s) RETURNING id
-            """, (tenant_id, tipo_dte, cantidad))
-            sol_id = cur.fetchone()[0]
-            conn.commit()
-    except Exception as e:
-        print(f"[Facturación] Error solicitar folios: {e}")
-        return jsonify({"ok": False, "error": "No se pudo registrar la solicitud"}), 500
-    finally:
-        release_conn(conn)
+        tipo_dte = int(data.get("tipo_dte"))
+        cantidad = int(data.get("cantidad"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Indica tipo de documento y cantidad"}), 400
+    if cantidad < 1 or cantidad > 1000:
+        return jsonify({"ok": False, "error": "La cantidad debe estar entre 1 y 1000"}), 400
 
-    return jsonify({"ok": True, "solicitud_id": sol_id,
-                    "mensaje": "Solicitud registrada. El equipo Lusync cargará tus folios pronto."})
+    from inventario import get_conn, release_conn
+    from facturacion.certificados import obtener_certificado
+    from facturacion.db import obtener_config_facturacion
+    from facturacion.utils import normalizar_ambiente
+    from facturacion.dtes.solicitar_folios import descargar_y_guardar
+
+    # Config del tenant (rut emisor + ambiente)
+    config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+    if not config:
+        return jsonify({"ok": False, "error": "No hay configuración de facturación"}), 400
+    rut_emisor = config.get("rut_emisor")
+    ambiente = normalizar_ambiente(config.get("ambiente") or "certificacion")
+
+    # Certificado del tenant (desencriptado)
+    cert = obtener_certificado(get_conn, release_conn, tenant_id)
+    if not cert or not cert.get("ok"):
+        return jsonify({"ok": False,
+                        "error": "No hay certificado digital cargado. Súbelo en Configuración."}), 400
+
+    res = descargar_y_guardar(
+        get_conn, release_conn, tenant_id,
+        cert["pfx_bytes"], cert["password"], rut_emisor,
+        tipo_dte, cantidad, ambiente)
+
+    if not res.get("ok"):
+        return jsonify({"ok": False, "error": res.get("error") or "No se pudieron descargar los folios"}), 400
+
+    return jsonify({
+        "ok": True,
+        "folio_desde": res.get("folio_desde"),
+        "folio_hasta": res.get("folio_hasta"),
+        "mensaje": "Folios %s–%s descargados y disponibles." % (
+            res.get("folio_desde"), res.get("folio_hasta")),
+    })
 
 
 @app.route("/facturacion/folios/resumen", methods=["GET"])
