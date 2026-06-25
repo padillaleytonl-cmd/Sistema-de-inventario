@@ -3601,54 +3601,6 @@ tbody td {
       Si necesitas ayuda escríbenos a <a href="mailto:soporte@lusync.cl" style="color:#534AB7;">soporte@lusync.cl</a>.
     </div>
 
-    <!-- Resolución SII (solo admin): para corregir FchResol/NroResol del sobre -->
-    <div id="facResolucionAdmin" style="display:none;background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:18px 20px;margin-top:18px;max-width:700px;">
-      <div style="font-weight:700;font-size:14px;margin-bottom:6px;">📋 Resolución SII (solo admin)</div>
-      <div style="color:var(--muted);font-size:13px;margin-bottom:12px;">
-        FchResol y NroResol van en la carátula del EnvioBOLETA. Si están mal, el SII
-        recibe el envío pero lo descarta (FAU). En <b>certificación</b>: NroResol=0.
-      </div>
-      <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
-        <div>
-          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px;">Fecha (YYYY-MM-DD)</label>
-          <input type="date" id="facResFecha" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;">
-        </div>
-        <div>
-          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px;">Número</label>
-          <input type="number" id="facResNumero" placeholder="0" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;width:120px;">
-        </div>
-        <button onclick="facGuardarResolucion()" style="background:#534AB7;color:#fff;border:none;padding:9px 16px;border-radius:8px;cursor:pointer;font-weight:600;">Aplicar</button>
-      </div>
-      <div id="facResMsg" style="margin-top:10px;font-size:13px;"></div>
-    </div>
-
-    <!-- Avanzar folio (solo admin): para saltar folios quemados -->
-    <div id="facAvanzarFolioAdmin" style="display:none;background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:18px 20px;margin-top:18px;max-width:700px;">
-      <div style="font-weight:700;font-size:14px;margin-bottom:6px;">⚙️ Avanzar folio (solo admin)</div>
-      <div style="color:var(--muted);font-size:13px;margin-bottom:12px;">
-        Si hay folios quemados (ej: tras certificación), salta el contador al próximo folio limpio.
-        El sistema seguirá emitiendo desde ese folio en adelante.
-      </div>
-      <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
-        <div>
-          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px;">Tipo DTE</label>
-          <select id="facAvFolioTipo" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;">
-            <option value="39">39 — Boleta Electrónica</option>
-            <option value="41">41 — Boleta Exenta</option>
-            <option value="33">33 — Factura Electrónica</option>
-            <option value="34">34 — Factura Exenta</option>
-            <option value="61">61 — Nota de Crédito</option>
-          </select>
-        </div>
-        <div>
-          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px;">Próximo folio</label>
-          <input type="number" id="facAvFolioNum" placeholder="21" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;width:120px;">
-        </div>
-        <button onclick="facAvanzarFolio()" style="background:#534AB7;color:#fff;border:none;padding:9px 16px;border-radius:8px;cursor:pointer;font-weight:600;">Aplicar</button>
-      </div>
-      <div id="facAvFolioMsg" style="margin-top:10px;font-size:13px;"></div>
-    </div>
-
   </div>
     </div><!-- /fac-pane-config -->
 
@@ -14264,77 +14216,17 @@ async function conDescargarZip(){
 // ── Switch de ambiente (solo admin) ──
 function facMostrarAmbienteAdmin(esAdmin, ambienteActual){
   const box=document.getElementById('facAmbienteAdmin');
-  const boxFolio=document.getElementById('facAvanzarFolioAdmin');
-  const boxResol=document.getElementById('facResolucionAdmin');
   if(esAdmin){
     if(box) box.style.display='block';
-    if(boxFolio) boxFolio.style.display='block';
-    if(boxResol) boxResol.style.display='block';
     const amb=ambienteActual||'certificacion';
     const sel=document.getElementById('facAmbienteSelect'); if(sel) sel.value=amb;
     const txt=document.getElementById('facAmbienteActualTxt');
     if(txt) txt.textContent = amb==='produccion'?'Producción (real)':'Certificación (pruebas)';
     const aviso=document.getElementById('facAmbienteAviso');
     if(aviso) aviso.style.display = amb==='produccion' ? 'none' : 'block';
-    // Cargar valores actuales de resolución
-    fetch('/facturacion/config').then(r=>r.json()).then(d=>{
-      if(d && d.config){
-        const f=document.getElementById('facResFecha');
-        const n=document.getElementById('facResNumero');
-        if(f && d.config.resolucion_sii_fecha) f.value=String(d.config.resolucion_sii_fecha).slice(0,10);
-        if(n && d.config.resolucion_sii_numero!=null) n.value=d.config.resolucion_sii_numero;
-      }
-    }).catch(()=>{});
   } else {
     if(box) box.style.display='none';
-    if(boxFolio) boxFolio.style.display='none';
-    if(boxResol) boxResol.style.display='none';
   }
-}
-async function facGuardarResolucion(){
-  const fecha=document.getElementById('facResFecha').value;
-  const numero=document.getElementById('facResNumero').value;
-  const msg=document.getElementById('facResMsg');
-  if(!fecha){ msg.innerHTML='<span style="color:#dc2626;">Indica una fecha</span>'; return; }
-  if(numero===''){ msg.innerHTML='<span style="color:#dc2626;">Indica un número (0 en certificación)</span>'; return; }
-  if(!confirm('Actualizar resolución SII a FchResol='+fecha+', NroResol='+numero+'?\n\nEsto afecta el próximo envío al SII.')) return;
-  msg.innerHTML='<span style="color:var(--muted);">Guardando…</span>';
-  try{
-    const r=await fetch('/facturacion/config/resolucion',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({fecha:fecha, numero:parseInt(numero,10)})});
-    const txt=await r.text();
-    let d; try{ d=JSON.parse(txt); }catch(_){ msg.innerHTML='<span style="color:#dc2626;">Respuesta inválida ('+r.status+'): '+txt.slice(0,200).replace(/</g,'&lt;')+'</span>'; return; }
-    if(d.ok){
-      const ant = d.anterior ? (' (antes: FchResol='+(d.anterior.fecha||'—')+', NroResol='+(d.anterior.numero==null?'—':d.anterior.numero)+')') : '';
-      msg.innerHTML='<span style="color:#1D9E75;">✓ '+d.mensaje+ant+'</span>';
-    } else {
-      msg.innerHTML='<span style="color:#dc2626;">✗ '+(d.error||'Error')+'</span>';
-    }
-  }catch(e){ msg.innerHTML='<span style="color:#dc2626;">Error: '+e.message+'</span>'; }
-}
-async function facAvanzarFolio(){
-  const tipo=parseInt(document.getElementById('facAvFolioTipo').value,10);
-  const folio=parseInt(document.getElementById('facAvFolioNum').value,10);
-  const msg=document.getElementById('facAvFolioMsg');
-  if(!folio||folio<1){ msg.innerHTML='<span style="color:#dc2626;">Indica un folio válido</span>'; return; }
-  if(!confirm('Avanzar el contador de folios tipo '+tipo+' a '+folio+'?\n\nLa próxima boleta usará el folio '+folio+'.')) return;
-  msg.innerHTML='<span style="color:var(--muted);">Aplicando…</span>';
-  try{
-    const r=await fetch('/facturacion/caf/ajustar-folio',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({tipo_dte:tipo, nuevo_folio:folio})});
-    const txt=await r.text();
-    let d;
-    try{ d=JSON.parse(txt); }
-    catch(_){
-      msg.innerHTML='<span style="color:#dc2626;">Respuesta no-JSON ('+r.status+'): '+txt.slice(0,200).replace(/</g,'&lt;')+'</span>';
-      return;
-    }
-    if(d.ok){
-      msg.innerHTML='<span style="color:#1D9E75;">✓ '+d.mensaje+' (antes: '+d.folio_anterior+')</span>';
-    } else {
-      msg.innerHTML='<span style="color:#dc2626;">✗ '+(d.error||'Error')+'</span>';
-    }
-  }catch(e){ msg.innerHTML='<span style="color:#dc2626;">Error: '+e.message+'</span>'; }
 }
 async function facCambiarAmbiente(){
   const nuevo=document.getElementById('facAmbienteSelect').value;
