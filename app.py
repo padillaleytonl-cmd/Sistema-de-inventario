@@ -23642,18 +23642,29 @@ def facturacion_folios_solicitar():
         return jsonify({"ok": False,
                         "error": "No hay certificado digital cargado. Súbelo en Configuración."}), 400
 
-    res = descargar_y_guardar(
-        get_conn, release_conn, tenant_id,
-        cert["pfx_bytes"], cert["password"], rut_emisor,
-        tipo_dte, cantidad, ambiente)
+    try:
+        res = descargar_y_guardar(
+            get_conn, release_conn, tenant_id,
+            cert["pfx_bytes"], cert["password"], rut_emisor,
+            tipo_dte, cantidad, ambiente)
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print("[Facturación] EXCEPCIÓN descarga folios tenant=%s: %s\n%s" % (tenant_id, e, tb))
+        return jsonify({"ok": False,
+                        "error": "No se pudo completar la descarga en este momento. "
+                                 "Intenta nuevamente en unos minutos.",
+                        "_debug": "EXCEPCIÓN: " + str(e)[:300]}), 400
 
     if not res.get("ok"):
         # El cliente nunca ve jerga técnica del SII; se registra en el log para soporte
+        err_real = res.get("error")
         print("[Facturación] Descarga folios falló tenant=%s tipo=%s: %s" % (
-            tenant_id, tipo_dte, res.get("error")))
+            tenant_id, tipo_dte, err_real))
         return jsonify({"ok": False,
                         "error": "No se pudo completar la descarga en este momento. "
-                                 "Intenta nuevamente en unos minutos."}), 400
+                                 "Intenta nuevamente en unos minutos.",
+                        "_debug": err_real}), 400
 
     return jsonify({
         "ok": True,
