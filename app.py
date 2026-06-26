@@ -23691,6 +23691,7 @@ def facturacion_folios_resumen():
     from datetime import date, timedelta
 
     cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id, ambiente="produccion")
+    print("[FoliosResumenDEBUG] tenant_id=%s | CAF producción=%s" % (tenant_id, len(cafs)))
 
     # Consumo promedio diario por tipo (últimos 30 días) desde facturacion_dtes
     consumo = {}
