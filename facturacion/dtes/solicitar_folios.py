@@ -185,11 +185,25 @@ def descargar_caf(pfx_bytes, password, rut_emisor, tipo_dte, cantidad,
 
         # 5. POST cantidad -> confirmación
         d5 = _inputs(r4.text)
+        # IMPORTANTE: el botón ACEPTAR cambia de texto según el tipo de DTE.
+        # Para boletas suele ser "Solicitar"; para facturas "Solicitar Numeración".
+        # El SII valida el valor exacto, así que NO lo hardcodeamos: usamos el
+        # que vino en el form (ya está en d5), y solo lo dejamos por defecto si
+        # el form no lo trajo.
+        aceptar_btn = d5.get("ACEPTAR") or "Solicitar"
+        # Desescapar entidades HTML (ej. "Numeraci&oacute;n" -> "Numeración")
+        try:
+            import html as _html
+            aceptar_btn = _html.unescape(aceptar_btn)
+        except Exception:
+            pass
         d5.update({
             "RUT_EMP": cuerpo, "DV_EMP": dv, "FOLIO_INICIAL": "0",
             "COD_DOCTO": str(tipo_dte), "CANT_DOCTOS": str(cantidad),
-            "ACEPTAR": "Solicitar",
+            "ACEPTAR": aceptar_btn,
         })
+        # Quitar el botón "Volver" (NEW) si vino, para no confundir al SII
+        d5.pop("NEW", None)
         r5 = s.post("%s/of_confirma_folio" % base, data=d5, timeout=timeout)
         if "Obtener Folios" not in r5.text and "btener" not in r5.text:
             motivo = _mensaje_sii(r5.text)
