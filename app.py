@@ -23575,6 +23575,33 @@ def facturacion_boletas_zip():
 
 
 
+@app.route("/facturacion/folios/tipos-habilitados", methods=["GET"])
+def facturacion_folios_tipos_habilitados():
+    """Devuelve los tipos de DTE que el tenant tiene habilitados/activos,
+    para llenar el selector de 'Solicitar folios' dinámicamente.
+    """
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    tenant_id = session.get("tenant_id") or 1
+
+    from inventario import get_conn, release_conn
+    from facturacion.db import calcular_mrr_tributario
+
+    try:
+        mrr = calcular_mrr_tributario(get_conn, release_conn, tenant_id)
+        desglose = mrr.get("desglose", []) if mrr else []
+    except Exception as e:
+        print(f"[Facturación] Error tipos habilitados: {e}")
+        desglose = []
+
+    tipos = [{"tipo_dte": d["tipo_dte"], "nombre": d["nombre"]}
+             for d in desglose if d.get("activo")]
+    # Fallback: si no hay ninguno activo, al menos boleta electrónica
+    if not tipos:
+        tipos = [{"tipo_dte": 39, "nombre": "Boleta electrónica"}]
+    return jsonify({"ok": True, "tipos": tipos})
+
+
 @app.route("/facturacion/folios/solicitar", methods=["POST"])
 def facturacion_folios_solicitar():
     """El cliente descarga folios automáticamente del SII y se guardan al tiro

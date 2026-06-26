@@ -13716,7 +13716,7 @@ async function dtCargarFolios(){
   const cont=document.getElementById('dtFoliosCont');
   try{
     const r=await fetch('/facturacion/folios/resumen'); const d=await r.json();
-    if(!d.ok||!d.folios.length){cont.innerHTML='<div style="color:var(--muted);">Aún no hay folios cargados. Lusync los gestiona por ti.</div>';return;}
+    if(!d.ok||!d.folios.length){cont.innerHTML='<div style="color:var(--muted);padding:8px;">Aún no tienes folios cargados. Usa el botón <b>“Solicitar más folios”</b> para descargarlos del SII.</div>';return;}
     let h='<div style="display:grid;gap:14px;">';
     d.folios.forEach(g=>{
       const pct=g.total>0?Math.round(g.usados/g.total*100):0;
@@ -13748,7 +13748,20 @@ function cliSolicitarFolios(){
   if(msg) msg.textContent='';
   const btn=document.getElementById('cliFoliosModalBtn');
   if(btn){ btn.disabled=false; btn.textContent='Descargar folios'; }
+  // Llenar el selector con los tipos que el tenant tiene habilitados
+  cliCargarTiposHabilitados();
   m.style.display='flex';
+}
+async function cliCargarTiposHabilitados(){
+  const sel=document.getElementById('cliFoliosTipo');
+  if(!sel) return;
+  try{
+    const r=await fetch('/facturacion/folios/tipos-habilitados');
+    const d=await r.json();
+    if(d.ok && d.tipos && d.tipos.length){
+      sel.innerHTML = d.tipos.map(t=>'<option value="'+t.tipo_dte+'">'+t.nombre+'</option>').join('');
+    }
+  }catch(e){ /* deja las opciones por defecto del HTML si falla */ }
 }
 function cliCerrarModalFolios(){
   const m=document.getElementById('cliFoliosModal');
