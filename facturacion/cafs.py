@@ -149,7 +149,13 @@ def subir_caf(get_conn_func, release_conn_func, tenant_id, xml_caf,
             }
 
     # Guardar en BD
-    conn = get_conn_func(); cur = conn.cursor()
+    # Pasar tenant_id explícito para que el contexto RLS sea correcto
+    # aunque no haya sesión Flask (ej. descarga automática de folios).
+    try:
+        conn = get_conn_func(tenant_id=tenant_id)
+    except TypeError:
+        conn = get_conn_func()
+    cur = conn.cursor()
     try:
         # Verificar que no se solape con otro CAF activo
         cur.execute("""
@@ -206,7 +212,11 @@ def listar_cafs_tenant(get_conn_func, release_conn_func, tenant_id, ambiente=Non
                   El cliente/tenant debe llamar con ambiente='produccion' para
                   no exponer los folios de prueba; el admin master usa None.
     """
-    conn = get_conn_func(); cur = conn.cursor()
+    try:
+        conn = get_conn_func(tenant_id=tenant_id)
+    except TypeError:
+        conn = get_conn_func()
+    cur = conn.cursor()
     try:
         # Verificar que la tabla exista
         cur.execute("""
@@ -279,7 +289,11 @@ def obtener_folio_disponible(get_conn_func, release_conn_func, tenant_id,
     Returns:
         dict: {ok, folio, caf_id, xml_caf, error}
     """
-    conn = get_conn_func(); cur = conn.cursor()
+    try:
+        conn = get_conn_func(tenant_id=tenant_id)
+    except TypeError:
+        conn = get_conn_func()
+    cur = conn.cursor()
     try:
         # Buscar el CAF más antiguo con folios disponibles
         # FOR UPDATE para lockear la fila mientras la actualizamos

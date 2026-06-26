@@ -23588,12 +23588,10 @@ def facturacion_folios_solicitar():
     tenant_id = session.get("tenant_id") or 1
 
     data = request.get_json(silent=True) or {}
-    print("[FoliosDEBUG] Llegó request tenant=%s data=%r" % (tenant_id, data))
     try:
         tipo_dte = int(data.get("tipo_dte"))
         cantidad = int(data.get("cantidad"))
     except (TypeError, ValueError):
-        print("[FoliosDEBUG] Falló validación tipo/cantidad: %r" % data)
         return jsonify({"ok": False, "error": "Indica tipo de documento y cantidad"}), 400
     if cantidad < 1 or cantidad > 1000:
         return jsonify({"ok": False, "error": "La cantidad debe estar entre 1 y 1000"}), 400
@@ -23617,12 +23615,10 @@ def facturacion_folios_solicitar():
         return jsonify({"ok": False,
                         "error": "No hay certificado digital cargado. Súbelo en Configuración."}), 400
 
-    print("[FoliosDEBUG] Inicio solicitud tenant=%s data=%s" % (tenant_id, data))
     res = descargar_y_guardar(
         get_conn, release_conn, tenant_id,
         cert["pfx_bytes"], cert["password"], rut_emisor,
         tipo_dte, cantidad, ambiente)
-    print("[FoliosDEBUG] Resultado: ok=%s error=%s" % (res.get("ok"), res.get("error")))
 
     if not res.get("ok"):
         # El cliente nunca ve jerga técnica del SII; se registra en el log para soporte
