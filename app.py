@@ -23675,6 +23675,36 @@ def facturacion_folios_solicitar():
     })
 
 
+@app.route("/facturacion/_diag_sesion", methods=["GET"])
+def facturacion_diag_sesion():
+    """Diagnóstico temporal: devuelve el tenant de la sesión actual y un conteo
+    directo de CAF de producción para ese tenant, leyendo la BD como lo hace
+    una request web real."""
+    tenant_id = session.get("tenant_id")
+    logged = session.get("logged")
+    from inventario import get_conn, release_conn
+    n_prod = None
+    err = None
+    try:
+        conn = get_conn(tenant_id=tenant_id) if tenant_id else get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) FROM facturacion_cafs "
+                    "WHERE tenant_id=%s AND ambiente='produccion'", (tenant_id,))
+                n_prod = cur.fetchone()[0]
+        finally:
+            release_conn(conn)
+    except Exception as e:
+        err = str(e)
+    return jsonify({
+        "logged": logged,
+        "tenant_id_en_sesion": tenant_id,
+        "caf_produccion_para_ese_tenant": n_prod,
+        "error": err,
+    })
+
+
 @app.route("/facturacion/folios/resumen", methods=["GET"])
 def facturacion_folios_resumen():
     """Resumen de uso de folios por tipo de DTE (estilo dashboard tributario):
