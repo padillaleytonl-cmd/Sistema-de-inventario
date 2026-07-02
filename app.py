@@ -23653,8 +23653,7 @@ def facturacion_folios_solicitar():
         print("[Facturación] EXCEPCIÓN descarga folios tenant=%s: %s\n%s" % (tenant_id, e, tb))
         return jsonify({"ok": False,
                         "error": "No se pudo completar la descarga en este momento. "
-                                 "Intenta nuevamente en unos minutos.",
-                        "_debug": "EXCEPCIÓN: " + str(e)[:300]}), 400
+                                 "Intenta nuevamente en unos minutos."}), 400
 
     if not res.get("ok"):
         # El cliente nunca ve jerga técnica del SII; se registra en el log para soporte
@@ -23663,8 +23662,7 @@ def facturacion_folios_solicitar():
             tenant_id, tipo_dte, err_real))
         return jsonify({"ok": False,
                         "error": "No se pudo completar la descarga en este momento. "
-                                 "Intenta nuevamente en unos minutos.",
-                        "_debug": err_real}), 400
+                                 "Intenta nuevamente en unos minutos."}), 400
 
     return jsonify({
         "ok": True,
@@ -23672,36 +23670,6 @@ def facturacion_folios_solicitar():
         "folio_hasta": res.get("folio_hasta"),
         "mensaje": "Folios %s–%s descargados y disponibles." % (
             res.get("folio_desde"), res.get("folio_hasta")),
-    })
-
-
-@app.route("/facturacion/_diag_sesion", methods=["GET"])
-def facturacion_diag_sesion():
-    """Diagnóstico temporal: devuelve el tenant de la sesión actual y un conteo
-    directo de CAF de producción para ese tenant, leyendo la BD como lo hace
-    una request web real."""
-    tenant_id = session.get("tenant_id")
-    logged = session.get("logged")
-    from inventario import get_conn, release_conn
-    n_prod = None
-    err = None
-    try:
-        conn = get_conn(tenant_id=tenant_id) if tenant_id else get_conn()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT COUNT(*) FROM facturacion_cafs "
-                    "WHERE tenant_id=%s AND ambiente='produccion'", (tenant_id,))
-                n_prod = cur.fetchone()[0]
-        finally:
-            release_conn(conn)
-    except Exception as e:
-        err = str(e)
-    return jsonify({
-        "logged": logged,
-        "tenant_id_en_sesion": tenant_id,
-        "caf_produccion_para_ese_tenant": n_prod,
-        "error": err,
     })
 
 
@@ -23721,7 +23689,6 @@ def facturacion_folios_resumen():
     from datetime import date, timedelta
 
     cafs = listar_cafs_tenant(get_conn, release_conn, tenant_id, ambiente="produccion")
-    print("[FoliosResumenDEBUG] tenant_id=%s | CAF producción=%s" % (tenant_id, len(cafs)))
 
     # Consumo promedio diario por tipo (últimos 30 días) desde facturacion_dtes
     consumo = {}
