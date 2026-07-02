@@ -93,9 +93,25 @@ def _pfx_a_pem_temporal(pfx_bytes, password):
 
 
 def _inputs(html):
-    """Extrae todos los <INPUT name="..." value="..."> de un HTML como dict."""
-    return dict(re.findall(
-        r'<INPUT[^>]+NAME="([^"]+)"[^>]*VALUE="([^"]*)"', html, re.IGNORECASE))
+    """Extrae todos los campos de formulario de un HTML como dict.
+
+    Robusto ante: atributos en cualquier orden, espacios alrededor del '=',
+    comillas simples o dobles, inputs sin value (quedan como ''), y campos
+    hidden/text/readonly. Es clave para tipos como factura/NC cuyo formulario
+    trae muchos campos ocultos que el SII espera de vuelta intactos.
+    """
+    campos = {}
+    # Recorre cada etiqueta <input ...>
+    for tag in re.findall(r'<input\b[^>]*>', html, re.IGNORECASE):
+        m_name = re.search(r'\bname\s*=\s*["\']?([^"\'\s>]+)', tag, re.IGNORECASE)
+        if not m_name:
+            continue
+        nombre = m_name.group(1)
+        m_val = re.search(r'\bvalue\s*=\s*"([^"]*)"', tag, re.IGNORECASE)
+        if not m_val:
+            m_val = re.search(r"\bvalue\s*=\s*'([^']*)'", tag, re.IGNORECASE)
+        campos[nombre] = m_val.group(1) if m_val else ""
+    return campos
 
 
 def _max_autorizado(html):
