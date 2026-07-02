@@ -221,6 +221,14 @@ def descargar_caf(pfx_bytes, password, rut_emisor, tipo_dte, cantidad,
         # Quitar el botón "Volver" (NEW) si vino, para no confundir al SII
         d5.pop("NEW", None)
         r5 = s.post("%s/of_confirma_folio" % base, data=d5, timeout=timeout)
+        # Caso primer timbraje: el SII pide el folio inicial (no hay timbraje
+        # anterior de este tipo). Reintentar con FOLIO_INICIAL=1.
+        if ("Obtener Folios" not in r5.text and "btener" not in r5.text
+                and ("Ingrese Folio Inicial" in r5.text
+                     or "No registra timbraje anterior" in r5.text)):
+            d5["FOLIO_INICIAL"] = "1"
+            r5 = s.post("%s/of_confirma_folio" % base, data=d5, timeout=timeout)
+            traza.append("5b. reintento con folio inicial=1")
         if "Obtener Folios" not in r5.text and "btener" not in r5.text:
             motivo = _mensaje_sii(r5.text)
             return {"ok": False, "caf_xml": None,
