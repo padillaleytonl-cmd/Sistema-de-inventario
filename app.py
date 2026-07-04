@@ -22915,6 +22915,7 @@ def facturacion_boleta_preview():
         "correo": config.get("email"),
         "resolucion_numero": config.get("resolucion_sii_numero"),
         "resolucion_anio": _anio_desde_fecha_resol(config.get("resolucion_sii_fecha")),
+        "resolucion_fecha": config.get("resolucion_sii_fecha"),
     }
     pdf = generar_pdf_dte(xml, formato=formato, url_consulta=url_consulta,
                           datos_tenant=_datos_tenant_pdf)
@@ -23298,6 +23299,7 @@ def facturacion_boleta_pdf(boleta_id):
         "correo": _cfg.get("email"),
         "resolucion_numero": _cfg.get("resolucion_sii_numero"),
         "resolucion_anio": _anio_desde_fecha_resol(_cfg.get("resolucion_sii_fecha")),
+        "resolucion_fecha": _cfg.get("resolucion_sii_fecha"),
     }
     url_consulta = "lusync.cl/consultadte"
     pdf = generar_pdf_dte(xml, formato=formato, url_consulta=url_consulta,

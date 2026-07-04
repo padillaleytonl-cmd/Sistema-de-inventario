@@ -764,7 +764,8 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
         c.setFont("Helvetica", 7.5)
         c.drawString(x, 1.55 * cm, "Timbre Electrónico SII")
         c.setFont("Helvetica", 6.5)
-        c.drawString(x, 1.25 * cm, f"Res. {d.get('nro_resol', RESOLUCION_NRO)} de {d.get('anio_resol', RESOLUCION_ANIO)} - Verifique documento: www.sii.cl")
+        _res_fecha = d.get('fch_resol') or str(d.get('anio_resol', RESOLUCION_ANIO))
+        c.drawString(x, 1.25 * cm, f"Res.{d.get('nro_resol', RESOLUCION_NRO)} de {_res_fecha}. Verifique el documento en: www.sii.cl")
         # Leyenda de destino (solo copia cedible), zona inferior derecha
         if etiqueta_copia:
             c.setFont("Helvetica-Bold", 13)
@@ -780,7 +781,8 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
         c.setFillColorRGB(0, 0, 0)
         # Aun en borrador, mostramos la leyenda de resolución + verificación
         c.setFont("Helvetica", 6.5)
-        c.drawString(x, 1.55 * cm, f"Res. {d.get('nro_resol', RESOLUCION_NRO)} de {d.get('anio_resol', RESOLUCION_ANIO)} - Verifique documento: www.sii.cl")
+        _res_fecha = d.get('fch_resol') or str(d.get('anio_resol', RESOLUCION_ANIO))
+        c.drawString(x, 1.55 * cm, f"Res.{d.get('nro_resol', RESOLUCION_NRO)} de {_res_fecha}. Verifique el documento en: www.sii.cl")
 
 
 def _pdf_carta(d: dict, url_consulta: str, solo_copia: str = None) -> bytes:
@@ -970,6 +972,10 @@ def generar_pdf_dte(dte_xml: bytes, formato: str = "carta",
                 _anio = None
     d['nro_resol'] = _nro if _nro is not None else RESOLUCION_NRO
     d['anio_resol'] = _anio if _anio is not None else RESOLUCION_ANIO
+    # Fecha completa de la resolución (AAAA-MM-DD) para la leyenda del pie,
+    # tal como en los documentos oficiales: "Res.80 de 2014-08-22".
+    if datos_tenant and datos_tenant.get("resolucion_fecha"):
+        d['fch_resol'] = str(datos_tenant.get("resolucion_fecha"))[:10]
 
     # Contacto del emisor para la parte VISUAL: se alimenta desde el tenant si el
     # XML no lo trajo (no lo trae por norma del SII). Nunca modifica el XML.
