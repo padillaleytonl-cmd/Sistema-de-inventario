@@ -927,7 +927,7 @@ def _pdf_rollo(d: dict, url_consulta: str) -> bytes:
 def generar_pdf_dte(dte_xml: bytes, formato: str = "carta",
                     url_consulta: str = "www.sii.cl",
                     nro_resol: int = None, anio_resol: int = None,
-                    solo_copia: str = None) -> bytes:
+                    solo_copia: str = None, datos_tenant: dict = None) -> bytes:
     """Genera el PDF de la representación gráfica de cualquier DTE.
 
     Args:
@@ -942,6 +942,9 @@ def generar_pdf_dte(dte_xml: bytes, formato: str = "carta",
         solo_copia: None = tributaria + cedible (2 páginas). 'tributaria' o
             'cedible' = una sola copia en 1 página (para el Upload de Muestras
             Impresas del SII, que exige un documento de una página por archivo).
+        datos_tenant: datos SOLO para la representación impresa, alimentados desde
+            la configuración del tenant (NO van en el XML legal, que sigue el
+            esquema del SII). Puede incluir telefono y correo del emisor.
 
     Returns:
         bytes del PDF.
@@ -950,6 +953,15 @@ def generar_pdf_dte(dte_xml: bytes, formato: str = "carta",
     # Resolución del emisor (configurable; default = certificación)
     d['nro_resol'] = nro_resol if nro_resol is not None else RESOLUCION_NRO
     d['anio_resol'] = anio_resol if anio_resol is not None else RESOLUCION_ANIO
+
+    # Contacto del emisor para la parte VISUAL: se alimenta desde el tenant si el
+    # XML no lo trajo (no lo trae por norma del SII). Nunca modifica el XML.
+    if datos_tenant:
+        if not d['emisor'].get('telefono') and datos_tenant.get('telefono'):
+            d['emisor']['telefono'] = datos_tenant['telefono']
+        if not d['emisor'].get('correo') and datos_tenant.get('correo'):
+            d['emisor']['correo'] = datos_tenant['correo']
+
     if formato == "rollo" and d['info']['es_boleta']:
         return _pdf_rollo(d, url_consulta)
     return _pdf_carta(d, url_consulta, solo_copia=solo_copia)

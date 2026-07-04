@@ -22896,7 +22896,12 @@ def facturacion_boleta_preview():
     ).encode("iso-8859-1", errors="replace")
 
     url_consulta = "lusync.cl/consultadte"
-    pdf = generar_pdf_dte(xml, formato=formato, url_consulta=url_consulta)
+    _datos_tenant_pdf = {
+        "telefono": config.get("telefono"),
+        "correo": config.get("email"),
+    }
+    pdf = generar_pdf_dte(xml, formato=formato, url_consulta=url_consulta,
+                          datos_tenant=_datos_tenant_pdf)
     return Response(pdf, mimetype="application/pdf",
                     headers={"Content-Disposition": 'inline; filename="preview.pdf"'})
 
@@ -23268,8 +23273,17 @@ def facturacion_boleta_pdf(boleta_id):
         return jsonify({"ok": False, "error": "Boleta no encontrada"}), 404
 
     xml = row[0].encode("iso-8859-1", errors="replace") if isinstance(row[0], str) else row[0]
+
+    # Datos de contacto del emisor para la parte visual (desde config del tenant)
+    from facturacion.db import obtener_config_facturacion
+    _cfg = obtener_config_facturacion(get_conn, release_conn, tenant_id) or {}
+    _datos_tenant_pdf = {
+        "telefono": _cfg.get("telefono"),
+        "correo": _cfg.get("email"),
+    }
     url_consulta = "lusync.cl/consultadte"
-    pdf = generar_pdf_dte(xml, formato=formato, url_consulta=url_consulta)
+    pdf = generar_pdf_dte(xml, formato=formato, url_consulta=url_consulta,
+                          datos_tenant=_datos_tenant_pdf)
     return Response(pdf, mimetype="application/pdf",
                     headers={"Content-Disposition": 'inline; filename="boleta_' + str(boleta_id) + '.pdf"'})
 

@@ -61,7 +61,13 @@ def parsear_boleta_xml(boleta_xml: bytes) -> dict:
         'direccion': _txt(s, 'DirOrigen'),
         'comuna': _txt(s, 'CmnaOrigen'),
         'ciudad': _txt(s, 'CiudadOrigen'),
+        'telefono': _txt(s, 'Telefono'),
+        'correo': _txt(s, 'CorreoEmisor'),
     }
+
+    # Resolución SII (puede venir en la carátula del sobre; opcional en el DTE)
+    nro_resol = _txt(s, 'NroResol')
+    fch_resol = _txt(s, 'FchResol')
 
     # Documento
     tipo_dte = _txt(s, 'TipoDTE')
@@ -108,6 +114,8 @@ def parsear_boleta_xml(boleta_xml: bytes) -> dict:
         'totales': totales,
         'items': items,
         'ted': ted,
+        'nro_resol': nro_resol,
+        'fch_resol': fch_resol,
     }
 
 
@@ -172,7 +180,15 @@ def _pdf_carta(d: dict) -> bytes:
     c.drawString(x, y, em['razon_social'][:45])
     c.setFont("Helvetica", 9)
     y -= 0.6 * cm
-    for linea in [em['giro'][:60], f"{em['direccion']}, {em['comuna']}".strip(', ')]:
+    _lineas_emisor = [em['giro'][:60], f"{em['direccion']}, {em['comuna']}".strip(', ')]
+    _contacto = []
+    if em.get('telefono'):
+        _contacto.append(f"Tel: {em['telefono']}")
+    if em.get('correo'):
+        _contacto.append(em['correo'])
+    if _contacto:
+        _lineas_emisor.append("  ".join(_contacto))
+    for linea in _lineas_emisor:
         if linea:
             c.drawString(x, y, linea)
             y -= 0.45 * cm
@@ -238,6 +254,20 @@ def _pdf_carta(d: dict) -> bytes:
         c.setFont("Helvetica", 7)
         c.drawString(x, 1.7 * cm, "Timbre Electrónico SII")
         c.drawString(x, 1.4 * cm, "Verifique documento: www.sii.cl")
+
+    # ── Leyenda de resolución SII (bajo el timbre) ──
+    if d.get('nro_resol') is not None:
+        try:
+            _nro = str(d.get('nro_resol') or '0')
+            _fch = str(d.get('fch_resol') or '')
+            c.setFont("Helvetica", 6.5)
+            _leyenda = "Res. N° %s" % _nro
+            if _fch:
+                _leyenda += " del %s" % _fch
+            _leyenda += " - Verifique en www.sii.cl"
+            c.drawString(x, 1.1 * cm, _leyenda)
+        except Exception:
+            pass
 
     c.showPage()
     c.save()
@@ -332,17 +362,36 @@ def _pdf_rollo(d: dict) -> bytes:
 # 5. API pública
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generar_pdf_boleta(boleta_xml: bytes, formato: str = "carta") -> bytes:
+def generar_pdf_boleta(boleta_xml: bytes, formato: str = "carta", datos_tenant: dict = None) -> bytes:
     """Genera el PDF de la representación gráfica de una boleta.
 
     Args:
         boleta_xml: XML de la boleta firmada (con TED).
         formato: "carta" (hoja, estilo factura) o "rollo" (ticket 80mm).
+        datos_tenant: datos SOLO para la representación impresa (no van en el XML
+            legal, que sigue el esquema del SII). Puede incluir:
+              - telefono, correo: contacto del emisor mostrado en el membrete.
+              - resolucion_numero, resolucion_fecha: leyenda de resolución en el pie.
+            Estos se alimentan desde la configuración del tenant, no del XML.
 
     Returns:
         bytes del PDF.
     """
     d = parsear_boleta_xml(boleta_xml)
+
+    # Enriquecer SOLO la parte visual con datos del tenant (nunca el XML).
+    if datos_tenant:
+        # Contacto del emisor: solo se completa si el XML no lo trajo (no lo trae por norma).
+        if not d["emisor"].get("telefono") and datos_tenant.get("telefono"):
+            d["emisor"]["telefono"] = datos_tenant["telefono"]
+        if not d["emisor"].get("correo") and datos_tenant.get("correo"):
+            d["emisor"]["correo"] = datos_tenant["correo"]
+        # Resolución (para la leyenda del pie), si el XML no la trajo.
+        if not d.get("nro_resol") and datos_tenant.get("resolucion_numero") is not None:
+            d["nro_resol"] = datos_tenant.get("resolucion_numero")
+        if not d.get("fch_resol") and datos_tenant.get("resolucion_fecha"):
+            d["fch_resol"] = datos_tenant.get("resolucion_fecha")
+
     if formato == "rollo":
         return _pdf_rollo(d)
     return _pdf_carta(d)
