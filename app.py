@@ -22506,14 +22506,9 @@ def facturacion_emitir_form():
 def facturacion_boleta_emitir():
     """Emite UNA boleta electrónica (39/41) y la envía al SII.
 
-    FLUJO PROFESIONAL (guardar-antes-de-enviar):
-      1. Reservar folio (atómico)
-      2. Generar + firmar
-      3. REGISTRAR en BD con estado 'generado' (ANTES de enviar) → nunca hay folio huérfano
-      4. Enviar al SII
-      5. Actualizar estado: 'enviado' (con track_id) o 'error_envio'
-      Si el SII rechaza o falla la conexión, la boleta queda registrada con su estado
-      real y su XML, para reintentar o auditar. El folio nunca se pierde sin rastro.
+    Este endpoint es una capa delgada: valida sesión, arma los parámetros desde
+    el request, y delega en emitir_boleta_core (motor compartido con la emisión
+    automática por marketplace). Toda la lógica de emisión vive en ese módulo.
     """
     if not session.get("logged"):
         return jsonify({"ok": False, "error": "no autenticado"}), 401
@@ -22521,208 +22516,27 @@ def facturacion_boleta_emitir():
     tenant_id = session.get("tenant_id") or 1
     data = request.get_json(silent=True) or {}
 
-    from inventario import get_conn, release_conn
-    from facturacion.certificados import obtener_certificado
-    from facturacion.db import obtener_config_facturacion
-    from facturacion.cafs import obtener_folio_disponible
-    from facturacion.utils import normalizar_ambiente
+    from facturacion.emision_core import emitir_boleta_core
 
-    pasos = []
-    def paso(nombre, ok, detalle=""):
-        pasos.append({"nombre": nombre, "ok": ok, "detalle": detalle})
+    resultado = emitir_boleta_core(
+        tenant_id=tenant_id,
+        items=data.get("items") or [],
+        receptor=data.get("receptor"),
+        ambiente=data.get("ambiente"),
+        referencias=data.get("referencias"),
+        actualizar_estado_fn=_fact_actualizar_estado_dte,
+    )
 
-    # 0. Validar items
-    items = data.get("items") or []
-    if not items:
-        return jsonify({"ok": False, "error": "Debes agregar al menos un ítem"}), 400
-    for it in items:
-        if not it.get("nombre") or not it.get("precio_unitario"):
-            return jsonify({"ok": False, "error": "Cada ítem necesita nombre y precio"}), 400
-
-    # 1. Config del tenant
-    config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
-    if not config:
-        return jsonify({"ok": False, "error": "No hay configuración de facturación para este tenant"}), 400
-
-    ambiente = normalizar_ambiente(data.get("ambiente") or config.get("ambiente") or "certificacion")
-    todos_exentos = all(it.get("exento") for it in items)
-    tipo_dte = 41 if todos_exentos else 39
-
-    emisor = {
-        "rut": config["rut_emisor"], "razon_social": config["razon_social"],
-        "giro": config.get("giro", "Venta al por menor"),
-        "dir_origen": config.get("direccion", "Sin dirección"),
-        "cmna_origen": config.get("comuna", "Santiago"),
-        "telefono": config.get("telefono"),
-        "correo": config.get("email"),
-    }
-
-    nro_resol = config.get("resolucion_sii_numero")
-    fch_resol = config.get("resolucion_sii_fecha")
-    if fch_resol and not isinstance(fch_resol, str):
-        try:
-            fch_resol = fch_resol.isoformat()
-        except Exception:
-            fch_resol = str(fch_resol)
-    if nro_resol is None:
-        nro_resol = 0
-    if not fch_resol:
-        fch_resol = "2014-08-22"
-
-    # 2. Certificado .pfx
-    cert = obtener_certificado(get_conn, release_conn, tenant_id)
-    if not cert.get("ok"):
-        return jsonify({"ok": False, "error": "Certificado: " + str(cert.get("error", "no disponible")),
-                        "pasos": pasos}), 400
-    paso("Leer certificado .pfx", True, cert["metadata"].get("titular", "?"))
-    rut_envia = cert["metadata"].get("rut", emisor["rut"])
-
-    # Receptor: genérico si no viene (XML al SII lleva 'Consumidor Final', validado)
-    receptor = data.get("receptor") or {"rut": "66666666-6", "razon_social": "Consumidor Final"}
-    if not receptor.get("rut"):
-        receptor["rut"] = "66666666-6"
-    if not receptor.get("razon_social"):
-        receptor["razon_social"] = "Consumidor Final"
-
-    # 3. Reservar folio (ATÓMICO)
-    folio_res = obtener_folio_disponible(get_conn, release_conn, tenant_id, tipo_dte, ambiente)
-    if not folio_res.get("ok"):
-        return jsonify({"ok": False, "error": folio_res.get("error"), "pasos": pasos}), 400
-    folio = folio_res["folio"]
-    paso("Reservar folio", True, "Folio " + str(folio) + " (tipo " + str(tipo_dte) + ", " + ambiente + ")")
-
-    track_id = None
-    boleta_id = None
-    total = 0
-
-    try:
-        from facturacion.dtes.caf_parser import parsear_caf_xml
-        from facturacion.dtes.boleta import generar_boleta_xml
-        from facturacion.dtes.envio_boleta import armar_envio_boleta
-        from facturacion.dtes.firma import firmar_envio_completo
-        from facturacion.dtes.sii_client import autenticar, enviar_boletas
-
-        caf = parsear_caf_xml(folio_res["xml_caf"])
-        # Fecha de emisión en hora de CHILE (no UTC del servidor). Si el servidor
-        # corre en UTC, datetime.now() daría el día equivocado de noche, causando
-        # que el FchEmis no coincida al consultar al SII. Usamos zona Chile.
-        try:
-            from zoneinfo import ZoneInfo
-            fecha = datetime.now(ZoneInfo("America/Santiago")).strftime("%Y-%m-%d")
-        except Exception:
-            # Fallback: UTC - 4 horas (horario estándar de Chile)
-            from datetime import timezone as _tz, timedelta as _td
-            fecha = (datetime.now(_tz.utc) - _td(hours=4)).strftime("%Y-%m-%d")
-
-        # 4. Generar la boleta
-        # Referencias opcionales del request (guía despacho, OC, etc.)
-        referencias = data.get("referencias") or []
-        if not isinstance(referencias, list):
-            referencias = []
-        res_bol = generar_boleta_xml(
-            caf=caf, folio=folio, fecha_emision=fecha,
-            emisor=emisor, items=items, receptor=receptor,
-            referencias=referencias if referencias else None,
-        )
-        boleta_xml = res_bol["xml"]
-        total = res_bol["totales"]["mnt_total"]
-        documento_id = res_bol["documento_id"]
-        paso("Generar boleta", True, ("$" + format(total, ",")).replace(",", "."))
-
-        # 5. Armar sobre + firmar
-        set_id = "SetDoc"
-        sobre = armar_envio_boleta(
-            dtes_firmados=[boleta_xml], rut_emisor=emisor["rut"],
-            rut_envia=rut_envia, fch_resol=fch_resol, nro_resol=nro_resol,
-            tipo_dte=tipo_dte, set_dte_id=set_id,
-        )
-        sobre_firmado = firmar_envio_completo(
-            sobre, cert["pfx_bytes"], cert["password"],
-            set_dte_id=set_id, documento_ids=[documento_id])
-        paso("Firmar sobre", True, str(len(sobre_firmado)) + " bytes")
-
-        # ─────────────────────────────────────────────────────────────────
-        # 6. REGISTRAR EN BD ANTES DE ENVIAR (estado 'generado')
-        #    Esto garantiza que el folio NUNCA queda huérfano: aunque el envío
-        #    al SII falle, la boleta queda registrada con su XML para reintento/auditoría.
-        # ─────────────────────────────────────────────────────────────────
-        conn = get_conn()
-        try:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO facturacion_dtes
-                      (tenant_id, tipo_dte, folio, rut_receptor, razon_social_receptor,
-                       monto_neto, monto_iva, monto_total, xml_firmado, estado,
-                       fecha_emision)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                    RETURNING id
-                """, (tenant_id, tipo_dte, folio, receptor["rut"], receptor["razon_social"],
-                      res_bol["totales"]["mnt_neto"], res_bol["totales"]["mnt_iva"],
-                      total, boleta_xml.decode("iso-8859-1", errors="replace"), "generado",
-                      fecha))  # fecha TIMBRADA en el XML (no NOW), para que la consulta al SII coincida
-                boleta_id = cur.fetchone()[0]
-            conn.commit()
-            paso("Registrar boleta (pre-envío)", True, "ID " + str(boleta_id) + " · estado: generado")
-        except Exception as e:
-            conn.rollback()
-            release_conn(conn)
-            # No pudimos registrar: abortamos ANTES de enviar (no consumimos folio en el SII)
-            paso("Registrar boleta (pre-envío)", False, str(e)[:200])
-            return jsonify({"ok": False, "folio": folio,
-                            "error": "No se pudo registrar la boleta antes de enviar: " + str(e)[:200],
-                            "pasos": pasos}), 500
-        finally:
-            try:
-                release_conn(conn)
-            except Exception:
-                pass
-
-        # 7. Autenticar + enviar al SII
-        try:
-            tok = autenticar(cert["pfx_bytes"], cert["password"], ambiente)
-            resultado = enviar_boletas(
-                envio_xml=sobre_firmado, token=tok,
-                rut_emisor=emisor["rut"], rut_envia=rut_envia, ambiente=ambiente)
-        except Exception as e:
-            # Falló la conexión/auth: la boleta queda en BD como 'error_envio' para reintento
-            _fact_actualizar_estado_dte(boleta_id, "error_envio", glosa=str(e)[:300])
-            paso("Enviar al SII", False, str(e)[:200])
-            return jsonify({"ok": False, "boleta_id": boleta_id, "folio": folio,
-                            "error": "No se pudo conectar con el SII. La boleta quedó guardada para reintentar.",
-                            "reintentable": True, "pasos": pasos}), 502
-
-        if not resultado.get("ok"):
-            detalle = resultado.get("error") or str(resultado.get("respuesta_cruda", ""))[:300]
-            _fact_actualizar_estado_dte(boleta_id, "error_envio", glosa=detalle)
-            paso("Enviar al SII", False, detalle)
-            return jsonify({"ok": False, "boleta_id": boleta_id, "folio": folio,
-                            "error": "El SII rechazó el envío: " + str(detalle),
-                            "reintentable": True, "pasos": pasos}), 502
-
-        track_id = resultado["track_id"]
-        # 8. Actualizar a 'enviado' con track_id
-        _fact_actualizar_estado_dte(boleta_id, "enviado", track_id=track_id,
-                                    estado_sii=resultado.get("estado"), set_fecha_envio=True)
-        paso("Enviar al SII", True, "Track ID: " + str(track_id))
-
-    except Exception as e:
-        import traceback
-        paso("Error", False, traceback.format_exc()[:400])
-        # Si ya habíamos registrado la boleta, dejarla marcada como error
-        if boleta_id:
-            try:
-                _fact_actualizar_estado_dte(boleta_id, "error_envio", glosa=str(e)[:300])
-            except Exception:
-                pass
-        return jsonify({"ok": False, "error": str(e)[:300], "folio": folio,
-                        "boleta_id": boleta_id, "pasos": pasos}), 500
-
-    return jsonify({
-        "ok": True, "folio": folio, "tipo_dte": tipo_dte, "track_id": track_id,
-        "total": total, "boleta_id": boleta_id,
-        "pdf_url": ("/facturacion/boleta/" + str(boleta_id) + "/pdf") if boleta_id else None,
-        "pasos": pasos,
-    })
+    # Códigos HTTP coherentes con el comportamiento anterior
+    if resultado.get("ok"):
+        return jsonify(resultado)
+    if resultado.get("reintentable"):
+        return jsonify(resultado), 502
+    # Errores de validación / negocio → 400; error interno → 500
+    err = (resultado.get("error") or "").lower()
+    if "no se pudo registrar" in err:
+        return jsonify(resultado), 500
+    return jsonify(resultado), 400
 
 
 @app.route("/facturacion/nota-credito/emitir", methods=["POST"])
