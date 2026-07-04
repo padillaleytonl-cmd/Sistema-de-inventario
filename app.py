@@ -22765,6 +22765,20 @@ def facturacion_nota_credito_emitir():
     })
 
 
+def _anio_desde_fecha_resol(fecha_resol):
+    """Extrae el año (int) de la fecha de resolución del tenant, para la leyenda
+    del PDF. Acepta date, datetime o string 'AAAA-MM-DD'. Devuelve None si no puede."""
+    if not fecha_resol:
+        return None
+    try:
+        if hasattr(fecha_resol, "year"):
+            return int(fecha_resol.year)
+        # string tipo 'AAAA-MM-DD'
+        return int(str(fecha_resol)[:4])
+    except (TypeError, ValueError):
+        return None
+
+
 def _fact_actualizar_estado_dte(boleta_id, estado, track_id=None, estado_sii=None,
                                 glosa=None, set_fecha_envio=False, set_fecha_aceptacion=False):
     """Actualiza el estado de un DTE registrado. Helper central de trazabilidad."""
@@ -22899,6 +22913,8 @@ def facturacion_boleta_preview():
     _datos_tenant_pdf = {
         "telefono": config.get("telefono"),
         "correo": config.get("email"),
+        "resolucion_numero": config.get("resolucion_sii_numero"),
+        "resolucion_anio": _anio_desde_fecha_resol(config.get("resolucion_sii_fecha")),
     }
     pdf = generar_pdf_dte(xml, formato=formato, url_consulta=url_consulta,
                           datos_tenant=_datos_tenant_pdf)
@@ -23280,6 +23296,8 @@ def facturacion_boleta_pdf(boleta_id):
     _datos_tenant_pdf = {
         "telefono": _cfg.get("telefono"),
         "correo": _cfg.get("email"),
+        "resolucion_numero": _cfg.get("resolucion_sii_numero"),
+        "resolucion_anio": _anio_desde_fecha_resol(_cfg.get("resolucion_sii_fecha")),
     }
     url_consulta = "lusync.cl/consultadte"
     pdf = generar_pdf_dte(xml, formato=formato, url_consulta=url_consulta,

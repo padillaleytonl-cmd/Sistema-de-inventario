@@ -778,6 +778,9 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
         c.drawCentredString(x + tw / 2, 1.9 * cm + th / 2 + 0.2 * cm, "VISTA PREVIA — BORRADOR")
         c.drawCentredString(x + tw / 2, 1.9 * cm + th / 2 - 0.3 * cm, "El timbre electrónico se genera al emitir")
         c.setFillColorRGB(0, 0, 0)
+        # Aun en borrador, mostramos la leyenda de resolución + verificación
+        c.setFont("Helvetica", 6.5)
+        c.drawString(x, 1.55 * cm, f"Res. {d.get('nro_resol', RESOLUCION_NRO)} de {d.get('anio_resol', RESOLUCION_ANIO)} - Verifique documento: www.sii.cl")
 
 
 def _pdf_carta(d: dict, url_consulta: str, solo_copia: str = None) -> bytes:
@@ -950,9 +953,23 @@ def generar_pdf_dte(dte_xml: bytes, formato: str = "carta",
         bytes del PDF.
     """
     d = parsear_dte_xml(dte_xml)
-    # Resolución del emisor (configurable; default = certificación)
-    d['nro_resol'] = nro_resol if nro_resol is not None else RESOLUCION_NRO
-    d['anio_resol'] = anio_resol if anio_resol is not None else RESOLUCION_ANIO
+    # Resolución del emisor (configurable; default = certificación).
+    # Prioridad: parámetro explícito > datos_tenant > default.
+    _nro = nro_resol
+    _anio = anio_resol
+    if datos_tenant:
+        if _nro is None and datos_tenant.get("resolucion_numero") is not None:
+            try:
+                _nro = int(datos_tenant.get("resolucion_numero"))
+            except (TypeError, ValueError):
+                _nro = None
+        if _anio is None and datos_tenant.get("resolucion_anio"):
+            try:
+                _anio = int(datos_tenant.get("resolucion_anio"))
+            except (TypeError, ValueError):
+                _anio = None
+    d['nro_resol'] = _nro if _nro is not None else RESOLUCION_NRO
+    d['anio_resol'] = _anio if _anio is not None else RESOLUCION_ANIO
 
     # Contacto del emisor para la parte VISUAL: se alimenta desde el tenant si el
     # XML no lo trajo (no lo trae por norma del SII). Nunca modifica el XML.
