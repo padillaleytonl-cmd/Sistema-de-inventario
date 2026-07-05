@@ -22976,7 +22976,13 @@ def facturacion_boleta_preview():
 def _esc_xml_preview(s):
     if s is None:
         return ""
-    s = str(s)
+    # Limpiar caracteres no compatibles con Latin-1 (emojis, guiones largos, etc.)
+    # para que no aparezcan como "?" en la vista previa, igual que en el XML real.
+    try:
+        from facturacion.dtes.boleta import _limpiar_latin1
+        s = _limpiar_latin1(str(s))
+    except Exception:
+        s = str(s)
     return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
              .replace('"', "&quot;").replace("'", "&apos;"))
 
