@@ -22796,6 +22796,18 @@ def facturacion_nota_credito_emitir():
     })
 
 
+def _fecha_chile():
+    """Fecha actual (AAAA-MM-DD) en hora de Chile, no UTC del servidor.
+    Evita que documentos emitidos de noche salgan con el día siguiente."""
+    from datetime import datetime as _d
+    try:
+        from zoneinfo import ZoneInfo
+        return _d.now(ZoneInfo("America/Santiago")).strftime("%Y-%m-%d")
+    except Exception:
+        from datetime import timezone as _tz, timedelta as _td
+        return (_d.now(_tz.utc) - _td(hours=4)).strftime("%Y-%m-%d")
+
+
 def _anio_desde_fecha_resol(fecha_resol):
     """Extrae el año (int) de la fecha de resolución del tenant, para la leyenda
     del PDF. Acepta date, datetime o string 'AAAA-MM-DD'. Devuelve None si no puede."""
@@ -22887,7 +22899,14 @@ def facturacion_boleta_preview():
 
     receptor = data.get("receptor") or {}
     from datetime import datetime as _dt
-    fecha = _dt.now().strftime("%Y-%m-%d")
+    # Fecha en hora de CHILE (no UTC del servidor). A las 21:53 del día 4 en Chile,
+    # en UTC ya es día 5; usar now() sin zona daría el día equivocado en la boleta.
+    try:
+        from zoneinfo import ZoneInfo
+        fecha = _dt.now(ZoneInfo("America/Santiago")).strftime("%Y-%m-%d")
+    except Exception:
+        from datetime import timezone as _tz, timedelta as _td
+        fecha = (_dt.now(_tz.utc) - _td(hours=4)).strftime("%Y-%m-%d")
 
     # Detalles XML
     detalles = ""
@@ -26514,7 +26533,7 @@ def admin_lusync_sii_test_envio():
             items = [{"nombre": "Item Set Prueba", "cantidad": 1,
                       "precio_unitario": 29800, "exento": False}]
             res_bol = generar_boleta_xml(
-                caf=caf, folio=folio, fecha_emision=datetime.now().strftime("%Y-%m-%d"),
+                caf=caf, folio=folio, fecha_emision=_fecha_chile(),
                 emisor=emisor, items=items,
                 referencia={"cod_ref": "SET", "razon_ref": "CASO-1"},
             )
@@ -29487,7 +29506,7 @@ def admin_lusync_sii_test_set_boletas():
         documento_ids = []
         if not error_fatal:
             from facturacion.dtes.boleta import generar_boleta_xml
-            fecha = datetime.now().strftime("%Y-%m-%d")
+            fecha = _fecha_chile()
             folio = folio_inicial
             for caso, items in SET_BOLETAS_BE.items():
                 res_bol = generar_boleta_xml(
@@ -29687,7 +29706,7 @@ def admin_lusync_sii_test_pdf_boleta():
         }
         # Usa el CASO-1 del Set como muestra
         res_bol = generar_boleta_xml(
-            caf=caf, folio=folio, fecha_emision=datetime.now().strftime("%Y-%m-%d"),
+            caf=caf, folio=folio, fecha_emision=_fecha_chile(),
             emisor=emisor,
             items=[{"nombre": "Cambio de aceite", "cantidad": 1, "precio_unitario": 19900, "exento": False},
                    {"nombre": "Alineacion y balanceo", "cantidad": 1, "precio_unitario": 9900, "exento": False}],
@@ -29770,7 +29789,7 @@ def admin_lusync_sii_test_rcof():
         # ─── 6. Generar el RCOF ───
         if not error_fatal:
             from facturacion.dtes.rcof import generar_rcof_xml
-            fecha = datetime.now().strftime("%Y-%m-%d")
+            fecha = _fecha_chile()
             res_rcof = generar_rcof_xml(
                 rut_emisor=rut_emisor, rut_envia=rut_envia, fecha=fecha,
                 resumenes=[resumen_39],

@@ -34,11 +34,41 @@ def _redondear_clp(valor: float) -> int:
     return int(round(valor))
 
 
+def _limpiar_latin1(s: str) -> str:
+    """Deja el texto compatible con ISO-8859-1 (codificación que exige el SII),
+    sin generar '?' feos. Transatlitera los caracteres tipográficos más comunes
+    a su equivalente ASCII y descarta lo que Latin-1 no puede representar
+    (emojis, símbolos raros). Mantiene tildes, ñ, ü, etc., que Latin-1 sí soporta.
+    """
+    if not s:
+        return ''
+    # Reemplazos tipográficos frecuentes en nombres de producto copiados de la web
+    reemplazos = {
+        '\u2013': '-', '\u2014': '-', '\u2012': '-', '\u2212': '-',  # guiones largos/menos
+        '\u2018': "'", '\u2019': "'", '\u201A': "'", '\u2032': "'",  # comillas simples curvas
+        '\u201C': '"', '\u201D': '"', '\u201E': '"', '\u2033': '"',  # comillas dobles curvas
+        '\u2026': '...',                                              # puntos suspensivos
+        '\u00A0': ' ',                                               # espacio no separable
+        '\u2022': '-', '\u25CF': '-', '\u00B7': '.',                 # viñetas / punto medio
+        '\u2122': '(TM)', '\u00AE': '(R)', '\u00A9': '(C)',          # marcas
+        '\u20A9': '', '\u20AC': 'EUR',                               # símbolos de moneda raros
+    }
+    for k, v in reemplazos.items():
+        s = s.replace(k, v)
+    # Descartar cualquier carácter que Latin-1 no pueda representar (emojis, etc.)
+    # sin dejar '?': se codifica ignorando lo no representable y se recupera.
+    s = s.encode('iso-8859-1', errors='ignore').decode('iso-8859-1')
+    # Colapsar espacios que hayan quedado dobles tras quitar símbolos
+    while '  ' in s:
+        s = s.replace('  ', ' ')
+    return s.strip()
+
+
 def _escape_xml(s: str) -> str:
-    """Escapa caracteres especiales para XML."""
+    """Escapa caracteres especiales para XML y limpia lo no compatible con Latin-1."""
     if s is None:
         return ''
-    s = str(s)
+    s = _limpiar_latin1(str(s))
     return (s.replace('&', '&amp;')
              .replace('<', '&lt;')
              .replace('>', '&gt;')

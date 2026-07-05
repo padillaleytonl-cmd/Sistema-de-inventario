@@ -127,7 +127,13 @@ def facturacion_boleta_emitir():
         from facturacion.dtes.sii_client import autenticar, enviar_boletas
 
         caf = parsear_caf_xml(folio_res["xml_caf"])
-        fecha = datetime.now().strftime("%Y-%m-%d")
+        # Fecha en hora de Chile (no UTC del servidor)
+        try:
+            from zoneinfo import ZoneInfo
+            fecha = datetime.now(ZoneInfo("America/Santiago")).strftime("%Y-%m-%d")
+        except Exception:
+            from datetime import timezone as _tz, timedelta as _td
+            fecha = (datetime.now(_tz.utc) - _td(hours=4)).strftime("%Y-%m-%d")
 
         # Receptor (opcional; default consumidor final)
         receptor = data.get("receptor") or None

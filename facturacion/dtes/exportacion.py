@@ -46,10 +46,36 @@ def _limpiar_rut(rut) -> str:
     return str(rut).replace('.', '').replace(' ', '').upper()
 
 
+def _limpiar_latin1(s: str) -> str:
+    """Deja el texto compatible con ISO-8859-1 (codificación que exige el SII),
+    sin generar '?' feos. Translitera los caracteres tipográficos más comunes
+    a su equivalente ASCII y descarta lo que Latin-1 no puede representar
+    (emojis, símbolos raros). Mantiene tildes, ñ, ü, etc., que Latin-1 sí soporta.
+    """
+    if not s:
+        return ''
+    reemplazos = {
+        '\u2013': '-', '\u2014': '-', '\u2012': '-', '\u2212': '-',
+        '\u2018': "'", '\u2019': "'", '\u201A': "'", '\u2032': "'",
+        '\u201C': '"', '\u201D': '"', '\u201E': '"', '\u2033': '"',
+        '\u2026': '...',
+        '\u00A0': ' ',
+        '\u2022': '-', '\u25CF': '-', '\u00B7': '.',
+        '\u2122': '(TM)', '\u00AE': '(R)', '\u00A9': '(C)',
+        '\u20A9': '', '\u20AC': 'EUR',
+    }
+    for k, v in reemplazos.items():
+        s = s.replace(k, v)
+    s = s.encode('iso-8859-1', errors='ignore').decode('iso-8859-1')
+    while '  ' in s:
+        s = s.replace('  ', ' ')
+    return s.strip()
+
+
 def _escape_xml(s) -> str:
     if s is None:
         return ''
-    s = str(s)
+    s = _limpiar_latin1(str(s))
     return (s.replace('&', '&amp;')
              .replace('<', '&lt;')
              .replace('>', '&gt;')
