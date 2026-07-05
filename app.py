@@ -22584,6 +22584,36 @@ def facturacion_nota_credito_emitir():
     if not referencia.get("folio_ref"):
         return jsonify({"ok": False, "error": "La Nota de Crédito requiere el folio del documento que modifica"}), 400
     cod_ref = int(referencia.get("cod_ref", 1))
+
+    # PROTECCIÓN: si es anulación total (CodRef=1), verificar que el documento
+    # referenciado NO esté ya anulado. Evita doble anulación (dos NC sobre el
+    # mismo documento), que rebajaría el débito fiscal dos veces. Esta validación
+    # va en el backend para ser robusta aunque el botón del frontend falle.
+    if cod_ref == 1:
+        try:
+            from inventario import get_conn as _gc0, release_conn as _rc0
+            _c0 = _gc0()
+            try:
+                with _c0.cursor() as _cur0:
+                    _cur0.execute(
+                        "SELECT estado, motivo_anulacion FROM facturacion_dtes "
+                        "WHERE tenant_id=%s AND tipo_dte=%s AND folio=%s",
+                        (tenant_id, int(referencia.get("tipo_doc_ref", 39)),
+                         referencia.get("folio_ref")))
+                    _row0 = _cur0.fetchone()
+            finally:
+                _rc0(_c0)
+            if _row0 and (_row0[0] in ("anulada", "anulado")
+                          or (_row0[1] and "Anulada con NC" in str(_row0[1]))):
+                return jsonify({"ok": False,
+                                "error": "Este documento ya fue anulado (%s). "
+                                         "No se puede anular dos veces." % (
+                                             _row0[1] or "anulado")}), 409
+        except Exception as _e0:
+            # Si la verificación falla por algo inesperado, no bloqueamos la emisión
+            # legítima, pero lo registramos.
+            print("[Facturación] No se pudo verificar doble anulación: %s" % _e0)
+
     # items: para anulación pueden venir del documento original
     items = data.get("items") or []
     if cod_ref == 1 and not items:
