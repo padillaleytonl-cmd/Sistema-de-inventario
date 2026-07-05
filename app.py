@@ -22883,7 +22883,10 @@ def facturacion_boleta_preview():
         return jsonify({"ok": False, "error": "Sin configuración"}), 400
 
     todos_exentos = all(it.get("exento") for it in items)
-    tipo_dte = 41 if todos_exentos else 39
+    # Tipo de documento: viene del body (NC, factura, etc.); default boleta según exención
+    tipo_dte = int(data.get("tipo_dte") or (41 if todos_exentos else 39))
+    # Referencia (para nota de crédito/débito): opcional
+    referencia = data.get("referencia") or None
 
     # Calcular totales (precios incluyen IVA, igual que boleta.py)
     bruto_af = 0; mnt_exe = 0
@@ -22935,6 +22938,22 @@ def facturacion_boleta_preview():
         tot += f"<IVA>{iva}</IVA>"
     tot += f"<MntTotal>{total}</MntTotal></Totales>"
 
+    # Referencia (NC/ND): el SII la exige. En el borrador se muestra para que el
+    # usuario vea a qué documento apunta antes de firmar.
+    ref_xml = ""
+    if referencia and referencia.get("folio_ref"):
+        _cod = {1: "1", 2: "2", 3: "3"}.get(int(referencia.get("cod_ref", 1)), "1")
+        ref_xml = (
+            "<Referencia>"
+            "<NroLinRef>1</NroLinRef>"
+            f"<TpoDocRef>{int(referencia.get('tipo_doc_ref', 39))}</TpoDocRef>"
+            f"<FolioRef>{referencia.get('folio_ref')}</FolioRef>"
+            f"<FchRef>{referencia.get('fecha_ref', fecha)}</FchRef>"
+            f"<CodRef>{_cod}</CodRef>"
+            f"<RazonRef>{_esc_xml_preview(referencia.get('razon_ref', ''))}</RazonRef>"
+            "</Referencia>"
+        )
+
     # XML borrador (sin TED real → el PDF mostrará placeholder de timbre)
     xml = (
         '<?xml version="1.0" encoding="ISO-8859-1"?>'
@@ -22955,6 +22974,7 @@ def facturacion_boleta_preview():
         f'{tot}'
         '</Encabezado>'
         f'{detalles}'
+        f'{ref_xml}'
         '<TmstFirma>BORRADOR</TmstFirma>'
         '</Documento></DTE>'
     ).encode("iso-8859-1", errors="replace")

@@ -13495,6 +13495,7 @@ function dtInit(){
 document.addEventListener('DOMContentLoaded', ()=>{ setTimeout(dtInit, 300); });
 
 let _dtNCcodRef = 1;  // 1=anula, 2=corrige texto, 3=corrige montos
+let _dtNCMontoMax = 0;  // monto del documento referenciado (tope para "corrige montos")
 function dtTipo(tipo, btn){
   _dtTipo = tipo;
   document.querySelectorAll('.dt-tipo').forEach(b=>{b.style.background='var(--card)';b.style.color='var(--text)';b.style.borderColor='var(--border)';});
@@ -13519,6 +13520,7 @@ function dtNCOperacion(cod, btn){
     3:'Rebaja parte del monto. Ingresa en los ítems el monto neto a rebajar (el IVA se calcula solo). No puede superar el total original.'
   };
   if(hint) hint.textContent = hints[cod]||'';
+  dtNCActualizarTope();
 }
 
 // Buscar documento emitido para referenciar en la NC
@@ -13554,10 +13556,21 @@ function dtNCSeleccionar(doc){
   document.getElementById('dtNCFechaRef').value = doc.fecha;
   document.getElementById('dtNCResultados').innerHTML='';
   document.getElementById('dtNCBuscar').value = dtTipoAbrev(doc.tipo).sigla+' N°'+doc.folio+' · '+(doc.cliente||'Consumidor Final');
+  _dtNCMontoMax = parseFloat(doc.monto)||0;
   // Si es anular, prellenar un ítem con el monto total del documento
   if(_dtNCcodRef===1 && doc.monto){
     document.getElementById('dtItems').innerHTML='';
     dtAddItem('Anulación '+dtTipoAbrev(doc.tipo).nombre+' N°'+doc.folio, 1, doc.monto, 'Un');
+  }
+  dtNCActualizarTope();
+}
+
+// Muestra el tope de monto disponible para "corrige montos"
+function dtNCActualizarTope(){
+  const hint=document.getElementById('dtNCopHint');
+  if(_dtNCcodRef===3 && _dtNCMontoMax>0 && hint){
+    hint.innerHTML='Rebaja parte del monto. Ingresa el monto neto a rebajar (el IVA se calcula solo). '
+      +'<b>Máximo del documento: '+_dtCLP(_dtNCMontoMax)+'</b> — la NC no puede superarlo.';
   }
 }
 
@@ -13674,7 +13687,7 @@ async function dtVistaPrevia(){
   if(document.getElementById('dtRecRut').value.trim())receptor.rut=document.getElementById('dtRecRut').value.trim();
   if(document.getElementById('dtRecNombre').value.trim())receptor.razon_social=document.getElementById('dtRecNombre').value.trim();
 
-  // Nota de Crédito: mostrar un resumen de la operación (no el PDF de boleta)
+  // Nota de Crédito: validar y mostrar el PDF borrador real (con su referencia)
   if(_dtTipo==='61'){
     const folioRef=document.getElementById('dtNCFolioRef').value.trim();
     const fechaRef=document.getElementById('dtNCFechaRef').value;
@@ -13682,23 +13695,26 @@ async function dtVistaPrevia(){
     const razon=document.getElementById('dtNCRazon').value.trim();
     if(!folioRef||!fechaRef){ alert('Indica el folio y la fecha del documento que se referencia.'); return; }
     if(!razon){ alert('El motivo / razón de referencia es obligatorio.'); return; }
-    const opTxt={1:'Anula documento completo',3:'Corrige montos (rebaja)'}[_dtNCcodRef]||'';
     let totalNC=0; items.forEach(it=>{ totalNC += (parseFloat(it.precio_unitario)||0)*(parseFloat(it.cantidad)||1); });
+    if(_dtNCcodRef===3 && _dtNCMontoMax>0 && totalNC > _dtNCMontoMax){
+      alert('El monto de la nota de crédito ('+_dtCLP(totalNC)+') no puede superar el total del documento original ('+_dtCLP(_dtNCMontoMax)+'). Ajusta el monto a rebajar.');
+      return;
+    }
     document.getElementById('dtFormWrap').style.display='none';
     const prev=document.getElementById('dtPreviaWrap'); prev.style.display='block';
-    prev.innerHTML='<div style="background:#faf7ff;border:1px solid #e5d9fb;border-radius:12px;padding:20px;">'
-      +'<div style="font-size:16px;font-weight:700;color:#6d28d9;margin-bottom:14px;">🧾 Resumen de la Nota de Crédito</div>'
-      +'<div style="display:grid;grid-template-columns:auto 1fr;gap:8px 16px;font-size:14px;color:var(--text);">'
-      +'<span style="color:var(--muted);">Operación:</span><b>'+opTxt+'</b>'
-      +'<span style="color:var(--muted);">Documento referenciado:</span><b>'+dtTipoAbrev(tipoRef).sigla+' N°'+folioRef+' ('+fechaRef+')</b>'
-      +'<span style="color:var(--muted);">Motivo:</span><span>'+razon+'</span>'
-      +'<span style="color:var(--muted);">Monto NC:</span><b>'+_dtCLP(totalNC)+'</b>'
-      +'</div>'
-      +'<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px;margin-top:16px;font-size:12px;color:#92400e;">⚠️ Una vez emitida y enviada al SII, la nota de crédito no se puede deshacer. Verifica el documento referenciado y el motivo.</div>'
-      +'<div style="display:flex;gap:10px;margin-top:16px;">'
-      +'<button onclick="dtCancelarPrevia()" style="flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);padding:14px;border-radius:11px;font-weight:600;font-size:14px;cursor:pointer;">← Volver a editar</button>'
-      +'<button id="dtBtnConfirmar" onclick="dtEmitir()" style="flex:2;background:#6d28d9;color:#fff;border:none;padding:14px;border-radius:11px;font-weight:700;font-size:15px;cursor:pointer;">✓ Confirmar y enviar al SII</button>'
-      +'</div></div>';
+    prev.innerHTML='<div style="padding:40px;text-align:center;color:var(--muted);font-size:14px;">Generando vista previa…</div>';
+    try{
+      const body={ items, receptor:Object.keys(receptor).length?receptor:null, formato,
+        tipo_dte:61, referencia:{ folio_ref:parseInt(folioRef,10), tipo_doc_ref:parseInt(tipoRef,10),
+          fecha_ref:fechaRef, cod_ref:_dtNCcodRef, razon_ref:razon } };
+      const r=await fetch('/facturacion/boleta/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      if(!r.ok){ let msg='No se pudo generar la vista previa'; try{const e=await r.json(); msg=e.error||msg;}catch(_){}
+        prev.innerHTML='<div style="background:#fdf2f2;border:1px solid #f3c2c2;border-radius:11px;padding:16px;color:#dc2626;font-size:13px;">'+msg+'</div><button onclick="dtCancelarPrevia()" style="margin-top:12px;background:var(--card);border:1px solid var(--border);color:var(--text);padding:12px 18px;border-radius:10px;font-weight:600;cursor:pointer;">← Volver a editar</button>'; return; }
+      const blob=await r.blob(); const pdfUrl=URL.createObjectURL(blob);
+      prev.innerHTML='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px;margin-bottom:14px;font-size:13px;color:#92400e;">⚠️ Vista previa de la nota de crédito. Revísala bien: una vez firmada y enviada al SII <b>no se puede deshacer</b>. El folio y el timbre se generan al confirmar.</div>'
+        +'<div style="border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#525659;"><iframe src="'+pdfUrl+'" style="width:100%;height:780px;border:none;display:block;"></iframe></div>'
+        +'<div style="display:flex;gap:10px;margin-top:14px;"><button onclick="dtCancelarPrevia()" style="flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);padding:14px;border-radius:11px;font-weight:600;font-size:14px;cursor:pointer;">← Volver a editar</button><button id="dtBtnConfirmar" onclick="dtEmitir()" style="flex:2;background:#6d28d9;color:#fff;border:none;padding:14px;border-radius:11px;font-weight:700;font-size:15px;cursor:pointer;">✓ Firmar y enviar al SII</button></div>';
+    }catch(e){ prev.innerHTML='<div style="color:#dc2626;font-size:13px;">Error generando vista previa: '+e.message+'</div><button onclick="dtCancelarPrevia()" style="margin-top:12px;background:var(--card);border:1px solid var(--border);color:var(--text);padding:12px 18px;border-radius:10px;font-weight:600;cursor:pointer;">← Volver a editar</button>'; }
     return;
   }
 
@@ -13761,6 +13777,15 @@ async function dtEmitir(){
     const razon=document.getElementById('dtNCRazon').value.trim();
     if(!folioRef||!fechaRef){ alert('Indica el folio y la fecha del documento que se referencia.'); if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';} return; }
     if(!razon){ alert('El motivo / razón de referencia es obligatorio.'); if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';} return; }
+    // Restricción SII: en "corrige montos" (rebaja), la NC no puede superar el total del documento original
+    if(_dtNCcodRef===3 && _dtNCMontoMax>0){
+      let totalNC=0; items.forEach(it=>{ totalNC += (parseFloat(it.precio_unitario)||0)*(parseFloat(it.cantidad)||1); });
+      if(totalNC > _dtNCMontoMax){
+        alert('El monto de la nota de crédito ('+_dtCLP(totalNC)+') no puede superar el total del documento original ('+_dtCLP(_dtNCMontoMax)+'). El SII rechazaría la nota. Ajusta el monto a rebajar.');
+        if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';}
+        return;
+      }
+    }
     const body={ items, receptor: Object.keys(receptor).length?receptor:null, formato,
       referencia:{ folio_ref: parseInt(folioRef,10), tipo_doc_ref: parseInt(tipoRef,10),
         fecha_ref: fechaRef, cod_ref: _dtNCcodRef, razon_ref: razon } };
@@ -14326,8 +14351,12 @@ function conRenderPagina(){
     // Botón "Anular con NC": solo para boletas/facturas (no NC/ND), enviadas/aceptadas y NO ya anuladas
     let btnAnular = '';
     const tipoNum = Number(doc.tipo_dte || doc.tipo || 39);
+    // Anulable: boletas/facturas enviadas/aceptadas que NO estén ya anuladas
+    const yaAnulado = doc.estado==='anulada' || doc.estado==='anulado'
+      || (doc.motivo_anulacion && doc.motivo_anulacion.indexOf('Anulada con NC')>=0);
     const anulable = ![61,56].includes(tipoNum)
-      && ['enviado','en_proceso','aceptado'].includes(doc.estado);
+      && ['enviado','en_proceso','aceptado'].includes(doc.estado)
+      && !yaAnulado;
     if(anulable){
       const dNC = {id:doc.id, tipo:tipoNum, folio:doc.folio,
                    fecha:doc.fecha_emision||'', monto:doc.monto_total||0, estado:doc.estado};
