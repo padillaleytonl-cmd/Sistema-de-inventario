@@ -22749,6 +22749,36 @@ def facturacion_nota_credito_emitir():
         _fact_actualizar_estado_dte(nc_id, "enviado", track_id=track_id, set_fecha_envio=True)
         paso("Enviar al SII", True, "Track ID: " + str(track_id))
 
+        # Si es anulación total (CodRef=1), marcar el documento original como anulado
+        # y vincularlo a esta NC. Deja rastro legal y operativo: la boleta queda
+        # "Anulada con NC N°<folio>" y no se considera vigente.
+        if cod_ref == 1:
+            try:
+                from inventario import get_conn as _gc, release_conn as _rc
+                _conn = _gc()
+                try:
+                    with _conn.cursor() as _cur:
+                        _cur.execute("""
+                            UPDATE facturacion_dtes
+                               SET estado = 'anulada',
+                                   fecha_anulacion = NOW(),
+                                   motivo_anulacion = %s,
+                                   referencia_dte_id = %s
+                             WHERE tenant_id = %s AND tipo_dte = %s AND folio = %s
+                        """, ("Anulada con NC N°%s" % folio,
+                              nc_id, tenant_id,
+                              referencia["tipo_doc_ref"], referencia["folio_ref"]))
+                    _conn.commit()
+                    paso("Marcar documento original anulado", True,
+                         "Doc tipo %s folio %s → anulado" % (
+                             referencia["tipo_doc_ref"], referencia["folio_ref"]))
+                finally:
+                    _rc(_conn)
+            except Exception as _e:
+                # No bloquea: la NC ya se emitió. Solo se registra el aviso.
+                print("[Facturación] NC %s emitida pero no se pudo marcar el "
+                      "documento original como anulado: %s" % (folio, _e))
+
     except Exception as e:
         import traceback
         paso("Error", False, traceback.format_exc()[:400])
@@ -22761,6 +22791,7 @@ def facturacion_nota_credito_emitir():
         "ok": True, "folio": folio, "tipo_dte": 61, "track_id": track_id,
         "total": total, "nc_id": nc_id,
         "pdf_url": ("/facturacion/boleta/" + str(nc_id) + "/pdf") if nc_id else None,
+        "anula_folio": referencia["folio_ref"] if cod_ref == 1 else None,
         "pasos": pasos,
     })
 
@@ -23809,7 +23840,7 @@ def facturacion_documentos_listar():
             cur.execute(
                 "SELECT id, tipo_dte, folio, rut_receptor, razon_social_receptor, "
                 "       monto_total, monto_iva, estado, track_id_sii, estado_sii, "
-                "       canal, orden_id, fecha_emision "
+                "       canal, orden_id, fecha_emision, motivo_anulacion "
                 "FROM facturacion_dtes WHERE " + where_sql +
                 " ORDER BY fecha_emision DESC, id DESC LIMIT %s OFFSET %s",
                 params + [por_pagina, offset])
@@ -23833,6 +23864,7 @@ def facturacion_documentos_listar():
             "estado": r[7], "track_id": r[8], "estado_sii": r[9],
             "canal": r[10] or "", "orden_id": r[11] or "",
             "fecha_emision": r[12].isoformat() if r[12] else None,
+            "motivo_anulacion": r[13] or "",
             "pdf_url": f"/facturacion/boleta/{r[0]}/pdf",
             "xml_url": f"/facturacion/boleta/{r[0]}/xml",
             "xml_receptor_url": f"/facturacion/boleta/{r[0]}/xml-receptor",

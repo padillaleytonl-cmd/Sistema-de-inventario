@@ -13807,6 +13807,8 @@ const DT_ESTADO = {
   revisar:         {bg:'#fef9e7', color:'#a16207', label:'⚠ Revisar datos'},
   rechazado:       {bg:'#fdf2f2', color:'#dc2626', label:'Rechazada'},
   error_envio:     {bg:'#fef3e2', color:'#b45309', label:'Error de envío'},
+  anulada:         {bg:'#f3f4f6', color:'#6b7280', label:'Anulada'},
+  anulado:         {bg:'#f3f4f6', color:'#6b7280', label:'Anulada'},
 };
 // Abreviaturas de tipo de documento (código DTE → sigla + nombre completo)
 const DT_TIPO_ABREV = {
@@ -13820,8 +13822,12 @@ const DT_TIPO_ABREV = {
 };
 function dtTipoAbrev(tipo){ return (DT_TIPO_ABREV[Number(tipo)]||{sigla:('T'+tipo),nombre:('Tipo '+tipo)}); }
 // Color de punto por estado (resumido a 4 grupos visuales)
-function dtEstadoPunto(estado){
+function dtEstadoPunto(estado, doc){
   const eb=DT_ESTADO[estado]||{color:'#6b6880',label:estado||'—'};
+  // Si está anulada y sabemos con qué NC, mostrarlo explícito
+  if((estado==='anulada'||estado==='anulado') && doc && doc.motivo_anulacion){
+    return {color:eb.color, label:doc.motivo_anulacion};
+  }
   return {color:eb.color, label:eb.label};
 }
 async function dtCargarDocs(){
@@ -14133,7 +14139,7 @@ function conRenderPagina(){
     +'<th style="padding:8px;text-align:right;">Acciones</th></tr></thead><tbody>';
   _conDocs.forEach(doc=>{
     const f=doc.fecha_emision?doc.fecha_emision.slice(0,10):'—';
-    const pt=dtEstadoPunto(doc.estado);
+    const pt=dtEstadoPunto(doc.estado, doc);
     const checked = _conSel.has(doc.id) ? 'checked' : '';
     const cliente = doc.razon_social_receptor || 'Boleta simple';
     const sub = [doc.rut_receptor, doc.orden_id].filter(Boolean).join(' · ');
@@ -14141,6 +14147,16 @@ function conRenderPagina(){
     const ae = doc.afecta
       ? '<span title="Venta afecta (con IVA)" style="font-size:12px;font-weight:700;display:inline-block;width:22px;height:22px;line-height:22px;border-radius:6px;background:#E6F1FB;color:#185FA5;cursor:default;">A</span>'
       : '<span title="Venta exenta (sin IVA)" style="font-size:12px;font-weight:700;display:inline-block;width:22px;height:22px;line-height:22px;border-radius:6px;background:#FAEEDA;color:#854F0B;cursor:default;">E</span>';
+    // Botón "Anular con NC": solo para boletas/facturas (no NC/ND), enviadas/aceptadas y NO ya anuladas
+    let btnAnular = '';
+    const tipoNum = Number(doc.tipo_dte || doc.tipo || 39);
+    const anulable = ![61,56].includes(tipoNum)
+      && ['enviado','en_proceso','aceptado'].includes(doc.estado);
+    if(anulable){
+      const dNC = {id:doc.id, tipo:tipoNum, folio:doc.folio,
+                   fecha:doc.fecha_emision||'', monto:doc.monto_total||0, estado:doc.estado};
+      btnAnular = `<button onclick='dtAbrirNotaCredito(${JSON.stringify(dNC)})' title="Anular con Nota de Crédito" style="background:var(--bg2);border:1px solid var(--border);color:#dc2626;padding:6px 9px;border-radius:7px;font-size:13px;cursor:pointer;margin-left:4px;">🧾</button>`;
+    }
     h+=`<tr style="border-top:1px solid var(--border);">
       <td style="padding:9px 8px;"><input type="checkbox" class="conSelChk" data-id="${doc.id}" ${checked} onchange="conToggleOne(${doc.id},this)" style="cursor:pointer;"></td>
       <td style="padding:9px 8px;color:var(--text);font-weight:600;">${doc.folio}</td>
@@ -14155,6 +14171,7 @@ function conRenderPagina(){
         </span>
         <button onclick="conDescargarUno(${doc.id},'carta')" title="Descargar PDF carta" style="background:var(--bg2);border:1px solid var(--border);color:#534AB7;padding:6px 9px;border-radius:7px;font-size:13px;cursor:pointer;margin-left:4px;">📄</button>
         <button onclick="conDescargarUno(${doc.id},'xml')" title="Descargar XML" style="background:var(--bg2);border:1px solid var(--border);color:#534AB7;padding:6px 9px;border-radius:7px;font-size:13px;cursor:pointer;margin-left:4px;">&lt;/&gt;</button>
+        ${btnAnular}
       </td></tr>`;
   });
   h+='</tbody></table>';
