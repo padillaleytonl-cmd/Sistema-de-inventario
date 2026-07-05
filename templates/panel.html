@@ -3364,8 +3364,6 @@ tbody td {
                 style="padding:8px 14px;border:1px solid #6d28d9;background:#6d28d9;color:#fff;border-radius:8px;font-family:inherit;font-weight:600;font-size:12px;cursor:pointer;">Anula documento</button>
               <button type="button" id="dtNCop3" onclick="dtNCOperacion(3,this)" class="dtNCop"
                 style="padding:8px 14px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-family:inherit;font-weight:600;font-size:12px;cursor:pointer;">Corrige montos (rebaja)</button>
-              <button type="button" id="dtNCop2" onclick="dtNCOperacion(2,this)" class="dtNCop"
-                style="padding:8px 14px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-family:inherit;font-weight:600;font-size:12px;cursor:pointer;">Corrige texto</button>
             </div>
             <div id="dtNCopHint" style="font-size:11px;color:var(--muted);margin-top:7px;">Deja sin efecto el documento completo. Los ítems replican el total del original.</div>
           </div>
@@ -13518,8 +13516,7 @@ function dtNCOperacion(cod, btn){
   const hint=document.getElementById('dtNCopHint');
   const hints={
     1:'Deja sin efecto el documento completo. Los ítems replican el total del original.',
-    3:'Rebaja parte del monto. Ingresa en los ítems el monto neto a rebajar (el IVA se calcula solo). No puede superar el total original.',
-    2:'Corrige datos de texto (RUT, razón social, dirección) sin cambiar montos. Agrega un ítem describiendo la corrección: "Donde dice X debe decir Y".'
+    3:'Rebaja parte del monto. Ingresa en los ítems el monto neto a rebajar (el IVA se calcula solo). No puede superar el total original.'
   };
   if(hint) hint.textContent = hints[cod]||'';
 }
@@ -13685,7 +13682,7 @@ async function dtVistaPrevia(){
     const razon=document.getElementById('dtNCRazon').value.trim();
     if(!folioRef||!fechaRef){ alert('Indica el folio y la fecha del documento que se referencia.'); return; }
     if(!razon){ alert('El motivo / razón de referencia es obligatorio.'); return; }
-    const opTxt={1:'Anula documento completo',3:'Corrige montos (rebaja)',2:'Corrige texto'}[_dtNCcodRef]||'';
+    const opTxt={1:'Anula documento completo',3:'Corrige montos (rebaja)'}[_dtNCcodRef]||'';
     let totalNC=0; items.forEach(it=>{ totalNC += (parseFloat(it.precio_unitario)||0)*(parseFloat(it.cantidad)||1); });
     document.getElementById('dtFormWrap').style.display='none';
     const prev=document.getElementById('dtPreviaWrap'); prev.style.display='block';
