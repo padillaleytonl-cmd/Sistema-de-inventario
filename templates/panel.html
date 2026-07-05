@@ -3341,6 +3341,8 @@ tbody td {
             style="padding:8px 16px;border:1px solid #059669;background:#059669;color:#fff;border-radius:8px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Boleta</button>
           <button class="dt-tipo" data-tipo="41" onclick="dtTipo('41',this)"
             style="padding:8px 16px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Boleta exenta</button>
+          <button class="dt-tipo" data-tipo="61" onclick="dtTipo('61',this)"
+            style="padding:8px 16px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Nota de Crédito</button>
           <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
             <span style="font-size:12px;color:var(--muted);font-weight:600;">Formato:</span>
             <select id="dtFormato" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);font-weight:600;cursor:pointer;">
@@ -3350,7 +3352,61 @@ tbody td {
           </div>
         </div>
 
-        <!-- Receptor -->
+        <!-- Bloque de referencia (solo Nota de Crédito) -->
+        <div id="dtNCRef" style="display:none;background:#faf7ff;border:1px solid #e5d9fb;border-radius:11px;padding:16px;margin-bottom:16px;">
+          <div style="font-size:13px;font-weight:700;color:#6d28d9;margin-bottom:12px;">🧾 Documento que se referencia</div>
+
+          <!-- Tipo de operación -->
+          <div style="margin-bottom:14px;">
+            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:6px;">Tipo de nota de crédito</label>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button type="button" id="dtNCop1" onclick="dtNCOperacion(1,this)" class="dtNCop"
+                style="padding:8px 14px;border:1px solid #6d28d9;background:#6d28d9;color:#fff;border-radius:8px;font-family:inherit;font-weight:600;font-size:12px;cursor:pointer;">Anula documento</button>
+              <button type="button" id="dtNCop3" onclick="dtNCOperacion(3,this)" class="dtNCop"
+                style="padding:8px 14px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-family:inherit;font-weight:600;font-size:12px;cursor:pointer;">Corrige montos (rebaja)</button>
+              <button type="button" id="dtNCop2" onclick="dtNCOperacion(2,this)" class="dtNCop"
+                style="padding:8px 14px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-family:inherit;font-weight:600;font-size:12px;cursor:pointer;">Corrige texto</button>
+            </div>
+            <div id="dtNCopHint" style="font-size:11px;color:var(--muted);margin-top:7px;">Deja sin efecto el documento completo. Los ítems replican el total del original.</div>
+          </div>
+
+          <!-- Cómo referenciar: buscar o manual -->
+          <div style="margin-bottom:12px;">
+            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:6px;">Buscar documento emitido (o ingresar manual abajo)</label>
+            <input id="dtNCBuscar" oninput="dtNCBuscarDoc(this.value)" placeholder="Folio, RUT o nombre del cliente…"
+              style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+            <div id="dtNCResultados" style="margin-top:4px;"></div>
+          </div>
+
+          <!-- Datos de referencia (se llenan al seleccionar o manual) -->
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+            <div>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Tipo doc. original</label>
+              <select id="dtNCTipoRef" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
+                <option value="39">Boleta (39)</option>
+                <option value="41">Boleta exenta (41)</option>
+                <option value="33">Factura (33)</option>
+                <option value="34">Factura exenta (34)</option>
+                <option value="56">Nota de débito (56)</option>
+              </select>
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Folio original</label>
+              <input id="dtNCFolioRef" type="number" placeholder="Ej: 25206"
+                style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Fecha original</label>
+              <input id="dtNCFechaRef" type="date"
+                style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
+            </div>
+          </div>
+          <div style="margin-top:10px;">
+            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Motivo / razón de referencia (obligatorio)</label>
+            <input id="dtNCRazon" placeholder="Ej: Anulación por devolución de producto"
+              style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
+          </div>
+        </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
           <div>
             <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">RUT cliente (opcional)</label>
@@ -13440,10 +13496,72 @@ function dtInit(){
 }
 document.addEventListener('DOMContentLoaded', ()=>{ setTimeout(dtInit, 300); });
 
+let _dtNCcodRef = 1;  // 1=anula, 2=corrige texto, 3=corrige montos
 function dtTipo(tipo, btn){
   _dtTipo = tipo;
   document.querySelectorAll('.dt-tipo').forEach(b=>{b.style.background='var(--card)';b.style.color='var(--text)';b.style.borderColor='var(--border)';});
   btn.style.background='#059669'; btn.style.color='#fff'; btn.style.borderColor='#059669';
+  // Mostrar bloque de referencia solo para Nota de Crédito (61)
+  const ncRef = document.getElementById('dtNCRef');
+  if(ncRef){
+    ncRef.style.display = (tipo==='61') ? 'block' : 'none';
+    // Para NC el botón usa color morado distintivo
+    if(tipo==='61'){ btn.style.background='#6d28d9'; btn.style.borderColor='#6d28d9'; }
+  }
+}
+
+// Cambiar el tipo de operación de la NC (1=anula, 2=corrige texto, 3=corrige montos)
+function dtNCOperacion(cod, btn){
+  _dtNCcodRef = cod;
+  document.querySelectorAll('.dtNCop').forEach(b=>{b.style.background='var(--card)';b.style.color='var(--text)';b.style.borderColor='var(--border)';});
+  btn.style.background='#6d28d9'; btn.style.color='#fff'; btn.style.borderColor='#6d28d9';
+  const hint=document.getElementById('dtNCopHint');
+  const hints={
+    1:'Deja sin efecto el documento completo. Los ítems replican el total del original.',
+    3:'Rebaja parte del monto. Ingresa en los ítems el monto neto a rebajar (el IVA se calcula solo). No puede superar el total original.',
+    2:'Corrige datos de texto (RUT, razón social, dirección) sin cambiar montos. Agrega un ítem describiendo la corrección: "Donde dice X debe decir Y".'
+  };
+  if(hint) hint.textContent = hints[cod]||'';
+}
+
+// Buscar documento emitido para referenciar en la NC
+let _dtNCBuscarTimer=null;
+function dtNCBuscarDoc(q){
+  clearTimeout(_dtNCBuscarTimer);
+  const cont=document.getElementById('dtNCResultados');
+  if(!q || q.trim().length<2){ cont.innerHTML=''; return; }
+  _dtNCBuscarTimer=setTimeout(async()=>{
+    try{
+      const r=await fetch('/facturacion/documentos?q='+encodeURIComponent(q.trim())+'&por_pagina=6');
+      const d=await r.json();
+      if(!d.ok || !d.documentos || !d.documentos.length){ cont.innerHTML='<div style="font-size:12px;color:var(--muted);padding:6px;">Sin resultados. Puedes ingresar los datos manualmente abajo.</div>'; return; }
+      let h='<div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-top:4px;">';
+      d.documentos.forEach(doc=>{
+        // No se puede referenciar una NC/ND desde una NC (salvo anular), y no la misma
+        const tab=dtTipoAbrev(doc.tipo_dte);
+        h+=`<div onclick='dtNCSeleccionar(${JSON.stringify({tipo:doc.tipo_dte,folio:doc.folio,fecha:(doc.fecha_emision||"").slice(0,10),cliente:doc.razon_social_receptor||"",monto:doc.monto_total})})' style="padding:9px 11px;border-bottom:1px solid var(--border);cursor:pointer;display:flex;justify-content:space-between;align-items:center;" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'">
+          <span style="font-size:12px;color:var(--text);"><b>${tab.sigla} N°${doc.folio}</b> · ${doc.razon_social_receptor||'Consumidor Final'}</span>
+          <span style="font-size:12px;color:var(--muted);">${_dtCLP(doc.monto_total)}</span>
+        </div>`;
+      });
+      h+='</div>';
+      cont.innerHTML=h;
+    }catch(e){ cont.innerHTML='<div style="font-size:12px;color:#dc2626;padding:6px;">Error al buscar.</div>'; }
+  }, 350);
+}
+
+// Al seleccionar un documento de la búsqueda, llenar los campos de referencia
+function dtNCSeleccionar(doc){
+  document.getElementById('dtNCTipoRef').value = doc.tipo;
+  document.getElementById('dtNCFolioRef').value = doc.folio;
+  document.getElementById('dtNCFechaRef').value = doc.fecha;
+  document.getElementById('dtNCResultados').innerHTML='';
+  document.getElementById('dtNCBuscar').value = dtTipoAbrev(doc.tipo).sigla+' N°'+doc.folio+' · '+(doc.cliente||'Consumidor Final');
+  // Si es anular, prellenar un ítem con el monto total del documento
+  if(_dtNCcodRef===1 && doc.monto){
+    document.getElementById('dtItems').innerHTML='';
+    dtAddItem('Anulación '+dtTipoAbrev(doc.tipo).nombre+' N°'+doc.folio, 1, doc.monto, 'Un');
+  }
 }
 
 function dtAddItem(nombre='',cant=1,precio='',unidad='Un',sku=''){
@@ -13559,6 +13677,34 @@ async function dtVistaPrevia(){
   if(document.getElementById('dtRecRut').value.trim())receptor.rut=document.getElementById('dtRecRut').value.trim();
   if(document.getElementById('dtRecNombre').value.trim())receptor.razon_social=document.getElementById('dtRecNombre').value.trim();
 
+  // Nota de Crédito: mostrar un resumen de la operación (no el PDF de boleta)
+  if(_dtTipo==='61'){
+    const folioRef=document.getElementById('dtNCFolioRef').value.trim();
+    const fechaRef=document.getElementById('dtNCFechaRef').value;
+    const tipoRef=document.getElementById('dtNCTipoRef').value;
+    const razon=document.getElementById('dtNCRazon').value.trim();
+    if(!folioRef||!fechaRef){ alert('Indica el folio y la fecha del documento que se referencia.'); return; }
+    if(!razon){ alert('El motivo / razón de referencia es obligatorio.'); return; }
+    const opTxt={1:'Anula documento completo',3:'Corrige montos (rebaja)',2:'Corrige texto'}[_dtNCcodRef]||'';
+    let totalNC=0; items.forEach(it=>{ totalNC += (parseFloat(it.precio_unitario)||0)*(parseFloat(it.cantidad)||1); });
+    document.getElementById('dtFormWrap').style.display='none';
+    const prev=document.getElementById('dtPreviaWrap'); prev.style.display='block';
+    prev.innerHTML='<div style="background:#faf7ff;border:1px solid #e5d9fb;border-radius:12px;padding:20px;">'
+      +'<div style="font-size:16px;font-weight:700;color:#6d28d9;margin-bottom:14px;">🧾 Resumen de la Nota de Crédito</div>'
+      +'<div style="display:grid;grid-template-columns:auto 1fr;gap:8px 16px;font-size:14px;color:var(--text);">'
+      +'<span style="color:var(--muted);">Operación:</span><b>'+opTxt+'</b>'
+      +'<span style="color:var(--muted);">Documento referenciado:</span><b>'+dtTipoAbrev(tipoRef).sigla+' N°'+folioRef+' ('+fechaRef+')</b>'
+      +'<span style="color:var(--muted);">Motivo:</span><span>'+razon+'</span>'
+      +'<span style="color:var(--muted);">Monto NC:</span><b>'+_dtCLP(totalNC)+'</b>'
+      +'</div>'
+      +'<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px;margin-top:16px;font-size:12px;color:#92400e;">⚠️ Una vez emitida y enviada al SII, la nota de crédito no se puede deshacer. Verifica el documento referenciado y el motivo.</div>'
+      +'<div style="display:flex;gap:10px;margin-top:16px;">'
+      +'<button onclick="dtCancelarPrevia()" style="flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);padding:14px;border-radius:11px;font-weight:600;font-size:14px;cursor:pointer;">← Volver a editar</button>'
+      +'<button id="dtBtnConfirmar" onclick="dtEmitir()" style="flex:2;background:#6d28d9;color:#fff;border:none;padding:14px;border-radius:11px;font-weight:700;font-size:15px;cursor:pointer;">✓ Confirmar y enviar al SII</button>'
+      +'</div></div>';
+    return;
+  }
+
   // Mostrar la previa con un loader mientras se genera el PDF
   document.getElementById('dtFormWrap').style.display='none';
   const prev=document.getElementById('dtPreviaWrap'); prev.style.display='block';
@@ -13609,32 +13755,58 @@ async function dtEmitir(){
   if(document.getElementById('dtRecRut').value.trim())receptor.rut=document.getElementById('dtRecRut').value.trim();
   if(document.getElementById('dtRecNombre').value.trim())receptor.razon_social=document.getElementById('dtRecNombre').value.trim();
   const referencias=dtLeerReferencias();
+  const formato=document.getElementById('dtFormato')?document.getElementById('dtFormato').value:'carta';
+
+  if(_dtTipo==='61'){
+    const folioRef=document.getElementById('dtNCFolioRef').value.trim();
+    const tipoRef=document.getElementById('dtNCTipoRef').value;
+    const fechaRef=document.getElementById('dtNCFechaRef').value;
+    const razon=document.getElementById('dtNCRazon').value.trim();
+    if(!folioRef||!fechaRef){ alert('Indica el folio y la fecha del documento que se referencia.'); if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';} return; }
+    if(!razon){ alert('El motivo / razón de referencia es obligatorio.'); if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';} return; }
+    const body={ items, receptor: Object.keys(receptor).length?receptor:null, formato,
+      referencia:{ folio_ref: parseInt(folioRef,10), tipo_doc_ref: parseInt(tipoRef,10),
+        fecha_ref: fechaRef, cod_ref: _dtNCcodRef, razon_ref: razon } };
+    try{
+      const r=await fetch('/facturacion/nota-credito/emitir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const d=await r.json();
+      dtMostrarResultado(d, formato, 'Nota de Crédito');
+    }catch(e){
+      document.getElementById('dtFormWrap').style.display='block';
+      document.getElementById('dtResultado').innerHTML='<div style="color:#dc2626;font-size:13px;">Error de conexión: '+e.message+'</div>';
+    }
+    if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';}
+    return;
+  }
+
   try{
-    const formato=document.getElementById('dtFormato')?document.getElementById('dtFormato').value:'carta';
     const body={items, receptor:Object.keys(receptor).length?receptor:null, formato};
     if(referencias.length) body.referencias=referencias;
-    const r=await fetch('/facturacion/boleta/emitir',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(body)});
+    const r=await fetch('/facturacion/boleta/emitir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const d=await r.json();
-    document.getElementById('dtPreviaWrap').style.display='none';
-    const cont=document.getElementById('dtResultado');
-    if(d.ok){
-      cont.innerHTML=`<div style="background:#f0fbf6;border:1px solid #b8e6d2;border-radius:11px;padding:16px;">
-        <div style="font-size:15px;font-weight:700;color:#047a56;margin-bottom:10px;">🎉 Documento emitido — Folio N° ${d.folio}</div>
-        <div style="font-size:13px;color:var(--muted);margin-bottom:12px;">Total ${_dtCLP(d.total)} · Track ID SII: ${d.track_id||'—'}</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <a href="${d.pdf_url}?formato="+formato+"" target="_blank" style="background:#534AB7;color:#fff;text-decoration:none;padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;">📄 PDF carta</a>
-          <a href="${d.pdf_url}?formato=rollo" target="_blank" style="background:#6b6880;color:#fff;text-decoration:none;padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;">🧾 PDF rollo</a>
-          <button onclick="dtReset()" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;cursor:pointer;">Emitir otro</button>
-        </div></div>`;
-    } else {
-      document.getElementById('dtFormWrap').style.display='block';
-      cont.innerHTML=`<div style="background:#fdf2f2;border:1px solid #f3c2c2;border-radius:11px;padding:16px;color:#dc2626;font-size:13px;">
-        ❌ ${d.error||'Error'} ${d.folio?'<br>Folio reservado: N° '+d.folio:''}</div>`;
-    }
+    dtMostrarResultado(d, formato, 'Documento');
   }catch(e){
     document.getElementById('dtFormWrap').style.display='block';
-    document.getElementById('dtResultado').innerHTML=`<div style="color:#dc2626;font-size:13px;">Error de conexión: ${e.message}</div>`;
+    document.getElementById('dtResultado').innerHTML='<div style="color:#dc2626;font-size:13px;">Error de conexión: '+e.message+'</div>';
+  }
+}
+
+function dtMostrarResultado(d, formato, etiqueta){
+  document.getElementById('dtPreviaWrap').style.display='none';
+  const cont=document.getElementById('dtResultado');
+  if(d.ok){
+    const idPdf = d.nc_id || d.boleta_id;
+    const pdfUrl = d.pdf_url || (idPdf?('/facturacion/boleta/'+idPdf+'/pdf'):'');
+    let botones='<a href="'+pdfUrl+'?formato=carta" target="_blank" style="background:#534AB7;color:#fff;text-decoration:none;padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;">📄 PDF carta</a>';
+    if(_dtTipo==='39'||_dtTipo==='41'){ botones+=' <a href="'+pdfUrl+'?formato=rollo" target="_blank" style="background:#6b6880;color:#fff;text-decoration:none;padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;">🧾 PDF rollo</a>'; }
+    botones+=' <button onclick="dtReset()" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;cursor:pointer;">Emitir otro</button>';
+    cont.innerHTML='<div style="background:#f0fbf6;border:1px solid #b8e6d2;border-radius:11px;padding:16px;">'
+      +'<div style="font-size:15px;font-weight:700;color:#047a56;margin-bottom:10px;">🎉 '+etiqueta+' emitida — Folio N° '+d.folio+'</div>'
+      +'<div style="font-size:13px;color:var(--muted);margin-bottom:12px;">Total '+_dtCLP(d.total)+' · Track ID SII: '+(d.track_id||'—')+'</div>'
+      +'<div style="display:flex;gap:8px;flex-wrap:wrap;">'+botones+'</div></div>';
+  } else {
+    document.getElementById('dtFormWrap').style.display='block';
+    cont.innerHTML='<div style="background:#fdf2f2;border:1px solid #f3c2c2;border-radius:11px;padding:16px;color:#dc2626;font-size:13px;">❌ '+(d.error||'Error')+' '+(d.folio?'<br>Folio reservado: N° '+d.folio:'')+'</div>';
   }
 }
 
@@ -13651,6 +13823,13 @@ function dtReset(){
   if(refsBox) refsBox.style.display='none';
   if(refsItems) refsItems.innerHTML='';
   const arrow=document.getElementById('dtRefsArrow'); if(arrow) arrow.textContent='▸';
+  // Reset estado de Nota de Crédito
+  const ncRef=document.getElementById('dtNCRef');
+  if(ncRef){
+    ['dtNCBuscar','dtNCFolioRef','dtNCFechaRef','dtNCRazon'].forEach(id=>{const el=document.getElementById(id); if(el) el.value='';});
+    const res=document.getElementById('dtNCResultados'); if(res) res.innerHTML='';
+    _dtNCcodRef=1;
+  }
 }
 
 // ───────── Referencias a otros documentos (guía despacho, OC, etc.) ─────────
