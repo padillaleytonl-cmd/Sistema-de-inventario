@@ -13536,12 +13536,25 @@ function dtNCBuscarDoc(q){
       if(!d.ok || !d.documentos || !d.documentos.length){ cont.innerHTML='<div style="font-size:12px;color:var(--muted);padding:6px;">Sin resultados. Puedes ingresar los datos manualmente abajo.</div>'; return; }
       let h='<div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-top:4px;">';
       d.documentos.forEach(doc=>{
-        // No se puede referenciar una NC/ND desde una NC (salvo anular), y no la misma
         const tab=dtTipoAbrev(doc.tipo_dte);
-        h+=`<div onclick='dtNCSeleccionar(${JSON.stringify({tipo:doc.tipo_dte,folio:doc.folio,fecha:(doc.fecha_emision||"").slice(0,10),cliente:doc.razon_social_receptor||"",monto:doc.monto_total})})' style="padding:9px 11px;border-bottom:1px solid var(--border);cursor:pointer;display:flex;justify-content:space-between;align-items:center;" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'">
-          <span style="font-size:12px;color:var(--text);"><b>${tab.sigla} N°${doc.folio}</b> · ${doc.razon_social_receptor||'Consumidor Final'}</span>
-          <span style="font-size:12px;color:var(--muted);">${_dtCLP(doc.monto_total)}</span>
-        </div>`;
+        // Un documento ya anulado no se puede volver a anular ni rebajar
+        const yaAnulado = doc.estado==='anulada' || doc.estado==='anulado'
+          || (doc.motivo_anulacion && doc.motivo_anulacion.indexOf('Anulada con NC')>=0);
+        // No se puede emitir NC contra una NC/ND (entre notas solo aplica la ND para anular NC)
+        const esNota = [61,56].includes(Number(doc.tipo_dte));
+        const bloqueado = yaAnulado || esNota;
+        if(bloqueado){
+          const razon = yaAnulado ? (doc.motivo_anulacion || 'Ya anulada') : 'No aplica NC sobre una nota';
+          h+=`<div style="padding:9px 11px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;opacity:.55;cursor:not-allowed;" title="${razon}">
+            <span style="font-size:12px;color:var(--muted);"><b>${tab.sigla} N°${doc.folio}</b> · ${doc.razon_social_receptor||'Consumidor Final'} <span style="font-size:10px;color:#b91c1c;">— ${razon}</span></span>
+            <span style="font-size:12px;color:var(--muted);">${_dtCLP(doc.monto_total)}</span>
+          </div>`;
+        } else {
+          h+=`<div onclick='dtNCSeleccionar(${JSON.stringify({tipo:doc.tipo_dte,folio:doc.folio,fecha:(doc.fecha_emision||"").slice(0,10),cliente:doc.razon_social_receptor||"",monto:doc.monto_total})})' style="padding:9px 11px;border-bottom:1px solid var(--border);cursor:pointer;display:flex;justify-content:space-between;align-items:center;" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'">
+            <span style="font-size:12px;color:var(--text);"><b>${tab.sigla} N°${doc.folio}</b> · ${doc.razon_social_receptor||'Consumidor Final'}</span>
+            <span style="font-size:12px;color:var(--muted);">${_dtCLP(doc.monto_total)}</span>
+          </div>`;
+        }
       });
       h+='</div>';
       cont.innerHTML=h;
