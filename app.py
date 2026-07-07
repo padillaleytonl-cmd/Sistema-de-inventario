@@ -22516,6 +22516,13 @@ def facturacion_boleta_emitir():
     tenant_id = session.get("tenant_id") or 1
     data = request.get_json(silent=True) or {}
 
+    # Si todos los ítems son exentos, es boleta exenta (41), que se paga aparte.
+    _items = data.get("items") or []
+    _todos_exentos = bool(_items) and all(it.get("exento") for it in _items)
+    if _todos_exentos and not _tenant_tipo_habilitado(tenant_id, 41):
+        return jsonify({"ok": False, "error": "El tipo 'Boleta exenta' no está "
+                        "habilitado en tu plan. Actívalo en Configuración."}), 403
+
     from facturacion.emision_core import emitir_boleta_core
 
     resultado = emitir_boleta_core(
@@ -22567,6 +22574,9 @@ def facturacion_nota_credito_emitir():
         return jsonify({"ok": False, "error": "no autenticado"}), 401
 
     tenant_id = session.get("tenant_id") or 1
+
+    if not _tenant_tipo_habilitado(tenant_id, 61):
+        return jsonify({"ok": False, "error": "El tipo de documento 'Nota de Credito' no esta habilitado en tu plan. Actívalo en Configuración."}), 403
     data = request.get_json(silent=True) or {}
 
     from inventario import get_conn, release_conn
@@ -22838,6 +22848,24 @@ def _fecha_chile():
         return (_d.now(_tz.utc) - _td(hours=4)).strftime("%Y-%m-%d")
 
 
+def _tenant_tipo_habilitado(tenant_id, tipo_dte):
+    """Devuelve True si el tenant tiene contratado/activo ese tipo de DTE.
+    Boleta (39) y NC (61) incluidas por defecto; el resto segun la config
+    (campos emite_* del plan pagado). Protege el backend aunque el frontend
+    muestre el tipo por error."""
+    try:
+        from inventario import get_conn as _gc, release_conn as _rc
+        from facturacion.db import calcular_mrr_tributario
+        mrr = calcular_mrr_tributario(_gc, _rc, tenant_id)
+        for d in (mrr.get("desglose", []) if mrr else []):
+            if int(d.get("tipo_dte")) == int(tipo_dte):
+                return bool(d.get("activo"))
+    except Exception as _e:
+        print("[Facturacion] No se pudo verificar habilitacion del tipo %s: %s" % (tipo_dte, _e))
+        return int(tipo_dte) in (39, 61)
+    return int(tipo_dte) in (39, 61)
+
+
 def _anio_desde_fecha_resol(fecha_resol):
     """Extrae el año (int) de la fecha de resolución del tenant, para la leyenda
     del PDF. Acepta date, datetime o string 'AAAA-MM-DD'. Devuelve None si no puede."""
@@ -22911,6 +22939,9 @@ def facturacion_nota_debito_emitir():
         return jsonify({"ok": False, "error": "no autenticado"}), 401
 
     tenant_id = session.get("tenant_id") or 1
+
+    if not _tenant_tipo_habilitado(tenant_id, 56):
+        return jsonify({"ok": False, "error": "El tipo de documento 'Nota de Debito' no esta habilitado en tu plan. Actívalo en Configuración."}), 403
     data = request.get_json(silent=True) or {}
 
     from inventario import get_conn, release_conn

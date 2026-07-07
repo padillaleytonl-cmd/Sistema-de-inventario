@@ -3336,15 +3336,11 @@ tbody td {
       <!-- TAB: EMITIR -->
       <div id="dt-pane-emitir" class="dt-pane" style="padding:22px;">
         <div id="dtFormWrap">
-        <div style="display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap;">
-          <button class="dt-tipo dt-tipo-active" data-tipo="39" onclick="dtTipo('39',this)"
-            style="padding:8px 16px;border:1px solid #059669;background:#059669;color:#fff;border-radius:8px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Boleta</button>
-          <button class="dt-tipo" data-tipo="41" onclick="dtTipo('41',this)"
-            style="padding:8px 16px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Boleta exenta</button>
-          <button class="dt-tipo" data-tipo="61" onclick="dtTipo('61',this)"
-            style="padding:8px 16px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Nota de Crédito</button>
-          <button class="dt-tipo" data-tipo="56" onclick="dtTipo('56',this)"
-            style="padding:8px 16px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Nota de Débito</button>
+        <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center;">
+          <div id="dtTiposBotones" style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="dt-tipo dt-tipo-active" data-tipo="39" onclick="dtTipo('39',this)"
+              style="padding:8px 16px;border:1px solid #059669;background:#059669;color:#fff;border-radius:8px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Boleta</button>
+          </div>
           <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
             <span style="font-size:12px;color:var(--muted);font-weight:600;">Formato:</span>
             <select id="dtFormato" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);font-weight:600;cursor:pointer;">
@@ -3352,6 +3348,10 @@ tbody td {
               <option value="rollo">Rollo (ticket 80mm)</option>
             </select>
           </div>
+        </div>
+        <div id="dtLeyendaModulos" style="font-size:11px;color:var(--muted);margin-bottom:18px;display:flex;align-items:center;gap:6px;">
+          <span style="font-size:13px;">🔒</span>
+          <span>Puedes activar más tipos de documento desde <b>Configuración</b>, desde 0,1 UF según el documento.</span>
         </div>
 
         <!-- Bloque de referencia (solo Nota de Crédito) -->
@@ -13493,11 +13493,54 @@ function dtTab(tab, btn){
 // Garantizar primera fila apenas el panel existe en el DOM
 function dtInit(){
   if(document.getElementById('dtItems') && !document.querySelector('.dt-item')) dtAddItem();
+  if(document.getElementById('dtTiposBotones')) dtCargarTiposHabilitados();
 }
 document.addEventListener('DOMContentLoaded', ()=>{ setTimeout(dtInit, 300); });
 
 let _dtNCcodRef = 1;  // 1=anula, 2=corrige texto, 3=corrige montos
 let _dtNCMontoMax = 0;  // monto del documento referenciado (tope para "corrige montos")
+
+// Catálogo de tipos emitibles manualmente, con nombre y precio de referencia (UF/mes)
+const DT_TIPOS_EMISOR = [
+  {tipo:'39', nombre:'Boleta',            campo:'emite_boleta',         uf:0.0},
+  {tipo:'41', nombre:'Boleta exenta',     campo:'emite_boleta_exenta',  uf:0.1},
+  {tipo:'33', nombre:'Factura',           campo:'emite_factura',        uf:0.2},
+  {tipo:'34', nombre:'Factura exenta',    campo:'emite_factura_exenta', uf:0.2},
+  {tipo:'61', nombre:'Nota de Crédito',   campo:'emite_nota_credito',   uf:0.0},
+  {tipo:'56', nombre:'Nota de Débito',    campo:'emite_nota_debito',    uf:0.1},
+  {tipo:'52', nombre:'Guía de Despacho',  campo:'emite_guia_despacho',  uf:0.1},
+];
+
+// Carga los tipos que el tenant tiene habilitados y pinta los botones.
+// Los activos son clickeables; los no contratados salen con candado (deshabilitados).
+async function dtCargarTiposHabilitados(){
+  const cont=document.getElementById('dtTiposBotones');
+  if(!cont) return;
+  let activos=[39,61]; // fallback mínimo: boleta y NC vienen incluidas
+  try{
+    const r=await fetch('/facturacion/folios/tipos-habilitados');
+    const d=await r.json();
+    if(d.ok && d.tipos && d.tipos.length){ activos=d.tipos.map(t=>Number(t.tipo_dte)); }
+  }catch(e){}
+  let h='';
+  let hayBloqueado=false;
+  DT_TIPOS_EMISOR.forEach(t=>{
+    const activo = activos.includes(Number(t.tipo));
+    if(activo){
+      h+=`<button class="dt-tipo" data-tipo="${t.tipo}" onclick="dtTipo('${t.tipo}',this)" style="padding:8px 16px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">${t.nombre}</button>`;
+    } else {
+      hayBloqueado=true;
+      h+=`<button class="dt-tipo-locked" disabled title="Actívalo en Configuración (${t.uf} UF/mes)" style="padding:8px 16px;border:1px solid var(--border);background:var(--bg2);color:var(--muted);border-radius:8px;font-family:inherit;font-weight:600;font-size:13px;cursor:not-allowed;opacity:.6;display:inline-flex;align-items:center;gap:6px;">🔒 ${t.nombre}</button>`;
+    }
+  });
+  cont.innerHTML=h;
+  // Seleccionar el primer tipo activo por defecto
+  const primero=cont.querySelector('.dt-tipo');
+  if(primero){ dtTipo(primero.getAttribute('data-tipo'), primero); }
+  // Mostrar u ocultar la leyenda según haya bloqueados
+  const ley=document.getElementById('dtLeyendaModulos');
+  if(ley) ley.style.display = hayBloqueado ? 'flex' : 'none';
+}
 function dtTipo(tipo, btn){
   _dtTipo = tipo;
   document.querySelectorAll('.dt-tipo').forEach(b=>{b.style.background='var(--card)';b.style.color='var(--text)';b.style.borderColor='var(--border)';});
