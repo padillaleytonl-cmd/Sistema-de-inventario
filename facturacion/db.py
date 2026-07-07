@@ -233,6 +233,16 @@ def init_facturacion_tables(get_conn_func, release_conn_func=None, enable_rls_fu
         conn.commit()
         print("[Facturación] Tablas creadas/verificadas correctamente")
 
+        # Círculo de clientes (base de receptores por tenant)
+        try:
+            from .clientes import _crear_tabla as _crear_tabla_clientes
+            with conn.cursor() as _curc:
+                _crear_tabla_clientes(_curc)
+            conn.commit()
+            print("[Facturación] Tabla de clientes lista")
+        except Exception as _e:
+            print(f"[Facturación] Skip tabla clientes: {_e}")
+
         # ─────────────────────────────────────────────────────────────────
         # 5. RLS (Row Level Security) por tenant
         # ─────────────────────────────────────────────────────────────────

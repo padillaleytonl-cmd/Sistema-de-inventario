@@ -24224,6 +24224,52 @@ def facturacion_descargar_zip():
                     headers={"Content-Disposition": 'attachment; filename="%s"' % fname})
 
 
+@app.route("/facturacion/clientes", methods=["GET"])
+def facturacion_clientes_listar():
+    """Lista o busca los clientes del tenant (círculo de clientes).
+    Query opcional: ?q=texto para buscar por nombre o RUT."""
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    tenant_id = session.get("tenant_id") or 1
+    from inventario import get_conn, release_conn
+    from facturacion.clientes import listar_clientes
+    q = request.args.get("q", "").strip() or None
+    try:
+        clientes = listar_clientes(get_conn, release_conn, tenant_id, q=q)
+        return jsonify({"ok": True, "clientes": clientes})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:200]}), 500
+
+
+@app.route("/facturacion/clientes/guardar", methods=["POST"])
+def facturacion_clientes_guardar():
+    """Crea o actualiza un cliente. Si el body trae 'id', edita; si no, crea."""
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    tenant_id = session.get("tenant_id") or 1
+    from inventario import get_conn, release_conn
+    from facturacion.clientes import guardar_cliente
+    data = request.get_json(silent=True) or {}
+    resultado = guardar_cliente(get_conn, release_conn, tenant_id, data)
+    return jsonify(resultado), (200 if resultado.get("ok") else 400)
+
+
+@app.route("/facturacion/clientes/eliminar", methods=["POST"])
+def facturacion_clientes_eliminar():
+    """Da de baja un cliente (baja lógica, preserva historial)."""
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    tenant_id = session.get("tenant_id") or 1
+    from inventario import get_conn, release_conn
+    from facturacion.clientes import eliminar_cliente
+    data = request.get_json(silent=True) or {}
+    cliente_id = data.get("id")
+    if not cliente_id:
+        return jsonify({"ok": False, "error": "falta id"}), 400
+    resultado = eliminar_cliente(get_conn, release_conn, tenant_id, cliente_id)
+    return jsonify(resultado), (200 if resultado.get("ok") else 400)
+
+
 @app.route("/facturacion/documentos", methods=["GET"])
 def facturacion_documentos_listar():
     """Lista los DTEs emitidos por el tenant, con PAGINACIÓN EN SERVIDOR.

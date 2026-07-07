@@ -3312,6 +3312,8 @@ tbody td {
         style="padding:11px 18px;border:none;background:none;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;color:var(--text);border-bottom:2px solid #534AB7;margin-bottom:-1px;">🧾 Facturar</button>
       <button class="fac-nav" data-fac="consultar" onclick="facNav('consultar',this)"
         style="padding:11px 18px;border:none;background:none;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;">🔍 Consultar boleta</button>
+      <button class="fac-nav" data-fac="clientes" onclick="facNav('clientes',this)"
+        style="padding:11px 18px;border:none;background:none;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;">👥 Clientes</button>
       <button class="fac-nav" data-fac="config" onclick="facNav('config',this)"
         style="padding:11px 18px;border:none;background:none;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;">⚙️ Configuración</button>
     </div>
@@ -3506,6 +3508,69 @@ tbody td {
 
     <!-- ═══════════ FIN PANEL DOCUMENTOS TRIBUTARIOS ═══════════ -->
     </div><!-- /fac-pane-facturar -->
+
+    <!-- ═══════════ SUB-SECCIÓN: CLIENTES (círculo de clientes) ═══════════ -->
+    <div id="fac-pane-clientes" class="fac-pane" style="display:none;">
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:14px;padding:22px;margin-bottom:20px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;flex-wrap:wrap;gap:10px;">
+          <div>
+            <div style="font-size:17px;font-weight:600;color:var(--text);">Círculo de clientes</div>
+            <div style="font-size:13px;color:var(--muted);">Tus clientes frecuentes para emitir facturas, guías y otros documentos</div>
+          </div>
+          <button onclick="cliNuevo()" style="padding:9px 16px;font-size:13px;background:#534AB7;color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">＋ Nuevo cliente</button>
+        </div>
+
+        <div style="margin:16px 0 12px;">
+          <input id="cliBuscar" oninput="cliListar(this.value)" placeholder="🔍 Buscar por nombre o RUT"
+            style="width:100%;padding:11px 14px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+        </div>
+
+        <div id="cliLista" style="border:1px solid var(--border);border-radius:12px;overflow:hidden;">
+          <div style="padding:24px;text-align:center;color:var(--muted);font-size:13px;">Cargando…</div>
+        </div>
+      </div>
+
+      <!-- Formulario nuevo/editar cliente (oculto por defecto) -->
+      <div id="cliForm" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:22px;margin-bottom:20px;">
+        <div id="cliFormTitulo" style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:14px;">Nuevo cliente</div>
+        <input type="hidden" id="cliId">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <div>
+            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">RUT *</label>
+            <input id="cliRut" placeholder="76.123.456-7" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+          </div>
+          <div>
+            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Razón social *</label>
+            <input id="cliRazon" placeholder="Empresa SpA" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+          </div>
+          <div>
+            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Giro *</label>
+            <input id="cliGiro" placeholder="Venta al por menor" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+          </div>
+          <div>
+            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Comuna *</label>
+            <input id="cliComuna" placeholder="Santiago" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+          </div>
+          <div style="grid-column:1 / -1;">
+            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Dirección *</label>
+            <input id="cliDireccion" placeholder="Av. Siempre Viva 742" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+          </div>
+          <div>
+            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Teléfono</label>
+            <input id="cliTelefono" placeholder="+56 9 1234 5678" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+          </div>
+          <div>
+            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Email</label>
+            <input id="cliEmail" placeholder="contacto@empresa.cl" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
+          <button onclick="cliCancelar()" style="padding:10px 18px;font-size:13px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);font-weight:600;cursor:pointer;">Cancelar</button>
+          <button onclick="cliGuardar()" style="padding:10px 18px;font-size:13px;background:#534AB7;color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">Guardar cliente</button>
+        </div>
+        <div id="cliFormMsg" style="margin-top:10px;font-size:12px;"></div>
+      </div>
+    </div>
 
     <!-- ═══════════ SUB-SECCIÓN: CONSULTAR BOLETA ═══════════ -->
     <div id="fac-pane-consultar" class="fac-pane" style="display:none;">
@@ -14371,6 +14436,90 @@ async function dtEmitirNotaCredito(d){
     }
   }catch(e){ res.innerHTML='<span style="color:#dc2626;font-size:13px;">Error: '+e.message+'</span>'; btn.disabled=false; btn.textContent='Emitir NC'; }
 }
+// ═══════════ CÍRCULO DE CLIENTES ═══════════
+let _cliBuscarTimer=null;
+function cliListar(q){
+  clearTimeout(_cliBuscarTimer);
+  _cliBuscarTimer=setTimeout(async()=>{
+    const cont=document.getElementById('cliLista');
+    try{
+      const url='/facturacion/clientes'+(q&&q.trim()?('?q='+encodeURIComponent(q.trim())):'');
+      const r=await fetch(url); const d=await r.json();
+      if(!d.ok){ cont.innerHTML='<div style="padding:20px;text-align:center;color:#dc2626;font-size:13px;">Error al cargar</div>'; return; }
+      if(!d.clientes.length){
+        cont.innerHTML='<div style="padding:28px;text-align:center;color:var(--muted);font-size:13px;">Aún no tienes clientes guardados.<br>Crea el primero con "Nuevo cliente".</div>';
+        return;
+      }
+      let h='<div style="display:grid;grid-template-columns:1fr 120px 90px;gap:8px;padding:10px 14px;border-bottom:1px solid var(--border);font-size:11px;color:var(--muted);font-weight:600;"><span>Cliente</span><span>RUT</span><span style="text-align:right;">Acciones</span></div>';
+      d.clientes.forEach(c=>{
+        const sub=[c.giro, c.direccion?(c.comuna?c.direccion+', '+c.comuna:c.direccion):''].filter(Boolean).join(' · ');
+        h+=`<div style="display:grid;grid-template-columns:1fr 120px 90px;gap:8px;padding:12px 14px;border-bottom:1px solid var(--border);align-items:center;">
+          <div><div style="font-size:14px;color:var(--text);">${_cliEsc(c.razon_social)}</div>${sub?'<div style="font-size:12px;color:var(--muted);">'+_cliEsc(sub)+'</div>':''}</div>
+          <span style="font-size:13px;color:var(--muted);">${_cliEsc(c.rut)}</span>
+          <div style="text-align:right;display:flex;gap:6px;justify-content:flex-end;">
+            <button onclick='cliEditar(${JSON.stringify(c)})' title="Editar" style="padding:6px 8px;border:1px solid var(--border);border-radius:7px;background:var(--card);cursor:pointer;">✏️</button>
+            <button onclick="cliEliminar(${c.id})" title="Eliminar" style="padding:6px 8px;border:1px solid var(--border);border-radius:7px;background:var(--card);cursor:pointer;color:#dc2626;">🗑</button>
+          </div>
+        </div>`;
+      });
+      cont.innerHTML=h;
+    }catch(e){ cont.innerHTML='<div style="padding:20px;text-align:center;color:#dc2626;font-size:13px;">Error de conexión</div>'; }
+  }, 250);
+}
+function _cliEsc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function cliNuevo(){
+  document.getElementById('cliId').value='';
+  ['cliRut','cliRazon','cliGiro','cliComuna','cliDireccion','cliTelefono','cliEmail'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('cliFormTitulo').textContent='Nuevo cliente';
+  document.getElementById('cliFormMsg').textContent='';
+  document.getElementById('cliForm').style.display='block';
+  document.getElementById('cliRut').focus();
+}
+function cliEditar(c){
+  document.getElementById('cliId').value=c.id;
+  document.getElementById('cliRut').value=c.rut||'';
+  document.getElementById('cliRazon').value=c.razon_social||'';
+  document.getElementById('cliGiro').value=c.giro||'';
+  document.getElementById('cliComuna').value=c.comuna||'';
+  document.getElementById('cliDireccion').value=c.direccion||'';
+  document.getElementById('cliTelefono').value=c.telefono||'';
+  document.getElementById('cliEmail').value=c.email||'';
+  document.getElementById('cliFormTitulo').textContent='Editar cliente';
+  document.getElementById('cliFormMsg').textContent='';
+  document.getElementById('cliForm').style.display='block';
+  document.getElementById('cliForm').scrollIntoView({behavior:'smooth',block:'center'});
+}
+function cliCancelar(){ document.getElementById('cliForm').style.display='none'; }
+async function cliGuardar(){
+  const body={
+    id: document.getElementById('cliId').value||null,
+    rut: document.getElementById('cliRut').value.trim(),
+    razon_social: document.getElementById('cliRazon').value.trim(),
+    giro: document.getElementById('cliGiro').value.trim(),
+    comuna: document.getElementById('cliComuna').value.trim(),
+    direccion: document.getElementById('cliDireccion').value.trim(),
+    telefono: document.getElementById('cliTelefono').value.trim(),
+    email: document.getElementById('cliEmail').value.trim(),
+  };
+  const msg=document.getElementById('cliFormMsg');
+  if(!body.rut||!body.razon_social){ msg.style.color='#dc2626'; msg.textContent='RUT y razón social son obligatorios.'; return; }
+  try{
+    const r=await fetch('/facturacion/clientes/guardar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const d=await r.json();
+    if(d.ok){ document.getElementById('cliForm').style.display='none'; cliListar(document.getElementById('cliBuscar').value); }
+    else { msg.style.color='#dc2626'; msg.textContent=d.error||'No se pudo guardar.'; }
+  }catch(e){ msg.style.color='#dc2626'; msg.textContent='Error de conexión.'; }
+}
+async function cliEliminar(id){
+  if(!confirm('¿Dar de baja este cliente? No se borra el historial de documentos emitidos.')) return;
+  try{
+    const r=await fetch('/facturacion/clientes/eliminar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+    const d=await r.json();
+    if(d.ok) cliListar(document.getElementById('cliBuscar').value);
+    else alert(d.error||'No se pudo eliminar.');
+  }catch(e){ alert('Error de conexión.'); }
+}
+
 function facNav(pane, btn){
   document.querySelectorAll('.fac-nav').forEach(b=>{b.style.color='var(--muted)';b.style.borderBottom='2px solid transparent';});
   if(btn){ btn.style.color='var(--text)'; btn.style.borderBottom='2px solid #534AB7'; }
@@ -14391,6 +14540,9 @@ function facNav(pane, btn){
     }
     // Cargar el listado automáticamente, sin tener que pulsar Buscar
     if(typeof conBuscar==='function') conBuscar();
+  }
+  if(pane==='clientes'){
+    if(typeof cliListar==='function') cliListar();
   }
 }
 
