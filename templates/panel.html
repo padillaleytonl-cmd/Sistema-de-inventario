@@ -3343,6 +3343,8 @@ tbody td {
             style="padding:8px 16px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Boleta exenta</button>
           <button class="dt-tipo" data-tipo="61" onclick="dtTipo('61',this)"
             style="padding:8px 16px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Nota de Crédito</button>
+          <button class="dt-tipo" data-tipo="56" onclick="dtTipo('56',this)"
+            style="padding:8px 16px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Nota de Débito</button>
           <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
             <span style="font-size:12px;color:var(--muted);font-weight:600;">Formato:</span>
             <select id="dtFormato" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);font-weight:600;cursor:pointer;">
@@ -3354,7 +3356,7 @@ tbody td {
 
         <!-- Bloque de referencia (solo Nota de Crédito) -->
         <div id="dtNCRef" style="display:none;background:#faf7ff;border:1px solid #e5d9fb;border-radius:11px;padding:16px;margin-bottom:16px;">
-          <div style="font-size:13px;font-weight:700;color:#6d28d9;margin-bottom:12px;">🧾 Documento que se referencia</div>
+          <div id="dtNCTitulo" style="font-size:13px;font-weight:700;color:#6d28d9;margin-bottom:12px;">🧾 Documento que se referencia</div>
 
           <!-- Tipo de operación -->
           <div style="margin-bottom:14px;">
@@ -13500,12 +13502,38 @@ function dtTipo(tipo, btn){
   _dtTipo = tipo;
   document.querySelectorAll('.dt-tipo').forEach(b=>{b.style.background='var(--card)';b.style.color='var(--text)';b.style.borderColor='var(--border)';});
   btn.style.background='#059669'; btn.style.color='#fff'; btn.style.borderColor='#059669';
-  // Mostrar bloque de referencia solo para Nota de Crédito (61)
   const ncRef = document.getElementById('dtNCRef');
+  const esNota = (tipo==='61' || tipo==='56');
   if(ncRef){
-    ncRef.style.display = (tipo==='61') ? 'block' : 'none';
-    // Para NC el botón usa color morado distintivo
+    ncRef.style.display = esNota ? 'block' : 'none';
+    // Color distintivo del botón según la nota
     if(tipo==='61'){ btn.style.background='#6d28d9'; btn.style.borderColor='#6d28d9'; }
+    if(tipo==='56'){ btn.style.background='#be185d'; btn.style.borderColor='#be185d'; }
+    if(esNota) dtNotaConfig(tipo);
+  }
+}
+
+// Ajusta el bloque de referencia según sea Nota de Crédito (61) o Débito (56)
+function dtNotaConfig(tipo){
+  const titulo=document.getElementById('dtNCTitulo');
+  const op1=document.getElementById('dtNCop1');
+  const op3=document.getElementById('dtNCop3');
+  const tipoRefSel=document.getElementById('dtNCTipoRef');
+  if(tipo==='56'){
+    // Nota de Débito: su uso principal es ANULAR una Nota de Crédito
+    if(titulo) titulo.textContent='🧾 Nota de crédito que se anula';
+    if(op1){ op1.textContent='Anula nota de crédito'; op1.style.display=''; }
+    if(op3){ op3.style.display='none'; }  // rebaja no aplica al caso ND→NC
+    _dtNCcodRef=1;
+    dtNCOperacion(1, op1);
+    // El documento referenciado solo puede ser una NC (61)
+    if(tipoRefSel){ tipoRefSel.innerHTML='<option value="61">Nota de Crédito (61)</option>'; }
+  } else {
+    // Nota de Crédito
+    if(titulo) titulo.textContent='🧾 Documento que se referencia';
+    if(op1){ op1.textContent='Anula documento'; op1.style.display=''; }
+    if(op3){ op3.style.display=''; }
+    if(tipoRefSel){ tipoRefSel.innerHTML='<option value="39">Boleta (39)</option><option value="41">Boleta exenta (41)</option><option value="33">Factura (33)</option><option value="34">Factura exenta (34)</option>'; }
   }
 }
 
@@ -13701,7 +13729,7 @@ async function dtVistaPrevia(){
   if(document.getElementById('dtRecNombre').value.trim())receptor.razon_social=document.getElementById('dtRecNombre').value.trim();
 
   // Nota de Crédito: validar y mostrar el PDF borrador real (con su referencia)
-  if(_dtTipo==='61'){
+  if(_dtTipo==='61'||_dtTipo==='56'){
     const folioRef=document.getElementById('dtNCFolioRef').value.trim();
     const fechaRef=document.getElementById('dtNCFechaRef').value;
     const tipoRef=document.getElementById('dtNCTipoRef').value;
@@ -13718,13 +13746,13 @@ async function dtVistaPrevia(){
     prev.innerHTML='<div style="padding:40px;text-align:center;color:var(--muted);font-size:14px;">Generando vista previa…</div>';
     try{
       const body={ items, receptor:Object.keys(receptor).length?receptor:null, formato,
-        tipo_dte:61, referencia:{ folio_ref:parseInt(folioRef,10), tipo_doc_ref:parseInt(tipoRef,10),
+        tipo_dte:parseInt(_dtTipo,10), referencia:{ folio_ref:parseInt(folioRef,10), tipo_doc_ref:parseInt(tipoRef,10),
           fecha_ref:fechaRef, cod_ref:_dtNCcodRef, razon_ref:razon } };
       const r=await fetch('/facturacion/boleta/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       if(!r.ok){ let msg='No se pudo generar la vista previa'; try{const e=await r.json(); msg=e.error||msg;}catch(_){}
         prev.innerHTML='<div style="background:#fdf2f2;border:1px solid #f3c2c2;border-radius:11px;padding:16px;color:#dc2626;font-size:13px;">'+msg+'</div><button onclick="dtCancelarPrevia()" style="margin-top:12px;background:var(--card);border:1px solid var(--border);color:var(--text);padding:12px 18px;border-radius:10px;font-weight:600;cursor:pointer;">← Volver a editar</button>'; return; }
       const blob=await r.blob(); const pdfUrl=URL.createObjectURL(blob);
-      prev.innerHTML='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px;margin-bottom:14px;font-size:13px;color:#92400e;">⚠️ Vista previa de la nota de crédito. Revísala bien: una vez firmada y enviada al SII <b>no se puede deshacer</b>. El folio y el timbre se generan al confirmar.</div>'
+      prev.innerHTML='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px;margin-bottom:14px;font-size:13px;color:#92400e;">⚠️ Vista previa de la '+(_dtTipo==='56'?'nota de débito':'nota de crédito')+'. Revísala bien: una vez firmada y enviada al SII <b>no se puede deshacer</b>. El folio y el timbre se generan al confirmar.</div>'
         +'<div style="border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#525659;"><iframe src="'+pdfUrl+'" style="width:100%;height:780px;border:none;display:block;"></iframe></div>'
         +'<div style="display:flex;gap:10px;margin-top:14px;"><button onclick="dtCancelarPrevia()" style="flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);padding:14px;border-radius:11px;font-weight:600;font-size:14px;cursor:pointer;">← Volver a editar</button><button id="dtBtnConfirmar" onclick="dtEmitir()" style="flex:2;background:#6d28d9;color:#fff;border:none;padding:14px;border-radius:11px;font-weight:700;font-size:15px;cursor:pointer;">✓ Firmar y enviar al SII</button></div>';
     }catch(e){ prev.innerHTML='<div style="color:#dc2626;font-size:13px;">Error generando vista previa: '+e.message+'</div><button onclick="dtCancelarPrevia()" style="margin-top:12px;background:var(--card);border:1px solid var(--border);color:var(--text);padding:12px 18px;border-radius:10px;font-weight:600;cursor:pointer;">← Volver a editar</button>'; }
@@ -13783,7 +13811,7 @@ async function dtEmitir(){
   const referencias=dtLeerReferencias();
   const formato=document.getElementById('dtFormato')?document.getElementById('dtFormato').value:'carta';
 
-  if(_dtTipo==='61'){
+  if(_dtTipo==='61'||_dtTipo==='56'){
     const folioRef=document.getElementById('dtNCFolioRef').value.trim();
     const tipoRef=document.getElementById('dtNCTipoRef').value;
     const fechaRef=document.getElementById('dtNCFechaRef').value;
@@ -13803,9 +13831,11 @@ async function dtEmitir(){
       referencia:{ folio_ref: parseInt(folioRef,10), tipo_doc_ref: parseInt(tipoRef,10),
         fecha_ref: fechaRef, cod_ref: _dtNCcodRef, razon_ref: razon } };
     try{
-      const r=await fetch('/facturacion/nota-credito/emitir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const _endpoint = _dtTipo==='56' ? '/facturacion/nota-debito/emitir' : '/facturacion/nota-credito/emitir';
+      const _etiq = _dtTipo==='56' ? 'Nota de Débito' : 'Nota de Crédito';
+      const r=await fetch(_endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       const d=await r.json();
-      dtMostrarResultado(d, formato, 'Nota de Crédito');
+      dtMostrarResultado(d, formato, _etiq);
     }catch(e){
       document.getElementById('dtFormWrap').style.display='block';
       document.getElementById('dtResultado').innerHTML='<div style="color:#dc2626;font-size:13px;">Error de conexión: '+e.message+'</div>';

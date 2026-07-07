@@ -22883,6 +22883,352 @@ def _fact_actualizar_estado_dte(boleta_id, estado, track_id=None, estado_sii=Non
         release_conn(conn)
 
 
+@app.route("/facturacion/nota-debito/emitir", methods=["POST"])
+def facturacion_nota_debito_emitir():
+    """Emite UNA Nota de Débito (tipo 56) que anula o rebaja un documento previo.
+
+    A diferencia de la boleta:
+      • Va en sobre EnvioDTE (no EnvioBOLETA)
+      • Se envía a maullin/palena DTEUpload con token SOAP (no pangal)
+      • Requiere Referencia OBLIGATORIA al documento original
+
+    Body JSON:
+      {
+        "referencia": {
+            "folio_ref": 24,            # folio del documento original
+            "tipo_doc_ref": 39,         # 39=boleta, 33=factura...
+            "fecha_ref": "2026-05-27",  # fecha del doc original (FchRef)
+            "cod_ref": 1,               # 1=anula, 2=corrige texto, 3=corrige montos
+            "razon_ref": "ANULA BOLETA"
+        },
+        "items": [...],                  # para anulación: los mismos del doc original
+        "receptor": {...}                # opcional
+      }
+    Para CodRef=1 (anula), los items deben replicar el documento original completo.
+    Para CodRef=3 (rebaja), los items son el monto a rebajar.
+    """
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+
+    tenant_id = session.get("tenant_id") or 1
+    data = request.get_json(silent=True) or {}
+
+    from inventario import get_conn, release_conn
+    from facturacion.certificados import obtener_certificado
+    from facturacion.db import obtener_config_facturacion
+    from facturacion.cafs import obtener_folio_disponible
+    from facturacion.utils import normalizar_ambiente
+
+    pasos = []
+    def paso(nombre, ok, detalle=""):
+        pasos.append({"nombre": nombre, "ok": ok, "detalle": detalle})
+
+    # 0. Validar referencia (OBLIGATORIA en NC)
+    referencia = data.get("referencia") or {}
+    if not referencia.get("folio_ref"):
+        return jsonify({"ok": False, "error": "La Nota de Crédito requiere el folio del documento que modifica"}), 400
+    cod_ref = int(referencia.get("cod_ref", 1))
+
+    # PROTECCIÓN: si es anulación total (CodRef=1), verificar que el documento
+    # referenciado NO esté ya anulado. Evita doble anulación (dos NC sobre el
+    # mismo documento), que rebajaría el débito fiscal dos veces. Esta validación
+    # va en el backend para ser robusta aunque el botón del frontend falle.
+    if cod_ref == 1:
+        try:
+            from inventario import get_conn as _gc0, release_conn as _rc0
+            _c0 = _gc0()
+            try:
+                with _c0.cursor() as _cur0:
+                    _cur0.execute(
+                        "SELECT estado, motivo_anulacion FROM facturacion_dtes "
+                        "WHERE tenant_id=%s AND tipo_dte=%s AND folio=%s",
+                        (tenant_id, int(referencia.get("tipo_doc_ref", 39)),
+                         referencia.get("folio_ref")))
+                    _row0 = _cur0.fetchone()
+            finally:
+                _rc0(_c0)
+            if _row0 and (_row0[0] in ("anulada", "anulado")
+                          or (_row0[1] and "Anulada con NC" in str(_row0[1]))):
+                return jsonify({"ok": False,
+                                "error": "Este documento ya fue anulado (%s). "
+                                         "No se puede anular dos veces." % (
+                                             _row0[1] or "anulado")}), 409
+        except Exception as _e0:
+            # Si la verificación falla por algo inesperado, no bloqueamos la emisión
+            # legítima, pero lo registramos.
+            print("[Facturación] No se pudo verificar doble anulación: %s" % _e0)
+
+    # items: para anulación pueden venir del documento original
+    items = data.get("items") or []
+    if cod_ref == 1 and not items:
+        # Anulación sin items: intentar reconstruir desde el documento referenciado
+        return jsonify({"ok": False, "error": "Para anular debes incluir los ítems del documento original (o usar el botón Anular desde el documento)"}), 400
+    if not items:
+        return jsonify({"ok": False, "error": "Debes incluir al menos un ítem"}), 400
+
+    # 1. Config
+    config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+    if not config:
+        return jsonify({"ok": False, "error": "No hay configuración de facturación"}), 400
+    ambiente = normalizar_ambiente(data.get("ambiente") or config.get("ambiente") or "certificacion")
+
+    emisor = {
+        "rut": config["rut_emisor"], "razon_social": config["razon_social"],
+        "giro": config.get("giro", "Venta al por menor"),
+        "dir_origen": config.get("direccion", "Sin dirección"),
+        "cmna_origen": config.get("comuna", "Santiago"),
+        "telefono": config.get("telefono"),
+        "correo": config.get("email"),
+    }
+    nro_resol = config.get("resolucion_sii_numero")
+    fch_resol = config.get("resolucion_sii_fecha")
+    if fch_resol and not isinstance(fch_resol, str):
+        try: fch_resol = fch_resol.isoformat()
+        except Exception: fch_resol = str(fch_resol)
+    if nro_resol is None: nro_resol = 0
+    if not fch_resol: fch_resol = "2026-05-15"
+
+    # 2. Certificado
+    cert = obtener_certificado(get_conn, release_conn, tenant_id)
+    if not cert.get("ok"):
+        return jsonify({"ok": False, "error": "Certificado: " + str(cert.get("error", "no disponible")), "pasos": pasos}), 400
+    paso("Leer certificado", True, cert["metadata"].get("titular", "?"))
+    rut_envia = cert["metadata"].get("rut", emisor["rut"])
+
+    receptor = data.get("receptor") or {"rut": "66666666-6", "razon_social": "Consumidor Final"}
+    if not receptor.get("rut"): receptor["rut"] = "66666666-6"
+    if not receptor.get("razon_social"): receptor["razon_social"] = "Consumidor Final"
+
+    # 3. Reservar folio tipo 61 (ATÓMICO)
+    folio_res = obtener_folio_disponible(get_conn, release_conn, tenant_id, 56, ambiente)
+    if not folio_res.get("ok"):
+        return jsonify({"ok": False, "error": folio_res.get("error") or "No hay folios de NC (tipo 61) disponibles. Carga un CAF tipo 61.", "pasos": pasos}), 400
+    folio = folio_res["folio"]
+    paso("Reservar folio ND", True, "Folio " + str(folio) + " (tipo 61, " + ambiente + ")")
+
+    track_id = None
+    nc_id = None
+    total = 0
+
+    try:
+        from facturacion.dtes.caf_parser import parsear_caf_xml
+        from facturacion.dtes.nota_debito import generar_nota_debito_xml
+        from facturacion.dtes.envio_dte import armar_envio_dte
+        from facturacion.dtes.firma import firmar_envio_completo
+        from facturacion.dtes.sii_client import obtener_token_dte, enviar_dte
+
+        caf = parsear_caf_xml(folio_res["xml_caf"])
+        try:
+            from zoneinfo import ZoneInfo
+            fecha = datetime.now(ZoneInfo("America/Santiago")).strftime("%Y-%m-%d")
+        except Exception:
+            from datetime import timezone as _tz, timedelta as _td
+            fecha = (datetime.now(_tz.utc) - _td(hours=4)).strftime("%Y-%m-%d")
+
+        # Referencia completa para la NC
+        ref = {
+            "folio_ref": referencia["folio_ref"],
+            "tipo_doc_ref": referencia.get("tipo_doc_ref", 39),
+            "fecha_ref": referencia.get("fecha_ref", fecha),
+            "cod_ref": cod_ref,
+            "razon_ref": referencia.get("razon_ref", "ANULA" if cod_ref == 1 else "CORRIGE"),
+        }
+
+        # 4. Generar la NC
+        res_nc = generar_nota_debito_xml(
+            caf=caf, folio=folio, fecha_emision=fecha,
+            emisor=emisor, items=items, referencia=ref, receptor=receptor,
+        )
+        nc_xml = res_nc["xml"]
+        total = res_nc["totales"]["mnt_total"]
+        documento_id = res_nc["documento_id"]
+        paso("Generar Nota de Débito", True, ("$" + format(total, ",")).replace(",", "."))
+
+        # 5. Firmar el documento individual + armar sobre EnvioDTE + firmar sobre
+        from facturacion.dtes.firma import firmar_documento
+        nc_firmada = firmar_documento(nc_xml, cert["pfx_bytes"], cert["password"], documento_id)
+
+        set_id = "SetDoc"
+        sobre = armar_envio_dte(
+            dtes_firmados=[nc_firmada], rut_emisor=emisor["rut"],
+            rut_envia=rut_envia, fch_resol=fch_resol, nro_resol=nro_resol,
+            tipo_dte=56, set_dte_id=set_id,
+        )
+        sobre_firmado = firmar_envio_completo(
+            sobre, cert["pfx_bytes"], cert["password"],
+            set_dte_id=set_id, documento_ids=[documento_id])
+        paso("Firmar sobre EnvioDTE", True, str(len(sobre_firmado)) + " bytes")
+
+        # 6. REGISTRAR EN BD ANTES DE ENVIAR
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO facturacion_dtes
+                      (tenant_id, tipo_dte, folio, rut_receptor, razon_social_receptor,
+                       monto_neto, monto_iva, monto_total, xml_firmado, estado, fecha_emision)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    RETURNING id
+                """, (tenant_id, 61, folio, receptor["rut"], receptor["razon_social"],
+                      res_nc["totales"]["mnt_neto"], res_nc["totales"]["mnt_iva"],
+                      total, nc_firmada.decode("iso-8859-1", errors="replace"), "generado", fecha))
+                nc_id = cur.fetchone()[0]
+            conn.commit()
+            paso("Registrar ND (pre-envío)", True, "ID " + str(nc_id))
+        except Exception as e:
+            conn.rollback(); release_conn(conn)
+            paso("Registrar ND (pre-envío)", False, str(e)[:200])
+            return jsonify({"ok": False, "folio": folio,
+                            "error": "No se pudo registrar la NC antes de enviar: " + str(e)[:200], "pasos": pasos}), 500
+        finally:
+            try: release_conn(conn)
+            except Exception: pass
+
+        # 7. Token SOAP + enviar a DTEUpload
+        try:
+            tok = obtener_token_dte(cert["pfx_bytes"], cert["password"], ambiente)
+            paso("Obtener token SOAP", True, "token " + str(tok)[:10] + "…")
+        except Exception as e:
+            import traceback
+            detalle_tok = str(e)[:250]
+            _fact_actualizar_estado_dte(nc_id, "error_envio", glosa="Token SOAP: " + detalle_tok)
+            paso("Obtener token SOAP", False, detalle_tok)
+            return jsonify({"ok": False, "nc_id": nc_id, "folio": folio,
+                            "error": "Error al autenticar con el SII (token SOAP): " + detalle_tok,
+                            "reintentable": True, "pasos": pasos,
+                            "trace": traceback.format_exc()[:500]}), 502
+        try:
+            resultado = enviar_dte(
+                envio_xml=sobre_firmado, token=tok,
+                rut_emisor=emisor["rut"], rut_envia=rut_envia, ambiente=ambiente)
+        except Exception as e:
+            import traceback
+            detalle_env = str(e)[:250]
+            _fact_actualizar_estado_dte(nc_id, "error_envio", glosa="Envío DTE: " + detalle_env)
+            paso("Enviar al SII", False, detalle_env)
+            return jsonify({"ok": False, "nc_id": nc_id, "folio": folio,
+                            "error": "Error al enviar al SII (DTEUpload): " + detalle_env,
+                            "reintentable": True, "pasos": pasos,
+                            "trace": traceback.format_exc()[:500]}), 502
+
+        if not resultado.get("ok"):
+            detalle = resultado.get("error") or ("; ".join(resultado.get("errores", []))) or str(resultado.get("respuesta_cruda", ""))[:300]
+            _fact_actualizar_estado_dte(nc_id, "error_envio", glosa=detalle)
+            paso("Enviar al SII", False, detalle)
+            return jsonify({"ok": False, "nc_id": nc_id, "folio": folio,
+                            "error": "El SII rechazó el envío: " + str(detalle),
+                            "reintentable": True, "pasos": pasos}), 502
+
+        track_id = resultado["track_id"]
+        _fact_actualizar_estado_dte(nc_id, "enviado", track_id=track_id, set_fecha_envio=True)
+        paso("Enviar al SII", True, "Track ID: " + str(track_id))
+
+        # Si es anulación total (CodRef=1), marcar el documento original como anulado
+        # y vincularlo a esta NC. Deja rastro legal y operativo: la boleta queda
+        # "Anulada con NC N°<folio>" y no se considera vigente.
+        if cod_ref == 1:
+            try:
+                from inventario import get_conn as _gc, release_conn as _rc
+                _conn = _gc()
+                try:
+                    with _conn.cursor() as _cur:
+                        _cur.execute("""
+                            UPDATE facturacion_dtes
+                               SET estado = 'anulada',
+                                   fecha_anulacion = NOW(),
+                                   motivo_anulacion = %s,
+                                   referencia_dte_id = %s
+                             WHERE tenant_id = %s AND tipo_dte = %s AND folio = %s
+                        """, ("Anulada con ND N°%s" % folio,
+                              nc_id, tenant_id,
+                              referencia["tipo_doc_ref"], referencia["folio_ref"]))
+                    _conn.commit()
+                    paso("Marcar NC referenciada anulada", True,
+                         "Doc tipo %s folio %s → anulado" % (
+                             referencia["tipo_doc_ref"], referencia["folio_ref"]))
+                finally:
+                    _rc(_conn)
+            except Exception as _e:
+                # No bloquea: la NC ya se emitió. Solo se registra el aviso.
+                print("[Facturación] NC %s emitida pero no se pudo marcar el "
+                      "documento original como anulado: %s" % (folio, _e))
+
+    except Exception as e:
+        import traceback
+        paso("Error", False, traceback.format_exc()[:400])
+        if nc_id:
+            try: _fact_actualizar_estado_dte(nc_id, "error_envio", glosa=str(e)[:300])
+            except Exception: pass
+        return jsonify({"ok": False, "error": str(e)[:300], "folio": folio, "nc_id": nc_id, "pasos": pasos}), 500
+
+    return jsonify({
+        "ok": True, "folio": folio, "tipo_dte": 56, "track_id": track_id,
+        "total": total, "nc_id": nc_id,
+        "pdf_url": ("/facturacion/boleta/" + str(nc_id) + "/pdf") if nc_id else None,
+        "anula_folio": referencia["folio_ref"] if cod_ref == 1 else None,
+        "pasos": pasos,
+    })
+
+
+def _fecha_chile():
+    """Fecha actual (AAAA-MM-DD) en hora de Chile, no UTC del servidor.
+    Evita que documentos emitidos de noche salgan con el día siguiente."""
+    from datetime import datetime as _d
+    try:
+        from zoneinfo import ZoneInfo
+        return _d.now(ZoneInfo("America/Santiago")).strftime("%Y-%m-%d")
+    except Exception:
+        from datetime import timezone as _tz, timedelta as _td
+        return (_d.now(_tz.utc) - _td(hours=4)).strftime("%Y-%m-%d")
+
+
+def _anio_desde_fecha_resol(fecha_resol):
+    """Extrae el año (int) de la fecha de resolución del tenant, para la leyenda
+    del PDF. Acepta date, datetime o string 'AAAA-MM-DD'. Devuelve None si no puede."""
+    if not fecha_resol:
+        return None
+    try:
+        if hasattr(fecha_resol, "year"):
+            return int(fecha_resol.year)
+        # string tipo 'AAAA-MM-DD'
+        return int(str(fecha_resol)[:4])
+    except (TypeError, ValueError):
+        return None
+
+
+def _fact_actualizar_estado_dte(boleta_id, estado, track_id=None, estado_sii=None,
+                                glosa=None, set_fecha_envio=False, set_fecha_aceptacion=False):
+    """Actualiza el estado de un DTE registrado. Helper central de trazabilidad."""
+    from inventario import get_conn, release_conn
+    conn = get_conn()
+    try:
+        sets = ["estado = %s"]
+        vals = [estado]
+        if track_id is not None:
+            sets.append("track_id_sii = %s"); vals.append(track_id)
+        if estado_sii is not None:
+            sets.append("estado_sii = %s"); vals.append(estado_sii)
+        if glosa is not None:
+            sets.append("glosa_sii = %s"); vals.append(glosa)
+        if set_fecha_envio:
+            sets.append("fecha_envio_sii = NOW()")
+        if set_fecha_aceptacion:
+            sets.append("fecha_aceptacion_sii = NOW()")
+        vals.append(boleta_id)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE facturacion_dtes SET " + ", ".join(sets) + " WHERE id = %s", vals)
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        print("[Facturación] Error actualizando estado DTE %s: %s" % (boleta_id, e))
+        return False
+    finally:
+        release_conn(conn)
+
+
+
+
 @app.route("/facturacion/boleta/preview", methods=["POST"])
 def facturacion_boleta_preview():
     """Genera un PDF de VISTA PREVIA (borrador) con el mismo diseño que el documento
