@@ -13520,13 +13520,13 @@ function dtNotaConfig(tipo){
   const op3=document.getElementById('dtNCop3');
   const tipoRefSel=document.getElementById('dtNCTipoRef');
   if(tipo==='56'){
-    // Nota de Débito: su uso principal es ANULAR una Nota de Crédito
-    if(titulo) titulo.textContent='🧾 Nota de crédito que se anula';
+    // Nota de Débito: puede ANULAR una Nota de Crédito, o CORREGIR montos al alza de facturas
+    if(titulo) titulo.textContent='🧾 Documento que se referencia';
     if(op1){ op1.textContent='Anula nota de crédito'; op1.style.display=''; }
-    if(op3){ op3.style.display='none'; }  // rebaja no aplica al caso ND→NC
+    if(op3){ op3.textContent='Corrige montos (al alza)'; op3.style.display=''; }
     _dtNCcodRef=1;
     dtNCOperacion(1, op1);
-    // El documento referenciado solo puede ser una NC (61)
+    // El tipo de referencia se ajusta según la operación (ver dtNCOperacion)
     if(tipoRefSel){ tipoRefSel.innerHTML='<option value="61">Nota de Crédito (61)</option>'; }
   } else {
     // Nota de Crédito
@@ -13541,13 +13541,34 @@ function dtNotaConfig(tipo){
 function dtNCOperacion(cod, btn){
   _dtNCcodRef = cod;
   document.querySelectorAll('.dtNCop').forEach(b=>{b.style.background='var(--card)';b.style.color='var(--text)';b.style.borderColor='var(--border)';});
-  btn.style.background='#6d28d9'; btn.style.color='#fff'; btn.style.borderColor='#6d28d9';
+  const colorNota = _dtTipo==='56' ? '#be185d' : '#6d28d9';
+  btn.style.background=colorNota; btn.style.color='#fff'; btn.style.borderColor=colorNota;
   const hint=document.getElementById('dtNCopHint');
-  const hints={
-    1:'Deja sin efecto el documento completo. Los ítems replican el total del original.',
-    3:'Rebaja parte del monto. Ingresa en los ítems el monto neto a rebajar (el IVA se calcula solo). No puede superar el total original.'
-  };
-  if(hint) hint.textContent = hints[cod]||'';
+  const tipoRefSel=document.getElementById('dtNCTipoRef');
+  let texto='';
+  if(_dtTipo==='56'){
+    // Nota de Débito
+    if(cod===1){
+      texto='Anula una nota de crédito completa. Los ítems replican el monto de la NC. El documento referenciado debe ser una Nota de Crédito.';
+      if(tipoRefSel) tipoRefSel.innerHTML='<option value="61">Nota de Crédito (61)</option>';
+    } else {
+      texto='Agrega un cargo/monto al alza sobre una factura (ej: intereses, reajuste). Ingresa el monto neto a agregar (el IVA se calcula solo).';
+      if(tipoRefSel) tipoRefSel.innerHTML='<option value="33">Factura (33)</option><option value="34">Factura exenta (34)</option>';
+    }
+  } else {
+    // Nota de Crédito
+    const hints={
+      1:'Deja sin efecto el documento completo. Los ítems replican el total del original.',
+      3:'Rebaja parte del monto. Ingresa en los ítems el monto neto a rebajar (el IVA se calcula solo). No puede superar el total original.'
+    };
+    texto=hints[cod]||'';
+  }
+  if(hint) hint.textContent = texto;
+  // Limpiar selección de referencia previa al cambiar operación (cambian los tipos válidos)
+  const buscar=document.getElementById('dtNCBuscar'); if(buscar) buscar.value='';
+  const res=document.getElementById('dtNCResultados'); if(res) res.innerHTML='';
+  const folioR=document.getElementById('dtNCFolioRef'); if(folioR) folioR.value='';
+  _dtNCMontoMax=0;
   dtNCActualizarTope();
 }
 
@@ -13563,21 +13584,40 @@ function dtNCBuscarDoc(q){
       const d=await r.json();
       if(!d.ok || !d.documentos || !d.documentos.length){ cont.innerHTML='<div style="font-size:12px;color:var(--muted);padding:6px;">Sin resultados. Puedes ingresar los datos manualmente abajo.</div>'; return; }
       let h='<div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-top:4px;">';
+      let mostrados=0;
       d.documentos.forEach(doc=>{
         const tab=dtTipoAbrev(doc.tipo_dte);
-        // Un documento ya anulado no se puede volver a anular ni rebajar
+        const tn=Number(doc.tipo_dte);
         const yaAnulado = doc.estado==='anulada' || doc.estado==='anulado'
-          || (doc.motivo_anulacion && doc.motivo_anulacion.indexOf('Anulada con NC')>=0);
-        // No se puede emitir NC contra una NC/ND (entre notas solo aplica la ND para anular NC)
-        const esNota = [61,56].includes(Number(doc.tipo_dte));
-        const bloqueado = yaAnulado || esNota;
-        if(bloqueado){
-          const razon = yaAnulado ? (doc.motivo_anulacion || 'Ya anulada') : 'No aplica NC sobre una nota';
-          h+=`<div style="padding:9px 11px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;opacity:.55;cursor:not-allowed;" title="${razon}">
+          || (doc.motivo_anulacion && (doc.motivo_anulacion.indexOf('Anulada con NC')>=0 || doc.motivo_anulacion.indexOf('Anulada con ND')>=0));
+
+        // ¿Qué documentos son referenciables según lo que estamos emitiendo?
+        let referenciable=true, razon='';
+        if(_dtTipo==='56'){
+          // NOTA DE DÉBITO
+          if(_dtNCcodRef===1){
+            // Anula NC: solo se pueden referenciar NOTAS DE CRÉDITO no anuladas
+            if(tn!==61){ referenciable=false; razon='La ND solo anula notas de crédito'; }
+            else if(yaAnulado){ referenciable=false; razon=doc.motivo_anulacion||'NC ya anulada'; }
+          } else {
+            // Corrige montos al alza: se referencian FACTURAS (afecta/exenta) no anuladas
+            if(![33,34].includes(tn)){ referenciable=false; razon='Solo facturas para corregir al alza'; }
+            else if(yaAnulado){ referenciable=false; razon=doc.motivo_anulacion||'Ya anulada'; }
+          }
+        } else {
+          // NOTA DE CRÉDITO
+          // Referencia boletas/facturas no anuladas; no otras notas
+          if([61,56].includes(tn)){ referenciable=false; razon='No aplica NC sobre una nota'; }
+          else if(yaAnulado){ referenciable=false; razon=doc.motivo_anulacion||'Ya anulada'; }
+        }
+
+        if(!referenciable){
+          h+=`<div style="padding:9px 11px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;opacity:.5;cursor:not-allowed;" title="${razon}">
             <span style="font-size:12px;color:var(--muted);"><b>${tab.sigla} N°${doc.folio}</b> · ${doc.razon_social_receptor||'Consumidor Final'} <span style="font-size:10px;color:#b91c1c;">— ${razon}</span></span>
             <span style="font-size:12px;color:var(--muted);">${_dtCLP(doc.monto_total)}</span>
           </div>`;
         } else {
+          mostrados++;
           h+=`<div onclick='dtNCSeleccionar(${JSON.stringify({tipo:doc.tipo_dte,folio:doc.folio,fecha:(doc.fecha_emision||"").slice(0,10),cliente:doc.razon_social_receptor||"",monto:doc.monto_total})})' style="padding:9px 11px;border-bottom:1px solid var(--border);cursor:pointer;display:flex;justify-content:space-between;align-items:center;" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'">
             <span style="font-size:12px;color:var(--text);"><b>${tab.sigla} N°${doc.folio}</b> · ${doc.razon_social_receptor||'Consumidor Final'}</span>
             <span style="font-size:12px;color:var(--muted);">${_dtCLP(doc.monto_total)}</span>
@@ -13609,7 +13649,7 @@ function dtNCSeleccionar(doc){
 // Muestra el tope de monto disponible para "corrige montos"
 function dtNCActualizarTope(){
   const hint=document.getElementById('dtNCopHint');
-  if(_dtNCcodRef===3 && _dtNCMontoMax>0 && hint){
+  if(_dtTipo==='61' && _dtNCcodRef===3 && _dtNCMontoMax>0 && hint){
     hint.innerHTML='Rebaja parte del monto. Ingresa el monto neto a rebajar (el IVA se calcula solo). '
       +'<b>Máximo del documento: '+_dtCLP(_dtNCMontoMax)+'</b> — la NC no puede superarlo.';
   }
@@ -13737,7 +13777,7 @@ async function dtVistaPrevia(){
     if(!folioRef||!fechaRef){ alert('Indica el folio y la fecha del documento que se referencia.'); return; }
     if(!razon){ alert('El motivo / razón de referencia es obligatorio.'); return; }
     let totalNC=0; items.forEach(it=>{ totalNC += (parseFloat(it.precio_unitario)||0)*(parseFloat(it.cantidad)||1); });
-    if(_dtNCcodRef===3 && _dtNCMontoMax>0 && totalNC > _dtNCMontoMax){
+    if(_dtTipo==='61' && _dtNCcodRef===3 && _dtNCMontoMax>0 && totalNC > _dtNCMontoMax){
       alert('El monto de la nota de crédito ('+_dtCLP(totalNC)+') no puede superar el total del documento original ('+_dtCLP(_dtNCMontoMax)+'). Ajusta el monto a rebajar.');
       return;
     }
@@ -13819,7 +13859,7 @@ async function dtEmitir(){
     if(!folioRef||!fechaRef){ alert('Indica el folio y la fecha del documento que se referencia.'); if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';} return; }
     if(!razon){ alert('El motivo / razón de referencia es obligatorio.'); if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';} return; }
     // Restricción SII: en "corrige montos" (rebaja), la NC no puede superar el total del documento original
-    if(_dtNCcodRef===3 && _dtNCMontoMax>0){
+    if(_dtTipo==='61' && _dtNCcodRef===3 && _dtNCMontoMax>0){
       let totalNC=0; items.forEach(it=>{ totalNC += (parseFloat(it.precio_unitario)||0)*(parseFloat(it.cantidad)||1); });
       if(totalNC > _dtNCMontoMax){
         alert('El monto de la nota de crédito ('+_dtCLP(totalNC)+') no puede superar el total del documento original ('+_dtCLP(_dtNCMontoMax)+'). El SII rechazaría la nota. Ajusta el monto a rebajar.');
