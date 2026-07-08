@@ -3409,16 +3409,43 @@ tbody td {
               style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
           </div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
-          <div>
-            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">RUT cliente (opcional)</label>
-            <input id="dtRecRut" placeholder="66666666-6 (consumidor final)"
+        <div style="margin-bottom:16px;">
+          <!-- Buscador del círculo de clientes -->
+          <div style="position:relative;margin-bottom:12px;">
+            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Buscar cliente registrado</label>
+            <input id="dtCliBuscar" oninput="dtCliBuscar(this.value)" autocomplete="off" placeholder="🔍 Nombre o RUT de un cliente guardado (opcional)"
               style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+            <div id="dtCliResultados" style="position:absolute;left:0;right:0;z-index:20;"></div>
           </div>
-          <div>
-            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Nombre / Razón social</label>
-            <input id="dtRecNombre" placeholder="Consumidor Final"
-              style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">RUT cliente <span id="dtRecRutReq" style="color:#dc2626;display:none;">*</span></label>
+              <input id="dtRecRut" placeholder="66666666-6 (consumidor final)"
+                style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Nombre / Razón social <span id="dtRecNombreReq" style="color:#dc2626;display:none;">*</span></label>
+              <input id="dtRecNombre" placeholder="Consumidor Final"
+                style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+            </div>
+          </div>
+          <!-- Campos extra del receptor (giro/dirección/comuna): visibles solo para documentos que los exigen -->
+          <div id="dtRecExtra" style="display:none;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
+            <div style="grid-column:1 / -1;">
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Giro del receptor <span style="color:#dc2626;">*</span></label>
+              <input id="dtRecGiro" placeholder="Giro comercial del cliente"
+                style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Dirección <span style="color:#dc2626;">*</span></label>
+              <input id="dtRecDireccion" placeholder="Dirección del cliente"
+                style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Comuna <span style="color:#dc2626;">*</span></label>
+              <input id="dtRecComuna" placeholder="Comuna"
+                style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+            </div>
           </div>
         </div>
 
@@ -13619,6 +13646,8 @@ function dtTipo(tipo, btn){
     if(tipo==='56'){ btn.style.background='#be185d'; btn.style.borderColor='#be185d'; }
     if(esNota) dtNotaConfig(tipo);
   }
+  // Mostrar campos de receptor completo si el documento los exige
+  if(typeof dtReceptorSegunTipo==='function') dtReceptorSegunTipo(tipo);
 }
 
 // Ajusta el bloque de referencia según sea Nota de Crédito (61) o Débito (56)
@@ -13875,6 +13904,11 @@ async function dtVistaPrevia(){
   const receptor={};
   if(document.getElementById('dtRecRut').value.trim())receptor.rut=document.getElementById('dtRecRut').value.trim();
   if(document.getElementById('dtRecNombre').value.trim())receptor.razon_social=document.getElementById('dtRecNombre').value.trim();
+  if(['33','34','52','46','43'].includes(String(_dtTipo))){
+    const g=document.getElementById('dtRecGiro'); if(g&&g.value.trim())receptor.giro=g.value.trim();
+    const dir=document.getElementById('dtRecDireccion'); if(dir&&dir.value.trim())receptor.direccion=dir.value.trim();
+    const com=document.getElementById('dtRecComuna'); if(com&&com.value.trim())receptor.comuna=com.value.trim();
+  }
 
   // Nota de Crédito: validar y mostrar el PDF borrador real (con su referencia)
   if(_dtTipo==='61'||_dtTipo==='56'){
@@ -13956,6 +13990,11 @@ async function dtEmitir(){
   const receptor={};
   if(document.getElementById('dtRecRut').value.trim())receptor.rut=document.getElementById('dtRecRut').value.trim();
   if(document.getElementById('dtRecNombre').value.trim())receptor.razon_social=document.getElementById('dtRecNombre').value.trim();
+  if(['33','34','52','46','43'].includes(String(_dtTipo))){
+    const g=document.getElementById('dtRecGiro'); if(g&&g.value.trim())receptor.giro=g.value.trim();
+    const dir=document.getElementById('dtRecDireccion'); if(dir&&dir.value.trim())receptor.direccion=dir.value.trim();
+    const com=document.getElementById('dtRecComuna'); if(com&&com.value.trim())receptor.comuna=com.value.trim();
+  }
   const referencias=dtLeerReferencias();
   const formato=document.getElementById('dtFormato')?document.getElementById('dtFormato').value:'carta';
 
@@ -14029,6 +14068,8 @@ function dtReset(){
   document.getElementById('dtPreviaWrap').innerHTML='';
   document.getElementById('dtFormWrap').style.display='block';
   document.getElementById('dtRecRut').value=''; document.getElementById('dtRecNombre').value='';
+  ['dtRecGiro','dtRecDireccion','dtRecComuna','dtCliBuscar'].forEach(id=>{const el=document.getElementById(id); if(el) el.value='';});
+  const cr=document.getElementById('dtCliResultados'); if(cr) cr.innerHTML='';
   document.getElementById('dtItems').innerHTML=''; dtAddItem();
   // Reset referencias
   const refsBox=document.getElementById('dtRefsBox');
@@ -14436,7 +14477,49 @@ async function dtEmitirNotaCredito(d){
     }
   }catch(e){ res.innerHTML='<span style="color:#dc2626;font-size:13px;">Error: '+e.message+'</span>'; btn.disabled=false; btn.textContent='Emitir NC'; }
 }
-// ═══════════ CÍRCULO DE CLIENTES ═══════════
+// ═══════════ Buscador de clientes en el emisor ═══════════
+let _dtCliBuscarTimer=null;
+function dtCliBuscar(q){
+  clearTimeout(_dtCliBuscarTimer);
+  const cont=document.getElementById('dtCliResultados');
+  if(!q || q.trim().length<2){ cont.innerHTML=''; return; }
+  _dtCliBuscarTimer=setTimeout(async()=>{
+    try{
+      const r=await fetch('/facturacion/clientes?q='+encodeURIComponent(q.trim()));
+      const d=await r.json();
+      if(!d.ok || !d.clientes.length){ cont.innerHTML='<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 11px;font-size:12px;color:var(--muted);margin-top:2px;">Sin coincidencias. Puedes escribir los datos manualmente.</div>'; return; }
+      let h='<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-top:2px;box-shadow:0 4px 12px rgba(0,0,0,.08);">';
+      d.clientes.forEach(c=>{
+        const sub=[c.rut, c.giro].filter(Boolean).join(' · ');
+        h+=`<div onclick='dtCliSeleccionar(${JSON.stringify(c)})' style="padding:9px 11px;border-bottom:1px solid var(--border);cursor:pointer;" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'">
+          <div style="font-size:13px;color:var(--text);font-weight:500;">${_cliEsc(c.razon_social)}</div>
+          <div style="font-size:11px;color:var(--muted);">${_cliEsc(sub)}</div>
+        </div>`;
+      });
+      h+='</div>';
+      cont.innerHTML=h;
+    }catch(e){ cont.innerHTML=''; }
+  }, 250);
+}
+function dtCliSeleccionar(c){
+  document.getElementById('dtRecRut').value=c.rut||'';
+  document.getElementById('dtRecNombre').value=c.razon_social||'';
+  // Campos extra (los usa la factura/guía; la boleta los ignora)
+  const g=document.getElementById('dtRecGiro'); if(g) g.value=c.giro||'';
+  const dir=document.getElementById('dtRecDireccion'); if(dir) dir.value=c.direccion||'';
+  const com=document.getElementById('dtRecComuna'); if(com) com.value=c.comuna||'';
+  document.getElementById('dtCliResultados').innerHTML='';
+  document.getElementById('dtCliBuscar').value=c.razon_social||'';
+}
+// Muestra u oculta los campos extra del receptor según el tipo de documento.
+// Factura (33/34), Guía (52), Factura compra (46), Liquidación (43) exigen receptor completo.
+function dtReceptorSegunTipo(tipo){
+  const extra=document.getElementById('dtRecExtra');
+  const requiereCompleto=['33','34','52','46','43'].includes(String(tipo));
+  if(extra) extra.style.display = requiereCompleto ? 'grid' : 'none';
+  const rr=document.getElementById('dtRecRutReq'); if(rr) rr.style.display=requiereCompleto?'inline':'none';
+  const nr=document.getElementById('dtRecNombreReq'); if(nr) nr.style.display=requiereCompleto?'inline':'none';
+}
 let _cliBuscarTimer=null;
 function cliListar(q){
   clearTimeout(_cliBuscarTimer);
