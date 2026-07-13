@@ -24224,6 +24224,226 @@ def facturacion_descargar_zip():
                     headers={"Content-Disposition": 'attachment; filename="%s"' % fname})
 
 
+@app.route("/facturacion/factura/emitir", methods=["POST"])
+def facturacion_factura_emitir():
+    """Emite UNA Factura Electrónica (33 afecta / 34 exenta) y la envía al SII.
+
+    A diferencia de la boleta:
+      • Va en sobre EnvioDTE (no EnvioBOLETA), con token SOAP a DTEUpload.
+      • Requiere RECEPTOR COMPLETO: rut, razón social, giro, dirección, comuna.
+      • Forma de pago (1=contado, 2=crédito, 3=sin costo); si es crédito puede
+        llevar fecha de vencimiento.
+
+    Body JSON:
+      {
+        "items": [...],
+        "receptor": {rut, razon_social, giro, direccion, comuna, [ciudad], [email]},
+        "exenta": false,               # true → DTE 34
+        "forma_pago": 1,               # 1=contado, 2=crédito, 3=sin costo
+        "fecha_vencimiento": "2026-08-01",  # opcional, si forma_pago=2
+        "referencias": [...]           # opcional (ej: factura que referencia una guía)
+      }
+    """
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+
+    tenant_id = session.get("tenant_id") or 1
+    data = request.get_json(silent=True) or {}
+
+    _es_exenta = bool(data.get("exenta"))
+    _tipo_factura = 34 if _es_exenta else 33
+
+    if not _tenant_tipo_habilitado(tenant_id, _tipo_factura):
+        return jsonify({"ok": False, "error": "El tipo de documento 'Factura' "
+                        "no está habilitado en tu plan. Actívalo en Configuración."}), 403
+
+    from facturacion.db import obtener_config_facturacion
+    from facturacion.certificados import obtener_certificado
+    from facturacion.cafs import obtener_folio_disponible
+    from facturacion.utils import normalizar_ambiente
+    from inventario import get_conn, release_conn
+
+    pasos = []
+    def paso(nombre, ok, detalle=""):
+        pasos.append({"nombre": nombre, "ok": ok, "detalle": detalle})
+
+    # 0. Validar receptor completo (OBLIGATORIO en factura)
+    receptor = data.get("receptor") or {}
+    faltan = [c for c in ("rut", "razon_social", "giro", "direccion", "comuna")
+              if not (receptor.get(c) or "").strip()]
+    if faltan:
+        return jsonify({"ok": False, "error": "La factura requiere receptor completo. "
+                        "Faltan: " + ", ".join(faltan)}), 400
+
+    items = data.get("items") or []
+    if not items:
+        return jsonify({"ok": False, "error": "Debes incluir al menos un ítem"}), 400
+
+    # 1. Config
+    config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+    if not config:
+        return jsonify({"ok": False, "error": "No hay configuración de facturación"}), 400
+    ambiente = normalizar_ambiente(data.get("ambiente") or config.get("ambiente") or "certificacion")
+
+    emisor = {
+        "rut": config["rut_emisor"], "razon_social": config["razon_social"],
+        "giro": config.get("giro", "Venta al por menor"),
+        "dir_origen": config.get("direccion", "Sin dirección"),
+        "cmna_origen": config.get("comuna", "Santiago"),
+        "ciudad_origen": config.get("ciudad"),
+        "acteco": config.get("acteco") or config.get("actividad_economica"),
+        "telefono": config.get("telefono"),
+        "correo": config.get("email"),
+    }
+    nro_resol = config.get("resolucion_sii_numero")
+    fch_resol = config.get("resolucion_sii_fecha")
+    if fch_resol and not isinstance(fch_resol, str):
+        try: fch_resol = fch_resol.isoformat()
+        except Exception: fch_resol = str(fch_resol)
+    if nro_resol is None: nro_resol = 0
+    if not fch_resol: fch_resol = "2026-05-15"
+
+    # 2. Certificado
+    cert = obtener_certificado(get_conn, release_conn, tenant_id)
+    if not cert.get("ok"):
+        return jsonify({"ok": False, "error": "Certificado: " + str(cert.get("error", "no disponible")), "pasos": pasos}), 400
+    paso("Leer certificado", True, cert["metadata"].get("titular", "?"))
+    rut_envia = cert["metadata"].get("rut", emisor["rut"])
+
+    # 3. Reservar folio (ATÓMICO)
+    folio_res = obtener_folio_disponible(get_conn, release_conn, tenant_id, _tipo_factura, ambiente)
+    if not folio_res.get("ok"):
+        return jsonify({"ok": False, "error": folio_res.get("error") or
+                        ("No hay folios de factura (tipo %s) disponibles. Carga un CAF." % _tipo_factura),
+                        "pasos": pasos}), 400
+    folio = folio_res["folio"]
+    paso("Reservar folio factura", True, "Folio " + str(folio) + " (tipo " + str(_tipo_factura) + ", " + ambiente + ")")
+
+    track_id = None
+    fac_id = None
+    total = 0
+
+    try:
+        from facturacion.dtes.caf_parser import parsear_caf_xml
+        from facturacion.dtes.factura import generar_factura_xml
+        from facturacion.dtes.envio_dte import armar_envio_dte
+        from facturacion.dtes.firma import firmar_documento, firmar_envio_completo
+        from facturacion.dtes.sii_client import obtener_token_dte, enviar_dte
+
+        caf = parsear_caf_xml(folio_res["xml_caf"])
+        try:
+            from zoneinfo import ZoneInfo
+            fecha = datetime.now(ZoneInfo("America/Santiago")).strftime("%Y-%m-%d")
+        except Exception:
+            from datetime import timezone as _tz, timedelta as _td
+            fecha = (datetime.now(_tz.utc) - _td(hours=4)).strftime("%Y-%m-%d")
+
+        forma_pago = int(data.get("forma_pago") or 1)
+        fecha_venc = data.get("fecha_vencimiento") or None
+
+        # 4. Generar la factura
+        res_fac = generar_factura_xml(
+            caf=caf, folio=folio, fecha_emision=fecha,
+            emisor=emisor, receptor=receptor, items=items,
+            forma_pago=forma_pago, fecha_vencimiento=fecha_venc,
+            es_exenta=_es_exenta,
+            referencias=data.get("referencias") or None,
+        )
+        fac_xml = res_fac["xml"]
+        total = res_fac["totales"]["mnt_total"]
+        documento_id = res_fac["documento_id"]
+        paso("Generar Factura", True, "Total " + str(total))
+
+        # 5. Firmar documento + sobre
+        fac_firmada = firmar_documento(fac_xml, cert["pfx_bytes"], cert["password"], documento_id)
+        set_id = "SetDoc"
+        sobre = armar_envio_dte(
+            dtes_firmados=[fac_firmada], rut_emisor=emisor["rut"], rut_envia=rut_envia,
+            fch_resol=fch_resol, nro_resol=nro_resol, tipo_dte=_tipo_factura, set_dte_id=set_id)
+        sobre_firmado = firmar_envio_completo(
+            sobre, cert["pfx_bytes"], cert["password"],
+            set_dte_id=set_id, documento_ids=[documento_id])
+        paso("Firmar sobre EnvioDTE", True, str(len(sobre_firmado)) + " bytes")
+
+        # 6. Registrar en BD antes de enviar
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO facturacion_dtes
+                      (tenant_id, tipo_dte, folio, rut_receptor, razon_social_receptor,
+                       monto_neto, monto_iva, monto_total, xml_firmado, estado, fecha_emision)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    RETURNING id
+                """, (tenant_id, _tipo_factura, folio, receptor["rut"], receptor["razon_social"],
+                      res_fac["totales"]["mnt_neto"], res_fac["totales"]["mnt_iva"],
+                      total, fac_firmada.decode("iso-8859-1", errors="replace"), "generado", fecha))
+                fac_id = cur.fetchone()[0]
+            conn.commit()
+            paso("Registrar factura (pre-envío)", True, "ID " + str(fac_id))
+        except Exception as e:
+            conn.rollback(); release_conn(conn)
+            paso("Registrar factura (pre-envío)", False, str(e)[:200])
+            return jsonify({"ok": False, "folio": folio,
+                            "error": "No se pudo registrar la factura antes de enviar: " + str(e)[:200], "pasos": pasos}), 500
+        finally:
+            try: release_conn(conn)
+            except Exception: pass
+
+        # 7. Token SOAP + enviar
+        try:
+            tok = obtener_token_dte(cert["pfx_bytes"], cert["password"], ambiente)
+            paso("Obtener token SOAP", True, "token " + str(tok)[:10] + "…")
+        except Exception as e:
+            import traceback
+            detalle_tok = str(e)[:250]
+            _fact_actualizar_estado_dte(fac_id, "error_envio", glosa="Token SOAP: " + detalle_tok)
+            paso("Obtener token SOAP", False, detalle_tok)
+            return jsonify({"ok": False, "fac_id": fac_id, "folio": folio,
+                            "error": "Error al autenticar con el SII (token SOAP): " + detalle_tok,
+                            "reintentable": True, "pasos": pasos,
+                            "trace": traceback.format_exc()[:500]}), 502
+        try:
+            resultado = enviar_dte(
+                envio_xml=sobre_firmado, token=tok,
+                rut_emisor=emisor["rut"], rut_envia=rut_envia, ambiente=ambiente)
+        except Exception as e:
+            import traceback
+            detalle_env = str(e)[:250]
+            _fact_actualizar_estado_dte(fac_id, "error_envio", glosa="Envío DTE: " + detalle_env)
+            paso("Enviar al SII", False, detalle_env)
+            return jsonify({"ok": False, "fac_id": fac_id, "folio": folio,
+                            "error": "Error al enviar al SII (DTEUpload): " + detalle_env,
+                            "reintentable": True, "pasos": pasos,
+                            "trace": traceback.format_exc()[:500]}), 502
+
+        if not resultado.get("ok"):
+            _fact_actualizar_estado_dte(fac_id, "error_envio", glosa=str(resultado.get("error", ""))[:250])
+            paso("Enviar al SII", False, str(resultado.get("error", "")))
+            return jsonify({"ok": False, "fac_id": fac_id, "folio": folio,
+                            "error": resultado.get("error") or "El SII no aceptó el envío",
+                            "reintentable": True, "pasos": pasos}), 502
+
+        track_id = resultado["track_id"]
+        _fact_actualizar_estado_dte(fac_id, "enviado", track_id=track_id, set_fecha_envio=True)
+        paso("Enviar al SII", True, "Track ID: " + str(track_id))
+
+    except Exception as e:
+        import traceback
+        paso("Error", False, traceback.format_exc()[:400])
+        if fac_id:
+            try: _fact_actualizar_estado_dte(fac_id, "error_envio", glosa=str(e)[:300])
+            except Exception: pass
+        return jsonify({"ok": False, "error": str(e)[:300], "folio": folio, "fac_id": fac_id, "pasos": pasos}), 500
+
+    return jsonify({
+        "ok": True, "folio": folio, "tipo_dte": _tipo_factura, "track_id": track_id,
+        "total": total, "fac_id": fac_id, "boleta_id": fac_id,
+        "pdf_url": ("/facturacion/boleta/" + str(fac_id) + "/pdf") if fac_id else None,
+        "pasos": pasos,
+    })
+
+
 @app.route("/facturacion/clientes", methods=["GET"])
 def facturacion_clientes_listar():
     """Lista o busca los clientes del tenant (círculo de clientes).

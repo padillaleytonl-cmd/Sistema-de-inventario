@@ -227,6 +227,9 @@ def generar_factura_xml(
         f'<DirOrigen>{_escape_xml(emisor["dir_origen"])}</DirOrigen>',
         f'<CmnaOrigen>{_escape_xml(emisor["cmna_origen"])}</CmnaOrigen>',
     ])
+    # CiudadOrigen: recomendado por el SII (mejora la representación impresa)
+    if emisor.get('ciudad_origen'):
+        emisor_parts.append(f'<CiudadOrigen>{_escape_xml(emisor["ciudad_origen"][:20])}</CiudadOrigen>')
     emisor_xml = '<Emisor>' + ''.join(emisor_parts) + '</Emisor>'
 
     # 3. Receptor (OBLIGATORIO con datos completos en factura)
@@ -238,10 +241,17 @@ def generar_factura_xml(
     ]
     if receptor.get('contacto'):
         rec_parts.append(f'<Contacto>{_escape_xml(receptor["contacto"][:80])}</Contacto>')
+    # CorreoRecep: recomendado — permite que el SII notifique al receptor al aceptar
+    if receptor.get('email') or receptor.get('correo'):
+        _correo_r = receptor.get('email') or receptor.get('correo')
+        rec_parts.append(f'<CorreoRecep>{_escape_xml(_correo_r[:80])}</CorreoRecep>')
     rec_parts.extend([
         f'<DirRecep>{_escape_xml(receptor.get("direccion", "Sin dirección")[:70])}</DirRecep>',
         f'<CmnaRecep>{_escape_xml(receptor.get("comuna", "Santiago")[:20])}</CmnaRecep>',
     ])
+    # CiudadRecep: recomendado por el SII
+    if receptor.get('ciudad'):
+        rec_parts.append(f'<CiudadRecep>{_escape_xml(receptor["ciudad"][:20])}</CiudadRecep>')
     receptor_xml = '<Receptor>' + ''.join(rec_parts) + '</Receptor>'
 
     # 4. Totales (orden EXACTO según schema SII DTE_v10)

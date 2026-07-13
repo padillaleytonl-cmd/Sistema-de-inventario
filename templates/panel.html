@@ -3449,6 +3449,24 @@ tbody td {
           </div>
         </div>
 
+        <!-- Forma de pago (solo factura 33/34) -->
+        <div id="dtFacPago" style="display:none;background:#f0f6ff;border:1px solid #cfe0f5;border-radius:11px;padding:14px 16px;margin-bottom:16px;">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Forma de pago</label>
+              <select id="dtFacFormaPago" onchange="dtFacVenc()" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
+                <option value="1">Contado</option>
+                <option value="2">Crédito</option>
+                <option value="3">Sin costo (gratuito)</option>
+              </select>
+            </div>
+            <div id="dtFacVencWrap" style="display:none;">
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Fecha de vencimiento</label>
+              <input id="dtFacVenc" type="date" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
+            </div>
+          </div>
+        </div>
+
         <!-- Items -->
         <table style="width:100%;margin-bottom:6px;">
           <thead><tr style="background:#1e2a4a;">
@@ -13941,6 +13959,17 @@ async function dtVistaPrevia(){
     return;
   }
 
+  // Factura: exige receptor completo antes de previsualizar
+  if(_dtTipo==='33'||_dtTipo==='34'){
+    const faltan=[];
+    if(!receptor.rut) faltan.push('RUT');
+    if(!receptor.razon_social) faltan.push('Razón social');
+    if(!receptor.giro) faltan.push('Giro');
+    if(!receptor.direccion) faltan.push('Dirección');
+    if(!receptor.comuna) faltan.push('Comuna');
+    if(faltan.length){ alert('La factura requiere receptor completo. Faltan: '+faltan.join(', ')+'.\nPuedes seleccionar un cliente registrado para autocompletar.'); return; }
+  }
+
   // Mostrar la previa con un loader mientras se genera el PDF
   document.getElementById('dtFormWrap').style.display='none';
   const prev=document.getElementById('dtPreviaWrap'); prev.style.display='block';
@@ -13948,7 +13977,7 @@ async function dtVistaPrevia(){
 
   try{
     const r=await fetch('/facturacion/boleta/preview',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({items,receptor:Object.keys(receptor).length?receptor:null,formato})});
+      body:JSON.stringify({items,receptor:Object.keys(receptor).length?receptor:null,formato,tipo_dte:parseInt(_dtTipo,10)})});
     if(!r.ok){
       let msg='No se pudo generar la vista previa';
       try{const e=await r.json(); msg=e.error||msg;}catch(_){}
@@ -13997,6 +14026,34 @@ async function dtEmitir(){
   }
   const referencias=dtLeerReferencias();
   const formato=document.getElementById('dtFormato')?document.getElementById('dtFormato').value:'carta';
+
+  // ── Factura afecta (33) / exenta (34): receptor completo + forma de pago ──
+  if(_dtTipo==='33'||_dtTipo==='34'){
+    const faltan=[];
+    if(!receptor.rut) faltan.push('RUT');
+    if(!receptor.razon_social) faltan.push('Razón social');
+    if(!receptor.giro) faltan.push('Giro');
+    if(!receptor.direccion) faltan.push('Dirección');
+    if(!receptor.comuna) faltan.push('Comuna');
+    if(faltan.length){ alert('La factura requiere receptor completo. Faltan: '+faltan.join(', ')+'.\nPuedes seleccionar un cliente registrado para autocompletar.'); if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';} return; }
+    const fp=document.getElementById('dtFacFormaPago');
+    const formaPago=fp?parseInt(fp.value,10):1;
+    const venc=document.getElementById('dtFacVenc');
+    const body={ items, receptor, formato, exenta:(_dtTipo==='34'),
+      forma_pago:formaPago,
+      fecha_vencimiento:(formaPago===2 && venc && venc.value)?venc.value:null };
+    if(referencias.length) body.referencias=referencias;
+    try{
+      const r=await fetch('/facturacion/factura/emitir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const d=await r.json();
+      dtMostrarResultado(d, formato, (_dtTipo==='34'?'Factura exenta':'Factura'));
+    }catch(e){
+      document.getElementById('dtFormWrap').style.display='block';
+      document.getElementById('dtResultado').innerHTML='<div style="color:#dc2626;font-size:13px;">Error de conexión: '+e.message+'</div>';
+    }
+    if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';}
+    return;
+  }
 
   if(_dtTipo==='61'||_dtTipo==='56'){
     const folioRef=document.getElementById('dtNCFolioRef').value.trim();
@@ -14519,6 +14576,15 @@ function dtReceptorSegunTipo(tipo){
   if(extra) extra.style.display = requiereCompleto ? 'grid' : 'none';
   const rr=document.getElementById('dtRecRutReq'); if(rr) rr.style.display=requiereCompleto?'inline':'none';
   const nr=document.getElementById('dtRecNombreReq'); if(nr) nr.style.display=requiereCompleto?'inline':'none';
+  // Forma de pago solo para factura (33/34)
+  const pago=document.getElementById('dtFacPago');
+  if(pago) pago.style.display = (tipo==='33'||tipo==='34') ? 'block' : 'none';
+}
+// Muestra el campo de vencimiento solo si la forma de pago es crédito (2)
+function dtFacVenc(){
+  const fp=document.getElementById('dtFacFormaPago');
+  const w=document.getElementById('dtFacVencWrap');
+  if(fp&&w) w.style.display = (fp.value==='2') ? 'block' : 'none';
 }
 let _cliBuscarTimer=null;
 function cliListar(q){
