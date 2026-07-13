@@ -3467,6 +3467,71 @@ tbody td {
           </div>
         </div>
 
+        <!-- Guía de despacho (solo tipo 52): traslado + despacho + transporte -->
+        <div id="dtGuia" style="display:none;background:#fef6ee;border:1px solid #f5ddc4;border-radius:11px;padding:16px;margin-bottom:16px;">
+          <div style="font-size:13px;font-weight:700;color:#b45309;margin-bottom:12px;">🚚 Datos del traslado</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+            <div>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Tipo de traslado <span style="color:#dc2626;">*</span></label>
+              <select id="dtGuiaTraslado" onchange="dtGuiaTrasladoChange()" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
+                <option value="1">1 · Venta</option>
+                <option value="2">2 · Ventas por efectuar</option>
+                <option value="3">3 · Consignación</option>
+                <option value="4">4 · Entrega gratuita</option>
+                <option value="5">5 · Traslado interno (misma empresa)</option>
+                <option value="6">6 · Otros traslados no venta</option>
+                <option value="7">7 · Guía de devolución</option>
+              </select>
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Tipo de despacho</label>
+              <select id="dtGuiaDespacho" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
+                <option value="0">0 · No aplica</option>
+                <option value="1">1 · Por cuenta del receptor</option>
+                <option value="2">2 · Emisor al cliente</option>
+                <option value="3">3 · Emisor a otras instalaciones</option>
+              </select>
+            </div>
+          </div>
+          <div id="dtGuiaTrasladoHint" style="font-size:11px;color:var(--muted);margin-bottom:12px;"></div>
+
+          <div style="font-size:13px;font-weight:700;color:#b45309;margin:6px 0 10px;">🚛 Transporte (opcional)</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+            <div>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Patente</label>
+              <input id="dtGuiaPatente" maxlength="8" placeholder="ABCD12" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">RUT transportista</label>
+              <input id="dtGuiaRutTrans" placeholder="76.123.456-7" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">RUT chofer</label>
+              <input id="dtGuiaRutChofer" placeholder="12.345.678-9" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
+            </div>
+            <div style="grid-column:1 / -1;">
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Nombre del chofer</label>
+              <input id="dtGuiaChofer" maxlength="30" placeholder="Nombre del conductor" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
+            </div>
+            <div style="grid-column:1 / -1;">
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Dirección de destino</label>
+              <input id="dtGuiaDirDest" maxlength="70" placeholder="Dónde se entregan los bienes" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Comuna destino</label>
+              <input id="dtGuiaCmnaDest" maxlength="20" placeholder="Comuna" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Ciudad destino</label>
+              <input id="dtGuiaCiudadDest" maxlength="20" placeholder="Ciudad" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Fecha de salida</label>
+              <input id="dtGuiaFchSalida" type="date" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
+            </div>
+          </div>
+        </div>
+
         <!-- Items -->
         <table style="width:100%;margin-bottom:6px;">
           <thead><tr style="background:#1e2a4a;">
@@ -13969,6 +14034,18 @@ async function dtVistaPrevia(){
     if(!receptor.comuna) faltan.push('Comuna');
     if(faltan.length){ alert('La factura requiere receptor completo. Faltan: '+faltan.join(', ')+'.\nPuedes seleccionar un cliente registrado para autocompletar.'); return; }
   }
+  // Guía: receptor obligatorio salvo traslado interno
+  if(_dtTipo==='52'){
+    const it=parseInt(document.getElementById('dtGuiaTraslado').value,10);
+    if(it!==5){
+      const faltan=[];
+      if(!receptor.rut) faltan.push('RUT');
+      if(!receptor.razon_social) faltan.push('Razón social');
+      if(!receptor.direccion) faltan.push('Dirección');
+      if(!receptor.comuna) faltan.push('Comuna');
+      if(faltan.length){ alert('La guía requiere receptor. Faltan: '+faltan.join(', ')+'.'); return; }
+    }
+  }
 
   // Mostrar la previa con un loader mientras se genera el PDF
   document.getElementById('dtFormWrap').style.display='none';
@@ -14026,6 +14103,40 @@ async function dtEmitir(){
   }
   const referencias=dtLeerReferencias();
   const formato=document.getElementById('dtFormato')?document.getElementById('dtFormato').value:'carta';
+
+  // ── Guía de Despacho (52): traslado + despacho + transporte ──
+  if(_dtTipo==='52'){
+    const indTraslado=parseInt(document.getElementById('dtGuiaTraslado').value,10);
+    const tipoDespacho=parseInt(document.getElementById('dtGuiaDespacho').value,10);
+    // Receptor: obligatorio salvo traslado interno (5)
+    if(indTraslado!==5){
+      const faltan=[];
+      if(!receptor.rut) faltan.push('RUT');
+      if(!receptor.razon_social) faltan.push('Razón social');
+      if(!receptor.direccion) faltan.push('Dirección');
+      if(!receptor.comuna) faltan.push('Comuna');
+      if(faltan.length){ alert('La guía requiere receptor. Faltan: '+faltan.join(', ')+'.\nPuedes seleccionar un cliente registrado.'); if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';} return; }
+    }
+    // Transporte (opcional): se arma solo con los campos que tengan valor
+    const transporte={};
+    const _t=(id,key)=>{const el=document.getElementById(id); if(el&&el.value.trim()) transporte[key]=el.value.trim();};
+    _t('dtGuiaPatente','patente'); _t('dtGuiaRutTrans','rut_transportista'); _t('dtGuiaRutChofer','rut_chofer');
+    _t('dtGuiaChofer','nombre_chofer'); _t('dtGuiaDirDest','dir_dest'); _t('dtGuiaCmnaDest','cmna_dest');
+    _t('dtGuiaCiudadDest','ciudad_dest'); _t('dtGuiaFchSalida','fch_salida');
+    const body={ items, receptor:(indTraslado!==5?receptor:null), formato,
+      ind_traslado:indTraslado, tipo_despacho:tipoDespacho,
+      transporte:Object.keys(transporte).length?transporte:null };
+    try{
+      const r=await fetch('/facturacion/guia/emitir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const d=await r.json();
+      dtMostrarResultado(d, formato, 'Guía de Despacho');
+    }catch(e){
+      document.getElementById('dtFormWrap').style.display='block';
+      document.getElementById('dtResultado').innerHTML='<div style="color:#dc2626;font-size:13px;">Error de conexión: '+e.message+'</div>';
+    }
+    if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';}
+    return;
+  }
 
   // ── Factura afecta (33) / exenta (34): receptor completo + forma de pago ──
   if(_dtTipo==='33'||_dtTipo==='34'){
@@ -14127,6 +14238,7 @@ function dtReset(){
   document.getElementById('dtRecRut').value=''; document.getElementById('dtRecNombre').value='';
   ['dtRecGiro','dtRecDireccion','dtRecComuna','dtCliBuscar'].forEach(id=>{const el=document.getElementById(id); if(el) el.value='';});
   const cr=document.getElementById('dtCliResultados'); if(cr) cr.innerHTML='';
+  ['dtGuiaPatente','dtGuiaRutTrans','dtGuiaRutChofer','dtGuiaChofer','dtGuiaDirDest','dtGuiaCmnaDest','dtGuiaCiudadDest','dtGuiaFchSalida'].forEach(id=>{const el=document.getElementById(id); if(el) el.value='';});
   document.getElementById('dtItems').innerHTML=''; dtAddItem();
   // Reset referencias
   const refsBox=document.getElementById('dtRefsBox');
@@ -14579,6 +14691,27 @@ function dtReceptorSegunTipo(tipo){
   // Forma de pago solo para factura (33/34)
   const pago=document.getElementById('dtFacPago');
   if(pago) pago.style.display = (tipo==='33'||tipo==='34') ? 'block' : 'none';
+  // Bloque de guía de despacho solo para tipo 52
+  const guia=document.getElementById('dtGuia');
+  if(guia) guia.style.display = (tipo==='52') ? 'block' : 'none';
+  if(tipo==='52' && typeof dtGuiaTrasladoChange==='function') dtGuiaTrasladoChange();
+}
+// Ajusta el receptor según el tipo de traslado de la guía
+function dtGuiaTrasladoChange(){
+  const sel=document.getElementById('dtGuiaTraslado');
+  const hint=document.getElementById('dtGuiaTrasladoHint');
+  if(!sel) return;
+  const v=sel.value;
+  const extra=document.getElementById('dtRecExtra');
+  const recSection=document.getElementById('dtRecRut');
+  if(v==='5'){
+    // Traslado interno: el receptor es el propio emisor, no hace falta pedirlo
+    if(hint) hint.innerHTML='Traslado interno: el receptor será tu propia empresa (mismo RUT). No necesitas ingresar cliente.';
+    if(extra) extra.style.display='none';
+  } else {
+    if(hint) hint.innerHTML='Indica el cliente/destinatario en la sección de receptor.';
+    if(extra) extra.style.display='grid';
+  }
 }
 // Muestra el campo de vencimiento solo si la forma de pago es crédito (2)
 function dtFacVenc(){
