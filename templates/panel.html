@@ -14091,8 +14091,23 @@ async function dtVistaPrevia(){
   prev.innerHTML=`<div style="padding:40px;text-align:center;color:var(--muted);font-size:14px;">Generando vista previa…</div>`;
 
   try{
+    // Para la guía, el borrador debe mostrar traslado y transporte
+    const _body={items,receptor:Object.keys(receptor).length?receptor:null,formato,tipo_dte:parseInt(_dtTipo,10)};
+    if(_dtTipo==='52'){
+      const _tr={};
+      const _g=(id,key)=>{const el=document.getElementById(id); if(el&&el.value.trim()) _tr[key]=el.value.trim();};
+      _g('dtGuiaPatente','patente'); _g('dtGuiaRutTrans','rut_transportista'); _g('dtGuiaRutChofer','rut_chofer');
+      _g('dtGuiaChofer','nombre_chofer'); _g('dtGuiaDirDest','dir_dest');
+      const _cd=(document.getElementById('dtGuiaRC_comuna')||{}).value||'';
+      if(_cd.trim()){ _tr.cmna_dest=_cd.trim(); _tr.ciudad_dest=_cd.trim(); }
+      _body.guia={
+        ind_traslado: parseInt((document.getElementById('dtGuiaTraslado')||{}).value||0,10),
+        tipo_despacho: parseInt((document.getElementById('dtGuiaDespacho')||{}).value||0,10),
+        transporte: Object.keys(_tr).length?_tr:null
+      };
+    }
     const r=await fetch('/facturacion/boleta/preview',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({items,receptor:Object.keys(receptor).length?receptor:null,formato,tipo_dte:parseInt(_dtTipo,10)})});
+      body:JSON.stringify(_body)});
     if(!r.ok){
       let msg='No se pudo generar la vista previa';
       try{const e=await r.json(); msg=e.error||msg;}catch(_){}

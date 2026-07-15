@@ -23361,12 +23361,57 @@ def facturacion_boleta_preview():
             "</Referencia>"
         )
 
+    # Guía de despacho (52): el borrador debe mostrar traslado y transporte,
+    # igual que el documento final, para que el usuario los revise antes de firmar.
+    _guia = data.get("guia") or {}
+    iddoc_extra = ""
+    transporte_xml = ""
+    if tipo_dte == 52 and _guia:
+        _it = _guia.get("ind_traslado")
+        _td = _guia.get("tipo_despacho")
+        if _it:
+            iddoc_extra += f"<IndTraslado>{int(_it)}</IndTraslado>"
+        if _td:
+            iddoc_extra += f"<TipoDespacho>{int(_td)}</TipoDespacho>"
+        _tr = _guia.get("transporte") or {}
+        if _tr:
+            _partes = ""
+            if _tr.get("patente"):
+                _partes += f"<Patente>{_esc_xml_preview(_tr['patente'])}</Patente>"
+            if _tr.get("rut_transportista"):
+                _partes += f"<RUTTrans>{_esc_xml_preview(_tr['rut_transportista'])}</RUTTrans>"
+            if _tr.get("rut_chofer") or _tr.get("nombre_chofer"):
+                _partes += "<Chofer>"
+                if _tr.get("rut_chofer"):
+                    _partes += f"<RUTChofer>{_esc_xml_preview(_tr['rut_chofer'])}</RUTChofer>"
+                if _tr.get("nombre_chofer"):
+                    _partes += f"<NombreChofer>{_esc_xml_preview(_tr['nombre_chofer'])}</NombreChofer>"
+                _partes += "</Chofer>"
+            if _tr.get("dir_dest"):
+                _partes += f"<DirDest>{_esc_xml_preview(_tr['dir_dest'])}</DirDest>"
+            if _tr.get("cmna_dest"):
+                _partes += f"<CmnaDest>{_esc_xml_preview(_tr['cmna_dest'])}</CmnaDest>"
+            if _tr.get("ciudad_dest"):
+                _partes += f"<CiudadDest>{_esc_xml_preview(_tr['ciudad_dest'])}</CiudadDest>"
+            if _partes:
+                transporte_xml = "<Transporte>" + _partes + "</Transporte>"
+
+    # Receptor: para factura/guía se muestran los datos completos que exige el SII
+    _rec_extra = ""
+    if tipo_dte in (33, 34, 52, 46, 43):
+        if receptor.get("giro"):
+            _rec_extra += f'<GiroRecep>{_esc_xml_preview(receptor.get("giro"))}</GiroRecep>'
+        if receptor.get("direccion"):
+            _rec_extra += f'<DirRecep>{_esc_xml_preview(receptor.get("direccion"))}</DirRecep>'
+        if receptor.get("comuna"):
+            _rec_extra += f'<CmnaRecep>{_esc_xml_preview(receptor.get("comuna"))}</CmnaRecep>'
+
     # XML borrador (sin TED real → el PDF mostrará placeholder de timbre)
     xml = (
         '<?xml version="1.0" encoding="ISO-8859-1"?>'
         '<DTE version="1.0"><Documento ID="BORRADOR">'
         '<Encabezado>'
-        f'<IdDoc><TipoDTE>{tipo_dte}</TipoDTE><Folio>0</Folio><FchEmis>{fecha}</FchEmis></IdDoc>'
+        f'<IdDoc><TipoDTE>{tipo_dte}</TipoDTE><Folio>0</Folio><FchEmis>{fecha}</FchEmis>{iddoc_extra}</IdDoc>'
         '<Emisor>'
         f'<RUTEmisor>{config.get("rut_emisor","")}</RUTEmisor>'
         f'<RznSocEmisor>{_esc_xml_preview(config.get("razon_social",""))}</RznSocEmisor>'
@@ -23377,7 +23422,9 @@ def facturacion_boleta_preview():
         '<Receptor>'
         f'<RUTRecep>{receptor.get("rut","66666666-6")}</RUTRecep>'
         f'<RznSocRecep>{_esc_xml_preview(receptor.get("razon_social","Consumidor Final"))}</RznSocRecep>'
+        f'{_rec_extra}'
         '</Receptor>'
+        f'{transporte_xml}'
         f'{tot}'
         '</Encabezado>'
         f'{detalles}'
