@@ -3336,259 +3336,55 @@ tbody td {
       </div>
 
       <!-- TAB: EMITIR -->
-      <div id="dt-pane-emitir" class="dt-pane" style="padding:22px;">
-        <div id="dtFormWrap">
-        <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center;">
-          <div id="dtTiposBotones" style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="dt-tipo dt-tipo-active" data-tipo="39" onclick="dtTipo('39',this)"
-              style="padding:8px 16px;border:1px solid #059669;background:#059669;color:#fff;border-radius:8px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Boleta</button>
-          </div>
-          <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
-            <span style="font-size:12px;color:var(--muted);font-weight:600;">Formato:</span>
-            <select id="dtFormato" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);font-weight:600;cursor:pointer;">
-              <option value="carta" selected>Carta (hoja)</option>
-              <option value="rollo">Rollo (ticket 80mm)</option>
-            </select>
+      <div id="dt-pane-emitir" class="dt-pane" style="padding:0;">
+
+        <!-- ══════ PASO 0: elegir tipo de documento ══════ -->
+        <div id="dtPaso0" style="padding:22px;">
+          <div style="font-size:16px;font-weight:600;color:var(--text);margin-bottom:4px;">¿Qué documento vas a emitir?</div>
+          <div style="font-size:13px;color:var(--muted);margin-bottom:18px;">Selecciona el tipo. El formulario se adapta a lo que exige el SII para cada uno.</div>
+          <div id="dtTiposGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;"></div>
+          <div id="dtLeyendaModulos" style="font-size:12px;color:var(--muted);margin-top:16px;display:none;align-items:center;gap:6px;">
+            Puedes activar más tipos de documento desde Configuración, desde 0,1 UF según el documento.
           </div>
         </div>
-        <div id="dtLeyendaModulos" style="font-size:11px;color:var(--muted);margin-bottom:18px;display:flex;align-items:center;gap:6px;">
-          <span style="font-size:13px;">🔒</span>
-          <span>Puedes activar más tipos de documento desde <b>Configuración</b>, desde 0,1 UF según el documento.</span>
-        </div>
 
-        <!-- Bloque de referencia (solo Nota de Crédito) -->
-        <div id="dtNCRef" style="display:none;background:#faf7ff;border:1px solid #e5d9fb;border-radius:11px;padding:16px;margin-bottom:16px;">
-          <div id="dtNCTitulo" style="font-size:13px;font-weight:700;color:#6d28d9;margin-bottom:12px;">🧾 Documento que se referencia</div>
+        <!-- ══════ ASISTENTE POR PASOS ══════ -->
+        <div id="dtWizard" style="display:none;">
 
-          <!-- Tipo de operación -->
-          <div style="margin-bottom:14px;">
-            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:6px;">Tipo de nota de crédito</label>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;">
-              <button type="button" id="dtNCop1" onclick="dtNCOperacion(1,this)" class="dtNCop"
-                style="padding:8px 14px;border:1px solid #6d28d9;background:#6d28d9;color:#fff;border-radius:8px;font-family:inherit;font-weight:600;font-size:12px;cursor:pointer;">Anula documento</button>
-              <button type="button" id="dtNCop3" onclick="dtNCOperacion(3,this)" class="dtNCop"
-                style="padding:8px 14px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-family:inherit;font-weight:600;font-size:12px;cursor:pointer;">Corrige montos (rebaja)</button>
+          <!-- Encabezado: documento, folio, ambiente -->
+          <div style="padding:16px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+            <div>
+              <div id="dtWizTitulo" style="font-size:16px;font-weight:600;color:var(--text);">Emitir documento</div>
+              <div id="dtWizSubtitulo" style="font-size:12px;color:var(--muted);">El folio se reserva al confirmar el envío</div>
             </div>
-            <div id="dtNCopHint" style="font-size:11px;color:var(--muted);margin-top:7px;">Deja sin efecto el documento completo. Los ítems replican el total del original.</div>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span id="dtWizAmbiente" style="font-size:11px;padding:4px 10px;border-radius:7px;background:#fef3c7;color:#92400e;font-weight:600;">Producción</span>
+              <button onclick="dtVolverATipos()" style="background:none;border:1px solid var(--border);color:var(--muted);padding:6px 12px;border-radius:8px;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;">Cambiar documento</button>
+            </div>
           </div>
 
-          <!-- Cómo referenciar: buscar o manual -->
-          <div style="margin-bottom:12px;">
-            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:6px;">Buscar documento emitido (o ingresar manual abajo)</label>
-            <input id="dtNCBuscar" oninput="dtNCBuscarDoc(this.value)" placeholder="Folio, RUT o nombre del cliente…"
-              style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
-            <div id="dtNCResultados" style="margin-top:4px;"></div>
-          </div>
+          <!-- Barra de pasos -->
+          <div id="dtStepBar" style="display:flex;padding:0 22px;border-bottom:1px solid var(--border);overflow-x:auto;"></div>
 
-          <!-- Datos de referencia (se llenan al seleccionar o manual) -->
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
-            <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Tipo doc. original</label>
-              <select id="dtNCTipoRef" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
-                <option value="39">Boleta (39)</option>
-                <option value="41">Boleta exenta (41)</option>
-                <option value="33">Factura (33)</option>
-                <option value="34">Factura exenta (34)</option>
-                <option value="56">Nota de débito (56)</option>
-              </select>
-            </div>
-            <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Folio original</label>
-              <input id="dtNCFolioRef" type="number" placeholder="Ej: 25206"
-                style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
-            </div>
-            <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Fecha original</label>
-              <input id="dtNCFechaRef" type="date"
-                style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
-            </div>
-          </div>
-          <div style="margin-top:10px;">
-            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Motivo / razón de referencia (obligatorio)</label>
-            <input id="dtNCRazon" placeholder="Ej: Anulación por devolución de producto"
-              style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
-          </div>
-        </div>
-        <div style="margin-bottom:16px;">
-          <!-- Buscador del círculo de clientes -->
-          <div style="position:relative;margin-bottom:12px;">
-            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Buscar cliente registrado</label>
-            <input id="dtCliBuscar" oninput="dtCliBuscar(this.value)" autocomplete="off" placeholder="🔍 Nombre o RUT de un cliente guardado (opcional)"
-              style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
-            <div id="dtCliResultados" style="position:absolute;left:0;right:0;z-index:20;"></div>
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-            <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">RUT cliente <span id="dtRecRutReq" style="color:#dc2626;display:none;">*</span></label>
-              <input id="dtRecRut" placeholder="66666666-6 (consumidor final)"
-                style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
-            </div>
-            <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Nombre / Razón social <span id="dtRecNombreReq" style="color:#dc2626;display:none;">*</span></label>
-              <input id="dtRecNombre" placeholder="Consumidor Final"
-                style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
-            </div>
-          </div>
-          <!-- Campos extra del receptor (giro/dirección/comuna): visibles solo para documentos que los exigen -->
-          <div id="dtRecExtra" style="display:none;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
-            <div style="grid-column:1 / -1;">
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Giro del receptor <span style="color:#dc2626;">*</span></label>
-              <input id="dtRecGiro" placeholder="Giro comercial del cliente"
-                style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
-            </div>
-            <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Dirección <span style="color:#dc2626;">*</span></label>
-              <input id="dtRecDireccion" placeholder="Dirección del cliente"
-                style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
-            </div>
-            <div style="grid-column:1 / -1;" id="dtRecRegionComuna">
-              <!-- Selector región + comuna se inyecta por JS (dtRecRC) -->
+          <!-- Contenido del paso -->
+          <div id="dtStepBody" style="padding:22px;min-height:220px;"></div>
+
+          <!-- Pie: navegación -->
+          <div style="padding:14px 22px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:var(--bg2);">
+            <span id="dtStepInfo" style="font-size:12px;color:var(--muted);"></span>
+            <div style="display:flex;gap:8px;">
+              <button id="dtBtnAtras" onclick="dtStepAtras()" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:10px 16px;border-radius:9px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Atrás</button>
+              <button id="dtBtnSiguiente" onclick="dtStepSiguiente()" style="background:#534AB7;border:none;color:#fff;padding:10px 18px;border-radius:9px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Continuar</button>
             </div>
           </div>
         </div>
 
-        <!-- Forma de pago (solo factura 33/34) -->
-        <div id="dtFacPago" style="display:none;background:#f0f6ff;border:1px solid #cfe0f5;border-radius:11px;padding:14px 16px;margin-bottom:16px;">
-          <div style="display:grid;grid-template-columns:1fr;gap:12px;max-width:340px;">
-            <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Forma de pago</label>
-              <select id="dtFacFormaPago" onchange="dtFacPagoHintUpdate()" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
-                <option value="1">Contado</option>
-                <option value="2">Crédito</option>
-                <option value="3">Sin costo (gratuito)</option>
-              </select>
-            </div>
-          </div>
-          <div id="dtFacPagoHint" style="font-size:11px;color:var(--muted);margin-top:9px;line-height:1.5;"></div>
-        </div>
-
-        <!-- Guía de despacho (solo tipo 52): traslado + despacho + transporte -->
-        <div id="dtGuia" style="display:none;background:#fef6ee;border:1px solid #f5ddc4;border-radius:11px;padding:16px;margin-bottom:16px;">
-          <div style="font-size:13px;font-weight:700;color:#b45309;margin-bottom:12px;">🚚 Datos del traslado</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
-            <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Tipo de traslado <span style="color:#dc2626;">*</span></label>
-              <select id="dtGuiaTraslado" onchange="dtGuiaTrasladoChange()" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
-                <option value="1">1 · Venta</option>
-                <option value="2">2 · Ventas por efectuar</option>
-                <option value="3">3 · Consignación</option>
-                <option value="4">4 · Entrega gratuita</option>
-                <option value="5">5 · Traslado interno (misma empresa)</option>
-                <option value="6">6 · Otros traslados no venta</option>
-                <option value="7">7 · Guía de devolución</option>
-              </select>
-            </div>
-            <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Tipo de despacho</label>
-              <select id="dtGuiaDespacho" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
-                <option value="0">0 · No aplica</option>
-                <option value="1">1 · Por cuenta del receptor</option>
-                <option value="2">2 · Emisor al cliente</option>
-                <option value="3">3 · Emisor a otras instalaciones</option>
-              </select>
-            </div>
-          </div>
-          <div id="dtGuiaTrasladoHint" style="font-size:11px;color:var(--muted);margin-bottom:12px;"></div>
-
-          <div style="font-size:13px;font-weight:700;color:#b45309;margin:6px 0 10px;">🚛 Transporte (obligatorio)</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
-            <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Patente <span style="color:#dc2626;">*</span></label>
-              <input id="dtGuiaPatente" maxlength="8" placeholder="ABCD12" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
-            </div>
-            <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">RUT transportista <span style="color:#dc2626;">*</span></label>
-              <input id="dtGuiaRutTrans" placeholder="76.123.456-7" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
-            </div>
-            <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">RUT chofer <span style="color:#dc2626;">*</span></label>
-              <input id="dtGuiaRutChofer" placeholder="12.345.678-9" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
-            </div>
-            <div style="grid-column:1 / -1;">
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Nombre del chofer <span style="color:#dc2626;">*</span></label>
-              <input id="dtGuiaChofer" maxlength="30" placeholder="Nombre del conductor" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
-            </div>
-            <div style="grid-column:1 / -1;">
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Dirección de destino <span style="color:#dc2626;">*</span></label>
-              <input id="dtGuiaDirDest" maxlength="70" placeholder="Dónde se entregan los bienes" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
-            </div>
-            <div style="grid-column:1 / -1;" id="dtGuiaRegionComuna">
-              <!-- Selector región + comuna destino (dtGuiaRC) -->
-            </div>
-            <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Fecha de salida <span style="color:#dc2626;">*</span></label>
-              <input id="dtGuiaFchSalida" type="date" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
-            </div>
-            <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Hora de salida</label>
-              <input id="dtGuiaHraSalida" type="time" step="1" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
-            </div>
-            <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Fecha de llegada</label>
-              <input id="dtGuiaFchLlegada" type="date" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
-            </div>
-            <div style="grid-column:1 / -1;font-size:11px;color:var(--muted);margin-top:-2px;">
-              Hora y fecha de llegada son opcionales según el SII, pero recomendadas: refuerzan la trazabilidad del traslado y deben aparecer en el documento impreso. Si el traslado dura más de un día, conviene indicar la fecha estimada de llegada.
-            </div>
-          </div>
-        </div>
-
-        <!-- Items -->
-        <table style="width:100%;margin-bottom:6px;">
-          <thead><tr style="background:#1e2a4a;">
-            <th style="font-size:11px;color:#fff;text-align:left;font-weight:600;padding:10px 8px;border-radius:8px 0 0 8px;">DESCRIPCIÓN</th>
-            <th style="font-size:11px;color:#fff;text-align:left;font-weight:600;padding:10px 8px;width:64px;">CANT.</th>
-            <th style="font-size:11px;color:#fff;text-align:left;font-weight:600;padding:10px 8px;width:78px;">UNIDAD</th>
-            <th style="font-size:11px;color:#fff;text-align:left;font-weight:600;padding:10px 8px;width:110px;">PRECIO UNIT.</th>
-            <th style="width:56px;font-size:11px;color:#fff;text-align:center;font-weight:600;padding:10px 8px;">EXENTO</th>
-            <th style="width:34px;background:#1e2a4a;border-radius:0 8px 8px 0;"></th>
-          </tr></thead>
-          <tbody id="dtItems"></tbody>
-        </table>
-        <button onclick="dtAddItem()" style="background:var(--bg2);color:#534AB7;border:none;padding:9px 14px;border-radius:9px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">+ Agregar ítem</button>
-
-        <!-- Totales -->
-        <div style="margin-top:16px;border-top:1px dashed var(--border);padding-top:14px;max-width:280px;margin-left:auto;">
-          <div style="display:flex;justify-content:space-between;font-size:13px;color:var(--muted);padding:3px 0;"><span>Neto</span><span id="dtNeto">$ 0</span></div>
-          <div id="dtLineExe" style="display:none;justify-content:space-between;font-size:13px;color:var(--muted);padding:3px 0;"><span>Exento</span><span id="dtExe">$ 0</span></div>
-          <div style="display:flex;justify-content:space-between;font-size:13px;color:var(--muted);padding:3px 0;"><span>IVA (19%)</span><span id="dtIva">$ 0</span></div>
-          <div style="display:flex;justify-content:space-between;font-size:19px;font-weight:700;color:var(--text);margin-top:6px;"><span>TOTAL</span><span id="dtTotal">$ 0</span></div>
-        </div>
+        <!-- Resultado de la emisión -->
+        <div id="dtResultado" style="padding:0 22px 22px;"></div>
 
         <datalist id="dtUnidades">
           <option value="Un"><option value="Kg"><option value="Gr"><option value="Lt"><option value="Mt"><option value="Mt2"><option value="Caja"><option value="Par"><option value="Docena"><option value="Hora"><option value="Servicio">
         </datalist>
-
-        <!-- Referencias a otros documentos (guía despacho, OC, etc) — colapsable -->
-        <div style="margin-top:16px;border-top:1px dashed var(--border);padding-top:14px;">
-          <button type="button" onclick="dtToggleRefs()" id="dtRefsToggle"
-            style="background:none;border:none;color:#534AB7;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;padding:4px 0;display:flex;align-items:center;gap:6px;">
-            <span id="dtRefsArrow">▸</span> Agregar referencia a otro documento (opcional)
-          </button>
-          <div id="dtRefsBox" style="display:none;margin-top:10px;">
-            <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">
-              Útil cuando esta boleta viene de una guía de despacho previa, orden de compra, o anula otra boleta.
-            </div>
-            <table style="width:100%;border-collapse:collapse;">
-              <thead><tr style="background:#1e2a4a;">
-                <th style="font-size:11px;color:#fff;text-align:left;font-weight:600;padding:8px;width:150px;border-radius:8px 0 0 8px;">TIPO DOCUMENTO</th>
-                <th style="font-size:11px;color:#fff;text-align:left;font-weight:600;padding:8px;width:110px;">FOLIO</th>
-                <th style="font-size:11px;color:#fff;text-align:left;font-weight:600;padding:8px;">MOTIVO</th>
-                <th style="width:34px;border-radius:0 8px 8px 0;"></th>
-              </tr></thead>
-              <tbody id="dtRefsItems"></tbody>
-            </table>
-            <button type="button" onclick="dtAddRef()" style="background:var(--bg2);color:#534AB7;border:none;padding:7px 12px;border-radius:8px;font-family:inherit;font-weight:600;font-size:12px;cursor:pointer;margin-top:8px;">+ Agregar referencia</button>
-          </div>
-        </div>
-
-        <button id="dtBtnEmitir" onclick="dtVistaPrevia()"
-          style="width:100%;background:#059669;color:#fff;border:none;padding:15px;border-radius:11px;font-family:inherit;font-weight:700;font-size:15px;cursor:pointer;margin-top:16px;">
-          Revisar y emitir
-        </button>
-        </div><!-- /dtFormWrap -->
-        <div id="dtPreviaWrap" style="display:none;"></div>
-        <div id="dtResultado" style="margin-top:16px;"></div>
       </div>
 
       <!-- TAB: FOLIOS -->
@@ -13652,7 +13448,6 @@ function vtaDescargarCSV(){
 
 
 // ═══════════ PANEL DOCUMENTOS TRIBUTARIOS ═══════════
-let _dtTipo = '39';
 let _dtProductos = null;        // cache de productos del tenant
 let _dtFilaActiva = null;        // fila donde se insertará el producto buscado
 const _dtCLP = n => '$ ' + (Math.round(n||0)).toLocaleString('es-CL');
@@ -13666,13 +13461,8 @@ function dtTab(tab, btn){
   if(tab==='folios') dtCargarFolios();
 }
 // Garantizar primera fila apenas el panel existe en el DOM
-function dtInit(){
-  if(document.getElementById('dtItems') && !document.querySelector('.dt-item')) dtAddItem();
-  if(document.getElementById('dtTiposBotones')) dtCargarTiposHabilitados();
-}
 document.addEventListener('DOMContentLoaded', ()=>{ setTimeout(dtInit, 300); });
 
-let _dtNCcodRef = 1;  // 1=anula, 2=corrige texto, 3=corrige montos
 let _dtNCMontoMax = 0;  // monto del documento referenciado (tope para "corrige montos")
 
 // Catálogo de tipos emitibles manualmente, con nombre y precio de referencia (UF/mes)
@@ -13725,122 +13515,11 @@ function dtSetRegionComuna(pfx, comuna){
 }
 
 
-const DT_TIPOS_EMISOR = [
-  {tipo:'39', nombre:'Boleta',            campo:'emite_boleta',         uf:0.0},
-  {tipo:'41', nombre:'Boleta exenta',     campo:'emite_boleta_exenta',  uf:0.1},
-  {tipo:'33', nombre:'Factura',           campo:'emite_factura',        uf:0.2},
-  {tipo:'34', nombre:'Factura exenta',    campo:'emite_factura_exenta', uf:0.2},
-  {tipo:'61', nombre:'Nota de Crédito',   campo:'emite_nota_credito',   uf:0.0},
-  {tipo:'56', nombre:'Nota de Débito',    campo:'emite_nota_debito',    uf:0.1},
-  {tipo:'52', nombre:'Guía de Despacho',  campo:'emite_guia_despacho',  uf:0.1},
-];
 
 // Carga los tipos que el tenant tiene habilitados y pinta los botones.
 // Los activos son clickeables; los no contratados salen con candado (deshabilitados).
-async function dtCargarTiposHabilitados(){
-  const cont=document.getElementById('dtTiposBotones');
-  if(!cont) return;
-  let activos=[39,61]; // fallback mínimo: boleta y NC vienen incluidas
-  try{
-    const r=await fetch('/facturacion/folios/tipos-habilitados');
-    const d=await r.json();
-    if(d.ok && d.tipos && d.tipos.length){ activos=d.tipos.map(t=>Number(t.tipo_dte)); }
-  }catch(e){}
-  let h='';
-  let hayBloqueado=false;
-  DT_TIPOS_EMISOR.forEach(t=>{
-    const activo = activos.includes(Number(t.tipo));
-    if(activo){
-      h+=`<button class="dt-tipo" data-tipo="${t.tipo}" onclick="dtTipo('${t.tipo}',this)" style="padding:8px 16px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">${t.nombre}</button>`;
-    } else {
-      hayBloqueado=true;
-      h+=`<button class="dt-tipo-locked" disabled title="Actívalo en Configuración (${t.uf} UF/mes)" style="padding:8px 16px;border:1px solid var(--border);background:var(--bg2);color:var(--muted);border-radius:8px;font-family:inherit;font-weight:600;font-size:13px;cursor:not-allowed;opacity:.6;display:inline-flex;align-items:center;gap:6px;">🔒 ${t.nombre}</button>`;
-    }
-  });
-  cont.innerHTML=h;
-  // Seleccionar el primer tipo activo por defecto
-  const primero=cont.querySelector('.dt-tipo');
-  if(primero){ dtTipo(primero.getAttribute('data-tipo'), primero); }
-  // Mostrar u ocultar la leyenda según haya bloqueados
-  const ley=document.getElementById('dtLeyendaModulos');
-  if(ley) ley.style.display = hayBloqueado ? 'flex' : 'none';
-}
-function dtTipo(tipo, btn){
-  _dtTipo = tipo;
-  document.querySelectorAll('.dt-tipo').forEach(b=>{b.style.background='var(--card)';b.style.color='var(--text)';b.style.borderColor='var(--border)';});
-  btn.style.background='#059669'; btn.style.color='#fff'; btn.style.borderColor='#059669';
-  const ncRef = document.getElementById('dtNCRef');
-  const esNota = (tipo==='61' || tipo==='56');
-  if(ncRef){
-    ncRef.style.display = esNota ? 'block' : 'none';
-    // Color distintivo del botón según la nota
-    if(tipo==='61'){ btn.style.background='#6d28d9'; btn.style.borderColor='#6d28d9'; }
-    if(tipo==='56'){ btn.style.background='#be185d'; btn.style.borderColor='#be185d'; }
-    if(esNota) dtNotaConfig(tipo);
-  }
-  // Mostrar campos de receptor completo si el documento los exige
-  if(typeof dtReceptorSegunTipo==='function') dtReceptorSegunTipo(tipo);
-}
-
 // Ajusta el bloque de referencia según sea Nota de Crédito (61) o Débito (56)
-function dtNotaConfig(tipo){
-  const titulo=document.getElementById('dtNCTitulo');
-  const op1=document.getElementById('dtNCop1');
-  const op3=document.getElementById('dtNCop3');
-  const tipoRefSel=document.getElementById('dtNCTipoRef');
-  if(tipo==='56'){
-    // Nota de Débito: puede ANULAR una Nota de Crédito, o CORREGIR montos al alza de facturas
-    if(titulo) titulo.textContent='🧾 Documento que se referencia';
-    if(op1){ op1.textContent='Anula nota de crédito'; op1.style.display=''; }
-    if(op3){ op3.textContent='Corrige montos (al alza)'; op3.style.display=''; }
-    _dtNCcodRef=1;
-    dtNCOperacion(1, op1);
-    // El tipo de referencia se ajusta según la operación (ver dtNCOperacion)
-    if(tipoRefSel){ tipoRefSel.innerHTML='<option value="61">Nota de Crédito (61)</option>'; }
-  } else {
-    // Nota de Crédito
-    if(titulo) titulo.textContent='🧾 Documento que se referencia';
-    if(op1){ op1.textContent='Anula documento'; op1.style.display=''; }
-    if(op3){ op3.style.display=''; }
-    if(tipoRefSel){ tipoRefSel.innerHTML='<option value="39">Boleta (39)</option><option value="41">Boleta exenta (41)</option><option value="33">Factura (33)</option><option value="34">Factura exenta (34)</option>'; }
-  }
-}
-
 // Cambiar el tipo de operación de la NC (1=anula, 2=corrige texto, 3=corrige montos)
-function dtNCOperacion(cod, btn){
-  _dtNCcodRef = cod;
-  document.querySelectorAll('.dtNCop').forEach(b=>{b.style.background='var(--card)';b.style.color='var(--text)';b.style.borderColor='var(--border)';});
-  const colorNota = _dtTipo==='56' ? '#be185d' : '#6d28d9';
-  btn.style.background=colorNota; btn.style.color='#fff'; btn.style.borderColor=colorNota;
-  const hint=document.getElementById('dtNCopHint');
-  const tipoRefSel=document.getElementById('dtNCTipoRef');
-  let texto='';
-  if(_dtTipo==='56'){
-    // Nota de Débito
-    if(cod===1){
-      texto='Anula una nota de crédito completa. Los ítems replican el monto de la NC. El documento referenciado debe ser una Nota de Crédito.';
-      if(tipoRefSel) tipoRefSel.innerHTML='<option value="61">Nota de Crédito (61)</option>';
-    } else {
-      texto='Agrega un cargo/monto al alza sobre una factura (ej: intereses, reajuste). Ingresa el monto neto a agregar (el IVA se calcula solo).';
-      if(tipoRefSel) tipoRefSel.innerHTML='<option value="33">Factura (33)</option><option value="34">Factura exenta (34)</option>';
-    }
-  } else {
-    // Nota de Crédito
-    const hints={
-      1:'Deja sin efecto el documento completo. Los ítems replican el total del original.',
-      3:'Rebaja parte del monto. Ingresa en los ítems el monto neto a rebajar (el IVA se calcula solo). No puede superar el total original.'
-    };
-    texto=hints[cod]||'';
-  }
-  if(hint) hint.textContent = texto;
-  // Limpiar selección de referencia previa al cambiar operación (cambian los tipos válidos)
-  const buscar=document.getElementById('dtNCBuscar'); if(buscar) buscar.value='';
-  const res=document.getElementById('dtNCResultados'); if(res) res.innerHTML='';
-  const folioR=document.getElementById('dtNCFolioRef'); if(folioR) folioR.value='';
-  _dtNCMontoMax=0;
-  dtNCActualizarTope();
-}
-
 // Buscar documento emitido para referenciar en la NC
 let _dtNCBuscarTimer=null;
 function dtNCBuscarDoc(q){
@@ -13864,7 +13543,7 @@ function dtNCBuscarDoc(q){
         let referenciable=true, razon='';
         if(_dtTipo==='56'){
           // NOTA DE DÉBITO
-          if(_dtNCcodRef===1){
+          if(_dtDatos.cod_ref===1){
             // Anula NC: solo se pueden referenciar NOTAS DE CRÉDITO no anuladas
             if(tn!==61){ referenciable=false; razon='La ND solo anula notas de crédito'; }
             else if(yaAnulado){ referenciable=false; razon=doc.motivo_anulacion||'NC ya anulada'; }
@@ -13901,32 +13580,604 @@ function dtNCBuscarDoc(q){
 
 // Al seleccionar un documento de la búsqueda, llenar los campos de referencia
 function dtNCSeleccionar(doc){
-  document.getElementById('dtNCTipoRef').value = doc.tipo;
+  const selTipo=document.getElementById('dtNCTipoRef');
+  if(selTipo){
+    if(!Array.from(selTipo.options).some(o=>String(o.value)===String(doc.tipo))){
+      selTipo.insertAdjacentHTML('beforeend', `<option value="${doc.tipo}">${dtTipoAbrev(doc.tipo).nombre}</option>`);
+    }
+    selTipo.value = doc.tipo;
+  }
   document.getElementById('dtNCFolioRef').value = doc.folio;
   document.getElementById('dtNCFechaRef').value = doc.fecha;
   document.getElementById('dtNCResultados').innerHTML='';
   document.getElementById('dtNCBuscar').value = dtTipoAbrev(doc.tipo).sigla+' N°'+doc.folio+' · '+(doc.cliente||'Consumidor Final');
   _dtNCMontoMax = parseFloat(doc.monto)||0;
-  // Si es anular, prellenar un ítem con el monto total del documento
-  if(_dtNCcodRef===1 && doc.monto){
-    document.getElementById('dtItems').innerHTML='';
-    dtAddItem('Anulación '+dtTipoAbrev(doc.tipo).nombre+' N°'+doc.folio, 1, doc.monto, 'Un');
+  // Al anular, el documento se replica completo: se prellenan los ítems y el receptor
+  if(_dtDatos.cod_ref===1 && doc.monto){
+    _dtDatos.items=[{nombre:'Anulación '+dtTipoAbrev(doc.tipo).nombre+' N°'+doc.folio,
+                     cantidad:1, precio_unitario:parseFloat(doc.monto)||0, unidad:'Un', exento:false}];
   }
-  dtNCActualizarTope();
+  if(doc.rut){ _dtDatos.receptor = Object.assign({}, _dtDatos.receptor||{}, {rut:doc.rut, razon_social:doc.cliente||''}); }
 }
 
 // Muestra el tope de monto disponible para "corrige montos"
-function dtNCActualizarTope(){
-  const hint=document.getElementById('dtNCopHint');
-  if(_dtTipo==='61' && _dtNCcodRef===3 && _dtNCMontoMax>0 && hint){
-    hint.innerHTML='Rebaja parte del monto. Ingresa el monto neto a rebajar (el IVA se calcula solo). '
-      +'<b>Máximo del documento: '+_dtCLP(_dtNCMontoMax)+'</b> — la NC no puede superarlo.';
+// ═══════════════════════════════════════════════════════════════════
+// EMISOR DE DOCUMENTOS — asistente por pasos
+// Cada tipo de DTE define su propia secuencia de pasos según lo que
+// exige el SII. El usuario ve una cosa a la vez y no puede avanzar sin
+// completar lo obligatorio. El último paso siempre es el visor del PDF.
+// ═══════════════════════════════════════════════════════════════════
+
+// Catálogo de tipos emitibles. 'uf' es el precio del módulo (habilitación por tenant).
+const DT_TIPOS_EMISOR = [
+  {tipo:'39', nombre:'Boleta electrónica',      desc:'Venta a consumidor final',                  uf:0.0},
+  {tipo:'41', nombre:'Boleta exenta',           desc:'Venta sin IVA a consumidor final',          uf:0.1},
+  {tipo:'33', nombre:'Factura electrónica',     desc:'Venta a empresa, con IVA',                  uf:0.2},
+  {tipo:'34', nombre:'Factura exenta',          desc:'Venta a empresa, sin IVA',                  uf:0.2},
+  {tipo:'61', nombre:'Nota de crédito',         desc:'Anula o rebaja un documento emitido',       uf:0.0},
+  {tipo:'56', nombre:'Nota de débito',          desc:'Anula una nota de crédito o agrega cargos', uf:0.1},
+  {tipo:'52', nombre:'Guía de despacho',        desc:'Respalda el traslado de bienes',            uf:0.1},
+];
+
+// Secuencia de pasos por tipo de documento
+const DT_PASOS = {
+  '39': ['productos','revisar'],
+  '41': ['productos','revisar'],
+  '33': ['receptor','pago','productos','revisar'],
+  '34': ['receptor','pago','productos','revisar'],
+  '61': ['operacion','referencia','productos','revisar'],
+  '56': ['operacion','referencia','productos','revisar'],
+  '52': ['traslado','destinatario','transporte','productos','revisar'],
+};
+
+const DT_PASO_NOMBRE = {
+  productos:'Productos', revisar:'Revisar', receptor:'Receptor', pago:'Pago',
+  operacion:'Operación', referencia:'Documento', traslado:'Traslado',
+  destinatario:'Destinatario', transporte:'Transporte',
+};
+
+// Estado del asistente
+let _dtTipo = null;
+let _dtPasoIdx = 0;
+let _dtDatos = {};   // acumula lo capturado en cada paso
+
+function dtPasos(){
+  let p = (DT_PASOS[_dtTipo] || ['productos','revisar']).slice();
+  // Guía con traslado interno: el receptor es el propio emisor, se omite el paso
+  if(_dtTipo==='52' && String(_dtDatos.ind_traslado)==='5'){
+    p = p.filter(x => x!=='destinatario');
+  }
+  return p;
+}
+
+// ── Paso 0: elegir tipo (según habilitación del tenant) ──
+async function dtCargarTiposHabilitados(){
+  const cont=document.getElementById('dtTiposGrid');
+  if(!cont) return;
+  let activos=[39,61];
+  try{
+    const r=await fetch('/facturacion/folios/tipos-habilitados');
+    const d=await r.json();
+    if(d.ok && d.tipos && d.tipos.length) activos=d.tipos.map(t=>Number(t.tipo_dte));
+  }catch(e){}
+  let h='', hayBloqueado=false;
+  DT_TIPOS_EMISOR.forEach(t=>{
+    const on = activos.includes(Number(t.tipo));
+    if(on){
+      h+=`<button onclick="dtElegirTipo('${t.tipo}')" style="text-align:left;background:var(--card);border:1px solid var(--border);border-radius:11px;padding:14px;cursor:pointer;font-family:inherit;transition:border-color .15s;" onmouseover="this.style.borderColor='#534AB7'" onmouseout="this.style.borderColor='var(--border)'">
+        <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:2px;">${t.nombre}</div>
+        <div style="font-size:12px;color:var(--muted);">${t.desc}</div>
+      </button>`;
+    } else {
+      hayBloqueado=true;
+      h+=`<div title="Actívalo en Configuración (${t.uf} UF/mes)" style="text-align:left;background:var(--bg2);border:1px solid var(--border);border-radius:11px;padding:14px;opacity:.55;cursor:not-allowed;">
+        <div style="font-size:14px;font-weight:600;color:var(--muted);margin-bottom:2px;">${t.nombre}</div>
+        <div style="font-size:12px;color:var(--muted);">No incluido en tu plan · ${t.uf} UF/mes</div>
+      </div>`;
+    }
+  });
+  cont.innerHTML=h;
+  const ley=document.getElementById('dtLeyendaModulos');
+  if(ley) ley.style.display = hayBloqueado ? 'flex' : 'none';
+}
+
+function dtElegirTipo(tipo){
+  _dtTipo = tipo;
+  _dtPasoIdx = 0;
+  _dtDatos = { items: [] };
+  if(tipo==='52') _dtDatos.ind_traslado = 1;
+  if(tipo==='61'||tipo==='56') _dtDatos.cod_ref = 1;
+  if(tipo==='33'||tipo==='34') _dtDatos.forma_pago = 1;
+  const t = DT_TIPOS_EMISOR.find(x=>x.tipo===tipo) || {nombre:'Documento'};
+  document.getElementById('dtWizTitulo').textContent = 'Emitir ' + t.nombre.toLowerCase();
+  document.getElementById('dtPaso0').style.display='none';
+  document.getElementById('dtWizard').style.display='block';
+  document.getElementById('dtResultado').innerHTML='';
+  dtStepRender();
+}
+
+function dtVolverATipos(){
+  document.getElementById('dtWizard').style.display='none';
+  document.getElementById('dtPaso0').style.display='block';
+  document.getElementById('dtResultado').innerHTML='';
+  _dtTipo=null;
+}
+
+// ── Barra de pasos ──
+function dtStepBar(){
+  const pasos = dtPasos();
+  const cont = document.getElementById('dtStepBar');
+  let h='';
+  pasos.forEach((p,i)=>{
+    const activo = i===_dtPasoIdx, hecho = i<_dtPasoIdx;
+    const circulo = hecho
+      ? `<span style="width:20px;height:20px;border-radius:50%;background:#059669;color:#fff;font-size:11px;display:inline-flex;align-items:center;justify-content:center;">✓</span>`
+      : `<span style="width:20px;height:20px;border-radius:50%;${activo?'background:#534AB7;color:#fff;':'border:1px solid var(--border);color:var(--muted);'}font-size:11px;display:inline-flex;align-items:center;justify-content:center;">${i+1}</span>`;
+    h+=`<div ${hecho?`onclick="dtIrAPaso(${i})" style="cursor:pointer;`:'style="'}padding:12px 14px 10px;${activo?'border-bottom:2px solid #534AB7;':'border-bottom:2px solid transparent;'}display:flex;align-items:center;gap:7px;white-space:nowrap;">
+      ${circulo}<span style="font-size:13px;color:${activo?'var(--text)':'var(--muted)'};font-weight:${activo?'600':'400'};">${DT_PASO_NOMBRE[p]||p}</span>
+    </div>`;
+  });
+  cont.innerHTML=h;
+  document.getElementById('dtStepInfo').textContent = `Paso ${_dtPasoIdx+1} de ${pasos.length}`;
+  document.getElementById('dtBtnAtras').style.visibility = _dtPasoIdx===0 ? 'hidden' : 'visible';
+  const ultimo = _dtPasoIdx === pasos.length-1;
+  const btn = document.getElementById('dtBtnSiguiente');
+  btn.textContent = ultimo ? 'Firmar y enviar al SII' : 'Continuar';
+  btn.style.background = ultimo ? '#059669' : '#534AB7';
+}
+
+function dtIrAPaso(i){ if(i<_dtPasoIdx){ _dtPasoIdx=i; dtStepRender(); } }
+function dtStepAtras(){ if(_dtPasoIdx>0){ _dtPasoIdx--; dtStepRender(); } }
+
+async function dtStepSiguiente(){
+  const pasos = dtPasos();
+  const actual = pasos[_dtPasoIdx];
+  const err = dtValidarPaso(actual);
+  if(err){ dtMostrarError(err); return; }
+  if(_dtPasoIdx === pasos.length-1){ await dtEmitir(); return; }
+  _dtPasoIdx++;
+  dtStepRender();
+}
+
+function dtMostrarError(msg){
+  const body=document.getElementById('dtStepBody');
+  let box=document.getElementById('dtStepError');
+  if(!box){
+    box=document.createElement('div');
+    box.id='dtStepError';
+    box.style.cssText='background:#fdf2f2;border:1px solid #f3c2c2;border-radius:9px;padding:11px 13px;color:#b91c1c;font-size:13px;margin-bottom:14px;';
+    body.insertBefore(box, body.firstChild);
+  }
+  box.textContent=msg;
+  box.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+function dtStepRender(){
+  const paso = dtPasos()[_dtPasoIdx];
+  const body = document.getElementById('dtStepBody');
+  const render = {
+    traslado: dtRenderTraslado, destinatario: dtRenderDestinatario,
+    transporte: dtRenderTransporte, receptor: dtRenderReceptor,
+    pago: dtRenderPago, operacion: dtRenderOperacion,
+    referencia: dtRenderReferencia, productos: dtRenderProductos,
+    revisar: dtRenderRevisar,
+  }[paso];
+  body.innerHTML = render ? render() : '';
+  dtStepBar();
+  if(paso==='productos'){ dtItemsRender(); }
+  if(paso==='revisar'){ dtCargarPreview(); }
+  if(paso==='destinatario' || paso==='receptor'){
+    const c=document.getElementById('dtRecRegionComuna');
+    if(c && !document.getElementById('dtRecRC_region')){
+      c.innerHTML=dtRegionComunaHTML('dtRecRC');
+      if(_dtDatos.receptor && _dtDatos.receptor.comuna) dtSetRegionComuna('dtRecRC', _dtDatos.receptor.comuna);
+    }
+  }
+  if(paso==='transporte'){
+    const c=document.getElementById('dtGuiaRegionComuna');
+    if(c && !document.getElementById('dtGuiaRC_region')){
+      c.innerHTML=dtRegionComunaHTML('dtGuiaRC');
+      const tr=_dtDatos.transporte||{};
+      if(tr.cmna_dest) dtSetRegionComuna('dtGuiaRC', tr.cmna_dest);
+    }
   }
 }
 
-function dtAddItem(nombre='',cant=1,precio='',unidad='Un',sku=''){
+// ── Helpers de UI ──
+function _dtCampo(label, id, valor, placeholder, req, tipo){
+  return `<div>
+    <label style="display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:5px;">${label}${req?' <span style="color:#dc2626;">*</span>':''}</label>
+    <input id="${id}" type="${tipo||'text'}" value="${valor||''}" placeholder="${placeholder||''}"
+      style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+  </div>`;
+}
+function _dtOpcion(sel, valor, titulo, desc, onclick){
+  const on = String(sel)===String(valor);
+  return `<label onclick="${onclick}" style="display:flex;align-items:flex-start;gap:11px;padding:12px 14px;border:${on?'2px solid #534AB7':'1px solid var(--border)'};border-radius:9px;cursor:pointer;background:${on?'#faf9ff':'var(--card)'};">
+    <span style="width:15px;height:15px;border-radius:50%;flex-shrink:0;margin-top:2px;${on?'border:5px solid #534AB7;':'border:1px solid var(--border);'}"></span>
+    <span><span style="display:block;font-size:14px;font-weight:${on?'600':'400'};color:var(--text);">${titulo}</span>
+    <span style="display:block;font-size:12px;color:var(--muted);margin-top:1px;">${desc}</span></span>
+  </label>`;
+}
+function _dtEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// ── PASO: traslado (guía) ──
+function dtRenderTraslado(){
+  const t=_dtDatos.ind_traslado||1;
+  const opts=[
+    [1,'Venta','Los bienes se venden y se despachan al cliente'],
+    [5,'Traslado interno','Entre tus bodegas o sucursales. No requiere destinatario'],
+    [7,'Devolución de mercaderías','Retorno de bienes al proveedor o desde un cliente'],
+    [2,'Ventas por efectuar','Traslado previo a concretar la venta'],
+    [3,'Consignación','Los bienes quedan en poder de un tercero para su venta'],
+    [4,'Entrega gratuita','Sin cobro al receptor'],
+    [6,'Otros traslados no venta','Cualquier otro motivo que no sea venta'],
+  ];
+  return `<div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px;">¿Qué tipo de traslado es?</div>
+  <div style="font-size:13px;color:var(--muted);margin-bottom:16px;">Determina qué datos exige el SII para esta guía.</div>
+  <div style="display:grid;gap:8px;max-width:560px;margin-bottom:20px;">
+    ${opts.map(o=>_dtOpcion(t,o[0],o[1],o[2],`dtSetTraslado(${o[0]})`)).join('')}
+  </div>
+  <div style="border-top:1px solid var(--border);padding-top:16px;max-width:420px;">
+    <label style="display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px;">¿Quién realiza el despacho?</label>
+    <select id="dtGuiaDespacho" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+      <option value="0">No aplica</option>
+      <option value="2">Por cuenta del emisor, al domicilio del cliente</option>
+      <option value="1">Por cuenta del receptor</option>
+      <option value="3">Por cuenta del emisor, a otras instalaciones</option>
+    </select>
+  </div>`;
+}
+function dtSetTraslado(v){ _dtDatos.ind_traslado=v; dtStepRender(); }
+
+// ── PASO: destinatario / receptor ──
+function dtRenderDestinatario(){ return dtRenderReceptor('¿A quién se despachan los bienes?'); }
+function dtRenderReceptor(titulo){
+  const r=_dtDatos.receptor||{};
+  const esFactura = (_dtTipo==='33'||_dtTipo==='34');
+  return `<div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px;">${titulo||'¿A quién le emites el documento?'}</div>
+  <div style="font-size:13px;color:var(--muted);margin-bottom:16px;">Busca un cliente guardado o escribe los datos. ${esFactura?'La factura exige todos los campos marcados.':''}</div>
+  <div style="max-width:620px;">
+    <div style="position:relative;margin-bottom:14px;">
+      <label style="display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:5px;">Buscar cliente registrado</label>
+      <input id="dtCliBuscar" oninput="dtCliBuscar(this.value)" autocomplete="off" placeholder="Nombre o RUT"
+        style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+      <div id="dtCliResultados" style="position:absolute;left:0;right:0;top:100%;z-index:30;"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      ${_dtCampo('RUT','dtRecRut',_dtEsc(r.rut),'76.123.456-7',true)}
+      ${_dtCampo('Razón social','dtRecNombre',_dtEsc(r.razon_social),'Empresa SpA',true)}
+      <div style="grid-column:1 / -1;">${_dtCampo('Giro','dtRecGiro',_dtEsc(r.giro),'Actividad comercial del cliente',esFactura)}</div>
+      <div style="grid-column:1 / -1;">${_dtCampo('Dirección','dtRecDireccion',_dtEsc(r.direccion),'Calle y número',true)}</div>
+      <div style="grid-column:1 / -1;" id="dtRecRegionComuna"></div>
+    </div>
+  </div>`;
+}
+
+// ── PASO: pago (factura) ──
+function dtRenderPago(){
+  const fp=_dtDatos.forma_pago||1;
+  return `<div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px;">¿Cómo se paga esta factura?</div>
+  <div style="font-size:13px;color:var(--muted);margin-bottom:16px;">El SII exige declarar la forma de pago.</div>
+  <div style="display:grid;gap:8px;max-width:560px;">
+    ${_dtOpcion(fp,1,'Contado','Pagada por completo al emitir, sin saldo pendiente. No se puede ceder.','dtSetPago(1)')}
+    ${_dtOpcion(fp,2,'Crédito','Queda un saldo pendiente de pago.','dtSetPago(2)')}
+    ${_dtOpcion(fp,3,'Sin costo','Solo para entregas gratuitas: muestras, donaciones, reemplazos sin cobro.','dtSetPago(3)')}
+  </div>
+  ${fp===3?'<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:9px;padding:11px 13px;margin-top:14px;font-size:12px;color:#92400e;max-width:560px;">Si el cliente paga algo por estos productos, esta no es la opción correcta. Usa contado o crédito.</div>':''}`;
+}
+function dtSetPago(v){ _dtDatos.forma_pago=v; dtStepRender(); }
+
+// ── PASO: operación (NC/ND) ──
+function dtRenderOperacion(){
+  const c=_dtDatos.cod_ref||1;
+  const esND=_dtTipo==='56';
+  const ops = esND
+    ? [[1,'Anular una nota de crédito','Deja sin efecto una NC emitida por error'],
+       [3,'Agregar cargos a una factura','Intereses, reajustes u otros montos al alza']]
+    : [[1,'Anular un documento','Deja sin efecto una boleta o factura completa'],
+       [3,'Rebajar el monto','Devolución parcial o descuento posterior']];
+  return `<div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px;">¿Qué necesitas hacer?</div>
+  <div style="font-size:13px;color:var(--muted);margin-bottom:16px;">Define qué documentos puedes referenciar en el siguiente paso.</div>
+  <div style="display:grid;gap:8px;max-width:560px;">
+    ${ops.map(o=>_dtOpcion(c,o[0],o[1],o[2],`dtSetOperacion(${o[0]})`)).join('')}
+  </div>
+  ${!esND?'<div style="font-size:12px;color:var(--muted);margin-top:14px;max-width:560px;">Si necesitas corregir datos de un documento (RUT, dirección, glosa), anúlalo y emite uno nuevo corregido.</div>':''}`;
+}
+function dtSetOperacion(v){ _dtDatos.cod_ref=v; _dtDatos.ref=null; dtStepRender(); }
+
+// ── PASO: referencia (NC/ND) ──
+// Tipos de documento referenciables según lo que se está emitiendo
+function dtTiposRefOpciones(sel){
+  const esND=_dtTipo==='56', cod=_dtDatos.cod_ref||1;
+  let tipos;
+  if(esND && cod===1) tipos=[[61,'Nota de crédito']];
+  else if(esND) tipos=[[33,'Factura electrónica'],[34,'Factura exenta']];
+  else tipos=[[39,'Boleta electrónica'],[41,'Boleta exenta'],[33,'Factura electrónica'],[34,'Factura exenta']];
+  return tipos.map(t=>`<option value="${t[0]}" ${String(sel)===String(t[0])?'selected':''}>${t[1]}</option>`).join('');
+}
+
+function dtRenderReferencia(){
+  const ref=_dtDatos.ref||{};
+  const esND=_dtTipo==='56';
+  const cod=_dtDatos.cod_ref||1;
+  let ayuda='';
+  if(esND && cod===1) ayuda='Solo puedes referenciar notas de crédito que no estén anuladas.';
+  else if(esND) ayuda='Solo puedes referenciar facturas.';
+  else ayuda='Solo puedes referenciar boletas o facturas que no estén anuladas.';
+  return `<div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px;">¿Sobre qué documento?</div>
+  <div style="font-size:13px;color:var(--muted);margin-bottom:16px;">${ayuda}</div>
+  <div style="max-width:620px;">
+    <div style="margin-bottom:14px;">
+      <label style="display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:5px;">Buscar documento emitido</label>
+      <input id="dtNCBuscar" oninput="dtNCBuscarDoc(this.value)" autocomplete="off" placeholder="Folio, RUT o nombre del cliente"
+        style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+      <div id="dtNCResultados"></div>
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin:14px 0 10px;">O ingresa los datos manualmente:</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+      <div>
+        <label style="display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:5px;">Tipo</label>
+        <select id="dtNCTipoRef" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+          ${dtTiposRefOpciones(ref.tipo_doc_ref)}
+        </select>
+      </div>
+      ${_dtCampo('Folio','dtNCFolioRef',ref.folio_ref||'','25206',true,'number')}
+      ${_dtCampo('Fecha de emisión','dtNCFechaRef',ref.fecha_ref||'','',true,'date')}
+    </div>
+    <div style="margin-top:12px;">
+      ${_dtCampo('Motivo','dtNCRazon',_dtEsc(ref.razon_ref),'Ej: anulación por devolución del cliente',true)}
+    </div>
+    ${(_dtNCMontoMax>0 && cod===3 && !esND)?`<div style="font-size:12px;color:var(--muted);margin-top:10px;">Monto del documento: ${_dtCLP(_dtNCMontoMax)}. La nota no puede superarlo.</div>`:''}
+  </div>`;
+}
+
+// ── PASO: transporte (guía) ──
+function dtRenderTransporte(){
+  const t=_dtDatos.transporte||{};
+  return `<div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px;">Datos del transporte</div>
+  <div style="font-size:13px;color:var(--muted);margin-bottom:16px;">El SII exige identificar el vehículo, el chofer y el destino del traslado.</div>
+  <div style="max-width:620px;display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+    ${_dtCampo('Patente del vehículo','dtGuiaPatente',_dtEsc(t.patente),'ABCD12',true)}
+    ${_dtCampo('Patente del carro o remolque','dtGuiaPatenteCarro',_dtEsc(t.patente_carro),'Opcional')}
+    ${_dtCampo('RUT del transportista','dtGuiaRutTrans',_dtEsc(t.rut_transportista),'76.123.456-7',true)}
+    ${_dtCampo('RUT del chofer','dtGuiaRutChofer',_dtEsc(t.rut_chofer),'12.345.678-9',true)}
+    <div style="grid-column:1 / -1;">${_dtCampo('Nombre del chofer','dtGuiaChofer',_dtEsc(t.nombre_chofer),'Nombre completo',true)}</div>
+    <div style="grid-column:1 / -1;border-top:1px solid var(--border);padding-top:14px;margin-top:2px;">
+      <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;">Destino del traslado</div>
+      ${_dtCampo('Dirección','dtGuiaDirDest',_dtEsc(t.dir_dest),'Dónde se entregan los bienes',true)}
+    </div>
+    <div style="grid-column:1 / -1;" id="dtGuiaRegionComuna"></div>
+    <div style="grid-column:1 / -1;border-top:1px solid var(--border);padding-top:14px;margin-top:2px;">
+      <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:3px;">Horario del traslado</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Opcionales según el SII, pero recomendados: refuerzan la trazabilidad y quedan impresos en la guía.</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+        ${_dtCampo('Fecha de salida','dtGuiaFchSalida',t.fch_salida||'','',true,'date')}
+        ${_dtCampo('Hora de salida','dtGuiaHraSalida',t.hra_salida||'','','','time')}
+        ${_dtCampo('Fecha de llegada','dtGuiaFchLlegada',t.fch_llegada||'','','','date')}
+      </div>
+    </div>
+  </div>`;
+}
+
+// ── PASO: productos ──
+function dtRenderProductos(){
+  const esNota=(_dtTipo==='61'||_dtTipo==='56');
+  const esGuiaInterna=(_dtTipo==='52' && String(_dtDatos.ind_traslado)==='5');
+  let ayuda='Agrega los productos o servicios que incluye el documento.';
+  if(esNota && _dtDatos.cod_ref===1) ayuda='Los ítems replican el documento que se anula, por el mismo monto.';
+  else if(esNota) ayuda='Ingresa el monto a ajustar. El IVA se calcula automáticamente.';
+  else if(esGuiaInterna) ayuda='En un traslado interno los bienes se detallan sin precio de venta.';
+  return `<div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px;">¿Qué incluye el documento?</div>
+  <div style="font-size:13px;color:var(--muted);margin-bottom:16px;">${ayuda}</div>
+  <table style="width:100%;margin-bottom:8px;">
+    <thead><tr style="border-bottom:1px solid var(--border);">
+      <th style="font-size:11px;color:var(--muted);text-align:left;font-weight:600;padding:8px 6px;">Descripción</th>
+      <th style="font-size:11px;color:var(--muted);text-align:left;font-weight:600;padding:8px 6px;width:64px;">Cant.</th>
+      <th style="font-size:11px;color:var(--muted);text-align:left;font-weight:600;padding:8px 6px;width:78px;">Unidad</th>
+      <th style="font-size:11px;color:var(--muted);text-align:left;font-weight:600;padding:8px 6px;width:110px;">Precio unit.</th>
+      <th style="font-size:11px;color:var(--muted);text-align:center;font-weight:600;padding:8px 6px;width:56px;">Exento</th>
+      <th style="width:34px;"></th>
+    </tr></thead>
+    <tbody id="dtItems"></tbody>
+  </table>
+  <button onclick="dtAddItem()" style="background:var(--bg2);color:#534AB7;border:none;padding:9px 14px;border-radius:9px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Agregar ítem</button>
+  <div style="margin-top:18px;border-top:1px solid var(--border);padding-top:14px;max-width:280px;margin-left:auto;">
+    <div style="display:flex;justify-content:space-between;font-size:13px;color:var(--muted);padding:3px 0;"><span>Neto</span><span id="dtNeto">$ 0</span></div>
+    <div id="dtLineExe" style="display:none;justify-content:space-between;font-size:13px;color:var(--muted);padding:3px 0;"><span>Exento</span><span id="dtExe">$ 0</span></div>
+    <div style="display:flex;justify-content:space-between;font-size:13px;color:var(--muted);padding:3px 0;"><span>IVA (19%)</span><span id="dtIva">$ 0</span></div>
+    <div style="display:flex;justify-content:space-between;font-size:18px;font-weight:700;color:var(--text);margin-top:6px;"><span>Total</span><span id="dtTotal">$ 0</span></div>
+  </div>`;
+}
+function dtItemsRender(){
+  const tb=document.getElementById('dtItems');
+  if(!tb) return;
+  tb.innerHTML='';
+  const guardados=_dtDatos.items||[];
+  if(guardados.length){ guardados.forEach(it=>dtAddItem(it.nombre,it.cantidad,it.precio_unitario,it.unidad,'',it.exento)); }
+  else { dtAddItem(); }
+  dtCalc();
+}
+
+// ── PASO: revisar (visor PDF) ──
+function dtRenderRevisar(){
+  return `<div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px;">Revisa antes de emitir</div>
+  <div style="font-size:13px;color:var(--muted);margin-bottom:14px;">Así se verá el documento. Una vez enviado al SII no se puede deshacer: para corregirlo tendrías que anularlo y emitir otro.</div>
+  <div id="dtPreviaWrap" style="border:1px solid var(--border);border-radius:11px;overflow:hidden;background:#525659;min-height:300px;">
+    <div style="padding:60px;text-align:center;color:#ccc;font-size:14px;">Generando vista previa…</div>
+  </div>`;
+}
+
+async function dtCargarPreview(){
+  const wrap=document.getElementById('dtPreviaWrap');
+  const items=dtItemsDesdeDatos();
+  const body={ items, formato:'carta', tipo_dte:parseInt(_dtTipo,10) };
+  if(_dtDatos.receptor && Object.keys(_dtDatos.receptor).length) body.receptor=_dtDatos.receptor;
+  if(_dtTipo==='52'){
+    body.guia={ ind_traslado:_dtDatos.ind_traslado, tipo_despacho:_dtDatos.tipo_despacho||0,
+                transporte:_dtDatos.transporte||null };
+  }
+  if((_dtTipo==='61'||_dtTipo==='56') && _dtDatos.ref){
+    body.referencia={ folio_ref:_dtDatos.ref.folio_ref, tipo_doc_ref:_dtDatos.ref.tipo_doc_ref,
+                      fecha_ref:_dtDatos.ref.fecha_ref, cod_ref:_dtDatos.cod_ref,
+                      razon_ref:_dtDatos.ref.razon_ref };
+  }
+  try{
+    const r=await fetch('/facturacion/boleta/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!r.ok){ let m='No se pudo generar la vista previa'; try{const e=await r.json(); m=e.error||m;}catch(_){}
+      wrap.innerHTML=`<div style="background:var(--card);padding:24px;text-align:center;color:#b91c1c;font-size:13px;">${m}</div>`; return; }
+    const blob=await r.blob();
+    wrap.innerHTML=`<iframe src="${URL.createObjectURL(blob)}" style="width:100%;height:720px;border:none;display:block;"></iframe>`;
+  }catch(e){
+    wrap.innerHTML=`<div style="background:var(--card);padding:24px;text-align:center;color:#b91c1c;font-size:13px;">Error generando la vista previa: ${e.message}</div>`;
+  }
+}
+
+// ── Validación por paso: guarda en _dtDatos y devuelve mensaje de error o null ──
+function dtValidarPaso(paso){
+  const v = id => { const e=document.getElementById(id); return e ? e.value.trim() : ''; };
+  if(paso==='traslado'){
+    _dtDatos.tipo_despacho = parseInt(v('dtGuiaDespacho')||'0',10);
+    if(!_dtDatos.ind_traslado) return 'Selecciona el tipo de traslado.';
+    return null;
+  }
+  if(paso==='receptor' || paso==='destinatario'){
+    const r={ rut:v('dtRecRut'), razon_social:v('dtRecNombre'), giro:v('dtRecGiro'),
+              direccion:v('dtRecDireccion'), comuna:v('dtRecRC_comuna') };
+    const falta=[];
+    if(!r.rut) falta.push('RUT');
+    if(!r.razon_social) falta.push('razón social');
+    if(!r.direccion) falta.push('dirección');
+    if(!r.comuna) falta.push('comuna');
+    if((_dtTipo==='33'||_dtTipo==='34') && !r.giro) falta.push('giro');
+    if(falta.length) return 'Falta completar: ' + falta.join(', ') + '.';
+    _dtDatos.receptor=r;
+    return null;
+  }
+  if(paso==='pago'){ if(!_dtDatos.forma_pago) return 'Selecciona la forma de pago.'; return null; }
+  if(paso==='operacion'){ if(!_dtDatos.cod_ref) return 'Selecciona qué necesitas hacer.'; return null; }
+  if(paso==='referencia'){
+    const ref={ folio_ref:parseInt(v('dtNCFolioRef')||'0',10), tipo_doc_ref:parseInt(v('dtNCTipoRef')||'0',10),
+                fecha_ref:v('dtNCFechaRef'), razon_ref:v('dtNCRazon') };
+    if(!ref.folio_ref) return 'Indica el folio del documento.';
+    if(!ref.fecha_ref) return 'Indica la fecha de emisión del documento.';
+    if(!ref.razon_ref) return 'El motivo es obligatorio.';
+    _dtDatos.ref=ref;
+    return null;
+  }
+  if(paso==='transporte'){
+    const t={ patente:v('dtGuiaPatente'), patente_carro:v('dtGuiaPatenteCarro'),
+              rut_transportista:v('dtGuiaRutTrans'), rut_chofer:v('dtGuiaRutChofer'),
+              nombre_chofer:v('dtGuiaChofer'), dir_dest:v('dtGuiaDirDest'),
+              cmna_dest:v('dtGuiaRC_comuna'), fch_salida:v('dtGuiaFchSalida'),
+              fch_llegada:v('dtGuiaFchLlegada') };
+    const hs=v('dtGuiaHraSalida');
+    if(hs) t.hra_salida = hs.length===5 ? hs+':00' : hs;
+    if(t.cmna_dest) t.ciudad_dest=t.cmna_dest;
+    const falta=[];
+    if(!t.patente) falta.push('patente');
+    if(!t.rut_transportista) falta.push('RUT del transportista');
+    if(!t.rut_chofer) falta.push('RUT del chofer');
+    if(!t.nombre_chofer) falta.push('nombre del chofer');
+    if(!t.dir_dest) falta.push('dirección de destino');
+    if(!t.cmna_dest) falta.push('comuna de destino');
+    if(!t.fch_salida) falta.push('fecha de salida');
+    if(falta.length) return 'Falta completar: ' + falta.join(', ') + '.';
+    Object.keys(t).forEach(k=>{ if(!t[k]) delete t[k]; });
+    _dtDatos.transporte=t;
+    return null;
+  }
+  if(paso==='productos'){
+    const items=dtLeerItems();
+    if(!items.length) return 'Agrega al menos un ítem con nombre y precio.';
+    // NC que rebaja: no puede superar el monto del documento referenciado
+    if(_dtTipo==='61' && _dtDatos.cod_ref===3 && _dtNCMontoMax>0){
+      const tot=items.reduce((s,it)=>s+(it.precio_unitario*it.cantidad),0);
+      if(tot>_dtNCMontoMax) return `El monto (${_dtCLP(tot)}) no puede superar el del documento original (${_dtCLP(_dtNCMontoMax)}).`;
+    }
+    _dtDatos.items=items;
+    return null;
+  }
+  return null;
+}
+
+function dtItemsDesdeDatos(){
+  return (_dtDatos.items && _dtDatos.items.length) ? _dtDatos.items : dtLeerItems();
+}
+
+// ── Emisión ──
+async function dtEmitir(){
+  const btn=document.getElementById('dtBtnSiguiente');
+  btn.disabled=true; btn.textContent='Enviando al SII…';
+  const items=dtItemsDesdeDatos();
+  let url, etiqueta, body;
+  if(_dtTipo==='52'){
+    url='/facturacion/guia/emitir'; etiqueta='Guía de despacho';
+    body={ items, formato:'carta', ind_traslado:_dtDatos.ind_traslado,
+           tipo_despacho:_dtDatos.tipo_despacho||0, transporte:_dtDatos.transporte||null,
+           receptor: String(_dtDatos.ind_traslado)==='5' ? null : _dtDatos.receptor };
+  } else if(_dtTipo==='33'||_dtTipo==='34'){
+    url='/facturacion/factura/emitir'; etiqueta=_dtTipo==='34'?'Factura exenta':'Factura';
+    body={ items, formato:'carta', receptor:_dtDatos.receptor, exenta:(_dtTipo==='34'),
+           forma_pago:_dtDatos.forma_pago||1 };
+  } else if(_dtTipo==='61'||_dtTipo==='56'){
+    url = _dtTipo==='56' ? '/facturacion/nota-debito/emitir' : '/facturacion/nota-credito/emitir';
+    etiqueta = _dtTipo==='56' ? 'Nota de débito' : 'Nota de crédito';
+    body={ items, formato:'carta', receptor:_dtDatos.receptor||null,
+           referencia:{ folio_ref:_dtDatos.ref.folio_ref, tipo_doc_ref:_dtDatos.ref.tipo_doc_ref,
+                        fecha_ref:_dtDatos.ref.fecha_ref, cod_ref:_dtDatos.cod_ref,
+                        razon_ref:_dtDatos.ref.razon_ref } };
+  } else {
+    url='/facturacion/boleta/emitir'; etiqueta='Boleta';
+    body={ items, formato:'carta', receptor:_dtDatos.receptor||null };
+  }
+  try{
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const d=await r.json();
+    dtMostrarResultado(d, etiqueta);
+  }catch(e){
+    dtMostrarError('Error de conexión: '+e.message);
+  }
+  btn.disabled=false; btn.textContent='Firmar y enviar al SII';
+}
+
+function dtMostrarResultado(d, etiqueta){
+  const cont=document.getElementById('dtResultado');
+  if(d.ok){
+    document.getElementById('dtWizard').style.display='none';
+    const id = d.guia_id || d.fac_id || d.nc_id || d.boleta_id;
+    const pdf = d.pdf_url || (id?('/facturacion/boleta/'+id+'/pdf'):'');
+    const rollo = (_dtTipo==='39'||_dtTipo==='41')
+      ? `<a href="${pdf}?formato=rollo" target="_blank" style="background:var(--card);border:1px solid var(--border);color:var(--text);text-decoration:none;padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;">PDF rollo</a>` : '';
+    cont.innerHTML=`<div style="background:#f0fbf6;border:1px solid #b8e6d2;border-radius:11px;padding:20px;margin-top:22px;">
+      <div style="font-size:16px;font-weight:700;color:#047a56;margin-bottom:6px;">${etiqueta} emitida — folio N° ${d.folio}</div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:16px;">Total ${_dtCLP(d.total)} · Track ID SII: ${d.track_id||'—'}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <a href="${pdf}?formato=carta" target="_blank" style="background:#534AB7;color:#fff;text-decoration:none;padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;">Ver PDF</a>
+        ${rollo}
+        <button onclick="dtVolverATipos()" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;cursor:pointer;">Emitir otro documento</button>
+      </div></div>`;
+  } else {
+    let detalle='';
+    if(d.pasos && d.pasos.length){
+      const fallo=d.pasos.filter(p=>!p.ok).map(p=>`${p.nombre}: ${p.detalle||''}`).join(' · ');
+      if(fallo) detalle=`<div style="font-size:12px;color:var(--muted);margin-top:8px;">${_dtEsc(fallo)}</div>`;
+    }
+    dtMostrarError((d.error||'No se pudo emitir el documento') + (d.folio?` (folio reservado: ${d.folio})`:''));
+    if(detalle){
+      const box=document.getElementById('dtStepError');
+      if(box) box.insertAdjacentHTML('beforeend', detalle);
+    }
+  }
+}
+
+function dtInit(){
+  if(document.getElementById('dtTiposGrid')) dtCargarTiposHabilitados();
+}
+
+function dtAddItem(nombre='',cant=1,precio='',unidad='Un',sku='',exento=null){
   const tr=document.createElement('tr'); tr.className='dt-item';
-  const exe = _dtTipo==='41';
+  const exe = (exento===null) ? (_dtTipo==='41') : !!exento;
   const inp='padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);width:100%;';
   tr.innerHTML=`
     <td style="padding:0 4px 8px;">
@@ -14029,382 +14280,7 @@ function dtCalc(){
 }
 
 // ── Vista previa antes de firmar: muestra el PDF REAL (borrador) embebido ──
-async function dtVistaPrevia(){
-  const items=dtLeerItems();
-  if(!items.length){alert('Agrega al menos un ítem con nombre y precio.');return;}
-  const formato = document.getElementById('dtFormato').value || 'carta';
-  const receptor={};
-  if(document.getElementById('dtRecRut').value.trim())receptor.rut=document.getElementById('dtRecRut').value.trim();
-  if(document.getElementById('dtRecNombre').value.trim())receptor.razon_social=document.getElementById('dtRecNombre').value.trim();
-  if(['33','34','52','46','43'].includes(String(_dtTipo))){
-    const g=document.getElementById('dtRecGiro'); if(g&&g.value.trim())receptor.giro=g.value.trim();
-    const dir=document.getElementById('dtRecDireccion'); if(dir&&dir.value.trim())receptor.direccion=dir.value.trim();
-    const com=document.getElementById('dtRecRC_comuna'); if(com&&com.value.trim())receptor.comuna=com.value.trim();
-  }
-
-  // Nota de Crédito: validar y mostrar el PDF borrador real (con su referencia)
-  if(_dtTipo==='61'||_dtTipo==='56'){
-    const folioRef=document.getElementById('dtNCFolioRef').value.trim();
-    const fechaRef=document.getElementById('dtNCFechaRef').value;
-    const tipoRef=document.getElementById('dtNCTipoRef').value;
-    const razon=document.getElementById('dtNCRazon').value.trim();
-    if(!folioRef||!fechaRef){ alert('Indica el folio y la fecha del documento que se referencia.'); return; }
-    if(!razon){ alert('El motivo / razón de referencia es obligatorio.'); return; }
-    let totalNC=0; items.forEach(it=>{ totalNC += (parseFloat(it.precio_unitario)||0)*(parseFloat(it.cantidad)||1); });
-    if(_dtTipo==='61' && _dtNCcodRef===3 && _dtNCMontoMax>0 && totalNC > _dtNCMontoMax){
-      alert('El monto de la nota de crédito ('+_dtCLP(totalNC)+') no puede superar el total del documento original ('+_dtCLP(_dtNCMontoMax)+'). Ajusta el monto a rebajar.');
-      return;
-    }
-    document.getElementById('dtFormWrap').style.display='none';
-    const prev=document.getElementById('dtPreviaWrap'); prev.style.display='block';
-    prev.innerHTML='<div style="padding:40px;text-align:center;color:var(--muted);font-size:14px;">Generando vista previa…</div>';
-    try{
-      const body={ items, receptor:Object.keys(receptor).length?receptor:null, formato,
-        tipo_dte:parseInt(_dtTipo,10), referencia:{ folio_ref:parseInt(folioRef,10), tipo_doc_ref:parseInt(tipoRef,10),
-          fecha_ref:fechaRef, cod_ref:_dtNCcodRef, razon_ref:razon } };
-      const r=await fetch('/facturacion/boleta/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-      if(!r.ok){ let msg='No se pudo generar la vista previa'; try{const e=await r.json(); msg=e.error||msg;}catch(_){}
-        prev.innerHTML='<div style="background:#fdf2f2;border:1px solid #f3c2c2;border-radius:11px;padding:16px;color:#dc2626;font-size:13px;">'+msg+'</div><button onclick="dtCancelarPrevia()" style="margin-top:12px;background:var(--card);border:1px solid var(--border);color:var(--text);padding:12px 18px;border-radius:10px;font-weight:600;cursor:pointer;">← Volver a editar</button>'; return; }
-      const blob=await r.blob(); const pdfUrl=URL.createObjectURL(blob);
-      prev.innerHTML='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px;margin-bottom:14px;font-size:13px;color:#92400e;">⚠️ Vista previa de la '+(_dtTipo==='56'?'nota de débito':'nota de crédito')+'. Revísala bien: una vez firmada y enviada al SII <b>no se puede deshacer</b>. El folio y el timbre se generan al confirmar.</div>'
-        +'<div style="border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#525659;"><iframe src="'+pdfUrl+'" style="width:100%;height:780px;border:none;display:block;"></iframe></div>'
-        +'<div style="display:flex;gap:10px;margin-top:14px;"><button onclick="dtCancelarPrevia()" style="flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);padding:14px;border-radius:11px;font-weight:600;font-size:14px;cursor:pointer;">← Volver a editar</button><button id="dtBtnConfirmar" onclick="dtEmitir()" style="flex:2;background:#6d28d9;color:#fff;border:none;padding:14px;border-radius:11px;font-weight:700;font-size:15px;cursor:pointer;">✓ Firmar y enviar al SII</button></div>';
-    }catch(e){ prev.innerHTML='<div style="color:#dc2626;font-size:13px;">Error generando vista previa: '+e.message+'</div><button onclick="dtCancelarPrevia()" style="margin-top:12px;background:var(--card);border:1px solid var(--border);color:var(--text);padding:12px 18px;border-radius:10px;font-weight:600;cursor:pointer;">← Volver a editar</button>'; }
-    return;
-  }
-
-  // Factura: exige receptor completo antes de previsualizar
-  if(_dtTipo==='33'||_dtTipo==='34'){
-    const faltan=[];
-    if(!receptor.rut) faltan.push('RUT');
-    if(!receptor.razon_social) faltan.push('Razón social');
-    if(!receptor.giro) faltan.push('Giro');
-    if(!receptor.direccion) faltan.push('Dirección');
-    if(!receptor.comuna) faltan.push('Comuna');
-    if(faltan.length){ alert('La factura requiere receptor completo. Faltan: '+faltan.join(', ')+'.\nPuedes seleccionar un cliente registrado para autocompletar.'); return; }
-  }
-  // Guía: receptor obligatorio salvo traslado interno
-  if(_dtTipo==='52'){
-    const it=parseInt(document.getElementById('dtGuiaTraslado').value,10);
-    if(it!==5){
-      const faltan=[];
-      if(!receptor.rut) faltan.push('RUT');
-      if(!receptor.razon_social) faltan.push('Razón social');
-      if(!receptor.direccion) faltan.push('Dirección');
-      if(!receptor.comuna) faltan.push('Comuna');
-      if(faltan.length){ alert('La guía requiere receptor. Faltan: '+faltan.join(', ')+'.'); return; }
-    }
-  }
-
-  // Mostrar la previa con un loader mientras se genera el PDF
-  document.getElementById('dtFormWrap').style.display='none';
-  const prev=document.getElementById('dtPreviaWrap'); prev.style.display='block';
-  prev.innerHTML=`<div style="padding:40px;text-align:center;color:var(--muted);font-size:14px;">Generando vista previa…</div>`;
-
-  try{
-    // Para la guía, el borrador debe mostrar traslado y transporte
-    const _body={items,receptor:Object.keys(receptor).length?receptor:null,formato,tipo_dte:parseInt(_dtTipo,10)};
-    if(_dtTipo==='52'){
-      const _tr={};
-      const _g=(id,key)=>{const el=document.getElementById(id); if(el&&el.value.trim()) _tr[key]=el.value.trim();};
-      _g('dtGuiaPatente','patente'); _g('dtGuiaRutTrans','rut_transportista'); _g('dtGuiaRutChofer','rut_chofer');
-      _g('dtGuiaChofer','nombre_chofer'); _g('dtGuiaDirDest','dir_dest');
-      _g('dtGuiaFchSalida','fch_salida'); _g('dtGuiaFchLlegada','fch_llegada');
-      const _hsp=(document.getElementById('dtGuiaHraSalida')||{}).value||'';
-      if(_hsp.trim()){ _tr.hra_salida = _hsp.length===5 ? _hsp+':00' : _hsp; }
-      const _cd=(document.getElementById('dtGuiaRC_comuna')||{}).value||'';
-      if(_cd.trim()){ _tr.cmna_dest=_cd.trim(); _tr.ciudad_dest=_cd.trim(); }
-      _body.guia={
-        ind_traslado: parseInt((document.getElementById('dtGuiaTraslado')||{}).value||0,10),
-        tipo_despacho: parseInt((document.getElementById('dtGuiaDespacho')||{}).value||0,10),
-        transporte: Object.keys(_tr).length?_tr:null
-      };
-    }
-    const r=await fetch('/facturacion/boleta/preview',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(_body)});
-    if(!r.ok){
-      let msg='No se pudo generar la vista previa';
-      try{const e=await r.json(); msg=e.error||msg;}catch(_){}
-      prev.innerHTML=`<div style="background:#fdf2f2;border:1px solid #f3c2c2;border-radius:11px;padding:16px;color:#dc2626;font-size:13px;">${msg}</div>
-        <button onclick="dtCancelarPrevia()" style="margin-top:12px;background:var(--card);border:1px solid var(--border);color:var(--text);padding:12px 18px;border-radius:10px;font-weight:600;cursor:pointer;">← Volver a editar</button>`;
-      return;
-    }
-    const blob=await r.blob();
-    const pdfUrl=URL.createObjectURL(blob);
-    const alto = formato==='rollo' ? '620px' : '780px';
-    prev.innerHTML=`
-      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px;margin-bottom:14px;font-size:13px;color:#92400e;">
-        ⚠️ Esta es la vista previa de cómo el cliente verá el documento. Revísala bien: una vez emitida y enviada al SII, la boleta <b>no se puede deshacer</b> (solo anular con nota de crédito). El folio y el timbre se generan al confirmar.
-      </div>
-      <div style="border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#525659;">
-        <iframe src="${pdfUrl}" style="width:100%;height:${alto};border:none;display:block;"></iframe>
-      </div>
-      <div style="display:flex;gap:10px;margin-top:14px;">
-        <button onclick="dtCancelarPrevia()" style="flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);padding:14px;border-radius:11px;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;">← Volver a editar</button>
-        <button id="dtBtnConfirmar" onclick="dtEmitir()" style="flex:2;background:#059669;color:#fff;border:none;padding:14px;border-radius:11px;font-family:inherit;font-weight:700;font-size:15px;cursor:pointer;">✓ Confirmar y enviar al SII</button>
-      </div>`;
-  }catch(e){
-    prev.innerHTML=`<div style="color:#dc2626;font-size:13px;">Error generando vista previa: ${e.message}</div>
-      <button onclick="dtCancelarPrevia()" style="margin-top:12px;background:var(--card);border:1px solid var(--border);color:var(--text);padding:12px 18px;border-radius:10px;font-weight:600;cursor:pointer;">← Volver a editar</button>`;
-  }
-}
-
-function dtCancelarPrevia(){
-  document.getElementById('dtPreviaWrap').style.display='none';
-  document.getElementById('dtPreviaWrap').innerHTML='';
-  document.getElementById('dtFormWrap').style.display='block';
-}
-
-async function dtEmitir(){
-  const items=dtLeerItems();
-  if(!items.length){alert('Agrega al menos un ítem.');return;}
-  const btn=document.getElementById('dtBtnConfirmar');
-  if(btn){btn.disabled=true; btn.textContent='Enviando al SII…';}
-  const receptor={};
-  if(document.getElementById('dtRecRut').value.trim())receptor.rut=document.getElementById('dtRecRut').value.trim();
-  if(document.getElementById('dtRecNombre').value.trim())receptor.razon_social=document.getElementById('dtRecNombre').value.trim();
-  if(['33','34','52','46','43'].includes(String(_dtTipo))){
-    const g=document.getElementById('dtRecGiro'); if(g&&g.value.trim())receptor.giro=g.value.trim();
-    const dir=document.getElementById('dtRecDireccion'); if(dir&&dir.value.trim())receptor.direccion=dir.value.trim();
-    const com=document.getElementById('dtRecRC_comuna'); if(com&&com.value.trim())receptor.comuna=com.value.trim();
-  }
-  const referencias=dtLeerReferencias();
-  const formato=document.getElementById('dtFormato')?document.getElementById('dtFormato').value:'carta';
-
-  // ── Guía de Despacho (52): traslado + despacho + transporte ──
-  if(_dtTipo==='52'){
-    const indTraslado=parseInt(document.getElementById('dtGuiaTraslado').value,10);
-    const tipoDespacho=parseInt(document.getElementById('dtGuiaDespacho').value,10);
-    // Receptor: obligatorio salvo traslado interno (5)
-    if(indTraslado!==5){
-      const faltan=[];
-      if(!receptor.rut) faltan.push('RUT');
-      if(!receptor.razon_social) faltan.push('Razón social');
-      if(!receptor.direccion) faltan.push('Dirección');
-      if(!receptor.comuna) faltan.push('Comuna');
-      if(faltan.length){ alert('La guía requiere receptor. Faltan: '+faltan.join(', ')+'.\nPuedes seleccionar un cliente registrado.'); if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';} return; }
-    }
-    // Transporte OBLIGATORIO (todos los campos). Comuna/ciudad desde el selector.
-    const cmnaDest=(document.getElementById('dtGuiaRC_comuna')||{}).value||'';
-    const transporte={};
-    const _t=(id,key)=>{const el=document.getElementById(id); if(el&&el.value.trim()) transporte[key]=el.value.trim();};
-    _t('dtGuiaPatente','patente'); _t('dtGuiaRutTrans','rut_transportista'); _t('dtGuiaRutChofer','rut_chofer');
-    _t('dtGuiaChofer','nombre_chofer'); _t('dtGuiaDirDest','dir_dest'); _t('dtGuiaFchSalida','fch_salida');
-    _t('dtGuiaFchLlegada','fch_llegada');
-    // Hora de salida: el SII exige HH:MM:SS; el input puede devolver solo HH:MM
-    const _hs=(document.getElementById('dtGuiaHraSalida')||{}).value||'';
-    if(_hs.trim()){ transporte.hra_salida = _hs.length===5 ? _hs+':00' : _hs; }
-    if(cmnaDest.trim()){ transporte.cmna_dest=cmnaDest.trim(); transporte.ciudad_dest=cmnaDest.trim(); }
-    // Validar que todo el transporte esté completo
-    const faltanT=[];
-    if(!transporte.patente) faltanT.push('Patente');
-    if(!transporte.rut_transportista) faltanT.push('RUT transportista');
-    if(!transporte.rut_chofer) faltanT.push('RUT chofer');
-    if(!transporte.nombre_chofer) faltanT.push('Nombre del chofer');
-    if(!transporte.dir_dest) faltanT.push('Dirección de destino');
-    if(!transporte.cmna_dest) faltanT.push('Comuna de destino');
-    if(!transporte.fch_salida) faltanT.push('Fecha de salida');
-    if(faltanT.length){ alert('Los datos de transporte son obligatorios. Faltan: '+faltanT.join(', ')+'.'); if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';} return; }
-    const body={ items, receptor:(indTraslado!==5?receptor:null), formato,
-      ind_traslado:indTraslado, tipo_despacho:tipoDespacho, transporte };
-    try{
-      const r=await fetch('/facturacion/guia/emitir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-      const d=await r.json();
-      dtMostrarResultado(d, formato, 'Guía de Despacho');
-    }catch(e){
-      document.getElementById('dtFormWrap').style.display='block';
-      document.getElementById('dtResultado').innerHTML='<div style="color:#dc2626;font-size:13px;">Error de conexión: '+e.message+'</div>';
-    }
-    if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';}
-    return;
-  }
-
-  // ── Factura afecta (33) / exenta (34): receptor completo + forma de pago ──
-  if(_dtTipo==='33'||_dtTipo==='34'){
-    const faltan=[];
-    if(!receptor.rut) faltan.push('RUT');
-    if(!receptor.razon_social) faltan.push('Razón social');
-    if(!receptor.giro) faltan.push('Giro');
-    if(!receptor.direccion) faltan.push('Dirección');
-    if(!receptor.comuna) faltan.push('Comuna');
-    if(faltan.length){ alert('La factura requiere receptor completo. Faltan: '+faltan.join(', ')+'.\nPuedes seleccionar un cliente registrado para autocompletar.'); if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';} return; }
-    const fp=document.getElementById('dtFacFormaPago');
-    const formaPago=fp?parseInt(fp.value,10):1;
-    // "Sin costo" (3) es solo para entregas gratuitas: confirmar para evitar errores
-    if(formaPago===3){
-      if(!confirm('Vas a emitir la factura con forma de pago "SIN COSTO".\n\nEsto corresponde SOLO a entregas gratuitas (muestras, donaciones, reemplazos sin cobro).\n\nSi el cliente está pagando por estos productos, debes usar Contado o Crédito.\n\n¿Confirmas que es una entrega gratuita?')){
-        if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';}
-        return;
-      }
-    }
-    const body={ items, receptor, formato, exenta:(_dtTipo==='34'),
-      forma_pago:formaPago,
-    };
-    if(referencias.length) body.referencias=referencias;
-    try{
-      const r=await fetch('/facturacion/factura/emitir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-      const d=await r.json();
-      dtMostrarResultado(d, formato, (_dtTipo==='34'?'Factura exenta':'Factura'));
-    }catch(e){
-      document.getElementById('dtFormWrap').style.display='block';
-      document.getElementById('dtResultado').innerHTML='<div style="color:#dc2626;font-size:13px;">Error de conexión: '+e.message+'</div>';
-    }
-    if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';}
-    return;
-  }
-
-  if(_dtTipo==='61'||_dtTipo==='56'){
-    const folioRef=document.getElementById('dtNCFolioRef').value.trim();
-    const tipoRef=document.getElementById('dtNCTipoRef').value;
-    const fechaRef=document.getElementById('dtNCFechaRef').value;
-    const razon=document.getElementById('dtNCRazon').value.trim();
-    if(!folioRef||!fechaRef){ alert('Indica el folio y la fecha del documento que se referencia.'); if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';} return; }
-    if(!razon){ alert('El motivo / razón de referencia es obligatorio.'); if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';} return; }
-    // Restricción SII: en "corrige montos" (rebaja), la NC no puede superar el total del documento original
-    if(_dtTipo==='61' && _dtNCcodRef===3 && _dtNCMontoMax>0){
-      let totalNC=0; items.forEach(it=>{ totalNC += (parseFloat(it.precio_unitario)||0)*(parseFloat(it.cantidad)||1); });
-      if(totalNC > _dtNCMontoMax){
-        alert('El monto de la nota de crédito ('+_dtCLP(totalNC)+') no puede superar el total del documento original ('+_dtCLP(_dtNCMontoMax)+'). El SII rechazaría la nota. Ajusta el monto a rebajar.');
-        if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';}
-        return;
-      }
-    }
-    const body={ items, receptor: Object.keys(receptor).length?receptor:null, formato,
-      referencia:{ folio_ref: parseInt(folioRef,10), tipo_doc_ref: parseInt(tipoRef,10),
-        fecha_ref: fechaRef, cod_ref: _dtNCcodRef, razon_ref: razon } };
-    try{
-      const _endpoint = _dtTipo==='56' ? '/facturacion/nota-debito/emitir' : '/facturacion/nota-credito/emitir';
-      const _etiq = _dtTipo==='56' ? 'Nota de Débito' : 'Nota de Crédito';
-      const r=await fetch(_endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-      const d=await r.json();
-      dtMostrarResultado(d, formato, _etiq);
-    }catch(e){
-      document.getElementById('dtFormWrap').style.display='block';
-      document.getElementById('dtResultado').innerHTML='<div style="color:#dc2626;font-size:13px;">Error de conexión: '+e.message+'</div>';
-    }
-    if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';}
-    return;
-  }
-
-  try{
-    const body={items, receptor:Object.keys(receptor).length?receptor:null, formato};
-    if(referencias.length) body.referencias=referencias;
-    const r=await fetch('/facturacion/boleta/emitir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    const d=await r.json();
-    dtMostrarResultado(d, formato, 'Documento');
-  }catch(e){
-    document.getElementById('dtFormWrap').style.display='block';
-    document.getElementById('dtResultado').innerHTML='<div style="color:#dc2626;font-size:13px;">Error de conexión: '+e.message+'</div>';
-  }
-}
-
-function dtMostrarResultado(d, formato, etiqueta){
-  document.getElementById('dtPreviaWrap').style.display='none';
-  const cont=document.getElementById('dtResultado');
-  if(d.ok){
-    const idPdf = d.nc_id || d.boleta_id;
-    const pdfUrl = d.pdf_url || (idPdf?('/facturacion/boleta/'+idPdf+'/pdf'):'');
-    let botones='<a href="'+pdfUrl+'?formato=carta" target="_blank" style="background:#534AB7;color:#fff;text-decoration:none;padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;">📄 PDF carta</a>';
-    if(_dtTipo==='39'||_dtTipo==='41'){ botones+=' <a href="'+pdfUrl+'?formato=rollo" target="_blank" style="background:#6b6880;color:#fff;text-decoration:none;padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;">🧾 PDF rollo</a>'; }
-    botones+=' <button onclick="dtReset()" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;cursor:pointer;">Emitir otro</button>';
-    cont.innerHTML='<div style="background:#f0fbf6;border:1px solid #b8e6d2;border-radius:11px;padding:16px;">'
-      +'<div style="font-size:15px;font-weight:700;color:#047a56;margin-bottom:10px;">🎉 '+etiqueta+' emitida — Folio N° '+d.folio+'</div>'
-      +'<div style="font-size:13px;color:var(--muted);margin-bottom:12px;">Total '+_dtCLP(d.total)+' · Track ID SII: '+(d.track_id||'—')+'</div>'
-      +'<div style="display:flex;gap:8px;flex-wrap:wrap;">'+botones+'</div></div>';
-  } else {
-    document.getElementById('dtFormWrap').style.display='block';
-    cont.innerHTML='<div style="background:#fdf2f2;border:1px solid #f3c2c2;border-radius:11px;padding:16px;color:#dc2626;font-size:13px;">❌ '+(d.error||'Error')+' '+(d.folio?'<br>Folio reservado: N° '+d.folio:'')+'</div>';
-  }
-}
-
-function dtReset(){
-  document.getElementById('dtResultado').innerHTML='';
-  document.getElementById('dtPreviaWrap').style.display='none';
-  document.getElementById('dtPreviaWrap').innerHTML='';
-  document.getElementById('dtFormWrap').style.display='block';
-  document.getElementById('dtRecRut').value=''; document.getElementById('dtRecNombre').value='';
-  ['dtRecGiro','dtRecDireccion','dtCliBuscar'].forEach(id=>{const el=document.getElementById(id); if(el) el.value='';});
-  const _rrc=document.getElementById('dtRecRC_comuna'); if(_rrc) _rrc.value='';
-  const _rrr=document.getElementById('dtRecRC_region'); if(_rrr) _rrr.value='';
-  const cr=document.getElementById('dtCliResultados'); if(cr) cr.innerHTML='';
-  ['dtGuiaPatente','dtGuiaRutTrans','dtGuiaRutChofer','dtGuiaChofer','dtGuiaDirDest','dtGuiaFchSalida','dtGuiaHraSalida','dtGuiaFchLlegada'].forEach(id=>{const el=document.getElementById(id); if(el) el.value='';});
-  const _grc=document.getElementById('dtGuiaRC_comuna'); if(_grc) _grc.value='';
-  const _grr=document.getElementById('dtGuiaRC_region'); if(_grr) _grr.value='';
-  document.getElementById('dtItems').innerHTML=''; dtAddItem();
-  // Reset referencias
-  const refsBox=document.getElementById('dtRefsBox');
-  const refsItems=document.getElementById('dtRefsItems');
-  if(refsBox) refsBox.style.display='none';
-  if(refsItems) refsItems.innerHTML='';
-  const arrow=document.getElementById('dtRefsArrow'); if(arrow) arrow.textContent='▸';
-  // Reset estado de Nota de Crédito
-  const ncRef=document.getElementById('dtNCRef');
-  if(ncRef){
-    ['dtNCBuscar','dtNCFolioRef','dtNCFechaRef','dtNCRazon'].forEach(id=>{const el=document.getElementById(id); if(el) el.value='';});
-    const res=document.getElementById('dtNCResultados'); if(res) res.innerHTML='';
-    _dtNCcodRef=1;
-  }
-}
-
 // ───────── Referencias a otros documentos (guía despacho, OC, etc.) ─────────
-function dtToggleRefs(){
-  const box=document.getElementById('dtRefsBox');
-  const arrow=document.getElementById('dtRefsArrow');
-  if(box.style.display==='none'){
-    box.style.display='block';
-    arrow.textContent='▾';
-    if(!document.getElementById('dtRefsItems').children.length) dtAddRef();
-  } else {
-    box.style.display='none';
-    arrow.textContent='▸';
-  }
-}
-function dtAddRef(){
-  const tbody=document.getElementById('dtRefsItems');
-  const tr=document.createElement('tr');
-  tr.innerHTML=`
-    <td style="padding:6px 4px;">
-      <select class="dt-ref-tipo" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
-        <option value="52">Guía de despacho (52)</option>
-        <option value="801">Orden de compra (801)</option>
-        <option value="802">Nota de pedido (802)</option>
-        <option value="39">Boleta electrónica (39)</option>
-        <option value="33">Factura electrónica (33)</option>
-        <option value="34">Factura exenta (34)</option>
-        <option value="HES">Recepción de servicio (HES)</option>
-      </select>
-    </td>
-    <td style="padding:6px 4px;">
-      <input class="dt-ref-folio" placeholder="Ej: 12345"
-        style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
-    </td>
-    <td style="padding:6px 4px;">
-      <input class="dt-ref-razon" placeholder="Motivo o detalle (opcional)" maxlength="90"
-        style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
-    </td>
-    <td style="padding:6px 4px;text-align:center;">
-      <button type="button" onclick="this.closest('tr').remove()" title="Eliminar"
-        style="background:none;border:none;color:#9ca3af;font-size:18px;cursor:pointer;line-height:1;padding:4px;">×</button>
-    </td>`;
-  tbody.appendChild(tr);
-}
-function dtLeerReferencias(){
-  const tbody=document.getElementById('dtRefsItems');
-  if(!tbody) return [];
-  const out=[];
-  tbody.querySelectorAll('tr').forEach(tr=>{
-    const tipo=(tr.querySelector('.dt-ref-tipo')||{}).value;
-    const folio=((tr.querySelector('.dt-ref-folio')||{}).value||'').trim();
-    const razon=((tr.querySelector('.dt-ref-razon')||{}).value||'').trim();
-    if(tipo && folio){
-      const ref={tpo_doc_ref:tipo, folio_ref:folio};
-      if(razon) ref.razon_ref=razon;
-      out.push(ref);
-    }
-  });
-  return out;
-}
-
 async function dtCargarFolios(){
   const cont=document.getElementById('dtFoliosCont');
   try{
@@ -14773,62 +14649,9 @@ function dtCliSeleccionar(c){
 }
 // Muestra u oculta los campos extra del receptor según el tipo de documento.
 // Factura (33/34), Guía (52), Factura compra (46), Liquidación (43) exigen receptor completo.
-function dtReceptorSegunTipo(tipo){
-  const extra=document.getElementById('dtRecExtra');
-  const requiereCompleto=['33','34','52','46','43'].includes(String(tipo));
-  if(extra) extra.style.display = requiereCompleto ? 'grid' : 'none';
-  // Inyectar el selector de región+comuna del receptor la primera vez que se muestra
-  const cont=document.getElementById('dtRecRegionComuna');
-  if(requiereCompleto && cont && !document.getElementById('dtRecRC_region')){
-    cont.innerHTML=dtRegionComunaHTML('dtRecRC');
-  }
-  const rr=document.getElementById('dtRecRutReq'); if(rr) rr.style.display=requiereCompleto?'inline':'none';
-  const nr=document.getElementById('dtRecNombreReq'); if(nr) nr.style.display=requiereCompleto?'inline':'none';
-  // Forma de pago solo para factura (33/34)
-  const pago=document.getElementById('dtFacPago');
-  if(pago){
-    pago.style.display = (tipo==='33'||tipo==='34') ? 'block' : 'none';
-    if(tipo==='33'||tipo==='34') dtFacPagoHintUpdate();  // pinta la advertencia inicial
-  }
-  // Bloque de guía de despacho solo para tipo 52
-  const guia=document.getElementById('dtGuia');
-  if(guia) guia.style.display = (tipo==='52') ? 'block' : 'none';
-  if(tipo==='52'){
-    const gcont=document.getElementById('dtGuiaRegionComuna');
-    if(gcont && !document.getElementById('dtGuiaRC_region')){ gcont.innerHTML=dtRegionComunaHTML('dtGuiaRC'); }
-    if(typeof dtGuiaTrasladoChange==='function') dtGuiaTrasladoChange();
-  }
-}
 // Ajusta el receptor según el tipo de traslado de la guía
-function dtGuiaTrasladoChange(){
-  const sel=document.getElementById('dtGuiaTraslado');
-  const hint=document.getElementById('dtGuiaTrasladoHint');
-  if(!sel) return;
-  const v=sel.value;
-  const extra=document.getElementById('dtRecExtra');
-  const recSection=document.getElementById('dtRecRut');
-  if(v==='5'){
-    // Traslado interno: el receptor es el propio emisor, no hace falta pedirlo
-    if(hint) hint.innerHTML='Traslado interno: el receptor será tu propia empresa (mismo RUT). No necesitas ingresar cliente.';
-    if(extra) extra.style.display='none';
-  } else {
-    if(hint) hint.innerHTML='Indica el cliente/destinatario en la sección de receptor.';
-    if(extra) extra.style.display='grid';
-  }
-}
 // Muestra el campo de vencimiento solo si la forma de pago es crédito (2),
 // y una advertencia con el uso correcto según la normativa del SII.
-function dtFacPagoHintUpdate(){
-  const fp=document.getElementById('dtFacFormaPago');
-  const hint=document.getElementById('dtFacPagoHint');
-  if(!fp) return;
-  const avisos={
-    '1':'⚠️ <b>Contado</b>: úsalo solo si la factura está <b>pagada por completo</b> al momento de emitirla, sin saldo pendiente. Una factura al contado <b>no se puede ceder</b> y no requiere acuse de recibo. Si hay saldo pendiente, corresponde Crédito.',
-    '2':'<b>Crédito</b>: hay un saldo pendiente de pago. Es la opción por defecto del SII si no se informa la forma de pago.',
-    '3':'⚠️ <b>Sin costo</b>: úsalo <b>solo para entregas gratuitas</b> (muestras, donaciones, reemplazos sin cobro). No corresponde para ventas normales, aunque el monto sea bajo. Si el cliente paga algo, usa Contado o Crédito.'
-  };
-  if(hint) hint.innerHTML = avisos[fp.value]||'';
-}
 let _cliBuscarTimer=null;
 function cliListar(q){
   clearTimeout(_cliBuscarTimer);
