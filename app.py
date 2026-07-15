@@ -23393,6 +23393,14 @@ def facturacion_boleta_preview():
                 _partes += f"<CmnaDest>{_esc_xml_preview(_tr['cmna_dest'])}</CmnaDest>"
             if _tr.get("ciudad_dest"):
                 _partes += f"<CiudadDest>{_esc_xml_preview(_tr['ciudad_dest'])}</CiudadDest>"
+            # Fecha/hora de salida y llegada (opcionales, Res.154). Van al final
+            # del bloque, en el orden que define el Anexo Técnico 2.5.
+            if _tr.get("fch_salida"):
+                _partes += f"<FchSalida>{_esc_xml_preview(_tr['fch_salida'])}</FchSalida>"
+            if _tr.get("hra_salida"):
+                _partes += f"<HraSalida>{_esc_xml_preview(_tr['hra_salida'])}</HraSalida>"
+            if _tr.get("fch_llegada"):
+                _partes += f"<FchLlegada>{_esc_xml_preview(_tr['fch_llegada'])}</FchLlegada>"
             if _partes:
                 transporte_xml = "<Transporte>" + _partes + "</Transporte>"
 

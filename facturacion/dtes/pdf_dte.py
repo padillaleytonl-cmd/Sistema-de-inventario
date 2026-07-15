@@ -268,6 +268,11 @@ def parsear_dte_xml(dte_xml: bytes) -> dict:
         'dir_dest': _txt(transporte_xml, 'DirDest') if transporte_xml else '',
         'cmna_dest': _txt(transporte_xml, 'CmnaDest') if transporte_xml else '',
         'ciudad_dest': _txt(transporte_xml, 'CiudadDest') if transporte_xml else '',
+        # Res.154: fecha/hora de salida y llegada deben aparecer en la representación impresa
+        'fch_salida': _txt(transporte_xml, 'FchSalida') if transporte_xml else '',
+        'hra_salida': _txt(transporte_xml, 'HraSalida') if transporte_xml else '',
+        'fch_llegada': _txt(transporte_xml, 'FchLlegada') if transporte_xml else '',
+        'patente_carro': _txt(transporte_xml, 'PatenteCarro') if transporte_xml else '',
         'bultos': bultos,
         # Hay transporte declarado (para decidir si dibujar el bloque)
         'tiene_datos': bool(transporte_xml and (
@@ -530,6 +535,14 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
             filas_tr.append(("Destino:", destino[:42]))
         elif cmna_ciudad:
             filas_tr.append(("Destino:", cmna_ciudad[:42]))
+        # Res.154: fecha/hora de salida y llegada deben ir impresas
+        _salida = " ".join([p for p in [tr.get('fch_salida', ''), tr.get('hra_salida', '')] if p])
+        if _salida:
+            filas_tr.append(("Salida:", _salida[:42]))
+        if tr.get('fch_llegada'):
+            filas_tr.append(("Llegada:", tr['fch_llegada'][:42]))
+        if tr.get('patente_carro'):
+            filas_tr.append(("Patente carro:", tr['patente_carro'][:42]))
         if tr.get('bultos'):
             for b in tr['bultos']:
                 partes = []

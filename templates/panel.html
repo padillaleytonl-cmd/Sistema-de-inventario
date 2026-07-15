@@ -3519,6 +3519,17 @@ tbody td {
               <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Fecha de salida <span style="color:#dc2626;">*</span></label>
               <input id="dtGuiaFchSalida" type="date" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
             </div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Hora de salida</label>
+              <input id="dtGuiaHraSalida" type="time" step="1" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Fecha de llegada</label>
+              <input id="dtGuiaFchLlegada" type="date" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
+            </div>
+            <div style="grid-column:1 / -1;font-size:11px;color:var(--muted);margin-top:-2px;">
+              Hora y fecha de llegada son opcionales según el SII, pero recomendadas: refuerzan la trazabilidad del traslado y deben aparecer en el documento impreso. Si el traslado dura más de un día, conviene indicar la fecha estimada de llegada.
+            </div>
           </div>
         </div>
 
@@ -14098,6 +14109,9 @@ async function dtVistaPrevia(){
       const _g=(id,key)=>{const el=document.getElementById(id); if(el&&el.value.trim()) _tr[key]=el.value.trim();};
       _g('dtGuiaPatente','patente'); _g('dtGuiaRutTrans','rut_transportista'); _g('dtGuiaRutChofer','rut_chofer');
       _g('dtGuiaChofer','nombre_chofer'); _g('dtGuiaDirDest','dir_dest');
+      _g('dtGuiaFchSalida','fch_salida'); _g('dtGuiaFchLlegada','fch_llegada');
+      const _hsp=(document.getElementById('dtGuiaHraSalida')||{}).value||'';
+      if(_hsp.trim()){ _tr.hra_salida = _hsp.length===5 ? _hsp+':00' : _hsp; }
       const _cd=(document.getElementById('dtGuiaRC_comuna')||{}).value||'';
       if(_cd.trim()){ _tr.cmna_dest=_cd.trim(); _tr.ciudad_dest=_cd.trim(); }
       _body.guia={
@@ -14176,6 +14190,10 @@ async function dtEmitir(){
     const _t=(id,key)=>{const el=document.getElementById(id); if(el&&el.value.trim()) transporte[key]=el.value.trim();};
     _t('dtGuiaPatente','patente'); _t('dtGuiaRutTrans','rut_transportista'); _t('dtGuiaRutChofer','rut_chofer');
     _t('dtGuiaChofer','nombre_chofer'); _t('dtGuiaDirDest','dir_dest'); _t('dtGuiaFchSalida','fch_salida');
+    _t('dtGuiaFchLlegada','fch_llegada');
+    // Hora de salida: el SII exige HH:MM:SS; el input puede devolver solo HH:MM
+    const _hs=(document.getElementById('dtGuiaHraSalida')||{}).value||'';
+    if(_hs.trim()){ transporte.hra_salida = _hs.length===5 ? _hs+':00' : _hs; }
     if(cmnaDest.trim()){ transporte.cmna_dest=cmnaDest.trim(); transporte.ciudad_dest=cmnaDest.trim(); }
     // Validar que todo el transporte esté completo
     const faltanT=[];
@@ -14309,7 +14327,7 @@ function dtReset(){
   const _rrc=document.getElementById('dtRecRC_comuna'); if(_rrc) _rrc.value='';
   const _rrr=document.getElementById('dtRecRC_region'); if(_rrr) _rrr.value='';
   const cr=document.getElementById('dtCliResultados'); if(cr) cr.innerHTML='';
-  ['dtGuiaPatente','dtGuiaRutTrans','dtGuiaRutChofer','dtGuiaChofer','dtGuiaDirDest','dtGuiaFchSalida'].forEach(id=>{const el=document.getElementById(id); if(el) el.value='';});
+  ['dtGuiaPatente','dtGuiaRutTrans','dtGuiaRutChofer','dtGuiaChofer','dtGuiaDirDest','dtGuiaFchSalida','dtGuiaHraSalida','dtGuiaFchLlegada'].forEach(id=>{const el=document.getElementById(id); if(el) el.value='';});
   const _grc=document.getElementById('dtGuiaRC_comuna'); if(_grc) _grc.value='';
   const _grr=document.getElementById('dtGuiaRC_region'); if(_grr) _grr.value='';
   document.getElementById('dtItems').innerHTML=''; dtAddItem();
