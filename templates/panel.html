@@ -3449,18 +3449,14 @@ tbody td {
 
         <!-- Forma de pago (solo factura 33/34) -->
         <div id="dtFacPago" style="display:none;background:#f0f6ff;border:1px solid #cfe0f5;border-radius:11px;padding:14px 16px;margin-bottom:16px;">
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <div style="display:grid;grid-template-columns:1fr;gap:12px;max-width:340px;">
             <div>
               <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Forma de pago</label>
-              <select id="dtFacFormaPago" onchange="dtFacVenc()" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
+              <select id="dtFacFormaPago" onchange="dtFacPagoHintUpdate()" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
                 <option value="1">Contado</option>
                 <option value="2">Crédito</option>
                 <option value="3">Sin costo (gratuito)</option>
               </select>
-            </div>
-            <div id="dtFacVencWrap" style="display:none;">
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Fecha de vencimiento</label>
-              <input id="dtFacVenc" type="date" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
             </div>
           </div>
           <div id="dtFacPagoHint" style="font-size:11px;color:var(--muted);margin-top:9px;line-height:1.5;"></div>
@@ -14208,10 +14204,9 @@ async function dtEmitir(){
         return;
       }
     }
-    const venc=document.getElementById('dtFacVenc');
     const body={ items, receptor, formato, exenta:(_dtTipo==='34'),
       forma_pago:formaPago,
-      fecha_vencimiento:(formaPago===2 && venc && venc.value)?venc.value:null };
+    };
     if(referencias.length) body.referencias=referencias;
     try{
       const r=await fetch('/facturacion/factura/emitir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -14760,7 +14755,7 @@ function dtReceptorSegunTipo(tipo){
   const pago=document.getElementById('dtFacPago');
   if(pago){
     pago.style.display = (tipo==='33'||tipo==='34') ? 'block' : 'none';
-    if(tipo==='33'||tipo==='34') dtFacVenc();  // pinta la advertencia inicial
+    if(tipo==='33'||tipo==='34') dtFacPagoHintUpdate();  // pinta la advertencia inicial
   }
   // Bloque de guía de despacho solo para tipo 52
   const guia=document.getElementById('dtGuia');
@@ -14790,15 +14785,13 @@ function dtGuiaTrasladoChange(){
 }
 // Muestra el campo de vencimiento solo si la forma de pago es crédito (2),
 // y una advertencia con el uso correcto según la normativa del SII.
-function dtFacVenc(){
+function dtFacPagoHintUpdate(){
   const fp=document.getElementById('dtFacFormaPago');
-  const w=document.getElementById('dtFacVencWrap');
   const hint=document.getElementById('dtFacPagoHint');
   if(!fp) return;
-  if(w) w.style.display = (fp.value==='2') ? 'block' : 'none';
   const avisos={
     '1':'⚠️ <b>Contado</b>: úsalo solo si la factura está <b>pagada por completo</b> al momento de emitirla, sin saldo pendiente. Una factura al contado <b>no se puede ceder</b> y no requiere acuse de recibo. Si hay saldo pendiente, corresponde Crédito.',
-    '2':'<b>Crédito</b>: hay un saldo pendiente de pago. Indica la fecha de vencimiento. Es la opción por defecto del SII si no se informa la forma de pago.',
+    '2':'<b>Crédito</b>: hay un saldo pendiente de pago. Es la opción por defecto del SII si no se informa la forma de pago.',
     '3':'⚠️ <b>Sin costo</b>: úsalo <b>solo para entregas gratuitas</b> (muestras, donaciones, reemplazos sin cobro). No corresponde para ventas normales, aunque el monto sea bajo. Si el cliente paga algo, usa Contado o Crédito.'
   };
   if(hint) hint.innerHTML = avisos[fp.value]||'';
