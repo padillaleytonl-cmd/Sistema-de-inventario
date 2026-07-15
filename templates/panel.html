@@ -3463,6 +3463,7 @@ tbody td {
               <input id="dtFacVenc" type="date" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
             </div>
           </div>
+          <div id="dtFacPagoHint" style="font-size:11px;color:var(--muted);margin-top:9px;line-height:1.5;"></div>
         </div>
 
         <!-- Guía de despacho (solo tipo 52): traslado + despacho + transporte -->
@@ -14200,6 +14201,13 @@ async function dtEmitir(){
     if(faltan.length){ alert('La factura requiere receptor completo. Faltan: '+faltan.join(', ')+'.\nPuedes seleccionar un cliente registrado para autocompletar.'); if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';} return; }
     const fp=document.getElementById('dtFacFormaPago');
     const formaPago=fp?parseInt(fp.value,10):1;
+    // "Sin costo" (3) es solo para entregas gratuitas: confirmar para evitar errores
+    if(formaPago===3){
+      if(!confirm('Vas a emitir la factura con forma de pago "SIN COSTO".\n\nEsto corresponde SOLO a entregas gratuitas (muestras, donaciones, reemplazos sin cobro).\n\nSi el cliente está pagando por estos productos, debes usar Contado o Crédito.\n\n¿Confirmas que es una entrega gratuita?')){
+        if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';}
+        return;
+      }
+    }
     const venc=document.getElementById('dtFacVenc');
     const body={ items, receptor, formato, exenta:(_dtTipo==='34'),
       forma_pago:formaPago,
@@ -14750,7 +14758,10 @@ function dtReceptorSegunTipo(tipo){
   const nr=document.getElementById('dtRecNombreReq'); if(nr) nr.style.display=requiereCompleto?'inline':'none';
   // Forma de pago solo para factura (33/34)
   const pago=document.getElementById('dtFacPago');
-  if(pago) pago.style.display = (tipo==='33'||tipo==='34') ? 'block' : 'none';
+  if(pago){
+    pago.style.display = (tipo==='33'||tipo==='34') ? 'block' : 'none';
+    if(tipo==='33'||tipo==='34') dtFacVenc();  // pinta la advertencia inicial
+  }
   // Bloque de guía de despacho solo para tipo 52
   const guia=document.getElementById('dtGuia');
   if(guia) guia.style.display = (tipo==='52') ? 'block' : 'none';
@@ -14777,11 +14788,20 @@ function dtGuiaTrasladoChange(){
     if(extra) extra.style.display='grid';
   }
 }
-// Muestra el campo de vencimiento solo si la forma de pago es crédito (2)
+// Muestra el campo de vencimiento solo si la forma de pago es crédito (2),
+// y una advertencia con el uso correcto según la normativa del SII.
 function dtFacVenc(){
   const fp=document.getElementById('dtFacFormaPago');
   const w=document.getElementById('dtFacVencWrap');
-  if(fp&&w) w.style.display = (fp.value==='2') ? 'block' : 'none';
+  const hint=document.getElementById('dtFacPagoHint');
+  if(!fp) return;
+  if(w) w.style.display = (fp.value==='2') ? 'block' : 'none';
+  const avisos={
+    '1':'⚠️ <b>Contado</b>: úsalo solo si la factura está <b>pagada por completo</b> al momento de emitirla, sin saldo pendiente. Una factura al contado <b>no se puede ceder</b> y no requiere acuse de recibo. Si hay saldo pendiente, corresponde Crédito.',
+    '2':'<b>Crédito</b>: hay un saldo pendiente de pago. Indica la fecha de vencimiento. Es la opción por defecto del SII si no se informa la forma de pago.',
+    '3':'⚠️ <b>Sin costo</b>: úsalo <b>solo para entregas gratuitas</b> (muestras, donaciones, reemplazos sin cobro). No corresponde para ventas normales, aunque el monto sea bajo. Si el cliente paga algo, usa Contado o Crédito.'
+  };
+  if(hint) hint.innerHTML = avisos[fp.value]||'';
 }
 let _cliBuscarTimer=null;
 function cliListar(q){
