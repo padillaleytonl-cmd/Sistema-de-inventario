@@ -13621,8 +13621,8 @@ const DT_TIPOS_EMISOR = [
 
 // Secuencia de pasos por tipo de documento
 const DT_PASOS = {
-  '39': ['productos','revisar'],
-  '41': ['productos','revisar'],
+  '39': ['cliente','productos','revisar'],
+  '41': ['cliente','productos','revisar'],
   '33': ['receptor','pago','productos','revisar'],
   '34': ['receptor','pago','productos','revisar'],
   '61': ['operacion','referencia','productos','revisar'],
@@ -13631,7 +13631,7 @@ const DT_PASOS = {
 };
 
 const DT_PASO_NOMBRE = {
-  productos:'Productos', revisar:'Revisar', receptor:'Receptor', pago:'Pago',
+  productos:'Productos', revisar:'Revisar', receptor:'Receptor', pago:'Pago', cliente:'Cliente',
   operacion:'Operación', referencia:'Documento', traslado:'Traslado',
   destinatario:'Destinatario', transporte:'Transporte',
 };
@@ -13756,7 +13756,7 @@ function dtStepRender(){
   const paso = dtPasos()[_dtPasoIdx];
   const body = document.getElementById('dtStepBody');
   const render = {
-    traslado: dtRenderTraslado, destinatario: dtRenderDestinatario,
+    traslado: dtRenderTraslado, destinatario: dtRenderDestinatario, cliente: dtRenderCliente,
     transporte: dtRenderTransporte, receptor: dtRenderReceptor,
     pago: dtRenderPago, operacion: dtRenderOperacion,
     referencia: dtRenderReferencia, productos: dtRenderProductos,
@@ -13764,9 +13764,15 @@ function dtStepRender(){
   }[paso];
   body.innerHTML = render ? render() : '';
   dtStepBar();
-  if(paso==='productos'){ dtItemsRender(); }
+  if(paso==='productos'){
+    dtItemsRender();
+    const refs=_dtDatos.referencias||[];
+    if(refs.length && document.getElementById('dtRefsItems')){
+      refs.forEach(r=>dtAddRef(r.tpo_doc_ref, r.folio_ref, r.razon_ref));
+    }
+  }
   if(paso==='revisar'){ dtCargarPreview(); }
-  if(paso==='destinatario' || paso==='receptor'){
+  if(paso==='destinatario' || paso==='receptor' || paso==='cliente'){
     const c=document.getElementById('dtRecRegionComuna');
     if(c && !document.getElementById('dtRecRC_region')){
       c.innerHTML=dtRegionComunaHTML('dtRecRC');
@@ -13851,6 +13857,26 @@ function dtRenderReceptor(titulo){
       <div style="grid-column:1 / -1;">${_dtCampo('Dirección','dtRecDireccion',_dtEsc(r.direccion),'Calle y número',true)}</div>
       <div style="grid-column:1 / -1;" id="dtRecRegionComuna"></div>
     </div>
+  </div>`;
+}
+
+// ── PASO: cliente (boleta) — opcional ──
+function dtRenderCliente(){
+  const r=_dtDatos.receptor||{};
+  return `<div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px;">¿A nombre de quién va la boleta?</div>
+  <div style="font-size:13px;color:var(--muted);margin-bottom:16px;">Opcional. Si la dejas en blanco, se emite a consumidor final.</div>
+  <div style="max-width:620px;">
+    <div style="position:relative;margin-bottom:14px;">
+      <label style="display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:5px;">Buscar cliente registrado</label>
+      <input id="dtCliBuscar" oninput="dtCliBuscar(this.value)" autocomplete="off" placeholder="Nombre o RUT"
+        style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+      <div id="dtCliResultados" style="position:absolute;left:0;right:0;top:100%;z-index:30;"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      ${_dtCampo('RUT','dtRecRut',_dtEsc(r.rut),'66666666-6 (consumidor final)')}
+      ${_dtCampo('Nombre','dtRecNombre',_dtEsc(r.razon_social),'Consumidor Final')}
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin-top:12px;">La boleta solo lleva RUT y nombre. El resto de los datos del cliente no aplican a este documento.</div>
   </div>`;
 }
 
@@ -13987,7 +14013,75 @@ function dtRenderProductos(){
     <div id="dtLineExe" style="display:none;justify-content:space-between;font-size:13px;color:var(--muted);padding:3px 0;"><span>Exento</span><span id="dtExe">$ 0</span></div>
     <div style="display:flex;justify-content:space-between;font-size:13px;color:var(--muted);padding:3px 0;"><span>IVA (19%)</span><span id="dtIva">$ 0</span></div>
     <div style="display:flex;justify-content:space-between;font-size:18px;font-weight:700;color:var(--text);margin-top:6px;"><span>Total</span><span id="dtTotal">$ 0</span></div>
+  </div>
+  ${dtRefsHTML()}`;
+}
+
+// Referencias a otros documentos (guía previa, orden de compra…). Aplica a
+// boleta y factura; las notas usan su propio paso de referencia obligatoria.
+function dtRefsHTML(){
+  if(['61','56','52'].includes(_dtTipo)) return '';
+  const refs=_dtDatos.referencias||[];
+  return `<div style="margin-top:20px;border-top:1px solid var(--border);padding-top:14px;">
+    <button type="button" onclick="dtToggleRefs()" id="dtRefsToggle"
+      style="background:none;border:none;color:#534AB7;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;padding:4px 0;display:flex;align-items:center;gap:6px;">
+      <span id="dtRefsArrow">${refs.length?'▾':'▸'}</span> Referenciar otro documento${refs.length?` (${refs.length})`:' (opcional)'}
+    </button>
+    <div id="dtRefsBox" style="display:${refs.length?'block':'none'};margin-top:10px;">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px;max-width:620px;">
+        Útil cuando este documento proviene de una guía de despacho previa, una orden de compra o una nota de pedido.
+      </div>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead><tr style="border-bottom:1px solid var(--border);">
+          <th style="font-size:11px;color:var(--muted);text-align:left;font-weight:600;padding:6px 4px;width:190px;">Tipo</th>
+          <th style="font-size:11px;color:var(--muted);text-align:left;font-weight:600;padding:6px 4px;width:120px;">Folio</th>
+          <th style="font-size:11px;color:var(--muted);text-align:left;font-weight:600;padding:6px 4px;">Motivo</th>
+          <th style="width:34px;"></th>
+        </tr></thead>
+        <tbody id="dtRefsItems"></tbody>
+      </table>
+      <button type="button" onclick="dtAddRef()" style="background:var(--bg2);color:#534AB7;border:none;padding:7px 12px;border-radius:8px;font-family:inherit;font-weight:600;font-size:12px;cursor:pointer;margin-top:8px;">Agregar referencia</button>
+    </div>
   </div>`;
+}
+function dtToggleRefs(){
+  const box=document.getElementById('dtRefsBox'), ar=document.getElementById('dtRefsArrow');
+  const abierto = box.style.display==='block';
+  box.style.display = abierto ? 'none' : 'block';
+  ar.textContent = abierto ? '▸' : '▾';
+  if(!abierto && !document.getElementById('dtRefsItems').children.length) dtAddRef();
+}
+function dtAddRef(tipo,folio,razon){
+  const tb=document.getElementById('dtRefsItems');
+  if(!tb) return;
+  const inp='width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);';
+  const tipos=[[52,'Guía de despacho'],[801,'Orden de compra'],[802,'Nota de pedido'],
+               [39,'Boleta electrónica'],[33,'Factura electrónica'],[34,'Factura exenta'],['HES','Recepción de servicio']];
+  const tr=document.createElement('tr');
+  tr.innerHTML=`
+    <td style="padding:6px 4px;"><select class="dt-ref-tipo" style="${inp}">
+      ${tipos.map(t=>`<option value="${t[0]}" ${String(tipo)===String(t[0])?'selected':''}>${t[1]}</option>`).join('')}
+    </select></td>
+    <td style="padding:6px 4px;"><input class="dt-ref-folio" value="${folio||''}" placeholder="12345" style="${inp}"></td>
+    <td style="padding:6px 4px;"><input class="dt-ref-razon" value="${razon||''}" placeholder="Opcional" style="${inp}"></td>
+    <td style="padding:6px 4px;"><button onclick="this.closest('tr').remove()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:4px;">×</button></td>`;
+  tb.appendChild(tr);
+}
+function dtLeerReferencias(){
+  const tb=document.getElementById('dtRefsItems');
+  if(!tb) return [];
+  const out=[];
+  tb.querySelectorAll('tr').forEach(tr=>{
+    const tipo=(tr.querySelector('.dt-ref-tipo')||{}).value;
+    const folio=((tr.querySelector('.dt-ref-folio')||{}).value||'').trim();
+    const razon=((tr.querySelector('.dt-ref-razon')||{}).value||'').trim();
+    if(tipo && folio){
+      const ref={tpo_doc_ref:tipo, folio_ref:folio};
+      if(razon) ref.razon_ref=razon;
+      out.push(ref);
+    }
+  });
+  return out;
 }
 function dtItemsRender(){
   const tb=document.getElementById('dtItems');
@@ -14001,17 +14095,36 @@ function dtItemsRender(){
 
 // ── PASO: revisar (visor PDF) ──
 function dtRenderRevisar(){
-  return `<div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px;">Revisa antes de emitir</div>
-  <div style="font-size:13px;color:var(--muted);margin-bottom:14px;">Así se verá el documento. Una vez enviado al SII no se puede deshacer: para corregirlo tendrías que anularlo y emitir otro.</div>
+  const esBoleta=(_dtTipo==='39'||_dtTipo==='41');
+  const f=_dtDatos.formato||'carta';
+  const selFormato = esBoleta ? `<div style="display:flex;align-items:center;gap:8px;">
+      <label style="font-size:12px;font-weight:600;color:var(--muted);">Formato</label>
+      <select id="dtFormato" onchange="dtCambiarFormato(this.value)" style="padding:7px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
+        <option value="carta" ${f==='carta'?'selected':''}>Carta (hoja)</option>
+        <option value="rollo" ${f==='rollo'?'selected':''}>Rollo (voucher 80mm)</option>
+      </select>
+    </div>` : '';
+  return `<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap;">
+    <div>
+      <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px;">Revisa antes de emitir</div>
+      <div style="font-size:13px;color:var(--muted);">Así se verá el documento. Una vez enviado al SII no se puede deshacer: para corregirlo tendrías que anularlo y emitir otro.</div>
+    </div>
+    ${selFormato}
+  </div>
   <div id="dtPreviaWrap" style="border:1px solid var(--border);border-radius:11px;overflow:hidden;background:#525659;min-height:300px;">
     <div style="padding:60px;text-align:center;color:#ccc;font-size:14px;">Generando vista previa…</div>
   </div>`;
 }
+// Formato del documento: rollo solo aplica a boletas
+function _dtFormato(){
+  return (_dtTipo==='39'||_dtTipo==='41') ? (_dtDatos.formato||'carta') : 'carta';
+}
+function dtCambiarFormato(v){ _dtDatos.formato=v; dtCargarPreview(); }
 
 async function dtCargarPreview(){
   const wrap=document.getElementById('dtPreviaWrap');
   const items=dtItemsDesdeDatos();
-  const body={ items, formato:'carta', tipo_dte:parseInt(_dtTipo,10) };
+  const body={ items, formato:_dtFormato(), tipo_dte:parseInt(_dtTipo,10) };
   if(_dtDatos.receptor && Object.keys(_dtDatos.receptor).length) body.receptor=_dtDatos.receptor;
   if(_dtTipo==='52'){
     body.guia={ ind_traslado:_dtDatos.ind_traslado, tipo_despacho:_dtDatos.tipo_despacho||0,
@@ -14039,6 +14152,12 @@ function dtValidarPaso(paso){
   if(paso==='traslado'){
     _dtDatos.tipo_despacho = parseInt(v('dtGuiaDespacho')||'0',10);
     if(!_dtDatos.ind_traslado) return 'Selecciona el tipo de traslado.';
+    return null;
+  }
+  if(paso==='cliente'){
+    const rut=v('dtRecRut'), nom=v('dtRecNombre');
+    if(rut && !nom) return 'Si indicas el RUT, agrega también el nombre del cliente.';
+    _dtDatos.receptor = (rut||nom) ? {rut:rut||'66666666-6', razon_social:nom||'Consumidor Final'} : null;
     return null;
   }
   if(paso==='receptor' || paso==='destinatario'){
@@ -14096,6 +14215,7 @@ function dtValidarPaso(paso){
       if(tot>_dtNCMontoMax) return `El monto (${_dtCLP(tot)}) no puede superar el del documento original (${_dtCLP(_dtNCMontoMax)}).`;
     }
     _dtDatos.items=items;
+    _dtDatos.referencias = dtLeerReferencias();
     return null;
   }
   return null;
@@ -14113,23 +14233,25 @@ async function dtEmitir(){
   let url, etiqueta, body;
   if(_dtTipo==='52'){
     url='/facturacion/guia/emitir'; etiqueta='Guía de despacho';
-    body={ items, formato:'carta', ind_traslado:_dtDatos.ind_traslado,
+    body={ items, formato:_dtFormato(), ind_traslado:_dtDatos.ind_traslado,
            tipo_despacho:_dtDatos.tipo_despacho||0, transporte:_dtDatos.transporte||null,
            receptor: String(_dtDatos.ind_traslado)==='5' ? null : _dtDatos.receptor };
   } else if(_dtTipo==='33'||_dtTipo==='34'){
     url='/facturacion/factura/emitir'; etiqueta=_dtTipo==='34'?'Factura exenta':'Factura';
-    body={ items, formato:'carta', receptor:_dtDatos.receptor, exenta:(_dtTipo==='34'),
+    body={ items, formato:_dtFormato(), receptor:_dtDatos.receptor, exenta:(_dtTipo==='34'),
            forma_pago:_dtDatos.forma_pago||1 };
+    if((_dtDatos.referencias||[]).length) body.referencias=_dtDatos.referencias;
   } else if(_dtTipo==='61'||_dtTipo==='56'){
     url = _dtTipo==='56' ? '/facturacion/nota-debito/emitir' : '/facturacion/nota-credito/emitir';
     etiqueta = _dtTipo==='56' ? 'Nota de débito' : 'Nota de crédito';
-    body={ items, formato:'carta', receptor:_dtDatos.receptor||null,
+    body={ items, formato:_dtFormato(), receptor:_dtDatos.receptor||null,
            referencia:{ folio_ref:_dtDatos.ref.folio_ref, tipo_doc_ref:_dtDatos.ref.tipo_doc_ref,
                         fecha_ref:_dtDatos.ref.fecha_ref, cod_ref:_dtDatos.cod_ref,
                         razon_ref:_dtDatos.ref.razon_ref } };
   } else {
     url='/facturacion/boleta/emitir'; etiqueta='Boleta';
-    body={ items, formato:'carta', receptor:_dtDatos.receptor||null };
+    body={ items, formato:_dtFormato(), receptor:_dtDatos.receptor||null };
+    if((_dtDatos.referencias||[]).length) body.referencias=_dtDatos.referencias;
   }
   try{
     const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
