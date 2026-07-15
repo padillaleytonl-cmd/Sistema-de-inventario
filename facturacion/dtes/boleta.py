@@ -272,12 +272,22 @@ def generar_boleta_xml(
     )
 
     # 6. Receptor
-    receptor_xml = (
-        f'<Receptor>'
-        f'<RUTRecep>{receptor_rut}</RUTRecep>'
-        f'<RznSocRecep>{_escape_xml(receptor_rs)}</RznSocRecep>'
-        f'</Receptor>'
-    )
+    # La boleta admite dirección/comuna/ciudad del receptor (formato boletas v4.00).
+    # Son opcionales: se incluyen solo si vienen. DirRecep pasa a ser obligatoria
+    # cuando el indicador de servicio es 1 o 2 (servicios prestados en un domicilio
+    # o bienes enviados a una dirección).
+    _rec_parts = [
+        f'<RUTRecep>{receptor_rut}</RUTRecep>',
+        f'<RznSocRecep>{_escape_xml(receptor_rs)}</RznSocRecep>',
+    ]
+    _r = receptor or {}
+    if _r.get('direccion'):
+        _rec_parts.append(f'<DirRecep>{_escape_xml(str(_r["direccion"])[:70])}</DirRecep>')
+    if _r.get('comuna'):
+        _rec_parts.append(f'<CmnaRecep>{_escape_xml(str(_r["comuna"])[:20])}</CmnaRecep>')
+    if _r.get('ciudad'):
+        _rec_parts.append(f'<CiudadRecep>{_escape_xml(str(_r["ciudad"])[:20])}</CiudadRecep>')
+    receptor_xml = '<Receptor>' + ''.join(_rec_parts) + '</Receptor>'
 
     # 7. IdDoc
     iddoc_xml = (
