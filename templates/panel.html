@@ -3441,10 +3441,8 @@ tbody td {
               <input id="dtRecDireccion" placeholder="Dirección del cliente"
                 style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
             </div>
-            <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Comuna <span style="color:#dc2626;">*</span></label>
-              <input id="dtRecComuna" placeholder="Comuna"
-                style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+            <div style="grid-column:1 / -1;" id="dtRecRegionComuna">
+              <!-- Selector región + comuna se inyecta por JS (dtRecRC) -->
             </div>
           </div>
         </div>
@@ -3495,38 +3493,33 @@ tbody td {
           </div>
           <div id="dtGuiaTrasladoHint" style="font-size:11px;color:var(--muted);margin-bottom:12px;"></div>
 
-          <div style="font-size:13px;font-weight:700;color:#b45309;margin:6px 0 10px;">🚛 Transporte (opcional)</div>
+          <div style="font-size:13px;font-weight:700;color:#b45309;margin:6px 0 10px;">🚛 Transporte (obligatorio)</div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
             <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Patente</label>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Patente <span style="color:#dc2626;">*</span></label>
               <input id="dtGuiaPatente" maxlength="8" placeholder="ABCD12" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
             </div>
             <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">RUT transportista</label>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">RUT transportista <span style="color:#dc2626;">*</span></label>
               <input id="dtGuiaRutTrans" placeholder="76.123.456-7" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
             </div>
             <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">RUT chofer</label>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">RUT chofer <span style="color:#dc2626;">*</span></label>
               <input id="dtGuiaRutChofer" placeholder="12.345.678-9" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
             </div>
             <div style="grid-column:1 / -1;">
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Nombre del chofer</label>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Nombre del chofer <span style="color:#dc2626;">*</span></label>
               <input id="dtGuiaChofer" maxlength="30" placeholder="Nombre del conductor" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
             </div>
             <div style="grid-column:1 / -1;">
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Dirección de destino</label>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Dirección de destino <span style="color:#dc2626;">*</span></label>
               <input id="dtGuiaDirDest" maxlength="70" placeholder="Dónde se entregan los bienes" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
             </div>
-            <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Comuna destino</label>
-              <input id="dtGuiaCmnaDest" maxlength="20" placeholder="Comuna" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
+            <div style="grid-column:1 / -1;" id="dtGuiaRegionComuna">
+              <!-- Selector región + comuna destino (dtGuiaRC) -->
             </div>
             <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Ciudad destino</label>
-              <input id="dtGuiaCiudadDest" maxlength="20" placeholder="Ciudad" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
-            </div>
-            <div>
-              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Fecha de salida</label>
+              <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Fecha de salida <span style="color:#dc2626;">*</span></label>
               <input id="dtGuiaFchSalida" type="date" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">
             </div>
           </div>
@@ -3657,9 +3650,8 @@ tbody td {
             <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Giro *</label>
             <input id="cliGiro" placeholder="Venta al por menor" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
           </div>
-          <div>
-            <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Comuna *</label>
-            <input id="cliComuna" placeholder="Santiago" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:14px;background:var(--bg2);color:var(--text);">
+          <div style="grid-column:1 / -1;" id="cliRegionComuna">
+            <!-- Selector región + comuna se inyecta por JS -->
           </div>
           <div style="grid-column:1 / -1;">
             <label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Dirección *</label>
@@ -13676,6 +13668,55 @@ let _dtNCcodRef = 1;  // 1=anula, 2=corrige texto, 3=corrige montos
 let _dtNCMontoMax = 0;  // monto del documento referenciado (tope para "corrige montos")
 
 // Catálogo de tipos emitibles manualmente, con nombre y precio de referencia (UF/mes)
+// Datos territoriales de Chile: regiones y comunas (fuente: SUBDERE/INE via repos públicos)
+// 16 regiones, 346 comunas. Para selectores encadenados región→comuna.
+const CHILE_TERRITORIO = {"Arica y Parinacota": ["Arica","Camarones","General Lagos","Putre"],"Tarapacá": ["Alto Hospicio","Camiña","Colchane","Huara","Iquique","Pica","Pozo Almonte"],"Antofagasta": ["Antofagasta","Calama","María Elena","Mejillones","Ollagüe","San Pedro de Atacama","Sierra Gorda","Taltal","Tocopilla"],"Atacama": ["Alto del Carmen","Caldera","Chañaral","Copiapó","Diego de Almagro","Freirina","Huasco","Tierra Amarilla","Vallenar"],"Coquimbo": ["Andacollo","Canela","Combarbalá","Coquimbo","Illapel","La Higuera","La Serena","Los Vilos","Monte Patria","Ovalle","Paiguano","Punitaqui","Río Hurtado","Salamanca","Vicuña"],"Valparaíso": ["Algarrobo","Cabildo","Calera","Calle Larga","Cartagena","Casablanca","Catemu","Concón","El Quisco","El Tabo","Hijuelas","Isla de Pascua","Juan Fernández","La Cruz","La Ligua","Limache","Llaillay","Los Andes","Nogales","Olmué","Panquehue","Papudo","Petorca","Puchuncaví","Putaendo","Quillota","Quilpué","Quintero","Riconada","San Antonio","San Esteban","San Felipe","Santa María","Santo Domingo","Valparaíso","Villa Alemana","Viña del Mar","Zapallar"],"Región Metropolitana de Santiago": ["Alhué","Buin","Calera de Tango","Cerrillos","Cerro Navia","Colina","Conchalí","Curacaví","El Bosque","El Monte","Estación Central","Huechuraba","Independencia","Isla de Maipo","La Cisterna","La Florida","La Granja","La Pintana","La Reina","Lampa","Las Condes","Lo Barnechea","Lo Espejo","Lo Prado","Macul","Maipú","María Pinto","Melipilla","Padre Hurtado","Paine","Pedro Aguirre Cerda","Peñaflor","Peñalolén","Pirque","Providencia","Pudahuel","Puente Alto","Quilicura","Quinta Normal","Recoleta","Renca","San Bernardo","San Joaquín","San José de Maipo","San Miguel","San Pedro","San Ramón","Santiago","Talagante","Tiltil","Vitacura","Ñuñoa"],"Región del Libertador Gral. Bernardo O'Higgins": ["Chimbarongo","Chépica","Codegua","Coinco","Coltauco","Doñihue","Graneros","La Estrella","Las Cabras","Litueche","Lolol","Machalí","Malloa","Marichihue","Mostazal","Nancagua","Navidad","Olivar","Palmilla","Paredones","Peralillo","Peumo","Pichidegua","Pichilemu","Placilla","Pumanque","Quinta de Tilcoco","Rancagua","Rengo","Requínoa","San Fernando","San Vicente","Santa Cruz"],"Región del Maule": ["Cauquenes","Chanco","Colbún","Constitución","Curepto","Curicó","Empedrado","Hualañé","Licantén","Linares","Longaví","Maule","Molina","Parral","Pelarco","Pelluhue","Pencahue","Rauco","Retiro","Romeral","Río Claro","Sagrada Familia","San Clemente","San Javier","San Rafael","Talca","Teno","Vichuquén","Villa Alegre","Yerbas Buenas"],"Región del Biobío": ["Alto Biobío","Antuco","Arauco","Cabrero","Cañete","Chiguayante","Concepción","Contulmo","Coronel","Curanilahue","Florida","Hualpén","Hualqui","Laja","Lebu","Los Álamos","Los Ángeles","Lota","Mulchén","Nacimiento","Negrete","Penco","Quilaco","Quilleco","San Pedro de la Paz","San Rosendo","Santa Bárbara","Santa Juana","Talcahuano","Tirúa","Tomé","Tucapel","Yumbel"],"Región del Ñuble": ["Bulnes","Chillán","Chillán Viejo","Cobquecura","Coelemu","Coihueco","El Carmen","Ninhue","Pemuco","Pinto","Portezuelo","Quillón","Quirihue","Ránquil","San Carlos","San Fabián","San Ignacio","San Nicolas","Treguaco","Yungay","Ñiquén"],"Región de la Araucanía": ["Angol","Carahu","Cholchol","Collipulli","Cunco","Curacautín","Curarrehue","Ercilla","Freire","Galvarin","Gorbea","Lautaro","Loncoche","Lonquimay","Los Sauces","Lumaco","Melipeuco","Nueva Imperial","Padre las Casa","Perquenco","Pitrufquén","Pucó","Purén","Renaico","Saavedra","Temuco","Teodoro Schmid","Toltén","Traiguén","Victoria","Vilcún","Villarrica"],"Región de los Ríos": ["Corral","Futrono","La Unión","Lago Ranco","Lanco","Los Lagos","Mariquina","Máfil","Paillaco","Panguipulli","Río Bueno","Valdivia"],"Región de los Lagos": ["Ancud","Calbuco","Castro","Chaitén","Chonchi","Cochamó","Curaco de Vélez","Dalcahue","Fresia","Frutillar","Futaleufú","Hualaihué","Llanquihue","Los Muermos","Maullín","Osorno","Palena","Puerto Montt","Puerto Octay","Puerto Varas","Puqueldón","Purranque","Puyehue","Queilén","Quellón","Quemchi","Quinchao","Río Negro","San Juan de la Costa","San Pablo"],"Región Aisén del Gral. Carlos Ibañez del Campo": ["Aisén","Chile Chico","Cisnes","Cochrane","Coyhaique","Guaitecas","Lago Verde","O’Higgins","Río Ibáñez","Tortel"],"Región de Magallanes y de la Antártica Chilena": ["Antártica","Cabo de Hornos (Ex. Navarino)","Laguna Blanca","Natales","Porvenir","Primavera","Punta Arenas","Río Verde","San Gregorio","Timaukel","Torres del Paine"]};
+
+
+// ═══════════ Selector de región + comuna (reutilizable) ═══════════
+// Construye un par de <select> encadenados: al elegir región se filtran las comunas.
+// Incluye búsqueda escribiendo en el select de comuna (datalist).
+// Uso: dtRegionComunaHTML('idPrefijo') devuelve el HTML; los valores se leen de
+//   #idPrefijo_region y #idPrefijo_comuna.
+function dtRegionComunaHTML(pfx, label){
+  const regiones = Object.keys(CHILE_TERRITORIO);
+  let opts = '<option value="">Selecciona región…</option>';
+  regiones.forEach(r=>{ opts += '<option value="'+r+'">'+r+'</option>'; });
+  return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">'
+    + '<div><label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Región</label>'
+    + '<select id="'+pfx+'_region" onchange="dtLlenarComunas(\''+pfx+'\')" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">'+opts+'</select></div>'
+    + '<div><label style="display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px;">Comuna</label>'
+    + '<input id="'+pfx+'_comuna" list="'+pfx+'_comunalist" autocomplete="off" placeholder="Elige región primero" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg2);color:var(--text);">'
+    + '<datalist id="'+pfx+'_comunalist"></datalist></div></div>';
+}
+// Llena las comunas de la región elegida en el datalist correspondiente
+function dtLlenarComunas(pfx){
+  const reg = document.getElementById(pfx+'_region').value;
+  const dl = document.getElementById(pfx+'_comunalist');
+  const inp = document.getElementById(pfx+'_comuna');
+  if(!dl) return;
+  const comunas = CHILE_TERRITORIO[reg] || [];
+  dl.innerHTML = comunas.map(c=>'<option value="'+c+'">').join('');
+  if(inp){ inp.value=''; inp.placeholder = comunas.length? 'Escribe o elige comuna…' : 'Elige región primero'; }
+}
+// Dada una comuna, encuentra y setea su región (para autocompletar al cargar un cliente)
+function dtSetRegionComuna(pfx, comuna){
+  if(!comuna) return;
+  for(const reg of Object.keys(CHILE_TERRITORIO)){
+    if(CHILE_TERRITORIO[reg].includes(comuna)){
+      const rsel=document.getElementById(pfx+'_region');
+      if(rsel){ rsel.value=reg; dtLlenarComunas(pfx); }
+      const csel=document.getElementById(pfx+'_comuna');
+      if(csel) csel.value=comuna;
+      return;
+    }
+  }
+  // Si no se encontró la región, al menos poner la comuna
+  const csel=document.getElementById(pfx+'_comuna');
+  if(csel) csel.value=comuna;
+}
+
+
 const DT_TIPOS_EMISOR = [
   {tipo:'39', nombre:'Boleta',            campo:'emite_boleta',         uf:0.0},
   {tipo:'41', nombre:'Boleta exenta',     campo:'emite_boleta_exenta',  uf:0.1},
@@ -13990,7 +14031,7 @@ async function dtVistaPrevia(){
   if(['33','34','52','46','43'].includes(String(_dtTipo))){
     const g=document.getElementById('dtRecGiro'); if(g&&g.value.trim())receptor.giro=g.value.trim();
     const dir=document.getElementById('dtRecDireccion'); if(dir&&dir.value.trim())receptor.direccion=dir.value.trim();
-    const com=document.getElementById('dtRecComuna'); if(com&&com.value.trim())receptor.comuna=com.value.trim();
+    const com=document.getElementById('dtRecRC_comuna'); if(com&&com.value.trim())receptor.comuna=com.value.trim();
   }
 
   // Nota de Crédito: validar y mostrar el PDF borrador real (con su referencia)
@@ -14099,7 +14140,7 @@ async function dtEmitir(){
   if(['33','34','52','46','43'].includes(String(_dtTipo))){
     const g=document.getElementById('dtRecGiro'); if(g&&g.value.trim())receptor.giro=g.value.trim();
     const dir=document.getElementById('dtRecDireccion'); if(dir&&dir.value.trim())receptor.direccion=dir.value.trim();
-    const com=document.getElementById('dtRecComuna'); if(com&&com.value.trim())receptor.comuna=com.value.trim();
+    const com=document.getElementById('dtRecRC_comuna'); if(com&&com.value.trim())receptor.comuna=com.value.trim();
   }
   const referencias=dtLeerReferencias();
   const formato=document.getElementById('dtFormato')?document.getElementById('dtFormato').value:'carta';
@@ -14117,15 +14158,25 @@ async function dtEmitir(){
       if(!receptor.comuna) faltan.push('Comuna');
       if(faltan.length){ alert('La guía requiere receptor. Faltan: '+faltan.join(', ')+'.\nPuedes seleccionar un cliente registrado.'); if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';} return; }
     }
-    // Transporte (opcional): se arma solo con los campos que tengan valor
+    // Transporte OBLIGATORIO (todos los campos). Comuna/ciudad desde el selector.
+    const cmnaDest=(document.getElementById('dtGuiaRC_comuna')||{}).value||'';
     const transporte={};
     const _t=(id,key)=>{const el=document.getElementById(id); if(el&&el.value.trim()) transporte[key]=el.value.trim();};
     _t('dtGuiaPatente','patente'); _t('dtGuiaRutTrans','rut_transportista'); _t('dtGuiaRutChofer','rut_chofer');
-    _t('dtGuiaChofer','nombre_chofer'); _t('dtGuiaDirDest','dir_dest'); _t('dtGuiaCmnaDest','cmna_dest');
-    _t('dtGuiaCiudadDest','ciudad_dest'); _t('dtGuiaFchSalida','fch_salida');
+    _t('dtGuiaChofer','nombre_chofer'); _t('dtGuiaDirDest','dir_dest'); _t('dtGuiaFchSalida','fch_salida');
+    if(cmnaDest.trim()){ transporte.cmna_dest=cmnaDest.trim(); transporte.ciudad_dest=cmnaDest.trim(); }
+    // Validar que todo el transporte esté completo
+    const faltanT=[];
+    if(!transporte.patente) faltanT.push('Patente');
+    if(!transporte.rut_transportista) faltanT.push('RUT transportista');
+    if(!transporte.rut_chofer) faltanT.push('RUT chofer');
+    if(!transporte.nombre_chofer) faltanT.push('Nombre del chofer');
+    if(!transporte.dir_dest) faltanT.push('Dirección de destino');
+    if(!transporte.cmna_dest) faltanT.push('Comuna de destino');
+    if(!transporte.fch_salida) faltanT.push('Fecha de salida');
+    if(faltanT.length){ alert('Los datos de transporte son obligatorios. Faltan: '+faltanT.join(', ')+'.'); if(btn){btn.disabled=false;btn.textContent='Confirmar y emitir';} return; }
     const body={ items, receptor:(indTraslado!==5?receptor:null), formato,
-      ind_traslado:indTraslado, tipo_despacho:tipoDespacho,
-      transporte:Object.keys(transporte).length?transporte:null };
+      ind_traslado:indTraslado, tipo_despacho:tipoDespacho, transporte };
     try{
       const r=await fetch('/facturacion/guia/emitir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       const d=await r.json();
@@ -14236,9 +14287,13 @@ function dtReset(){
   document.getElementById('dtPreviaWrap').innerHTML='';
   document.getElementById('dtFormWrap').style.display='block';
   document.getElementById('dtRecRut').value=''; document.getElementById('dtRecNombre').value='';
-  ['dtRecGiro','dtRecDireccion','dtRecComuna','dtCliBuscar'].forEach(id=>{const el=document.getElementById(id); if(el) el.value='';});
+  ['dtRecGiro','dtRecDireccion','dtCliBuscar'].forEach(id=>{const el=document.getElementById(id); if(el) el.value='';});
+  const _rrc=document.getElementById('dtRecRC_comuna'); if(_rrc) _rrc.value='';
+  const _rrr=document.getElementById('dtRecRC_region'); if(_rrr) _rrr.value='';
   const cr=document.getElementById('dtCliResultados'); if(cr) cr.innerHTML='';
-  ['dtGuiaPatente','dtGuiaRutTrans','dtGuiaRutChofer','dtGuiaChofer','dtGuiaDirDest','dtGuiaCmnaDest','dtGuiaCiudadDest','dtGuiaFchSalida'].forEach(id=>{const el=document.getElementById(id); if(el) el.value='';});
+  ['dtGuiaPatente','dtGuiaRutTrans','dtGuiaRutChofer','dtGuiaChofer','dtGuiaDirDest','dtGuiaFchSalida'].forEach(id=>{const el=document.getElementById(id); if(el) el.value='';});
+  const _grc=document.getElementById('dtGuiaRC_comuna'); if(_grc) _grc.value='';
+  const _grr=document.getElementById('dtGuiaRC_region'); if(_grr) _grr.value='';
   document.getElementById('dtItems').innerHTML=''; dtAddItem();
   // Reset referencias
   const refsBox=document.getElementById('dtRefsBox');
@@ -14676,7 +14731,7 @@ function dtCliSeleccionar(c){
   // Campos extra (los usa la factura/guía; la boleta los ignora)
   const g=document.getElementById('dtRecGiro'); if(g) g.value=c.giro||'';
   const dir=document.getElementById('dtRecDireccion'); if(dir) dir.value=c.direccion||'';
-  const com=document.getElementById('dtRecComuna'); if(com) com.value=c.comuna||'';
+  if(document.getElementById('dtRecRC_comuna')) dtSetRegionComuna('dtRecRC', c.comuna||'');
   document.getElementById('dtCliResultados').innerHTML='';
   document.getElementById('dtCliBuscar').value=c.razon_social||'';
 }
@@ -14686,6 +14741,11 @@ function dtReceptorSegunTipo(tipo){
   const extra=document.getElementById('dtRecExtra');
   const requiereCompleto=['33','34','52','46','43'].includes(String(tipo));
   if(extra) extra.style.display = requiereCompleto ? 'grid' : 'none';
+  // Inyectar el selector de región+comuna del receptor la primera vez que se muestra
+  const cont=document.getElementById('dtRecRegionComuna');
+  if(requiereCompleto && cont && !document.getElementById('dtRecRC_region')){
+    cont.innerHTML=dtRegionComunaHTML('dtRecRC');
+  }
   const rr=document.getElementById('dtRecRutReq'); if(rr) rr.style.display=requiereCompleto?'inline':'none';
   const nr=document.getElementById('dtRecNombreReq'); if(nr) nr.style.display=requiereCompleto?'inline':'none';
   // Forma de pago solo para factura (33/34)
@@ -14694,7 +14754,11 @@ function dtReceptorSegunTipo(tipo){
   // Bloque de guía de despacho solo para tipo 52
   const guia=document.getElementById('dtGuia');
   if(guia) guia.style.display = (tipo==='52') ? 'block' : 'none';
-  if(tipo==='52' && typeof dtGuiaTrasladoChange==='function') dtGuiaTrasladoChange();
+  if(tipo==='52'){
+    const gcont=document.getElementById('dtGuiaRegionComuna');
+    if(gcont && !document.getElementById('dtGuiaRC_region')){ gcont.innerHTML=dtRegionComunaHTML('dtGuiaRC'); }
+    if(typeof dtGuiaTrasladoChange==='function') dtGuiaTrasladoChange();
+  }
 }
 // Ajusta el receptor según el tipo de traslado de la guía
 function dtGuiaTrasladoChange(){
@@ -14751,7 +14815,8 @@ function cliListar(q){
 function _cliEsc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function cliNuevo(){
   document.getElementById('cliId').value='';
-  ['cliRut','cliRazon','cliGiro','cliComuna','cliDireccion','cliTelefono','cliEmail'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('cliRegionComuna').innerHTML=dtRegionComunaHTML('cliRC');
+  ['cliRut','cliRazon','cliGiro','cliDireccion','cliTelefono','cliEmail'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('cliFormTitulo').textContent='Nuevo cliente';
   document.getElementById('cliFormMsg').textContent='';
   document.getElementById('cliForm').style.display='block';
@@ -14762,7 +14827,8 @@ function cliEditar(c){
   document.getElementById('cliRut').value=c.rut||'';
   document.getElementById('cliRazon').value=c.razon_social||'';
   document.getElementById('cliGiro').value=c.giro||'';
-  document.getElementById('cliComuna').value=c.comuna||'';
+  document.getElementById('cliRegionComuna').innerHTML=dtRegionComunaHTML('cliRC');
+  dtSetRegionComuna('cliRC', c.comuna||'');
   document.getElementById('cliDireccion').value=c.direccion||'';
   document.getElementById('cliTelefono').value=c.telefono||'';
   document.getElementById('cliEmail').value=c.email||'';
@@ -14778,7 +14844,7 @@ async function cliGuardar(){
     rut: document.getElementById('cliRut').value.trim(),
     razon_social: document.getElementById('cliRazon').value.trim(),
     giro: document.getElementById('cliGiro').value.trim(),
-    comuna: document.getElementById('cliComuna').value.trim(),
+    comuna: (document.getElementById('cliRC_comuna')||{}).value ? document.getElementById('cliRC_comuna').value.trim() : '',
     direccion: document.getElementById('cliDireccion').value.trim(),
     telefono: document.getElementById('cliTelefono').value.trim(),
     email: document.getElementById('cliEmail').value.trim(),
