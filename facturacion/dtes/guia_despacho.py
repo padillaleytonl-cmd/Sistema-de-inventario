@@ -184,6 +184,25 @@ def _calcular_totales_guia(items: List[Dict], es_venta: bool) -> Dict:
     }
 
 
+def _normalizar_rut(rut):
+    """Normaliza un RUT al formato que exige el SII: sin puntos, con guion y
+    dígito verificador en mayúscula. Acepta '18849272k', '18.849.272-k',
+    '18849272-K' y devuelve siempre '18849272-K'.
+    Devuelve None si viene vacío."""
+    if not rut:
+        return None
+    limpio = str(rut).replace('.', '').replace(' ', '').strip().upper()
+    if not limpio:
+        return None
+    # Si ya trae guion, solo asegurar mayúscula (ya aplicada arriba)
+    if '-' in limpio:
+        return limpio
+    # Sin guion: separar el último carácter como dígito verificador
+    if len(limpio) > 1:
+        return limpio[:-1] + '-' + limpio[-1]
+    return limpio
+
+
 def _construir_transporte_xml(transporte: Optional[Dict]) -> str:
     """Construye el bloque <Transporte> según Anexo Técnico 2.5 (Res.154/2025).
 
@@ -224,14 +243,12 @@ def _construir_transporte_xml(transporte: Optional[Dict]) -> str:
     if patente_carro:
         partes.append(f'<PatenteCarro>{_escape_xml(patente_carro)}</PatenteCarro>')
 
-    rut_trans = _v('rut_transportista')
+    rut_trans = _normalizar_rut(_v('rut_transportista'))
     if rut_trans:
-        rut_trans = rut_trans.replace('.', '')
         partes.append(f'<RUTTrans>{_escape_xml(rut_trans)}</RUTTrans>')
 
-    rut_chofer = _v('rut_chofer')
+    rut_chofer = _normalizar_rut(_v('rut_chofer'))
     if rut_chofer:
-        rut_chofer = rut_chofer.replace('.', '')
         partes.append(f'<RUTChofer>{_escape_xml(rut_chofer)}</RUTChofer>')
 
     nombre_chofer = _v('nombre_chofer', 30)
@@ -358,7 +375,7 @@ def generar_guia_despacho_xml(
     emisor_xml = '<Emisor>' + ''.join(emisor_parts) + '</Emisor>'
 
     # 3. Receptor
-    rut_r = str(receptor['rut']).replace('.', '').strip()
+    rut_r = _normalizar_rut(receptor['rut'])
     rec_parts = [
         f'<RUTRecep>{rut_r}</RUTRecep>',
         f'<RznSocRecep>{_escape_xml(receptor["razon_social"][:100])}</RznSocRecep>',

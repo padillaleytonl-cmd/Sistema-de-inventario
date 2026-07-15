@@ -35,6 +35,22 @@ from .ted import construir_ted
 IVA_PORCENTAJE = 19
 
 
+def _normalizar_rut(rut):
+    """Normaliza un RUT al formato que exige el SII: sin puntos, con guion y
+    digito verificador en mayuscula. '18849272k' / '18.849.272-k' -> '18849272-K'.
+    Devuelve '' si viene vacio."""
+    if not rut:
+        return ''
+    limpio = str(rut).replace('.', '').replace(' ', '').strip().upper()
+    if not limpio:
+        return ''
+    if '-' in limpio:
+        return limpio
+    if len(limpio) > 1:
+        return limpio[:-1] + '-' + limpio[-1]
+    return limpio
+
+
 def _redondear_clp(valor: float) -> int:
     return int(round(valor))
 
@@ -203,7 +219,7 @@ def generar_nota_debito_xml(
     iddoc_xml = '<IdDoc>' + ''.join(iddoc_parts) + '</IdDoc>'
 
     # 2. Emisor (con Acteco obligatorio - schema SII para ND)
-    rut_e = str(emisor['rut']).replace('.', '').strip()
+    rut_e = _normalizar_rut(emisor['rut'])
     emisor_parts = [
         f'<RUTEmisor>{rut_e}</RUTEmisor>',
         f'<RznSoc>{_escape_xml(emisor["razon_social"])}</RznSoc>',
@@ -236,7 +252,7 @@ def generar_nota_debito_xml(
     emisor_xml = '<Emisor>' + ''.join(emisor_parts) + '</Emisor>'
 
     # 3. Receptor
-    rut_r = str(receptor['rut']).replace('.', '').strip()
+    rut_r = _normalizar_rut(receptor['rut'])
     rec_parts = [
         f'<RUTRecep>{rut_r}</RUTRecep>',
         f'<RznSocRecep>{_escape_xml(receptor["razon_social"][:100])}</RznSocRecep>',

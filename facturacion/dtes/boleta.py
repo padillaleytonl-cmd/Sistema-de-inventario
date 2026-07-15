@@ -29,6 +29,21 @@ from .ted import construir_ted
 IVA_PORCENTAJE = 19  # IVA Chile
 
 
+def _normalizar_rut(rut):
+    """Normaliza un RUT al formato que exige el SII: sin puntos, con guion y
+    digito verificador en mayuscula. '18849272k' / '18.849.272-k' -> '18849272-K'."""
+    if not rut:
+        return ''
+    limpio = str(rut).replace('.', '').replace(' ', '').strip().upper()
+    if not limpio:
+        return ''
+    if '-' in limpio:
+        return limpio
+    if len(limpio) > 1:
+        return limpio[:-1] + '-' + limpio[-1]
+    return limpio
+
+
 def _redondear_clp(valor: float) -> int:
     """Redondea al peso entero (sin decimales)."""
     return int(round(valor))
@@ -170,7 +185,7 @@ def generar_boleta_xml(
     totales = calcular_totales_boleta(items)
 
     # 2. TED (timbre) — el monto del TED es el MntTotal
-    receptor_rut = (receptor or {}).get('rut', '66666666-6')
+    receptor_rut = _normalizar_rut((receptor or {}).get('rut', '66666666-6')) or '66666666-6'
     receptor_rs = (receptor or {}).get('razon_social', 'Consumidor Final')
 
     ted = construir_ted(

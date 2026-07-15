@@ -41,6 +41,21 @@ from .ted import construir_ted
 IVA_PORCENTAJE = 19
 
 
+def _normalizar_rut(rut):
+    """Normaliza un RUT al formato del SII: sin puntos, con guion, DV en mayúscula.
+    '76922864k' / '76.922.864-k' → '76922864-K'."""
+    if not rut:
+        return None
+    limpio = str(rut).replace('.', '').replace(' ', '').strip().upper()
+    if not limpio:
+        return None
+    if '-' in limpio:
+        return limpio
+    if len(limpio) > 1:
+        return limpio[:-1] + '-' + limpio[-1]
+    return limpio
+
+
 def _redondear_clp(valor: float) -> int:
     return int(round(valor))
 
@@ -233,7 +248,7 @@ def generar_factura_xml(
     emisor_xml = '<Emisor>' + ''.join(emisor_parts) + '</Emisor>'
 
     # 3. Receptor (OBLIGATORIO con datos completos en factura)
-    rut_r = str(receptor['rut']).replace('.', '').strip()
+    rut_r = _normalizar_rut(receptor['rut'])
     rec_parts = [
         f'<RUTRecep>{rut_r}</RUTRecep>',
         f'<RznSocRecep>{_escape_xml(receptor["razon_social"][:100])}</RznSocRecep>',

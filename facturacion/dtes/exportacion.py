@@ -40,10 +40,19 @@ def _round(valor) -> int:
 
 
 def _limpiar_rut(rut) -> str:
-    """Quita puntos y espacios del RUT, deja formato NNNNNNNN-D que exige el schema."""
+    """Normaliza el RUT al formato NNNNNNNN-D que exige el schema: sin puntos ni
+    espacios, con guion y digito verificador en mayuscula.
+    '18849272k' / '18.849.272-k' -> '18849272-K'."""
     if rut is None:
         return ''
-    return str(rut).replace('.', '').replace(' ', '').upper()
+    limpio = str(rut).replace('.', '').replace(' ', '').strip().upper()
+    if not limpio:
+        return ''
+    if '-' in limpio:
+        return limpio
+    if len(limpio) > 1:
+        return limpio[:-1] + '-' + limpio[-1]
+    return limpio
 
 
 def _limpiar_latin1(s: str) -> str:
