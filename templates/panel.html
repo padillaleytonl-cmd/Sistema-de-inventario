@@ -13875,8 +13875,10 @@ function dtRenderCliente(){
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
       ${_dtCampo('RUT','dtRecRut',_dtEsc(r.rut),'66666666-6 (consumidor final)')}
       ${_dtCampo('Nombre','dtRecNombre',_dtEsc(r.razon_social),'Consumidor Final')}
+      <div style="grid-column:1 / -1;">${_dtCampo('Dirección','dtRecDireccion',_dtEsc(r.direccion),'Dónde se entregan los bienes o se presta el servicio')}</div>
+      <div style="grid-column:1 / -1;" id="dtRecRegionComuna"></div>
     </div>
-    <div style="font-size:12px;color:var(--muted);margin-top:12px;">La boleta solo lleva RUT y nombre. El resto de los datos del cliente no aplican a este documento.</div>
+    <div style="font-size:12px;color:var(--muted);margin-top:12px;">La dirección es obligatoria cuando la boleta cubre un servicio prestado en un domicilio o bienes enviados a una dirección.</div>
   </div>`;
 }
 
@@ -14156,8 +14158,14 @@ function dtValidarPaso(paso){
   }
   if(paso==='cliente'){
     const rut=v('dtRecRut'), nom=v('dtRecNombre');
+    const dir=v('dtRecDireccion'), com=v('dtRecRC_comuna');
     if(rut && !nom) return 'Si indicas el RUT, agrega también el nombre del cliente.';
-    _dtDatos.receptor = (rut||nom) ? {rut:rut||'66666666-6', razon_social:nom||'Consumidor Final'} : null;
+    if(rut||nom||dir||com){
+      const r={rut:rut||'66666666-6', razon_social:nom||'Consumidor Final'};
+      if(dir) r.direccion=dir;
+      if(com){ r.comuna=com; r.ciudad=com; }
+      _dtDatos.receptor=r;
+    } else { _dtDatos.receptor=null; }
     return null;
   }
   if(paso==='receptor' || paso==='destinatario'){
@@ -14762,7 +14770,7 @@ function dtCliBuscar(q){
 function dtCliSeleccionar(c){
   document.getElementById('dtRecRut').value=c.rut||'';
   document.getElementById('dtRecNombre').value=c.razon_social||'';
-  // Campos extra (los usa la factura/guía; la boleta los ignora)
+  // El giro solo aplica a factura y guía; la boleta no lo lleva
   const g=document.getElementById('dtRecGiro'); if(g) g.value=c.giro||'';
   const dir=document.getElementById('dtRecDireccion'); if(dir) dir.value=c.direccion||'';
   if(document.getElementById('dtRecRC_comuna')) dtSetRegionComuna('dtRecRC', c.comuna||'');
