@@ -14281,12 +14281,18 @@ function dtMostrarResultado(d, etiqueta){
       ? `<a href="${pdf}?formato=rollo" target="_blank" style="background:var(--card);border:1px solid var(--border);color:var(--text);text-decoration:none;padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;">PDF rollo</a>` : '';
     cont.innerHTML=`<div style="background:#f0fbf6;border:1px solid #b8e6d2;border-radius:11px;padding:20px;margin-top:22px;">
       <div style="font-size:16px;font-weight:700;color:#047a56;margin-bottom:6px;">${etiqueta} emitida — folio N° ${d.folio}</div>
-      <div style="font-size:13px;color:var(--muted);margin-bottom:16px;">Total ${_dtCLP(d.total)} · Track ID SII: ${d.track_id||'—'}</div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:12px;">Total ${_dtCLP(d.total)} · Track ID SII: ${d.track_id||'—'}</div>
+      <div id="dtEstadoSii" style="display:flex;align-items:center;gap:8px;font-size:13px;padding:9px 12px;background:var(--card);border:1px solid var(--border);border-radius:9px;margin-bottom:16px;">
+        <span style="width:9px;height:9px;border-radius:50%;background:#f59e0b;flex-shrink:0;"></span>
+        <span id="dtEstadoTexto" style="color:var(--muted);">Consultando estado en el SII…</span>
+      </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <a href="${pdf}?formato=carta" target="_blank" style="background:#534AB7;color:#fff;text-decoration:none;padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;">Ver PDF</a>
         ${rollo}
         <button onclick="dtVolverATipos()" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;cursor:pointer;">Emitir otro documento</button>
       </div></div>`;
+    // Consulta automática del estado en el SII (como el bot de folios)
+    if(id) dtConsultarEstado(id, true);
   } else {
     let detalle='';
     if(d.pasos && d.pasos.length){
@@ -14299,6 +14305,42 @@ function dtMostrarResultado(d, etiqueta){
       if(box) box.insertAdjacentHTML('beforeend', detalle);
     }
   }
+}
+
+
+// Consulta el estado de un DTE en el SII (getEstUp por Track ID, como el bot de folios).
+// autoReintento: si es true y el estado no es final, reintenta solo unas veces.
+async function dtConsultarEstado(dteId, autoReintento, intento){
+  intento = intento || 0;
+  const cont=document.getElementById('dtEstadoSii');
+  const txt=document.getElementById('dtEstadoTexto');
+  const dot=cont ? cont.querySelector('span') : null;
+  try{
+    const r=await fetch('/facturacion/dte/'+dteId+'/consultar-estado',{method:'POST'});
+    const d=await r.json();
+    if(!d.ok){ if(txt) txt.textContent = d.error||'No se pudo consultar el estado.'; return; }
+    if(!cont) return;
+    if(d.estado==='aceptado'){
+      dot.style.background='#059669';
+      txt.innerHTML='<b style="color:#047a56;">Aceptado por el SII</b>'+(d.reparos?` · ${d.reparos} reparo(s)`:'');
+    } else if(d.estado==='rechazado'){
+      dot.style.background='#dc2626';
+      txt.innerHTML='<b style="color:#b91c1c;">Rechazado por el SII</b> — '+_dtEsc(d.mensaje||'');
+    } else {
+      dot.style.background='#f59e0b';
+      txt.textContent = d.mensaje || 'En proceso de validación en el SII.';
+      // Reintento automático suave (hasta 3 veces, cada 12s) solo tras emitir
+      if(autoReintento && intento<3){
+        setTimeout(()=>dtConsultarEstado(dteId, true, intento+1), 12000);
+      } else {
+        // Ofrecer botón para reconsultar manualmente
+        if(!document.getElementById('dtEstadoBtn')){
+          cont.insertAdjacentHTML('beforeend',
+            `<button id="dtEstadoBtn" onclick="dtConsultarEstado(${dteId},false)" style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);padding:5px 11px;border-radius:7px;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;">Actualizar</button>`);
+        }
+      }
+    }
+  }catch(e){ if(txt) txt.textContent='Error consultando el estado: '+e.message; }
 }
 
 function dtInit(){

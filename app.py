@@ -24732,6 +24732,112 @@ def facturacion_guia_emitir():
     })
 
 
+@app.route("/facturacion/dte/<int:dte_id>/consultar-estado", methods=["POST"])
+def facturacion_consultar_estado(dte_id):
+    """Consulta EN VIVO el estado de un DTE en el SII por su Track ID (getEstUp).
+
+    Funciona como el bot de folios: toma el certificado del tenant, autentica
+    con el SII y pregunta por el track del envío. Actualiza el estado en la BD
+    y lo devuelve. Es el método confiable para guías y facturas (getEstDte da
+    falsos negativos con montos 0 o documentos recién emitidos).
+    """
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    tenant_id = session.get("tenant_id") or 1
+
+    from inventario import get_conn, release_conn
+    from facturacion.certificados import obtener_certificado
+    from facturacion.db import obtener_config_facturacion
+    from facturacion.utils import normalizar_ambiente
+    from facturacion.dtes.sii_client import consultar_estado_upload
+
+    # 1. Traer el documento y su track_id
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT id, tipo_dte, folio, track_id_sii, estado, estado_sii
+                           FROM facturacion_dtes
+                           WHERE id=%s AND tenant_id=%s""", (dte_id, tenant_id))
+            row = cur.fetchone()
+    finally:
+        release_conn(conn)
+
+    if not row:
+        return jsonify({"ok": False, "error": "Documento no encontrado"}), 404
+    _id, tipo_dte, folio, track_id, estado_local, estado_sii_prev = row
+
+    # Si ya está en un estado final, no hace falta reconsultar
+    if estado_local in ("aceptado", "rechazado", "anulada"):
+        return jsonify({"ok": True, "estado": estado_local, "estado_sii": estado_sii_prev,
+                        "final": True, "mensaje": _estado_mensaje(estado_local, estado_sii_prev)})
+
+    if not track_id:
+        return jsonify({"ok": False, "error": "Este documento no tiene Track ID (no se alcanzó a enviar al SII)."}), 400
+
+    # 2. Config + certificado del tenant
+    config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+    if not config:
+        return jsonify({"ok": False, "error": "No hay configuración de facturación"}), 400
+    ambiente = normalizar_ambiente(config.get("ambiente") or "certificacion")
+    cert = obtener_certificado(get_conn, release_conn, tenant_id)
+    if not cert or not cert.get("ok"):
+        return jsonify({"ok": False, "error": "No hay certificado digital cargado."}), 400
+
+    # 3. Consultar al SII por Track ID
+    try:
+        res = consultar_estado_upload(
+            pfx_bytes=cert["pfx_bytes"], password=cert["password"],
+            rut_consultante=config["rut_emisor"], rut_emisor=config["rut_emisor"],
+            track_id=str(track_id), ambiente=ambiente)
+    except Exception as e:
+        import traceback
+        print("[Estado SII] Excepción tenant=%s dte=%s: %s\n%s" %
+              (tenant_id, dte_id, e, traceback.format_exc()[:500]))
+        return jsonify({"ok": False, "error": "No se pudo consultar el estado en este momento. "
+                        "Intenta nuevamente en unos minutos."}), 502
+
+    est = (res.get("estado") or "").upper()
+
+    # 4. Interpretar y actualizar
+    if res.get("aceptado"):
+        _fact_actualizar_estado_dte(dte_id, "aceptado", estado_sii=est,
+                                    glosa=res.get("glosa") or "Aceptado por el SII",
+                                    set_fecha_aceptacion=True)
+        return jsonify({"ok": True, "estado": "aceptado", "estado_sii": est, "final": True,
+                        "mensaje": "El SII aceptó el documento.",
+                        "aceptados": res.get("aceptados"), "reparos": res.get("reparos")})
+    if res.get("rechazado"):
+        _fact_actualizar_estado_dte(dte_id, "rechazado", estado_sii=est,
+                                    glosa=res.get("glosa") or "Rechazado por el SII")
+        return jsonify({"ok": True, "estado": "rechazado", "estado_sii": est, "final": True,
+                        "mensaje": "El SII rechazó el documento: " + (res.get("glosa") or est),
+                        "rechazados": res.get("rechazados")})
+
+    # Estados no finales: EPR sin detalle aún, SOK, en proceso…
+    _mensajes_proceso = {
+        "SOK": "Recibido por el SII, validando esquema.",
+        "REC": "Recibido, en proceso de validación.",
+        "PDR": "En proceso de revisión.",
+        "": "En proceso.",
+    }
+    msg = _mensajes_proceso.get(est, "En proceso de validación en el SII (%s)." % est)
+    if est:
+        _fact_actualizar_estado_dte(dte_id, estado_local or "enviado", estado_sii=est,
+                                    glosa=res.get("glosa") or msg)
+    return jsonify({"ok": True, "estado": "en_proceso", "estado_sii": est, "final": False,
+                    "mensaje": msg + " Vuelve a consultar en unos minutos."})
+
+
+def _estado_mensaje(estado_local, estado_sii):
+    if estado_local == "aceptado":
+        return "El SII aceptó el documento."
+    if estado_local == "rechazado":
+        return "El SII rechazó el documento."
+    if estado_local == "anulada":
+        return "Documento anulado."
+    return "En proceso."
+
+
 @app.route("/facturacion/clientes", methods=["GET"])
 def facturacion_clientes_listar():
     """Lista o busca los clientes del tenant (círculo de clientes).
@@ -25430,15 +25536,16 @@ def _fact_job_consultar_estados():
     from facturacion.certificados import obtener_certificado
     from facturacion.db import obtener_config_facturacion
     from facturacion.utils import normalizar_ambiente
-    from facturacion.dtes.sii_client import consultar_estado_dte
+    from facturacion.dtes.sii_client import consultar_estado_upload
     try:
         conn = get_conn()
         try:
             with conn.cursor() as cur:
-                cur.execute("""SELECT id, tenant_id, tipo_dte, folio, rut_receptor,
+                cur.execute("""SELECT id, tenant_id, tipo_dte, folio, track_id_sii,
                                       monto_total, fecha_emision
                                FROM facturacion_dtes
                                WHERE estado IN ('enviado','en_proceso')
+                                 AND track_id_sii IS NOT NULL
                                  AND fecha_emision > (NOW() - INTERVAL '7 days')
                                ORDER BY tenant_id LIMIT 200""")
                 pendientes = cur.fetchall()
@@ -25446,10 +25553,12 @@ def _fact_job_consultar_estados():
             release_conn(conn)
         if not pendientes:
             return
-        # Agrupar por tenant para reutilizar certificado/config
+        # Agrupar por tenant para reutilizar certificado/config y token
         certs = {}
         for row in pendientes:
-            bid, tid, tipo_dte, folio, rut_recep, monto, fch = row
+            bid, tid, tipo_dte, folio, track_id, monto, fch = row
+            if not track_id:
+                continue
             try:
                 if tid not in certs:
                     cfg = obtener_config_facturacion(get_conn, release_conn, tid)
@@ -25459,23 +25568,22 @@ def _fact_job_consultar_estados():
                     continue
                 cfg, crt = certs[tid]
                 amb = normalizar_ambiente(cfg.get("ambiente") or "certificacion")
-                fch_str = fch.strftime("%Y-%m-%d") if hasattr(fch, "strftime") else str(fch)[:10]
-                res = consultar_estado_dte(
+                # getEstUp: consulta por Track ID del envío (confiable para guías/facturas,
+                # a diferencia de getEstDte que da falsos negativos con monto 0).
+                res = consultar_estado_upload(
                     pfx_bytes=crt["pfx_bytes"], password=crt["password"],
                     rut_consultante=cfg["rut_emisor"], rut_emisor=cfg["rut_emisor"],
-                    rut_receptor=rut_recep or "66666666-6", tipo_dte=tipo_dte,
-                    folio=folio, fecha_emision=fch_str, monto_total=int(monto or 0),
-                    ambiente=amb)
+                    track_id=str(track_id), ambiente=amb)
                 est = (res.get("estado") or "").upper()
-                if est == "DOK":
+                if res.get("aceptado"):
                     _fact_actualizar_estado_dte(bid, "aceptado", estado_sii=est,
                                                 glosa="Aceptado por el SII", set_fecha_aceptacion=True)
-                elif est in ("FAN", "FNA", "RCT", "RCH", "RFR", "RSC"):
+                elif res.get("rechazado"):
                     _fact_actualizar_estado_dte(bid, "rechazado", estado_sii=est,
                                                 glosa=res.get("glosa") or "Rechazado por el SII")
-                # DNK/FAU: aún no final, se reintenta en la próxima corrida
+                # Estados no finales (SOK/en proceso): se reintenta en la próxima corrida
             except Exception as e:
-                print("[Estado SII] Error boleta %s: %s" % (bid, str(e)[:120]))
+                print("[Estado SII] Error dte %s: %s" % (bid, str(e)[:120]))
     except Exception as e:
         print("[Estado SII] Error general: %s" % str(e)[:200])
 
