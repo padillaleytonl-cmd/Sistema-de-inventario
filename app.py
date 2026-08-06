@@ -2299,8 +2299,25 @@ scheduler.add_job(_sync_full_meli_diario, "interval", hours=24, id="full_meli_di
 # El generador (_fact_job_rcof_diario + facturacion/rcof.py) se conserva por si el SII
 # lo solicita puntualmente, y se puede disparar manualmente vía /facturacion/rcof/generar.
 
-scheduler.start()
-atexit.register(lambda: scheduler.shutdown(wait=False))
+import os as _os_sched
+# Arrancar el scheduler solo una vez. Con el reloader de Flask o si el módulo se
+# importa más de una vez, evitamos duplicar jobs y los errores "cannot schedule
+# new futures after interpreter shutdown" (que salen cuando un scheduler duplicado
+# intenta lanzar jobs mientras el proceso original se apaga).
+if not _os_sched.environ.get("_LUSYNC_SCHEDULER_STARTED"):
+    _os_sched.environ["_LUSYNC_SCHEDULER_STARTED"] = "1"
+    try:
+        scheduler.start()
+    except Exception as _e_sched:
+        print(f"[Scheduler] No se pudo iniciar: {_e_sched}")
+
+    def _apagar_scheduler():
+        try:
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+    atexit.register(_apagar_scheduler)
 
 # ── SYNC DE RECUPERACIÓN AL ARRANCAR ──
 # Busca órdenes perdidas durante caídas del servidor
@@ -4363,6 +4380,14 @@ def audit_test():
     return {"ok": True, "mensaje": "Registro de prueba creado"}
 
 # ── LOGIN / PANEL ──
+
+@app.route("/healthz")
+def _healthz():
+    """Health check para Render: responde 200 siempre que la app esté viva,
+    sin requerir sesión ni tocar la base de datos. Configura esta ruta como
+    'Health Check Path' en Render para que marque el servicio como Live."""
+    return "ok", 200
+
 
 @app.route("/")
 def home():
