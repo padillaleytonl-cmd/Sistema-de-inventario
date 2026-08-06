@@ -28,3 +28,4 @@ pyOpenSSL>=23.3.0        # Manejar archivos .pfx (PKCS#12) — leer cert + priva
 reportlab==4.4.10
 Pillow==12.1.1
 pdf417gen==0.8.1
+gunicorn
