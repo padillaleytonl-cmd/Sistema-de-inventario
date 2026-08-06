@@ -1028,6 +1028,11 @@ def _sync_meli_automatico():
         from mercadolibre import obtener_ordenes_meli
         from inventario import descontar_venta_inteligente, detectar_fulfillment_meli
         from datetime import datetime
+        try:
+            from mercadolibre import meli_headers as _meli_headers, MELI_API_URL as _MELI_API_URL
+            import requests as _req_ml
+        except Exception:
+            _meli_headers, _MELI_API_URL, _req_ml = None, None, None
         nuevas = 0
         canceladas = 0
         errores = []
@@ -1116,7 +1121,43 @@ def _sync_meli_automatico():
                         # [atomic] orden marcada al inicio — no remarcar
                         continue
 
+                    # ¿La orden es Fulfillment (Full)? En Full el stock físico vive en
+                    # la bodega de Mercado Libre, no en la central. Si una orden Full no
+                    # se entrega, ML reintegra el producto a SU stock de Full — Lusync NO
+                    # debe reintegrarlo a la bodega central, o lo contaría dos veces.
+                    _es_full_cancel = False
+                    try:
+                        _es_full_cancel = detectar_fulfillment_meli(o)
+                    except Exception:
+                        _es_full_cancel = False
+
+                    # ¿El envío alcanzó a despacharse y NO se entregó? En ese caso el
+                    # producto salió de la bodega y podría no haber vuelto (ML paga
+                    # igual). Se reintegra el stock (normalmente vuelve), pero se marca
+                    # como "pendiente de verificar" para revisión física.
+                    _ship = o.get("shipping") or {}
+                    _ship_status = (_ship.get("status") or "").lower()
+                    _ship_substatus = (_ship.get("substatus") or "").lower()
+                    # El status dentro de la orden a veces está desactualizado: si hay
+                    # shipping_id, consultar /shipments/{id} para el estado real.
+                    _ship_id = _ship.get("id")
+                    if _ship_id and _req_ml and _meli_headers and _MELI_API_URL:
+                        try:
+                            _rs = _req_ml.get(f"{_MELI_API_URL}/shipments/{_ship_id}",
+                                              headers=_meli_headers(), timeout=12)
+                            if _rs.status_code == 200:
+                                _sd = _rs.json()
+                                _ship_status = (_sd.get("status") or _ship_status).lower()
+                                _ship_substatus = (_sd.get("substatus") or _ship_substatus).lower()
+                        except Exception:
+                            pass
+                    no_entregado = (
+                        _ship_status in ("not_delivered", "not_delivered_return", "returned")
+                        or _ship_substatus in ("returning_to_sender", "returned_to_hub", "lost", "stolen", "damaged")
+                    )
+
                     items_reintegrados = []
+                    items_full = []  # Full: no se reintegra a central, ML lo maneja en su stock
                     for item in o.get("order_items", []):
                         item_data = item.get("item", {})
                         item_id_canc = item_data.get("id", "")
@@ -1134,14 +1175,30 @@ def _sync_meli_automatico():
                         except Exception:
                             sku_lusync = sku_seller
 
+                        # ── FULL: el stock lo repone ML en su bodega, no la central ──
+                        if _es_full_cancel:
+                            _nom = next((pp["nombre"] for pp in cargar_productos() if pp["sku"] == sku_lusync), sku_lusync)
+                            registrar_movimiento(
+                                "ajuste", sku_lusync, _nom, 0,
+                                f"Cancelación Full MELI orden {order_id} — stock lo repone ML en Full, no la central",
+                                usuario="Sistema", canal="MercadoLibre Full", orden_id=order_id
+                            )
+                            items_full.append(f"{_nom} (SKU: {sku_seller}→{sku_lusync}) x{cantidad}")
+                            continue
+
                         productos = cargar_productos()
                         for p in productos:
                             if p["sku"] == sku_lusync:
                                 p["stock"] += cantidad
                                 guardar_producto(p)
+                                _motivo = (
+                                    f"Cancelación MELI orden {order_id} — NO ENTREGADO, verificar retorno físico"
+                                    if no_entregado else
+                                    f"Cancelación MELI orden {order_id}"
+                                )
                                 registrar_movimiento(
                                     "entrada", p["sku"], p["nombre"], cantidad,
-                                    f"Cancelación MELI orden {order_id}",
+                                    _motivo,
                                     usuario="Sistema", canal="MercadoLibre", orden_id=order_id
                                 )
                                 sincronizar_stock_marketplaces(
@@ -1151,14 +1208,42 @@ def _sync_meli_automatico():
                                 items_reintegrados.append(f"{p['nombre']} (SKU: {sku_seller}→{sku_lusync}) x{cantidad}")
                                 break
 
-                    if items_reintegrados:
+                    # Aviso para órdenes Full (no se tocó la central)
+                    if items_full:
                         try:
                             crear_alerta(
-                                tipo="cancelacion",
-                                titulo=f"Orden cancelada en MercadoLibre: {order_id}",
-                                mensaje="Stock reintegrado:<br>" + "<br>".join(f"• {it}" for it in items_reintegrados),
-                                sku=sku_lusync
+                                tipo="cancelacion_full",
+                                titulo=f"Orden Full no completada: {order_id}",
+                                mensaje=("Esta orden es <b>Fulfillment (Full)</b>: el stock lo administra Mercado Libre "
+                                         "en su propia bodega. No se modificó tu stock central — el ajuste ocurre "
+                                         "automáticamente en Full.<br><br>"
+                                         "Productos (informativo):<br>" + "<br>".join(f"• {it}" for it in items_full)),
+                                sku=None
                             )
+                        except: pass
+                        canceladas += 1
+
+                    if items_reintegrados:
+                        try:
+                            if no_entregado:
+                                crear_alerta(
+                                    tipo="verificar_retorno",
+                                    titulo=f"Verificar retorno físico — orden {order_id} no entregada",
+                                    mensaje=("Mercado Libre marcó esta orden como <b>no entregada</b> y reembolsó al comprador. "
+                                             "Se reintegró el stock al inventario de forma preventiva, pero el producto <b>puede o no volver</b> a tu bodega:<br><br>"
+                                             "• Si el paquete <b>vuelve</b>, el stock ya está correcto (y ML puede descontarte el pago al confirmarlo).<br>"
+                                             "• Si ML decide <b>no devolvértelo</b> (cuando el retorno cuesta más que el producto), te deja el dinero pero el producto se pierde: en ese caso debes <b>descontar el stock manualmente</b>.<br><br>"
+                                             "<b>Acción:</b> cuando sepas el desenlace, ajusta si corresponde.<br><br>"
+                                             "Productos reintegrados (por verificar):<br>" + "<br>".join(f"• {it}" for it in items_reintegrados)),
+                                    sku=sku_lusync
+                                )
+                            else:
+                                crear_alerta(
+                                    tipo="cancelacion",
+                                    titulo=f"Orden cancelada en MercadoLibre: {order_id}",
+                                    mensaje="Stock reintegrado:<br>" + "<br>".join(f"• {it}" for it in items_reintegrados),
+                                    sku=sku_lusync
+                                )
                         except: pass
                         canceladas += 1
 
