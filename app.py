@@ -25554,9 +25554,11 @@ def facturacion_diagnostico_sii(boleta_id):
 
 
 @app.route("/facturacion/boleta/<int:boleta_id>/consultar-estado", methods=["POST", "GET"])
-def facturacion_consultar_estado(boleta_id):
+def facturacion_consultar_estado_boleta(boleta_id):
     """LIMBO 3: consulta el estado REAL en el SII de una boleta enviada.
     Actualiza estado_sii y, si fue aceptada, marca fecha_aceptacion_sii.
+    (Método antiguo por getEstDte; el flujo nuevo usa getEstUp en
+    facturacion_consultar_estado, ruta /facturacion/dte/<id>/consultar-estado.)
     """
     if not session.get("logged"):
         return jsonify({"ok": False, "error": "no autenticado"}), 401
