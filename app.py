@@ -22808,6 +22808,12 @@ def facturacion_nota_credito_emitir():
     receptor = data.get("receptor") or {"rut": "66666666-6", "razon_social": "Consumidor Final"}
     if not receptor.get("rut"): receptor["rut"] = "66666666-6"
     if not receptor.get("razon_social"): receptor["razon_social"] = "Consumidor Final"
+    # Validar dígito verificador del RUT receptor (evita rechazo del SII por RUT inválido).
+    from facturacion.utils import validar_rut as _validar_rut_nc
+    _rr_nc = (receptor.get("rut") or "").strip()
+    if _rr_nc and _rr_nc != "66666666-6" and not _validar_rut_nc(_rr_nc):
+        return jsonify({"ok": False, "error": "El RUT del receptor (%s) no es válido: "
+                        "el dígito verificador no corresponde." % _rr_nc}), 400
 
     # 3. Reservar folio tipo 61 (ATÓMICO)
     folio_res = obtener_folio_disponible(get_conn, release_conn, tenant_id, 61, ambiente)
@@ -23173,6 +23179,12 @@ def facturacion_nota_debito_emitir():
     receptor = data.get("receptor") or {"rut": "66666666-6", "razon_social": "Consumidor Final"}
     if not receptor.get("rut"): receptor["rut"] = "66666666-6"
     if not receptor.get("razon_social"): receptor["razon_social"] = "Consumidor Final"
+    # Validar dígito verificador del RUT receptor (evita rechazo del SII por RUT inválido).
+    from facturacion.utils import validar_rut as _validar_rut_nc
+    _rr_nc = (receptor.get("rut") or "").strip()
+    if _rr_nc and _rr_nc != "66666666-6" and not _validar_rut_nc(_rr_nc):
+        return jsonify({"ok": False, "error": "El RUT del receptor (%s) no es válido: "
+                        "el dígito verificador no corresponde." % _rr_nc}), 400
 
     # 3. Reservar folio tipo 61 (ATÓMICO)
     folio_res = obtener_folio_disponible(get_conn, release_conn, tenant_id, 56, ambiente)
@@ -24491,6 +24503,13 @@ def facturacion_factura_emitir():
     if faltan:
         return jsonify({"ok": False, "error": "La factura requiere receptor completo. "
                         "Faltan: " + ", ".join(faltan)}), 400
+    # Validar dígito verificador del RUT receptor antes de emitir (un RUT inválido
+    # hace que el SII rechace el documento).
+    from facturacion.utils import validar_rut as _validar_rut
+    _rut_recep_f = (receptor.get("rut") or "").strip()
+    if not _validar_rut(_rut_recep_f):
+        return jsonify({"ok": False, "error": "El RUT del receptor (%s) no es válido: "
+                        "el dígito verificador no corresponde." % _rut_recep_f}), 400
 
     items = data.get("items") or []
     if not items:
@@ -24721,6 +24740,14 @@ def facturacion_guia_emitir():
                   if not (receptor.get(c) or "").strip()]
         if faltan:
             return jsonify({"ok": False, "error": "La guía requiere receptor. Faltan: " + ", ".join(faltan)}), 400
+        # Validar dígito verificador del RUT receptor: un RUT inválido hace que el
+        # SII rechace el documento (aunque el envío se procese). Se valida ANTES de
+        # gastar folio y enviar.
+        from facturacion.utils import validar_rut as _validar_rut
+        _rut_recep = (receptor.get("rut") or "").strip()
+        if not _validar_rut(_rut_recep):
+            return jsonify({"ok": False, "error": "El RUT del receptor (%s) no es válido: "
+                            "el dígito verificador no corresponde. Verifica el RUT antes de emitir." % _rut_recep}), 400
 
     # 1. Config
     config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
