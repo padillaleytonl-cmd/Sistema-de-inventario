@@ -50,14 +50,14 @@ y ANTES de <Totales>. Orden EXACTO de sub-campos según manual 2.5:
   <Patente>       (67) placa patente vehículo
   <PatenteCarro>  (nuevo) placa carro/remolque (opcional)
   <RUTTrans>      (68) RUT transportista (si ≠ emisor)
-  <RUTChofer>     (69) RUT chofer
-  <NombreChofer>  (70) nombre chofer
+  <Chofer>        contiene RUTChofer (69) y NombreChofer (70)
   <DirDest>       (71) dirección destino
   <CmnaDest>      (72) comuna destino
   <CiudadDest>    (73) ciudad destino (opcional)
-  <FchSalida>     (nuevo) fecha salida AAAA-MM-DD
-  <HraSalida>     (nuevo) hora salida HH:MM:SS
-  <FchLlegada>    (nuevo) fecha llegada (oblig. si traslado > 1 día)
+
+Nota: las fechas/horas de traslado (salida y llegada) NO van en el XML del
+SII — se muestran solo en la representación gráfica (PDF), igual que Lioren.
+El SII acepta la guía sin esos campos; van en el papel para el chofer/fiscalizador.
 
 IMPORTANTE: el bloque <Transporte> SOLO se incluye cuando hay traslado
 físico de bienes (guías y facturas con traslado). NUNCA en servicios.
@@ -247,13 +247,16 @@ def _construir_transporte_xml(transporte: Optional[Dict]) -> str:
     if rut_trans:
         partes.append(f'<RUTTrans>{_escape_xml(rut_trans)}</RUTTrans>')
 
+    # RUTChofer y NombreChofer van DENTRO de un elemento <Chofer> (schema SII).
     rut_chofer = _normalizar_rut(_v('rut_chofer'))
-    if rut_chofer:
-        partes.append(f'<RUTChofer>{_escape_xml(rut_chofer)}</RUTChofer>')
-
     nombre_chofer = _v('nombre_chofer', 30)
-    if nombre_chofer:
-        partes.append(f'<NombreChofer>{_escape_xml(nombre_chofer)}</NombreChofer>')
+    if rut_chofer or nombre_chofer:
+        chofer_inner = ''
+        if rut_chofer:
+            chofer_inner += f'<RUTChofer>{_escape_xml(rut_chofer)}</RUTChofer>'
+        if nombre_chofer:
+            chofer_inner += f'<NombreChofer>{_escape_xml(nombre_chofer)}</NombreChofer>'
+        partes.append(f'<Chofer>{chofer_inner}</Chofer>')
 
     dir_dest = _v('dir_dest', 70)
     if dir_dest:
@@ -326,22 +329,6 @@ def generar_guia_despacho_xml(
     if tipo_despacho:
         iddoc_parts.append(f'<TipoDespacho>{tipo_despacho}</TipoDespacho>')
     iddoc_parts.append(f'<IndTraslado>{ind_traslado}</IndTraslado>')
-    # Fecha/hora de salida y llegada: el schema del SII las ubica en IdDoc
-    # (después de IndTraslado), NO en el bloque Transporte. Se leen del dict
-    # transporte por comodidad del emisor, pero el XML las pone aquí.
-    _tr_fechas = transporte or {}
-    def _trv(k):
-        v = _tr_fechas.get(k)
-        return str(v).strip() if v not in (None, "") else None
-    _fsal = _trv('fch_salida')
-    if _fsal:
-        iddoc_parts.append(f'<FchSalida>{_escape_xml(_fsal)}</FchSalida>')
-    _hsal = _trv('hra_salida')
-    if _hsal:
-        iddoc_parts.append(f'<HraSalida>{_escape_xml(_hsal)}</HraSalida>')
-    _flleg = _trv('fch_llegada')
-    if _flleg:
-        iddoc_parts.append(f'<FchLlegada>{_escape_xml(_flleg)}</FchLlegada>')
     iddoc_xml = '<IdDoc>' + ''.join(iddoc_parts) + '</IdDoc>'
 
     # 2. Emisor (con Acteco obligatorio)

@@ -23960,11 +23960,21 @@ def facturacion_boleta_pdf(boleta_id):
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT xml_firmado FROM facturacion_dtes
-                WHERE id = %s AND tenant_id = %s
-            """, (boleta_id, tenant_id))
-            row = cur.fetchone()
+            # datos_traslado guarda las fechas de salida/llegada para el PDF (no van
+            # en el XML del SII). La columna puede no existir en tenants antiguos.
+            try:
+                cur.execute("""
+                    SELECT xml_firmado, datos_traslado FROM facturacion_dtes
+                    WHERE id = %s AND tenant_id = %s
+                """, (boleta_id, tenant_id))
+                row = cur.fetchone()
+            except Exception:
+                conn.rollback()
+                cur.execute("""
+                    SELECT xml_firmado, NULL FROM facturacion_dtes
+                    WHERE id = %s AND tenant_id = %s
+                """, (boleta_id, tenant_id))
+                row = cur.fetchone()
     finally:
         release_conn(conn)
 
@@ -23972,6 +23982,13 @@ def facturacion_boleta_pdf(boleta_id):
         return jsonify({"ok": False, "error": "Boleta no encontrada"}), 404
 
     xml = row[0].encode("iso-8859-1", errors="replace") if isinstance(row[0], str) else row[0]
+    _datos_traslado_pdf = None
+    if len(row) > 1 and row[1]:
+        try:
+            import json as _json_tr
+            _datos_traslado_pdf = _json_tr.loads(row[1]) if isinstance(row[1], str) else row[1]
+        except Exception:
+            _datos_traslado_pdf = None
 
     # Datos de contacto del emisor para la parte visual (desde config del tenant)
     from facturacion.db import obtener_config_facturacion
@@ -23985,7 +24002,8 @@ def facturacion_boleta_pdf(boleta_id):
     }
     url_consulta = "lusync.cl/consultadte"
     pdf = generar_pdf_dte(xml, formato=formato, url_consulta=url_consulta,
-                          datos_tenant=_datos_tenant_pdf)
+                          datos_tenant=_datos_tenant_pdf,
+                          datos_traslado=_datos_traslado_pdf)
     return Response(pdf, mimetype="application/pdf",
                     headers={"Content-Disposition": 'inline; filename="boleta_' + str(boleta_id) + '.pdf"'})
 
@@ -24801,15 +24819,33 @@ def facturacion_guia_emitir():
         conn = get_conn()
         try:
             with conn.cursor() as cur:
+                # Asegurar columna datos_traslado (fechas de salida/llegada para el PDF,
+                # no van en el XML del SII). Autocreación idempotente.
+                try:
+                    cur.execute("ALTER TABLE facturacion_dtes ADD COLUMN IF NOT EXISTS datos_traslado TEXT")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                # Armar el JSON de fechas desde el transporte capturado
+                import json as _json_tr_ins
+                _tr_fechas = {}
+                if transporte:
+                    for _k in ("fch_salida", "hra_salida", "fch_llegada", "hra_llegada"):
+                        _val = transporte.get(_k)
+                        if _val:
+                            _tr_fechas[_k] = str(_val)
+                _datos_traslado_json = _json_tr_ins.dumps(_tr_fechas) if _tr_fechas else None
                 cur.execute("""
                     INSERT INTO facturacion_dtes
                       (tenant_id, tipo_dte, folio, rut_receptor, razon_social_receptor,
-                       monto_neto, monto_iva, monto_total, xml_firmado, estado, fecha_emision)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                       monto_neto, monto_iva, monto_total, xml_firmado, estado, fecha_emision,
+                       datos_traslado)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     RETURNING id
                 """, (tenant_id, 52, folio, receptor.get("rut", ""), receptor.get("razon_social", ""),
                       res_g["totales"]["mnt_neto"], res_g["totales"]["mnt_iva"],
-                      total, guia_firmada.decode("iso-8859-1", errors="replace"), "generado", fecha))
+                      total, guia_firmada.decode("iso-8859-1", errors="replace"), "generado", fecha,
+                      _datos_traslado_json))
                 guia_id = cur.fetchone()[0]
             conn.commit()
             paso("Registrar guía (pre-envío)", True, "ID " + str(guia_id))
