@@ -89,9 +89,24 @@ def _lusync_init_pesado():
         print(f"[init_facturacion] ERROR: {e}")
         traceback.print_exc()
 
+import threading as _thr_init
+_LUSYNC_INIT_LISTO = _thr_init.Event()
+
+def _lusync_init_con_flag():
+    try:
+        _lusync_init_pesado()
+    finally:
+        _LUSYNC_INIT_LISTO.set()
+
 if not _os_init.environ.get("_LUSYNC_INIT_DONE"):
     _os_init.environ["_LUSYNC_INIT_DONE"] = "1"
-    _lusync_init_pesado()
+    # Ejecutar en un hilo de fondo para que el servidor abra el puerto de inmediato.
+    # Render detecta el puerto en segundos en vez de esperar los ~27s del init,
+    # evitando el "No open ports detected" / "Timed Out". El scheduler (más abajo)
+    # espera a que este init termine antes de lanzar sus jobs.
+    _thr_init.Thread(target=_lusync_init_con_flag, daemon=True).start()
+else:
+    _LUSYNC_INIT_LISTO.set()
 
 # Registrar Blueprints (módulos de marketplaces)
 from walmart import walmart_bp
@@ -2316,10 +2331,19 @@ import os as _os_sched
 # intenta lanzar jobs mientras el proceso original se apaga).
 if not _os_sched.environ.get("_LUSYNC_SCHEDULER_STARTED"):
     _os_sched.environ["_LUSYNC_SCHEDULER_STARTED"] = "1"
-    try:
-        scheduler.start()
-    except Exception as _e_sched:
-        print(f"[Scheduler] No se pudo iniciar: {_e_sched}")
+    def _arrancar_scheduler():
+        # Esperar a que la inicialización pesada (tablas, RLS) termine, para que
+        # los jobs no corran contra tablas que aún no existen.
+        try:
+            _LUSYNC_INIT_LISTO.wait(timeout=120)
+        except Exception:
+            pass
+        try:
+            scheduler.start()
+        except Exception as _e_sched:
+            print(f"[Scheduler] No se pudo iniciar: {_e_sched}")
+    import threading as _thr_sched
+    _thr_sched.Thread(target=_arrancar_scheduler, daemon=True).start()
 
     def _apagar_scheduler():
         try:
