@@ -269,9 +269,11 @@ def parsear_dte_xml(dte_xml: bytes) -> dict:
         'cmna_dest': _txt(transporte_xml, 'CmnaDest') if transporte_xml else '',
         'ciudad_dest': _txt(transporte_xml, 'CiudadDest') if transporte_xml else '',
         # Res.154: fecha/hora de salida y llegada deben aparecer en la representación impresa
-        'fch_salida': _txt(transporte_xml, 'FchSalida') if transporte_xml else '',
-        'hra_salida': _txt(transporte_xml, 'HraSalida') if transporte_xml else '',
-        'fch_llegada': _txt(transporte_xml, 'FchLlegada') if transporte_xml else '',
+        # Fecha/hora de salida y llegada: el schema las ubica en IdDoc (encabezado),
+        # no en Transporte. Se leen de ahí.
+        'fch_salida': _txt(encabezado, 'FchSalida'),
+        'hra_salida': _txt(encabezado, 'HraSalida'),
+        'fch_llegada': _txt(encabezado, 'FchLlegada'),
         'patente_carro': _txt(transporte_xml, 'PatenteCarro') if transporte_xml else '',
         'bultos': bultos,
         # Hay transporte declarado (para decidir si dibujar el bloque)

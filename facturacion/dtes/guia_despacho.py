@@ -267,19 +267,6 @@ def _construir_transporte_xml(transporte: Optional[Dict]) -> str:
     if ciudad_dest:
         partes.append(f'<CiudadDest>{_escape_xml(ciudad_dest)}</CiudadDest>')
 
-    # Campos nuevos Res.154 / Anexo 2.5
-    fch_salida = _v('fch_salida')
-    if fch_salida:
-        partes.append(f'<FchSalida>{_escape_xml(fch_salida)}</FchSalida>')
-
-    hra_salida = _v('hra_salida')
-    if hra_salida:
-        partes.append(f'<HraSalida>{_escape_xml(hra_salida)}</HraSalida>')
-
-    fch_llegada = _v('fch_llegada')
-    if fch_llegada:
-        partes.append(f'<FchLlegada>{_escape_xml(fch_llegada)}</FchLlegada>')
-
     if not partes:
         return ''
 
@@ -339,6 +326,22 @@ def generar_guia_despacho_xml(
     if tipo_despacho:
         iddoc_parts.append(f'<TipoDespacho>{tipo_despacho}</TipoDespacho>')
     iddoc_parts.append(f'<IndTraslado>{ind_traslado}</IndTraslado>')
+    # Fecha/hora de salida y llegada: el schema del SII las ubica en IdDoc
+    # (después de IndTraslado), NO en el bloque Transporte. Se leen del dict
+    # transporte por comodidad del emisor, pero el XML las pone aquí.
+    _tr_fechas = transporte or {}
+    def _trv(k):
+        v = _tr_fechas.get(k)
+        return str(v).strip() if v not in (None, "") else None
+    _fsal = _trv('fch_salida')
+    if _fsal:
+        iddoc_parts.append(f'<FchSalida>{_escape_xml(_fsal)}</FchSalida>')
+    _hsal = _trv('hra_salida')
+    if _hsal:
+        iddoc_parts.append(f'<HraSalida>{_escape_xml(_hsal)}</HraSalida>')
+    _flleg = _trv('fch_llegada')
+    if _flleg:
+        iddoc_parts.append(f'<FchLlegada>{_escape_xml(_flleg)}</FchLlegada>')
     iddoc_xml = '<IdDoc>' + ''.join(iddoc_parts) + '</IdDoc>'
 
     # 2. Emisor (con Acteco obligatorio)

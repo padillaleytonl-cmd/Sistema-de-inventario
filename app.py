@@ -23517,6 +23517,14 @@ def facturacion_boleta_preview():
             iddoc_extra += f"<IndTraslado>{int(_it)}</IndTraslado>"
         if _td:
             iddoc_extra += f"<TipoDespacho>{int(_td)}</TipoDespacho>"
+        # Fecha/hora salida y llegada van en IdDoc (schema SII), no en Transporte
+        _trf = _guia.get("transporte") or {}
+        if _trf.get("fch_salida"):
+            iddoc_extra += f"<FchSalida>{_esc_xml_preview(_trf['fch_salida'])}</FchSalida>"
+        if _trf.get("hra_salida"):
+            iddoc_extra += f"<HraSalida>{_esc_xml_preview(_trf['hra_salida'])}</HraSalida>"
+        if _trf.get("fch_llegada"):
+            iddoc_extra += f"<FchLlegada>{_esc_xml_preview(_trf['fch_llegada'])}</FchLlegada>"
         _tr = _guia.get("transporte") or {}
         if _tr:
             _partes = ""
@@ -23537,14 +23545,6 @@ def facturacion_boleta_preview():
                 _partes += f"<CmnaDest>{_esc_xml_preview(_tr['cmna_dest'])}</CmnaDest>"
             if _tr.get("ciudad_dest"):
                 _partes += f"<CiudadDest>{_esc_xml_preview(_tr['ciudad_dest'])}</CiudadDest>"
-            # Fecha/hora de salida y llegada (opcionales, Res.154). Van al final
-            # del bloque, en el orden que define el Anexo Técnico 2.5.
-            if _tr.get("fch_salida"):
-                _partes += f"<FchSalida>{_esc_xml_preview(_tr['fch_salida'])}</FchSalida>"
-            if _tr.get("hra_salida"):
-                _partes += f"<HraSalida>{_esc_xml_preview(_tr['hra_salida'])}</HraSalida>"
-            if _tr.get("fch_llegada"):
-                _partes += f"<FchLlegada>{_esc_xml_preview(_tr['fch_llegada'])}</FchLlegada>"
             if _partes:
                 transporte_xml = "<Transporte>" + _partes + "</Transporte>"
 
