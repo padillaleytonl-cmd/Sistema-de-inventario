@@ -45,43 +45,53 @@ from inventario import (cargar_productos, guardar_productos, guardar_producto,
 app = Flask(__name__)
 app.secret_key = "clave_super_segura"
 
-init_db()
-init_devoluciones()
-try:
-    from inventario import init_feriados
-    init_feriados()
-except Exception as e:
-    print(f"[init_feriados] {e}")
-try:
-    from tenancy import init_multitenancy
-    init_multitenancy()
-except Exception as e:
-    import traceback
-    print(f"[init_multitenancy] ERROR: {e}")
-    traceback.print_exc()
-try:
-    from tenant_rls import init_rls_policies
-    init_rls_policies()
-except Exception as e:
-    import traceback
-    print(f"[init_rls_policies] ERROR: {e}")
-    traceback.print_exc()
-init_audit()
-init_sku_mapeo()
-init_alertas()
-init_meli_auth()
-init_bodegas()
+# ── Inicialización pesada: se ejecuta UNA sola vez ──
+# Con gunicorn (o si el módulo se importa más de una vez), este bloque podría
+# correr varias veces y disparar init_multitenancy/RLS/facturación en loop, lo
+# que retrasa el arranque más de 27s y hace que Render nunca detecte el puerto
+# ("Timed Out"). La guarda por variable de entorno garantiza una sola ejecución.
+import os as _os_init
+def _lusync_init_pesado():
+    init_db()
+    init_devoluciones()
+    try:
+        from inventario import init_feriados
+        init_feriados()
+    except Exception as e:
+        print(f"[init_feriados] {e}")
+    try:
+        from tenancy import init_multitenancy
+        init_multitenancy()
+    except Exception as e:
+        import traceback
+        print(f"[init_multitenancy] ERROR: {e}")
+        traceback.print_exc()
+    try:
+        from tenant_rls import init_rls_policies
+        init_rls_policies()
+    except Exception as e:
+        import traceback
+        print(f"[init_rls_policies] ERROR: {e}")
+        traceback.print_exc()
+    init_audit()
+    init_sku_mapeo()
+    init_alertas()
+    init_meli_auth()
+    init_bodegas()
+    # ── Facturación electrónica SII (multi-tenant) ──
+    try:
+        from facturacion import init_facturacion_tables, init_uf_table
+        from inventario import get_conn as _gc_fact, release_conn as _rc_fact
+        init_facturacion_tables(_gc_fact, _rc_fact)
+        init_uf_table(_gc_fact, _rc_fact)
+    except Exception as e:
+        import traceback
+        print(f"[init_facturacion] ERROR: {e}")
+        traceback.print_exc()
 
-# ── Facturación electrónica SII (multi-tenant) ──
-try:
-    from facturacion import init_facturacion_tables, init_uf_table
-    from inventario import get_conn as _gc_fact, release_conn as _rc_fact
-    init_facturacion_tables(_gc_fact, _rc_fact)
-    init_uf_table(_gc_fact, _rc_fact)
-except Exception as e:
-    import traceback
-    print(f"[init_facturacion] ERROR: {e}")
-    traceback.print_exc()
+if not _os_init.environ.get("_LUSYNC_INIT_DONE"):
+    _os_init.environ["_LUSYNC_INIT_DONE"] = "1"
+    _lusync_init_pesado()
 
 # Registrar Blueprints (módulos de marketplaces)
 from walmart import walmart_bp
