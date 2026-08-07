@@ -22866,7 +22866,7 @@ def facturacion_nota_credito_emitir():
         )
         sobre_firmado = firmar_envio_completo(
             sobre, cert["pfx_bytes"], cert["password"],
-            set_dte_id=set_id, documento_ids=[documento_id])
+            set_dte_id=set_id, documento_ids=[])  # Documento ya firmado por firmar_documento; evita doble firma (RSC)
         paso("Firmar sobre EnvioDTE", True, str(len(sobre_firmado)) + " bytes")
 
         # 6. REGISTRAR EN BD ANTES DE ENVIAR
@@ -23231,7 +23231,7 @@ def facturacion_nota_debito_emitir():
         )
         sobre_firmado = firmar_envio_completo(
             sobre, cert["pfx_bytes"], cert["password"],
-            set_dte_id=set_id, documento_ids=[documento_id])
+            set_dte_id=set_id, documento_ids=[])  # Documento ya firmado por firmar_documento; evita doble firma (RSC)
         paso("Firmar sobre EnvioDTE", True, str(len(sobre_firmado)) + " bytes")
 
         # 6. REGISTRAR EN BD ANTES DE ENVIAR
@@ -24579,7 +24579,7 @@ def facturacion_factura_emitir():
             fch_resol=fch_resol, nro_resol=nro_resol, tipo_dte=_tipo_factura, set_dte_id=set_id)
         sobre_firmado = firmar_envio_completo(
             sobre, cert["pfx_bytes"], cert["password"],
-            set_dte_id=set_id, documento_ids=[documento_id])
+            set_dte_id=set_id, documento_ids=[])  # Documento ya firmado por firmar_documento; evita doble firma (RSC)
         paso("Firmar sobre EnvioDTE", True, str(len(sobre_firmado)) + " bytes")
 
         # 6. Registrar en BD antes de enviar
@@ -24805,6 +24805,11 @@ def facturacion_guia_emitir():
         paso("Generar Guía de Despacho", True, "Total " + str(total))
 
         # 5. Firmar documento + sobre
+        # El Documento se firma UNA sola vez con firmar_documento. Luego
+        # firmar_envio_completo debe firmar SOLO el SetDTE (documento_ids=[]),
+        # NO re-firmar el Documento: dos <Signature> dentro del <DTE> rompen el
+        # schema del SII (RSC "Signature not expected"). Verificado contra el XSD
+        # oficial EnvioDTE: con documento_ids=[] el sobre valida; con el id, no.
         guia_firmada = firmar_documento(guia_xml, cert["pfx_bytes"], cert["password"], documento_id)
         set_id = "SetDoc"
         sobre = armar_envio_dte(
@@ -24812,7 +24817,7 @@ def facturacion_guia_emitir():
             fch_resol=fch_resol, nro_resol=nro_resol, tipo_dte=52, set_dte_id=set_id)
         sobre_firmado = firmar_envio_completo(
             sobre, cert["pfx_bytes"], cert["password"],
-            set_dte_id=set_id, documento_ids=[documento_id])
+            set_dte_id=set_id, documento_ids=[])
         paso("Firmar sobre EnvioDTE", True, str(len(sobre_firmado)) + " bytes")
 
         # 6. Registrar en BD antes de enviar
