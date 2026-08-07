@@ -472,7 +472,7 @@ def generar_guia_despacho_xml(
     documento_id = f'F{folio}T{tipo_dte}'
     dte_xml = (
         '<?xml version="1.0" encoding="ISO-8859-1"?>'
-        f'<DTE version="1.0">'
+        f'<DTE xmlns="http://www.sii.cl/SiiDte" version="1.0">'
         f'<Documento ID="{documento_id}">'
         f'{encabezado_xml}'
         f'{detalles_xml}'
