@@ -167,15 +167,24 @@ def _calcular_totales_guia(items: List[Dict], es_venta: bool) -> Dict:
         mnt_exe = bruto_ex
         mnt_total = mnt_neto + mnt_iva + mnt_exe
     else:
-        # Guía no venta: sin IVA. Los precios (si los hay) solo son valor referencial.
-        # Manual SII: cuando IndTraslado=5 (traslado interno), puede no llevar MntNeto/IVA.
-        mnt_neto = 0
-        mnt_iva = 0
-        mnt_exe = 0
-        # MntTotal = 0 cuando es traslado puro sin precios
-        # Pero si vienen precios (ej. para tener valor referencial de inventario),
-        # podemos usar el bruto_af como MntTotal sin IVA.
-        mnt_total = 0
+        # Guía no venta (traslado interno, otros traslados, etc.).
+        # CRÍTICO: el MntTotal debe cuadrar con la suma de los MontoItem del
+        # detalle. Si el detalle trae precios, los Totales NO pueden quedar en 0
+        # (el SII rechaza por schema la inconsistencia). Solo cuando el traslado
+        # va sin precios (todos los MontoItem en 0) los totales quedan en 0.
+        if bruto_af > 0 or bruto_ex > 0:
+            # Hay montos en el detalle: los totales deben reflejarlos, con IVA
+            # sobre la parte afecta (igual que Lioren en IndTraslado=6 con montos).
+            mnt_neto = bruto_af
+            mnt_iva = _redondear_clp(mnt_neto * IVA_PORCENTAJE / 100.0)
+            mnt_exe = bruto_ex
+            mnt_total = mnt_neto + mnt_iva + mnt_exe
+        else:
+            # Traslado sin valorizar (ej. traslado interno puro): todo en 0.
+            mnt_neto = 0
+            mnt_iva = 0
+            mnt_exe = 0
+            mnt_total = 0
 
     return {
         'mnt_neto': mnt_neto, 'mnt_iva': mnt_iva,
@@ -384,10 +393,11 @@ def generar_guia_despacho_xml(
     # también aplica porque mueve bienes físicos.
     transporte_xml = _construir_transporte_xml(transporte)
 
-    # 4. Totales — varía según si es venta o solo movimiento
+    # 4. Totales — reflejan los montos del detalle. Si hay monto (venta o traslado
+    #    valorizado como IndTraslado=6 con precios), se detallan MntNeto/IVA/MntTotal
+    #    y deben cuadrar con la suma de MontoItem. Solo si no hay monto, MntTotal=0.
     tot_parts = []
-    if es_venta and mnt_total > 0:
-        # Venta: MntNeto, IVA, etc. como factura
+    if mnt_total > 0:
         if mnt_neto > 0:
             tot_parts.append(f'<MntNeto>{mnt_neto}</MntNeto>')
         if mnt_exe > 0:
@@ -397,7 +407,7 @@ def generar_guia_despacho_xml(
             tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
         tot_parts.append(f'<MntTotal>{mnt_total}</MntTotal>')
     else:
-        # No venta (traslado interno, etc.): MntTotal=0
+        # Traslado sin valorizar (todos los ítems sin precio): MntTotal=0
         tot_parts.append(f'<MntTotal>0</MntTotal>')
     totales_xml = '<Totales>' + ''.join(tot_parts) + '</Totales>'
 
