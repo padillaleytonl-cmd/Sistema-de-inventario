@@ -4044,6 +4044,7 @@ tbody td {
             <div style="display:flex;gap:10px;flex-wrap:wrap;">
               <button class="btn-primary" onclick="recuperarOrdenes(true)">Ver diagnóstico (dry-run)</button>
               <button class="btn-secondary" style="background:#dc2626;color:#fff;border-color:#dc2626;" onclick="recuperarOrdenes(false)">Destildar 1 lote</button>
+              <button class="btn-secondary" onclick="verificarRecuperacion()">Verificar fechas</button>
             </div>
 
             <pre id="rec_resultado" style="background:var(--bg);padding:12px;border-radius:6px;margin-top:14px;font-size:12px;line-height:1.5;white-space:pre-wrap;max-height:320px;overflow:auto;display:none;"></pre>
@@ -5244,6 +5245,44 @@ async function recuperarOrdenes(dryRun){
       if (r.recuperables > 0) {
         txt += `\n\nSi se ve bien, apretá "Destildar 1 lote" para empezar.`;
       }
+    }
+    out.textContent = txt;
+  } catch (e) {
+    out.textContent = 'Error de red: ' + e;
+  }
+}
+
+async function verificarRecuperacion(){
+  const dias = document.getElementById('rec_dias').value;
+  const out  = document.getElementById('rec_resultado');
+  out.style.display = 'block';
+  out.textContent = 'Verificando...';
+
+  try {
+    const r = await fetch(`/admin/verificar_recuperacion?dias=${dias}`).then(x => x.json());
+    if (r.error) { out.textContent = 'Error: ' + r.error; return; }
+
+    let txt = '';
+    txt += `VERIFICACIÓN (últimos ${r.dias} días)\n\n`;
+    txt += `Órdenes que aún siguen sin venta: ${r.pendientes_sin_venta}\n\n`;
+    txt += `Ventas de marketplace registradas: ${r.ventas_marketplace_total}\n`;
+    txt += `  → con fecha = fecha real de compra: ${r.con_fecha_real}\n`;
+    txt += `  → con fecha = hoy:                  ${r.con_fecha_hoy}\n\n`;
+    if ((r.ultimas_importadas||[]).length) {
+      txt += `Últimas recuperadas (importadas en las últimas 2h):\n`;
+      txt += `  orden            canal        fecha       f.compra    cant\n`;
+      r.ultimas_importadas.forEach(m => {
+        txt += `  ${(m.orden||'').padEnd(15).slice(0,15)}  ${(m.canal||'').padEnd(11).slice(0,11)}  ${m.fecha}  ${m.fecha_compra}  ${m.cantidad}\n`;
+      });
+      txt += `\n`;
+    }
+    if (r.pendientes_sin_venta === 0) {
+      txt += `✓ Recuperación completa. `;
+    }
+    if (r.con_fecha_hoy > 0 && r.con_fecha_real > 0) {
+      txt += `\n⚠ Hay ${r.con_fecha_hoy} con fecha de hoy: pueden ser ventas reales de hoy (normal),\n  o recuperadas antes de aplicar el fix. Revisá la muestra de arriba.`;
+    } else if (r.con_fecha_real > 0 && r.con_fecha_hoy === 0) {
+      txt += `\n✓ Todas quedaron con su fecha real de compra. El fix funciona.`;
     }
     out.textContent = txt;
   } catch (e) {

@@ -8382,6 +8382,83 @@ def admin_recuperar_ordenes_atascadas():
     })
 
 
+@app.route("/admin/verificar_recuperacion", methods=["GET"])
+def admin_verificar_recuperacion():
+    """Verifica el resultado de la recuperación: cuántas órdenes siguen sin venta
+    y, de las ventas registradas, cuántas quedaron con la FECHA REAL de compra
+    (vs. fecha de hoy). Confirma que el fix de fecha está funcionando.
+
+    Query string:
+      ?dias=8   (ventana hacia atrás, default 8)
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    dias = int(request.args.get("dias", 8))
+    from inventario import get_conn, release_conn
+
+    conn = get_conn(tenant_id=1)
+    try:
+        with conn.cursor() as cur:
+            # 1) ¿Cuántas siguen sin venta? (mismo criterio que la recuperación)
+            cur.execute("""
+                SELECT COUNT(*)
+                FROM ordenes_procesadas op
+                WHERE op.fecha > NOW() - (%s || ' days')::INTERVAL
+                  AND op.order_id_texto IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM movimientos m
+                      WHERE m.tipo='salida'
+                        AND (m.orden_id = op.order_id_texto
+                             OR m.orden_id = split_part(op.order_id_texto,'-',2)
+                             OR op.order_id_texto LIKE '%%' || m.orden_id)
+                  )
+            """, (dias,))
+            pendientes = cur.fetchone()[0]
+
+            # 2) De las ventas de marketplace, ¿cuántas tienen fecha = fecha real?
+            cur.execute("""
+                SELECT
+                  COUNT(*) AS total,
+                  COUNT(*) FILTER (WHERE fecha_compra_marketplace IS NOT NULL
+                       AND date_trunc('day', fecha) = date_trunc('day', fecha_compra_marketplace)) AS fecha_ok,
+                  COUNT(*) FILTER (WHERE date_trunc('day', fecha) = date_trunc('day', NOW())) AS fecha_hoy
+                FROM movimientos
+                WHERE tipo='salida'
+                  AND fecha > NOW() - (%s || ' days')::INTERVAL
+                  AND canal ILIKE ANY(ARRAY['%%meli%%','%%mercadolibre%%','%%falabella%%',
+                                            '%%paris%%','%%ripley%%','%%walmart%%','%%woo%%'])
+            """, (dias,))
+            total, fecha_ok, fecha_hoy = cur.fetchone()
+
+            # 3) Muestra de las últimas importadas (últimas 2h)
+            cur.execute("""
+                SELECT orden_id, canal, fecha::date, fecha_compra_marketplace::date, cantidad
+                FROM movimientos
+                WHERE tipo='salida'
+                  AND fecha_importacion > NOW() - INTERVAL '2 hours'
+                ORDER BY fecha_importacion DESC
+                LIMIT 10
+            """)
+            muestra = [
+                {"orden": str(o), "canal": c, "fecha": str(f),
+                 "fecha_compra": str(fc), "cantidad": cant}
+                for o, c, f, fc, cant in cur.fetchall()
+            ]
+    finally:
+        release_conn(conn)
+
+    return jsonify({
+        "ok": True,
+        "dias": dias,
+        "pendientes_sin_venta": pendientes,
+        "ventas_marketplace_total": total,
+        "con_fecha_real": fecha_ok,
+        "con_fecha_hoy": fecha_hoy,
+        "ultimas_importadas": muestra,
+    })
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # PLANTILLAS DE STOCK Y RESET CONTROLADO DE MOVIMIENTOS
 # ════════════════════════════════════════════════════════════════════════════
