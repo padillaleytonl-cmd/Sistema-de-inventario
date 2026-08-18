@@ -2247,7 +2247,24 @@ def ajustar_stock_bodega(sku, bodega_codigo, delta):
     lo que convertía deltas negativos a 0 y NO descontaba stock al UPDATE.
     Ahora pasamos el delta REAL y aplicamos GREATEST solo en la lógica de upsert.
     """
-    conn = get_conn(); cur = conn.cursor()
+    # Resolver tenant EXPLÍCITO para no violar RLS al escribir stock_bodega desde
+    # el sync automático (hilo scheduler sin sesión Flask).
+    _tid_sb = None
+    try:
+        from flask import session, has_request_context
+        if has_request_context():
+            _tid_sb = session.get("tenant_id")
+    except Exception:
+        pass
+    if not _tid_sb:
+        try:
+            from app import get_thread_tenant
+            _tid_sb = get_thread_tenant()
+        except Exception:
+            pass
+    if not _tid_sb:
+        _tid_sb = 1  # Fallback Babymine
+    conn = get_conn(tenant_id=int(_tid_sb)); cur = conn.cursor()
     nuevo = 0
     try:
         delta_int = int(delta)
@@ -2417,7 +2434,26 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
 
     # Registrar movimiento con la bodega y trazabilidad completa
     try:
-        conn = get_conn(); cur = conn.cursor()
+        # Resolver tenant EXPLÍCITO: en el sync automático (hilo del scheduler, sin
+        # sesión Flask) la conexión quedaría sin app.tenant_id y el INSERT a
+        # movimientos violaría RLS → la venta se marcaba como procesada pero NO se
+        # registraba en Lusync. Mismo fix que en intentar_marcar_orden_atomic.
+        _tid_dv = None
+        try:
+            from flask import session, has_request_context
+            if has_request_context():
+                _tid_dv = session.get("tenant_id")
+        except Exception:
+            pass
+        if not _tid_dv:
+            try:
+                from app import get_thread_tenant
+                _tid_dv = get_thread_tenant()
+            except Exception:
+                pass
+        if not _tid_dv:
+            _tid_dv = 1  # Fallback Babymine
+        conn = get_conn(tenant_id=int(_tid_dv)); cur = conn.cursor()
         # NOTA: NO hacer ALTER TABLE aquí. Las columnas ya existen hace meses
         # y ALTER+COMMIT resetea app.tenant_id de sesión PG (rompe RLS para INSERT).
 
