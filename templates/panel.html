@@ -4047,6 +4047,18 @@ tbody td {
               <button class="btn-secondary" onclick="verificarRecuperacion()">Verificar fechas</button>
             </div>
 
+            <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
+              <p style="color:var(--muted);font-size:13px;margin:0 0 10px;">
+                <strong>Recuperación directa (MercadoLibre):</strong> para órdenes viejas que el
+                sync ya no trae. Pide a ML todas las órdenes del rango y registra las que falten,
+                sin depender de destildar. Empezá por el dry-run.
+              </p>
+              <div style="display:flex;gap:10px;flex-wrap:wrap;">
+                <button class="btn-primary" onclick="recuperarDirecto(true)">Diagnóstico directo (dry-run)</button>
+                <button class="btn-secondary" style="background:#059669;color:#fff;border-color:#059669;" onclick="recuperarDirecto(false)">Recuperar directo (ML)</button>
+              </div>
+            </div>
+
             <pre id="rec_resultado" style="background:var(--bg);padding:12px;border-radius:6px;margin-top:14px;font-size:12px;line-height:1.5;white-space:pre-wrap;max-height:320px;overflow:auto;display:none;"></pre>
           </div>
         </div>
@@ -5283,6 +5295,46 @@ async function verificarRecuperacion(){
       txt += `\n⚠ Hay ${r.con_fecha_hoy} con fecha de hoy: pueden ser ventas reales de hoy (normal),\n  o recuperadas antes de aplicar el fix. Revisá la muestra de arriba.`;
     } else if (r.con_fecha_real > 0 && r.con_fecha_hoy === 0) {
       txt += `\n✓ Todas quedaron con su fecha real de compra. El fix funciona.`;
+    }
+    out.textContent = txt;
+  } catch (e) {
+    out.textContent = 'Error de red: ' + e;
+  }
+}
+
+async function recuperarDirecto(dryRun){
+  const dias = document.getElementById('rec_dias').value;
+  const out  = document.getElementById('rec_resultado');
+  out.style.display = 'block';
+
+  if (!dryRun && !confirm('Esto va a traer las órdenes de ML del rango y REGISTRAR las que falten (descuenta stock). ¿Continuar?')) {
+    return;
+  }
+  out.textContent = dryRun ? 'Consultando ML (puede tardar unos segundos)...' : 'Recuperando de ML (puede tardar)...';
+
+  const url = `/admin/recuperar_directo_meli?dry_run=${dryRun?'1':'0'}&dias=${dias}&limite=50`;
+  try {
+    const r = await fetch(url).then(x => x.json());
+    if (r.error) { out.textContent = 'Error: ' + r.error; return; }
+
+    let txt = '';
+    txt += `Modo: ${r.dry_run ? 'DIAGNÓSTICO (no se registró nada)' : 'EJECUTADO'}\n`;
+    txt += `Rango: últimos ${r.dias} días\n\n`;
+    txt += `Órdenes ML en el rango:   ${r.ordenes_rango}\n`;
+    txt += `  Pagadas:                ${r.pagadas}\n`;
+    txt += `  Sin venta (faltantes):  ${r.faltantes}\n\n`;
+    if (!r.dry_run) {
+      txt += `>>> Registradas ahora:    ${r.procesadas_esta_llamada} órdenes (${r.items_registrados} items)\n`;
+      txt += `>>> Faltan:               ${r.restantes}\n`;
+      if (r.restantes > 0) txt += `\nApretá "Recuperar directo (ML)" de nuevo para el siguiente bloque.`;
+      else txt += `\n✓ No quedan faltantes de ML en el rango.`;
+      if ((r.errores||[]).length) {
+        txt += `\n\nErrores (${r.errores.length}):\n` + r.errores.map(e=>'  '+e).join('\n');
+      }
+    } else {
+      txt += `Muestra de faltantes:\n${(r.muestra||[]).map(m=>'  '+m).join('\n')}`;
+      if (r.faltantes > 0) txt += `\n\nSi se ve bien, apretá "Recuperar directo (ML)".`;
+      else txt += `\n\n✓ No hay faltantes: todas las órdenes del rango ya están registradas.`;
     }
     out.textContent = txt;
   } catch (e) {

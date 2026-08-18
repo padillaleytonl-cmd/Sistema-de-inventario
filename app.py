@@ -8459,6 +8459,148 @@ def admin_verificar_recuperacion():
     })
 
 
+@app.route("/admin/recuperar_directo_meli", methods=["GET"])
+def admin_recuperar_directo_meli():
+    """Recuperación DIRECTA de órdenes ML por rango de fechas.
+
+    A diferencia de destildar (que depende de la ventana de 50 órdenes del sync),
+    este endpoint pide a ML TODAS las órdenes de un rango de fechas (paginando),
+    detecta cuáles no tienen venta registrada en movimientos, y las registra
+    directamente con descontar_venta_inteligente (fix de fecha + RLS ya aplicados).
+
+    Sirve para recuperar órdenes VIEJAS que el sync ya no trae.
+
+    Query string:
+      ?dry_run=1     (default 1: solo diagnostica, NO registra)
+      ?dias=8        (rango hacia atrás, default 8)
+      ?limite=50     (máx órdenes a registrar por llamada, default 50)
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    from datetime import datetime, timedelta
+    import pytz as _pytz
+    TZ = _pytz.timezone('America/Santiago')
+
+    dry_run = request.args.get("dry_run", "1") == "1"
+    dias    = int(request.args.get("dias", 8))
+    limite  = int(request.args.get("limite", 50))
+
+    try:
+        registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
+                        "recuperar_directo_meli",
+                        detalle=f"dias={dias} limite={limite} dry_run={dry_run}")
+    except Exception:
+        pass
+
+    from mercadolibre import obtener_todas_ordenes_meli_rango
+    from inventario import (get_conn, release_conn, descontar_venta_inteligente,
+                            detectar_fulfillment_meli, obtener_sku_lusync_por_canal,
+                            marcar_orden_procesada_texto)
+
+    # 1) Traer TODAS las órdenes ML del rango (paginado, rompe el límite de 50)
+    ahora = datetime.now(TZ)
+    df = (ahora - timedelta(days=dias)).strftime("%Y-%m-%dT00:00:00.000-04:00")
+    dt = ahora.strftime("%Y-%m-%dT23:59:59.000-04:00")
+
+    log = [f"Rango: {df[:10]} a {dt[:10]}"]
+    try:
+        ordenes = obtener_todas_ordenes_meli_rango(df, dt, max_paginas=10)
+    except Exception as e:
+        return jsonify({"error": f"Error trayendo órdenes ML: {e}"}), 500
+    log.append(f"Órdenes ML traídas del rango: {len(ordenes)}")
+
+    # 2) Filtrar solo pagadas
+    pagadas = [o for o in ordenes if o.get("status") in ("paid", "confirmed")]
+    log.append(f"Órdenes pagadas: {len(pagadas)}")
+
+    # 3) Cruzar contra movimientos: ¿cuáles NO tienen venta registrada?
+    conn = get_conn(tenant_id=1)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT DISTINCT orden_id FROM movimientos
+                           WHERE tipo='salida' AND fecha > NOW() - (%s || ' days')::INTERVAL
+                             AND orden_id IS NOT NULL""", (dias + 2,))
+            ya_registradas = set(str(r[0]) for r in cur.fetchall())
+    finally:
+        release_conn(conn)
+
+    faltantes = [o for o in pagadas if str(o.get("id", "")) not in ya_registradas]
+    log.append(f"Órdenes SIN venta registrada (faltantes): {len(faltantes)}")
+
+    # 4) Registrar (o simular) las faltantes
+    a_procesar = faltantes[:limite]
+    registradas = 0
+    items_total = 0
+    errores = []
+    muestra = []
+
+    for o in a_procesar:
+        order_id = str(o.get("id", ""))
+        # fecha real de compra
+        fecha_compra = None
+        try:
+            ds = (o.get("date_created", "") or "").replace("Z", "+00:00")
+            if ds:
+                fecha_compra = datetime.fromisoformat(ds)
+        except Exception:
+            pass
+
+        es_full = detectar_fulfillment_meli(o)
+
+        if len(muestra) < 8:
+            muestra.append(f"{(str(fecha_compra)[:10])} | {order_id} | {'FULL' if es_full else 'Seller'}")
+
+        if dry_run:
+            continue
+
+        hubo_item = False
+        for item in o.get("order_items", []):
+            item_data = item.get("item", {})
+            item_id = item_data.get("id", "")
+            sku_seller = ((item_data.get("seller_sku") or "").strip()
+                          or (item_data.get("seller_custom_field") or "").strip())
+            cantidad = int(item.get("quantity", 1))
+            if not sku_seller:
+                continue
+            try:
+                sku_lusync = obtener_sku_lusync_por_canal(
+                    "mercadolibre", sku_canal=sku_seller, item_id_canal=item_id) or sku_seller
+            except Exception:
+                sku_lusync = sku_seller
+            try:
+                descontar_venta_inteligente(
+                    sku=sku_lusync, cantidad=cantidad, canal="mercadolibre",
+                    fulfillment=es_full, orden_id=order_id,
+                    fecha_compra_marketplace=fecha_compra)
+                items_total += 1
+                hubo_item = True
+            except Exception as e:
+                errores.append(f"{order_id}/{sku_seller}: {str(e)[:120]}")
+
+        if hubo_item:
+            try:
+                marcar_orden_procesada_texto(f"MELI-{order_id}")
+            except Exception:
+                pass
+            registradas += 1
+
+    return jsonify({
+        "ok": True,
+        "dry_run": dry_run,
+        "dias": dias,
+        "ordenes_rango": len(ordenes),
+        "pagadas": len(pagadas),
+        "faltantes": len(faltantes),
+        "procesadas_esta_llamada": registradas,
+        "items_registrados": items_total,
+        "restantes": max(0, len(faltantes) - registradas),
+        "errores": errores[:10],
+        "muestra": muestra,
+        "log": log,
+    })
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # PLANTILLAS DE STOCK Y RESET CONTROLADO DE MOVIMIENTOS
 # ════════════════════════════════════════════════════════════════════════════
