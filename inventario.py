@@ -2472,7 +2472,7 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
              origen_registro, stock_antes, stock_despues)
             VALUES ('salida', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (sku, nombre, descontar, motivo_final, usuario, canal_normalizado,
-             ahora_chile, orden_id, bodega, ahora_chile,
+             (fecha_compra_clean or ahora_chile), orden_id, bodega, ahora_chile,
              fecha_compra_clean, origen_registro, stock_antes, stock_despues))
         conn.commit()
         cur.close(); release_conn(conn)

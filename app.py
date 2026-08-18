@@ -8300,6 +8300,88 @@ def admin_estado_reconstruccion():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
+@app.route("/admin/recuperar_ordenes_atascadas", methods=["GET"])
+def admin_recuperar_ordenes_atascadas():
+    """Recupera órdenes marcadas como procesadas pero SIN venta registrada.
+    Las destilda de ordenes_procesadas para que el sync las reprocese
+    (con fecha real de compra, gracias al fix de descontar_venta_inteligente).
+
+    Query string:
+      ?dry_run=1     (default 1: solo diagnostica, NO borra)
+      ?dias=8        (ventana hacia atrás, default 8)
+      ?lote=40       (cuántas destildar por llamada, default 40 — evita saturar)
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    dry_run = request.args.get("dry_run", "1") == "1"   # default seguro = dry_run
+    dias    = int(request.args.get("dias", 8))
+    lote    = int(request.args.get("lote", 40))
+
+    PREFIJOS_VENTA   = ("MELI-", "FALABELLA-", "PARIS-", "RIPLEY-", "RP-", "WOO-", "FBM-OP-")
+    PREFIJOS_EXCLUIR = ("CANCEL-", "AJUSTE-", "DEV-", "TEST-", "CASO-")
+
+    def _es_recuperable(k):
+        if any(x in k for x in PREFIJOS_EXCLUIR):
+            return False
+        return k.startswith(PREFIJOS_VENTA)
+
+    try:
+        registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
+                        "recuperar_ordenes_atascadas",
+                        detalle=f"dias={dias} lote={lote} dry_run={dry_run}")
+    except Exception:
+        pass
+
+    from inventario import get_conn, release_conn
+    from collections import Counter
+
+    conn = get_conn(tenant_id=1)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT op.order_id_texto, op.fecha
+                FROM ordenes_procesadas op
+                WHERE op.fecha > NOW() - (%s || ' days')::INTERVAL
+                  AND op.order_id_texto IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM movimientos m
+                      WHERE m.tipo = 'salida'
+                        AND (m.orden_id = op.order_id_texto
+                             OR m.orden_id = split_part(op.order_id_texto, '-', 2)
+                             OR op.order_id_texto LIKE '%%' || m.orden_id)
+                  )
+                ORDER BY op.fecha DESC
+            """, (dias,))
+            rows = cur.fetchall()
+
+            recuperables = [(r[0], str(r[1])) for r in rows if _es_recuperable(r[0])]
+            excluidas    = [r[0] for r in rows if not _es_recuperable(r[0])]
+            canales      = Counter(k.split("-")[0] for k, _ in recuperables)
+
+            borradas = 0
+            if not dry_run and recuperables:
+                keys = [k for k, _ in recuperables[:lote]]
+                cur.execute("DELETE FROM ordenes_procesadas WHERE order_id_texto = ANY(%s)", (keys,))
+                borradas = cur.rowcount
+                conn.commit()
+    finally:
+        release_conn(conn)
+
+    return jsonify({
+        "ok": True,
+        "dry_run": dry_run,
+        "dias": dias,
+        "total_sin_venta": len(rows),
+        "recuperables": len(recuperables),
+        "excluidas": len(excluidas),
+        "desglose_por_canal": dict(canales),
+        "destildadas_en_esta_llamada": borradas,
+        "restantes_por_destildar": len(recuperables) - borradas,
+        "muestra": [f"{f[:19]} | {k}" for k, f in recuperables[:5]],
+    })
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # PLANTILLAS DE STOCK Y RESET CONTROLADO DE MOVIMIENTOS
 # ════════════════════════════════════════════════════════════════════════════
