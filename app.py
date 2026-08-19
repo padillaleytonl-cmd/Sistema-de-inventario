@@ -7345,6 +7345,17 @@ def ruta_meli_webhook():
         return jsonify({"status": "ok"}), 200
     
     try:
+        # FIX RLS (2026-08-18): los webhooks llegan SIN sesión Flask, por lo que
+        # get_conn() quedaba sin tenant y RLS ocultaba productos/mapeos. El síntoma:
+        # "[MELI Webhook] SKU 'X' no encontrado en inventario" con la orden ya
+        # marcada (atomic) → venta jamás registrada (limbo). Setear el tenant del
+        # thread hace que TODAS las consultas internas (cargar_productos,
+        # listar_sku_mapeo, etc.) resuelvan RLS igual que en los schedulers.
+        try:
+            set_thread_tenant(1)  # único tenant productivo (Babymine)
+        except Exception:
+            pass
+
         payload = request.json or {}
         topic = (payload.get("topic") or "").lower()
         
@@ -7400,6 +7411,13 @@ def ruta_meli_webhook_fbm():
         return jsonify({"status": "ok", "endpoint": "fbm_stock_operations"}), 200
     
     try:
+        # FIX RLS (2026-08-18): webhook sin sesión → setear tenant del thread
+        # para que las consultas internas resuelvan RLS (mismo fix que orders).
+        try:
+            set_thread_tenant(1)
+        except Exception:
+            pass
+
         payload = request.json or {}
         # Procesar de forma resiliente: si algo falla, devolver 200 igual
         # (MELI reintenta cada 5min hasta 7 días si recibe error)

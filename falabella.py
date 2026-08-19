@@ -974,6 +974,16 @@ def falabella_webhook():
         })
 
     try:
+        # FIX RLS (2026-08-18): los webhooks llegan SIN sesión Flask → get_conn()
+        # quedaba sin tenant y RLS ocultaba productos/mapeos, dejando órdenes
+        # marcadas sin registrar (limbo). Setear el tenant del thread para que
+        # todas las consultas internas resuelvan RLS como en los schedulers.
+        try:
+            from app import set_thread_tenant
+            set_thread_tenant(1)  # único tenant productivo (Babymine)
+        except Exception:
+            pass
+
         payload = request.get_json(silent=True) or {}
         evento = payload.get("event", "desconocido")
         data = payload.get("data", {})
