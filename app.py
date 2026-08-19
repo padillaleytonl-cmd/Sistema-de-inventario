@@ -8342,6 +8342,9 @@ def admin_recuperar_ordenes_atascadas():
     def _es_recuperable(k):
         if any(x in k for x in PREFIJOS_EXCLUIR):
             return False
+        # Walmart marca con el customerOrderId pelado (solo dígitos, sin prefijo)
+        if k.isdigit():
+            return True
         return k.startswith(PREFIJOS_VENTA)
 
     try:
@@ -8375,7 +8378,7 @@ def admin_recuperar_ordenes_atascadas():
 
             recuperables = [(r[0], str(r[1])) for r in rows if _es_recuperable(r[0])]
             excluidas    = [r[0] for r in rows if not _es_recuperable(r[0])]
-            canales      = Counter(k.split("-")[0] for k, _ in recuperables)
+            canales      = Counter(("WALMART" if k.isdigit() else k.split("-")[0]) for k, _ in recuperables)
 
             borradas = 0
             if not dry_run and recuperables:
