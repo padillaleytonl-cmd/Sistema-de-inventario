@@ -1059,7 +1059,12 @@ def _sync_meli_automatico():
 
                 # ── Órdenes pagadas ──
                 if estado in ("paid", "confirmed"):
-                    if not intentar_marcar_orden_atomic(meli_key):
+                    # NO marcar aún: primero registramos la venta. Si marcáramos
+                    # antes y el registro fallara, la orden quedaría marcada sin
+                    # venta y nunca se reintentaría (ese era el bug: órdenes
+                    # marcadas pero no registradas en Lusync). Marcamos al final,
+                    # solo si el descuento fue exitoso.
+                    if orden_ya_procesada_texto(meli_key):
                         continue
 
                     # Parsear fecha de compra
@@ -1115,7 +1120,10 @@ def _sync_meli_automatico():
                             errores.append(f"MELI {order_id}/{sku_seller}→{sku_lusync}: {e}")
 
                     if items_descontados:
-                        # [atomic] orden marcada al inicio — no remarcar
+                        # Registro exitoso: AHORA marcamos la orden como procesada.
+                        # Si el descuento hubiera fallado, items_descontados estaría
+                        # vacío y la orden NO se marca, para reintentarla luego.
+                        intentar_marcar_orden_atomic(meli_key)
                         nuevas += 1
 
                 # ── Órdenes canceladas ──
