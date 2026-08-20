@@ -45,68 +45,49 @@ from inventario import (cargar_productos, guardar_productos, guardar_producto,
 app = Flask(__name__)
 app.secret_key = "clave_super_segura"
 
-# ── Inicialización pesada: se ejecuta UNA sola vez ──
-# Con gunicorn (o si el módulo se importa más de una vez), este bloque podría
-# correr varias veces y disparar init_multitenancy/RLS/facturación en loop, lo
-# que retrasa el arranque más de 27s y hace que Render nunca detecte el puerto
-# ("Timed Out"). La guarda por variable de entorno garantiza una sola ejecución.
-import os as _os_init
-def _lusync_init_pesado():
-    init_db()
-    init_devoluciones()
-    try:
-        from inventario import init_feriados
-        init_feriados()
-    except Exception as e:
-        print(f"[init_feriados] {e}")
-    try:
-        from tenancy import init_multitenancy
-        init_multitenancy()
-    except Exception as e:
-        import traceback
-        print(f"[init_multitenancy] ERROR: {e}")
-        traceback.print_exc()
-    try:
-        from tenant_rls import init_rls_policies
-        init_rls_policies()
-    except Exception as e:
-        import traceback
-        print(f"[init_rls_policies] ERROR: {e}")
-        traceback.print_exc()
-    init_audit()
-    init_sku_mapeo()
-    init_alertas()
-    init_meli_auth()
-    init_bodegas()
-    # ── Facturación electrónica SII (multi-tenant) ──
-    try:
-        from facturacion import init_facturacion_tables, init_uf_table
-        from inventario import get_conn as _gc_fact, release_conn as _rc_fact
-        init_facturacion_tables(_gc_fact, _rc_fact)
-        init_uf_table(_gc_fact, _rc_fact)
-    except Exception as e:
-        import traceback
-        print(f"[init_facturacion] ERROR: {e}")
-        traceback.print_exc()
-
-import threading as _thr_init
-_LUSYNC_INIT_LISTO = _thr_init.Event()
-
-def _lusync_init_con_flag():
-    try:
-        _lusync_init_pesado()
-    finally:
-        _LUSYNC_INIT_LISTO.set()
-
-if not _os_init.environ.get("_LUSYNC_INIT_DONE"):
-    _os_init.environ["_LUSYNC_INIT_DONE"] = "1"
-    # Ejecutar en un hilo de fondo para que el servidor abra el puerto de inmediato.
-    # Render detecta el puerto en segundos en vez de esperar los ~27s del init,
-    # evitando el "No open ports detected" / "Timed Out". El scheduler (más abajo)
-    # espera a que este init termine antes de lanzar sus jobs.
-    _thr_init.Thread(target=_lusync_init_con_flag, daemon=True).start()
-else:
-    _LUSYNC_INIT_LISTO.set()
+# ── Inicialización: SECUENCIAL en el hilo principal ──
+# IMPORTANTE: los init corren directo (no en hilo de fondo). Cuando se movieron a
+# un hilo de fondo + el scheduler a otro hilo (para que Render abriera el puerto
+# rápido), el scheduler quedó corriendo en un contexto sin tenant establecido y
+# TODOS los syncs de marketplaces empezaron a fallar por RLS: las ventas se
+# marcaban como procesadas pero no se registraban en Lusync. Volvemos al arranque
+# secuencial que sí funcionaba (commit c63c23c).
+init_db()
+init_devoluciones()
+try:
+    from inventario import init_feriados
+    init_feriados()
+except Exception as e:
+    print(f"[init_feriados] {e}")
+try:
+    from tenancy import init_multitenancy
+    init_multitenancy()
+except Exception as e:
+    import traceback
+    print(f"[init_multitenancy] ERROR: {e}")
+    traceback.print_exc()
+try:
+    from tenant_rls import init_rls_policies
+    init_rls_policies()
+except Exception as e:
+    import traceback
+    print(f"[init_rls_policies] ERROR: {e}")
+    traceback.print_exc()
+init_audit()
+init_sku_mapeo()
+init_alertas()
+init_meli_auth()
+init_bodegas()
+# ── Facturación electrónica SII (multi-tenant) ──
+try:
+    from facturacion import init_facturacion_tables, init_uf_table
+    from inventario import get_conn as _gc_fact, release_conn as _rc_fact
+    init_facturacion_tables(_gc_fact, _rc_fact)
+    init_uf_table(_gc_fact, _rc_fact)
+except Exception as e:
+    import traceback
+    print(f"[init_facturacion] ERROR: {e}")
+    traceback.print_exc()
 
 # Registrar Blueprints (módulos de marketplaces)
 from walmart import walmart_bp
@@ -2331,19 +2312,13 @@ import os as _os_sched
 # intenta lanzar jobs mientras el proceso original se apaga).
 if not _os_sched.environ.get("_LUSYNC_SCHEDULER_STARTED"):
     _os_sched.environ["_LUSYNC_SCHEDULER_STARTED"] = "1"
-    def _arrancar_scheduler():
-        # Esperar a que la inicialización pesada (tablas, RLS) termine, para que
-        # los jobs no corran contra tablas que aún no existen.
-        try:
-            _LUSYNC_INIT_LISTO.wait(timeout=120)
-        except Exception:
-            pass
-        try:
-            scheduler.start()
-        except Exception as _e_sched:
-            print(f"[Scheduler] No se pudo iniciar: {_e_sched}")
-    import threading as _thr_sched
-    _thr_sched.Thread(target=_arrancar_scheduler, daemon=True).start()
+    # Arranque DIRECTO del scheduler (como en c63c23c). El init ya corrió
+    # secuencialmente arriba, así que las tablas existen. NO arrancar en un hilo
+    # aparte: eso dejaba el scheduler sin contexto de tenant y rompía los syncs.
+    try:
+        scheduler.start()
+    except Exception as _e_sched:
+        print(f"[Scheduler] No se pudo iniciar: {_e_sched}")
 
     def _apagar_scheduler():
         try:
