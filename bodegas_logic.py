@@ -162,13 +162,32 @@ def detectar_fulfillment_walmart(orden_data):
 
 
 def detectar_fulfillment_falabella(orden_data):
-    """Falabella Fulfillment vs Seller (cuando se habilite)."""
+    """
+    Falabella Full (FBF) vs Seller/normal (FBS).
+
+    Campo REAL confirmado en la cuenta (Falabella Seller Center Chile):
+      ShippingType = "Own Warehouse" -> Falabella despacha desde SU bodega (Full/FBF)
+                                        -> NO descuenta stock central
+      ShippingType = "Dropshipping"  -> el vendedor despacha (venta normal/FBS)
+                                        -> SÍ descuenta stock central
+    """
     try:
-        # Falabella usa Mirakl. El campo es 'fulfillment_type' o 'logistic_class'
+        stype = (orden_data.get("ShippingType") or
+                 orden_data.get("shipping_type") or "").strip().lower()
+        if stype:
+            # "Own Warehouse" (bodega de Falabella) = Full
+            if "own warehouse" in stype or "warehouse" in stype or "fulfillment" in stype:
+                return True
+            # "Dropshipping" = despacha el vendedor = normal
+            if "dropship" in stype:
+                return False
+        # Fallbacks (formato Mirakl u otras versiones)
         f_type = (orden_data.get("fulfillment_type") or
                   orden_data.get("logistic_class") or "").upper()
         return "FULFILLED" in f_type or f_type == "FBF"
-    except: return False
+    except Exception as e:
+        print(f"[Bodegas] detectar_fulfillment_falabella error: {e}")
+        return False
 
 
 def detectar_fulfillment_ripley(orden_data):
