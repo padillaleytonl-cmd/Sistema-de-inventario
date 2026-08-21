@@ -206,13 +206,35 @@ def detectar_fulfillment_falabella(orden_data):
 
 
 def detectar_fulfillment_ripley(orden_data):
-    """Ripley Fulfillment vs Seller (cuando se habilite)."""
+    """
+    Ripley: ventas de bodega propia (normal) vs FULL Ripley.
+
+    Campo REAL confirmado (Ripley usa Mirakl): shipping_type_code.
+    Regla confirmada por el vendedor:
+      "FP_CENTRAL24" = Flota Propia (como ML Flex) -> sale de TU bodega -> descuenta (normal)
+      "AllDay"       = Blue Express                -> sale de TU bodega -> descuenta (normal)
+      cualquier OTRO shipping_type_code            -> FULL Ripley -> NO descuenta central
+
+    Solo FP_CENTRAL24 y AllDay salen de bodega propia; todo lo demás es fulfillment.
+    """
     try:
-        # Ripley también usa Mirakl
+        stc = (orden_data.get("shipping_type_code") or "").strip().upper()
+        if stc:
+            # Códigos que salen de bodega propia (despacha el vendedor)
+            if stc in ("FP_CENTRAL24", "ALLDAY"):
+                return False
+            # Cualquier otro código = Full Ripley
+            return True
+
+        # Fallback: campos antiguos si no vino shipping_type_code
         f_type = (orden_data.get("fulfillment_type") or
                   orden_data.get("shipping_type") or "").upper()
-        return "FULFILLED" in f_type or f_type == "FBR"
-    except: return False
+        if "FULFILLED" in f_type or f_type == "FBR":
+            return True
+        return False
+    except Exception as e:
+        print(f"[Bodegas] detectar_fulfillment_ripley error: {e}")
+        return False
 
 
 def detectar_fulfillment_hites(orden_data):
