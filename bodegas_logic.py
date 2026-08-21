@@ -87,27 +87,42 @@ def detectar_fulfillment_meli(orden_data):
 
 def detectar_fulfillment_paris(orden_data):
     """
-    París CrossDocking (Fulfillment) vs Seller envía.
+    Paris: ventas de bodega propia (normal) vs FULL Paris.
 
-    Campos posibles:
-      shipments[].flow      = 'CROSSDOCKING' → CD/Fulfillment
-      shipments[].flowType
-      shippingType o shipping_type
+    Confirmado por el vendedor con las ventas reales del mes (todas salieron de su bodega):
+      orderTypeId 1  = Dropshipping         -> sale de TU bodega -> descuenta (normal)
+      orderTypeId 15 = (variante despacho propio) -> sale de TU bodega -> descuenta (normal)
+      orderTypeId 21 = (variante despacho propio) -> sale de TU bodega -> descuenta (normal)
+      orderTypeId 3  = Fulfillment by Blue Express -> Full, NO descuenta central
+      orderTypeId 7  = Fulfillment by Paris        -> Full, NO descuenta central
+      orderTypeId 4  = Intangibles                 -> sin stock físico
+
+    Solo los tipos de FULFILLMENT real (3 y 7) son fulfillment; el resto sale de bodega propia.
     """
     try:
-        # Path 1: shipments[].flow
+        otid = orden_data.get("orderTypeId")
+        if otid is not None:
+            try:
+                otid = int(otid)
+            except (ValueError, TypeError):
+                otid = None
+            # Solo Fulfillment by Blue Express (3) y Fulfillment by Paris (7) son Full.
+            if otid in (3, 7):
+                return True
+            if otid is not None:  # 1, 15, 21 y demás = sale de bodega propia = normal
+                return False
+
+        # Fallback: si no vino orderTypeId, usar campos de flujo/despacho
         shipments = orden_data.get("shipments", [])
         for ship in shipments:
             flow = (ship.get("flow") or ship.get("flowType") or "").upper()
-            if "CROSS" in flow or flow == "CD":
+            if "CROSS" in flow or flow == "CD" or "FULFILL" in flow:
                 return True
-
-        # Path 2: shippingType en la orden
         shipping_type = (orden_data.get("shippingType") or
                          orden_data.get("shipping_type") or "").upper()
-        if "CROSS" in shipping_type or shipping_type == "CD":
+        if "CROSS" in shipping_type or "FULFILL" in shipping_type:
             return True
-
+        # Sin datos: asumir normal (descuenta) para no perder stock real
         return False
     except Exception as e:
         print(f"[Bodegas] detectar_fulfillment_paris error: {e}")
