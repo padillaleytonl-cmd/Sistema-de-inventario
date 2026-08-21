@@ -1178,7 +1178,10 @@ def intentar_marcar_orden_atomic(order_id_texto):
     if not tid:
         tid = 1  # Fallback Babymine
 
-    conn = get_conn()
+    # Pasar el tenant EXPLÍCITO a get_conn: así la conexión establece app.tenant_id
+    # y el INSERT satisface la política RLS aunque el sync corra en un hilo del
+    # scheduler sin sesión Flask. (Complementa la política tenant_insert_ok de la BD.)
+    conn = get_conn(tenant_id=int(tid))
     cur  = conn.cursor()
     try:
         # NOTA: NO hacemos ALTER TABLE aquí. La columna order_id_texto ya existe
