@@ -50,14 +50,14 @@ y ANTES de <Totales>. Orden EXACTO de sub-campos según manual 2.5:
   <Patente>       (67) placa patente vehículo
   <PatenteCarro>  (nuevo) placa carro/remolque (opcional)
   <RUTTrans>      (68) RUT transportista (si ≠ emisor)
-  <Chofer>        contiene RUTChofer (69) y NombreChofer (70)
+  <RUTChofer>     (69) RUT chofer
+  <NombreChofer>  (70) nombre chofer
   <DirDest>       (71) dirección destino
   <CmnaDest>      (72) comuna destino
   <CiudadDest>    (73) ciudad destino (opcional)
-
-Nota: las fechas/horas de traslado (salida y llegada) NO van en el XML del
-SII — se muestran solo en la representación gráfica (PDF), igual que Lioren.
-El SII acepta la guía sin esos campos; van en el papel para el chofer/fiscalizador.
+  <FchSalida>     (nuevo) fecha salida AAAA-MM-DD
+  <HraSalida>     (nuevo) hora salida HH:MM:SS
+  <FchLlegada>    (nuevo) fecha llegada (oblig. si traslado > 1 día)
 
 IMPORTANTE: el bloque <Transporte> SOLO se incluye cuando hay traslado
 físico de bienes (guías y facturas con traslado). NUNCA en servicios.
@@ -167,24 +167,15 @@ def _calcular_totales_guia(items: List[Dict], es_venta: bool) -> Dict:
         mnt_exe = bruto_ex
         mnt_total = mnt_neto + mnt_iva + mnt_exe
     else:
-        # Guía no venta (traslado interno, otros traslados, etc.).
-        # CRÍTICO: el MntTotal debe cuadrar con la suma de los MontoItem del
-        # detalle. Si el detalle trae precios, los Totales NO pueden quedar en 0
-        # (el SII rechaza por schema la inconsistencia). Solo cuando el traslado
-        # va sin precios (todos los MontoItem en 0) los totales quedan en 0.
-        if bruto_af > 0 or bruto_ex > 0:
-            # Hay montos en el detalle: los totales deben reflejarlos, con IVA
-            # sobre la parte afecta (igual que Lioren en IndTraslado=6 con montos).
-            mnt_neto = bruto_af
-            mnt_iva = _redondear_clp(mnt_neto * IVA_PORCENTAJE / 100.0)
-            mnt_exe = bruto_ex
-            mnt_total = mnt_neto + mnt_iva + mnt_exe
-        else:
-            # Traslado sin valorizar (ej. traslado interno puro): todo en 0.
-            mnt_neto = 0
-            mnt_iva = 0
-            mnt_exe = 0
-            mnt_total = 0
+        # Guía no venta: sin IVA. Los precios (si los hay) solo son valor referencial.
+        # Manual SII: cuando IndTraslado=5 (traslado interno), puede no llevar MntNeto/IVA.
+        mnt_neto = 0
+        mnt_iva = 0
+        mnt_exe = 0
+        # MntTotal = 0 cuando es traslado puro sin precios
+        # Pero si vienen precios (ej. para tener valor referencial de inventario),
+        # podemos usar el bruto_af como MntTotal sin IVA.
+        mnt_total = 0
 
     return {
         'mnt_neto': mnt_neto, 'mnt_iva': mnt_iva,
@@ -256,16 +247,13 @@ def _construir_transporte_xml(transporte: Optional[Dict]) -> str:
     if rut_trans:
         partes.append(f'<RUTTrans>{_escape_xml(rut_trans)}</RUTTrans>')
 
-    # RUTChofer y NombreChofer van DENTRO de un elemento <Chofer> (schema SII).
     rut_chofer = _normalizar_rut(_v('rut_chofer'))
+    if rut_chofer:
+        partes.append(f'<RUTChofer>{_escape_xml(rut_chofer)}</RUTChofer>')
+
     nombre_chofer = _v('nombre_chofer', 30)
-    if rut_chofer or nombre_chofer:
-        chofer_inner = ''
-        if rut_chofer:
-            chofer_inner += f'<RUTChofer>{_escape_xml(rut_chofer)}</RUTChofer>'
-        if nombre_chofer:
-            chofer_inner += f'<NombreChofer>{_escape_xml(nombre_chofer)}</NombreChofer>'
-        partes.append(f'<Chofer>{chofer_inner}</Chofer>')
+    if nombre_chofer:
+        partes.append(f'<NombreChofer>{_escape_xml(nombre_chofer)}</NombreChofer>')
 
     dir_dest = _v('dir_dest', 70)
     if dir_dest:
@@ -278,6 +266,19 @@ def _construir_transporte_xml(transporte: Optional[Dict]) -> str:
     ciudad_dest = _v('ciudad_dest', 20)
     if ciudad_dest:
         partes.append(f'<CiudadDest>{_escape_xml(ciudad_dest)}</CiudadDest>')
+
+    # Campos nuevos Res.154 / Anexo 2.5
+    fch_salida = _v('fch_salida')
+    if fch_salida:
+        partes.append(f'<FchSalida>{_escape_xml(fch_salida)}</FchSalida>')
+
+    hra_salida = _v('hra_salida')
+    if hra_salida:
+        partes.append(f'<HraSalida>{_escape_xml(hra_salida)}</HraSalida>')
+
+    fch_llegada = _v('fch_llegada')
+    if fch_llegada:
+        partes.append(f'<FchLlegada>{_escape_xml(fch_llegada)}</FchLlegada>')
 
     if not partes:
         return ''
@@ -393,11 +394,10 @@ def generar_guia_despacho_xml(
     # también aplica porque mueve bienes físicos.
     transporte_xml = _construir_transporte_xml(transporte)
 
-    # 4. Totales — reflejan los montos del detalle. Si hay monto (venta o traslado
-    #    valorizado como IndTraslado=6 con precios), se detallan MntNeto/IVA/MntTotal
-    #    y deben cuadrar con la suma de MontoItem. Solo si no hay monto, MntTotal=0.
+    # 4. Totales — varía según si es venta o solo movimiento
     tot_parts = []
-    if mnt_total > 0:
+    if es_venta and mnt_total > 0:
+        # Venta: MntNeto, IVA, etc. como factura
         if mnt_neto > 0:
             tot_parts.append(f'<MntNeto>{mnt_neto}</MntNeto>')
         if mnt_exe > 0:
@@ -407,7 +407,7 @@ def generar_guia_despacho_xml(
             tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
         tot_parts.append(f'<MntTotal>{mnt_total}</MntTotal>')
     else:
-        # Traslado sin valorizar (todos los ítems sin precio): MntTotal=0
+        # No venta (traslado interno, etc.): MntTotal=0
         tot_parts.append(f'<MntTotal>0</MntTotal>')
     totales_xml = '<Totales>' + ''.join(tot_parts) + '</Totales>'
 
@@ -482,7 +482,7 @@ def generar_guia_despacho_xml(
     documento_id = f'F{folio}T{tipo_dte}'
     dte_xml = (
         '<?xml version="1.0" encoding="ISO-8859-1"?>'
-        f'<DTE xmlns="http://www.sii.cl/SiiDte" version="1.0">'
+        f'<DTE version="1.0">'
         f'<Documento ID="{documento_id}">'
         f'{encabezado_xml}'
         f'{detalles_xml}'

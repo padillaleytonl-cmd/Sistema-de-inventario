@@ -3703,7 +3703,6 @@ tbody td {
         <button class="cfg-tab" onclick="showCfgTab('integraciones',this)">Integraciones</button>
         <button class="cfg-tab" onclick="showCfgTab('usuarios',this)">Usuarios</button>
         <button class="cfg-tab" onclick="showCfgTab('tipificaciones',this)">Motivos de movimiento</button>
-        <button class="cfg-tab" onclick="showCfgTab('mantencion',this)">Mantención</button>
       </div>
 
       <!-- Contenido configuración -->
@@ -4019,47 +4018,6 @@ tbody td {
               </div>
             </div>
             <button class="btn-primary" onclick="toast('Funcionalidad de invitación próximamente', 'warn')">Enviar invitación</button>
-          </div>
-        </div>
-
-        <div id="cfg-mantencion" style="display:none;">
-          <div class="card">
-            <div class="card-title" style="margin-bottom:8px;">🔧 Recuperar órdenes atascadas</div>
-            <p style="color:var(--muted);font-size:13px;margin:0 0 14px;">
-              Reprocesa ventas que quedaron marcadas como procesadas pero sin registrarse
-              (no descontaron stock ni aparecen en reportes). Empezá siempre por
-              <strong>Ver diagnóstico</strong>: no toca nada, solo muestra cuántas hay.
-              Las ventas se reprocesan con su <strong>fecha real de compra</strong>.
-            </p>
-
-            <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-bottom:14px;">
-              <label style="font-size:13px;">Días hacia atrás:
-                <input type="number" id="rec_dias" value="8" min="1" max="30" style="width:64px;margin-left:6px;">
-              </label>
-              <label style="font-size:13px;">Órdenes por lote:
-                <input type="number" id="rec_lote" value="40" min="10" max="100" style="width:64px;margin-left:6px;">
-              </label>
-            </div>
-
-            <div style="display:flex;gap:10px;flex-wrap:wrap;">
-              <button class="btn-primary" onclick="recuperarOrdenes(true)">Ver diagnóstico (dry-run)</button>
-              <button class="btn-secondary" style="background:#dc2626;color:#fff;border-color:#dc2626;" onclick="recuperarOrdenes(false)">Destildar 1 lote</button>
-              <button class="btn-secondary" onclick="verificarRecuperacion()">Verificar fechas</button>
-            </div>
-
-            <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
-              <p style="color:var(--muted);font-size:13px;margin:0 0 10px;">
-                <strong>Recuperación directa (MercadoLibre):</strong> para órdenes viejas que el
-                sync ya no trae. Pide a ML todas las órdenes del rango y registra las que falten,
-                sin depender de destildar. Empezá por el dry-run.
-              </p>
-              <div style="display:flex;gap:10px;flex-wrap:wrap;">
-                <button class="btn-primary" onclick="recuperarDirecto(true)">Diagnóstico directo (dry-run)</button>
-                <button class="btn-secondary" style="background:#059669;color:#fff;border-color:#059669;" onclick="recuperarDirecto(false)">Recuperar directo (ML)</button>
-              </div>
-            </div>
-
-            <pre id="rec_resultado" style="background:var(--bg);padding:12px;border-radius:6px;margin-top:14px;font-size:12px;line-height:1.5;white-space:pre-wrap;max-height:320px;overflow:auto;display:none;"></pre>
           </div>
         </div>
 
@@ -5211,7 +5169,7 @@ function cargarMovimientosFull(){
 // ── CONFIGURACIÓN
 function showCfgTab(tab, el){
   if (tab === 'tipificaciones') cargarTipificaciones();
-  ['negocio','restock','bodegas','integraciones','usuarios','tipificaciones','mantencion'].forEach(t => {
+  ['negocio','restock','bodegas','integraciones','usuarios'].forEach(t => {
     const el2 = document.getElementById('cfg-'+t);
     if(el2) el2.style.display = t===tab ? '' : 'none';
   });
@@ -5219,127 +5177,6 @@ function showCfgTab(tab, el){
   if(el) el.classList.add('active');
   if(tab === 'restock') cargarLeadTimes();
   if(tab === 'usuarios') cargarUsuarios();
-}
-
-async function recuperarOrdenes(dryRun){
-  const dias = document.getElementById('rec_dias').value;
-  const lote = document.getElementById('rec_lote').value;
-  const out  = document.getElementById('rec_resultado');
-  out.style.display = 'block';
-
-  if (!dryRun && !confirm('Esto va a destildar 1 lote de órdenes para que el sync las reprocese. ¿Continuar?')) {
-    return;
-  }
-  out.textContent = 'Consultando...';
-
-  const url = `/admin/recuperar_ordenes_atascadas?dry_run=${dryRun?'1':'0'}&dias=${dias}&lote=${lote}`;
-  try {
-    const r = await fetch(url).then(x => x.json());
-    if (r.error) { out.textContent = 'Error: ' + r.error; return; }
-
-    let txt = '';
-    txt += `Modo: ${r.dry_run ? 'DIAGNÓSTICO (no se borró nada)' : 'EJECUTADO'}\n`;
-    txt += `Ventana: últimos ${r.dias} días\n\n`;
-    txt += `Total sin venta:   ${r.total_sin_venta}\n`;
-    txt += `  Recuperables:    ${r.recuperables}\n`;
-    txt += `  Excluidas:       ${r.excluidas}  (cancelaciones, ajustes, tests)\n\n`;
-    txt += `Por canal: ${JSON.stringify(r.desglose_por_canal)}\n\n`;
-    if (!r.dry_run) {
-      txt += `>>> Destildadas ahora:      ${r.destildadas_en_esta_llamada}\n`;
-      txt += `>>> Faltan por destildar:   ${r.restantes_por_destildar}\n`;
-      if (r.restantes_por_destildar > 0) {
-        txt += `\nEsperá ~5 min (un ciclo de sync) y apretá "Destildar 1 lote" de nuevo,\nhasta que "faltan" llegue a 0.`;
-      } else {
-        txt += `\n✓ No quedan órdenes por destildar.`;
-      }
-    } else {
-      txt += `Muestra (5 más recientes):\n${(r.muestra||[]).map(m=>'  '+m).join('\n')}`;
-      if (r.recuperables > 0) {
-        txt += `\n\nSi se ve bien, apretá "Destildar 1 lote" para empezar.`;
-      }
-    }
-    out.textContent = txt;
-  } catch (e) {
-    out.textContent = 'Error de red: ' + e;
-  }
-}
-
-async function verificarRecuperacion(){
-  const dias = document.getElementById('rec_dias').value;
-  const out  = document.getElementById('rec_resultado');
-  out.style.display = 'block';
-  out.textContent = 'Verificando...';
-
-  try {
-    const r = await fetch(`/admin/verificar_recuperacion?dias=${dias}`).then(x => x.json());
-    if (r.error) { out.textContent = 'Error: ' + r.error; return; }
-
-    let txt = '';
-    txt += `VERIFICACIÓN (últimos ${r.dias} días)\n\n`;
-    txt += `Órdenes que aún siguen sin venta: ${r.pendientes_sin_venta}\n\n`;
-    txt += `Ventas de marketplace registradas: ${r.ventas_marketplace_total}\n`;
-    txt += `  → con fecha = fecha real de compra: ${r.con_fecha_real}\n`;
-    txt += `  → con fecha = hoy:                  ${r.con_fecha_hoy}\n\n`;
-    if ((r.ultimas_importadas||[]).length) {
-      txt += `Últimas recuperadas (importadas en las últimas 2h):\n`;
-      txt += `  orden            canal        fecha       f.compra    cant\n`;
-      r.ultimas_importadas.forEach(m => {
-        txt += `  ${(m.orden||'').padEnd(15).slice(0,15)}  ${(m.canal||'').padEnd(11).slice(0,11)}  ${m.fecha}  ${m.fecha_compra}  ${m.cantidad}\n`;
-      });
-      txt += `\n`;
-    }
-    if (r.pendientes_sin_venta === 0) {
-      txt += `✓ Recuperación completa. `;
-    }
-    if (r.con_fecha_hoy > 0 && r.con_fecha_real > 0) {
-      txt += `\n⚠ Hay ${r.con_fecha_hoy} con fecha de hoy: pueden ser ventas reales de hoy (normal),\n  o recuperadas antes de aplicar el fix. Revisá la muestra de arriba.`;
-    } else if (r.con_fecha_real > 0 && r.con_fecha_hoy === 0) {
-      txt += `\n✓ Todas quedaron con su fecha real de compra. El fix funciona.`;
-    }
-    out.textContent = txt;
-  } catch (e) {
-    out.textContent = 'Error de red: ' + e;
-  }
-}
-
-async function recuperarDirecto(dryRun){
-  const dias = document.getElementById('rec_dias').value;
-  const out  = document.getElementById('rec_resultado');
-  out.style.display = 'block';
-
-  if (!dryRun && !confirm('Esto va a traer las órdenes de ML del rango y REGISTRAR las que falten (descuenta stock). ¿Continuar?')) {
-    return;
-  }
-  out.textContent = dryRun ? 'Consultando ML (puede tardar unos segundos)...' : 'Recuperando de ML (puede tardar)...';
-
-  const url = `/admin/recuperar_directo_meli?dry_run=${dryRun?'1':'0'}&dias=${dias}&limite=50`;
-  try {
-    const r = await fetch(url).then(x => x.json());
-    if (r.error) { out.textContent = 'Error: ' + r.error; return; }
-
-    let txt = '';
-    txt += `Modo: ${r.dry_run ? 'DIAGNÓSTICO (no se registró nada)' : 'EJECUTADO'}\n`;
-    txt += `Rango: últimos ${r.dias} días\n\n`;
-    txt += `Órdenes ML en el rango:   ${r.ordenes_rango}\n`;
-    txt += `  Pagadas:                ${r.pagadas}\n`;
-    txt += `  Sin venta (faltantes):  ${r.faltantes}\n\n`;
-    if (!r.dry_run) {
-      txt += `>>> Registradas ahora:    ${r.procesadas_esta_llamada} órdenes (${r.items_registrados} items)\n`;
-      txt += `>>> Faltan:               ${r.restantes}\n`;
-      if (r.restantes > 0) txt += `\nApretá "Recuperar directo (ML)" de nuevo para el siguiente bloque.`;
-      else txt += `\n✓ No quedan faltantes de ML en el rango.`;
-      if ((r.errores||[]).length) {
-        txt += `\n\nErrores (${r.errores.length}):\n` + r.errores.map(e=>'  '+e).join('\n');
-      }
-    } else {
-      txt += `Muestra de faltantes:\n${(r.muestra||[]).map(m=>'  '+m).join('\n')}`;
-      if (r.faltantes > 0) txt += `\n\nSi se ve bien, apretá "Recuperar directo (ML)".`;
-      else txt += `\n\n✓ No hay faltantes: todas las órdenes del rango ya están registradas.`;
-    }
-    out.textContent = txt;
-  } catch (e) {
-    out.textContent = 'Error de red: ' + e;
-  }
 }
 
 function cargarConfiguracion(){
@@ -14444,18 +14281,12 @@ function dtMostrarResultado(d, etiqueta){
       ? `<a href="${pdf}?formato=rollo" target="_blank" style="background:var(--card);border:1px solid var(--border);color:var(--text);text-decoration:none;padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;">PDF rollo</a>` : '';
     cont.innerHTML=`<div style="background:#f0fbf6;border:1px solid #b8e6d2;border-radius:11px;padding:20px;margin-top:22px;">
       <div style="font-size:16px;font-weight:700;color:#047a56;margin-bottom:6px;">${etiqueta} emitida — folio N° ${d.folio}</div>
-      <div style="font-size:13px;color:var(--muted);margin-bottom:12px;">Total ${_dtCLP(d.total)} · Track ID SII: ${d.track_id||'—'}</div>
-      <div id="dtEstadoSii" style="display:flex;align-items:center;gap:8px;font-size:13px;padding:9px 12px;background:var(--card);border:1px solid var(--border);border-radius:9px;margin-bottom:16px;">
-        <span style="width:9px;height:9px;border-radius:50%;background:#f59e0b;flex-shrink:0;"></span>
-        <span id="dtEstadoTexto" style="color:var(--muted);">Consultando estado en el SII…</span>
-      </div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:16px;">Total ${_dtCLP(d.total)} · Track ID SII: ${d.track_id||'—'}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <a href="${pdf}?formato=carta" target="_blank" style="background:#534AB7;color:#fff;text-decoration:none;padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;">Ver PDF</a>
         ${rollo}
         <button onclick="dtVolverATipos()" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:10px 16px;border-radius:9px;font-weight:600;font-size:13px;cursor:pointer;">Emitir otro documento</button>
       </div></div>`;
-    // Consulta automática del estado en el SII (como el bot de folios)
-    if(id) dtConsultarEstado(id, true);
   } else {
     let detalle='';
     if(d.pasos && d.pasos.length){
@@ -14468,42 +14299,6 @@ function dtMostrarResultado(d, etiqueta){
       if(box) box.insertAdjacentHTML('beforeend', detalle);
     }
   }
-}
-
-
-// Consulta el estado de un DTE en el SII (getEstUp por Track ID, como el bot de folios).
-// autoReintento: si es true y el estado no es final, reintenta solo unas veces.
-async function dtConsultarEstado(dteId, autoReintento, intento){
-  intento = intento || 0;
-  const cont=document.getElementById('dtEstadoSii');
-  const txt=document.getElementById('dtEstadoTexto');
-  const dot=cont ? cont.querySelector('span') : null;
-  try{
-    const r=await fetch('/facturacion/dte/'+dteId+'/consultar-estado',{method:'POST'});
-    const d=await r.json();
-    if(!d.ok){ if(txt) txt.textContent = d.error||'No se pudo consultar el estado.'; return; }
-    if(!cont) return;
-    if(d.estado==='aceptado'){
-      dot.style.background='#059669';
-      txt.innerHTML='<b style="color:#047a56;">Aceptado por el SII</b>'+(d.reparos?` · ${d.reparos} reparo(s)`:'');
-    } else if(d.estado==='rechazado'){
-      dot.style.background='#dc2626';
-      txt.innerHTML='<b style="color:#b91c1c;">Rechazado por el SII</b> — '+_dtEsc(d.mensaje||'');
-    } else {
-      dot.style.background='#f59e0b';
-      txt.textContent = d.mensaje || 'En proceso de validación en el SII.';
-      // Reintento automático suave (hasta 3 veces, cada 12s) solo tras emitir
-      if(autoReintento && intento<3){
-        setTimeout(()=>dtConsultarEstado(dteId, true, intento+1), 12000);
-      } else {
-        // Ofrecer botón para reconsultar manualmente
-        if(!document.getElementById('dtEstadoBtn')){
-          cont.insertAdjacentHTML('beforeend',
-            `<button id="dtEstadoBtn" onclick="dtConsultarEstado(${dteId},false)" style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--muted);padding:5px 11px;border-radius:7px;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;">Actualizar</button>`);
-        }
-      }
-    }
-  }catch(e){ if(txt) txt.textContent='Error consultando el estado: '+e.message; }
 }
 
 function dtInit(){

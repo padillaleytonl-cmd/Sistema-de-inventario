@@ -268,13 +268,10 @@ def parsear_dte_xml(dte_xml: bytes) -> dict:
         'dir_dest': _txt(transporte_xml, 'DirDest') if transporte_xml else '',
         'cmna_dest': _txt(transporte_xml, 'CmnaDest') if transporte_xml else '',
         'ciudad_dest': _txt(transporte_xml, 'CiudadDest') if transporte_xml else '',
-        # Las fechas/horas de traslado NO van en el XML del SII (igual que Lioren):
-        # se muestran solo en el PDF, tomándolas de datos_traslado (capturadas al
-        # emitir). Si no vienen, quedan vacías y no se imprime esa línea.
-        'fch_salida': (datos_traslado or {}).get('fch_salida', '') or '',
-        'hra_salida': (datos_traslado or {}).get('hra_salida', '') or '',
-        'fch_llegada': (datos_traslado or {}).get('fch_llegada', '') or '',
-        'hra_llegada': (datos_traslado or {}).get('hra_llegada', '') or '',
+        # Res.154: fecha/hora de salida y llegada deben aparecer en la representación impresa
+        'fch_salida': _txt(transporte_xml, 'FchSalida') if transporte_xml else '',
+        'hra_salida': _txt(transporte_xml, 'HraSalida') if transporte_xml else '',
+        'fch_llegada': _txt(transporte_xml, 'FchLlegada') if transporte_xml else '',
         'patente_carro': _txt(transporte_xml, 'PatenteCarro') if transporte_xml else '',
         'bultos': bultos,
         # Hay transporte declarado (para decidir si dibujar el bloque)
@@ -538,14 +535,12 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
             filas_tr.append(("Destino:", destino[:42]))
         elif cmna_ciudad:
             filas_tr.append(("Destino:", cmna_ciudad[:42]))
-        # Fechas/horas de traslado (solo en el PDF, no en el XML). Formato como Lioren:
-        # "Inicio de traslado" = fecha + hora salida; "Fin de traslado" = fecha + hora llegada.
-        _inicio = " ".join([p for p in [tr.get('fch_salida', ''), tr.get('hra_salida', '')] if p])
-        if _inicio:
-            filas_tr.append(("Inicio de traslado:", _inicio[:42]))
-        _fin = " ".join([p for p in [tr.get('fch_llegada', ''), tr.get('hra_llegada', '')] if p])
-        if _fin:
-            filas_tr.append(("Fin de traslado:", _fin[:42]))
+        # Res.154: fecha/hora de salida y llegada deben ir impresas
+        _salida = " ".join([p for p in [tr.get('fch_salida', ''), tr.get('hra_salida', '')] if p])
+        if _salida:
+            filas_tr.append(("Salida:", _salida[:42]))
+        if tr.get('fch_llegada'):
+            filas_tr.append(("Llegada:", tr['fch_llegada'][:42]))
         if tr.get('patente_carro'):
             filas_tr.append(("Patente carro:", tr['patente_carro'][:42]))
         if tr.get('bultos'):
@@ -950,8 +945,7 @@ def _pdf_rollo(d: dict, url_consulta: str) -> bytes:
 def generar_pdf_dte(dte_xml: bytes, formato: str = "carta",
                     url_consulta: str = "www.sii.cl",
                     nro_resol: int = None, anio_resol: int = None,
-                    solo_copia: str = None, datos_tenant: dict = None,
-                    datos_traslado: dict = None) -> bytes:
+                    solo_copia: str = None, datos_tenant: dict = None) -> bytes:
     """Genera el PDF de la representación gráfica de cualquier DTE.
 
     Args:

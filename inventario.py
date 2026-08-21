@@ -674,26 +674,7 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
     # Normalizar canal SIEMPRE — evita que entren 'mercadolibre' vs 'MercadoLibre' mezclados
     canal_normalizado = normalizar_canal(canal) if canal else "Sistema"
 
-    # Resolver tenant y pasarlo EXPLÍCITO a get_conn: en el sync automático (hilo del
-    # scheduler, sin sesión Flask) la conexión quedaría sin app.tenant_id y el INSERT
-    # violaría RLS. Mismo fix que en intentar_marcar_orden_atomic.
-    _tid_mov = None
-    try:
-        from flask import session, has_request_context
-        if has_request_context():
-            _tid_mov = session.get("tenant_id")
-    except Exception:
-        pass
-    if not _tid_mov:
-        try:
-            from app import get_thread_tenant
-            _tid_mov = get_thread_tenant()
-        except Exception:
-            pass
-    if not _tid_mov:
-        _tid_mov = 1  # Fallback Babymine
-
-    conn = get_conn(tenant_id=int(_tid_mov))
+    conn = get_conn()
     cur = conn.cursor()
     try:
         # NOTA: NO hacemos ALTER TABLE acá — las columnas ya existen hace meses.
@@ -1197,13 +1178,7 @@ def intentar_marcar_orden_atomic(order_id_texto):
     if not tid:
         tid = 1  # Fallback Babymine
 
-    # CRÍTICO: pasar el tenant EXPLÍCITO a get_conn para que establezca
-    # app.tenant_id en la conexión. Sin esto, en el sync automático (que corre
-    # en un hilo del scheduler, sin sesión Flask ni thread tenant), la conexión
-    # queda con app.tenant_id vacío y el INSERT viola la política RLS
-    # (tenant_id=1 ≠ app.tenant_id=NULL). Ese era el motivo por el que las
-    # órdenes de marketplaces dejaban de registrarse.
-    conn = get_conn(tenant_id=int(tid))
+    conn = get_conn()
     cur  = conn.cursor()
     try:
         # NOTA: NO hacemos ALTER TABLE aquí. La columna order_id_texto ya existe
@@ -2247,24 +2222,7 @@ def ajustar_stock_bodega(sku, bodega_codigo, delta):
     lo que convertía deltas negativos a 0 y NO descontaba stock al UPDATE.
     Ahora pasamos el delta REAL y aplicamos GREATEST solo en la lógica de upsert.
     """
-    # Resolver tenant EXPLÍCITO para no violar RLS al escribir stock_bodega desde
-    # el sync automático (hilo scheduler sin sesión Flask).
-    _tid_sb = None
-    try:
-        from flask import session, has_request_context
-        if has_request_context():
-            _tid_sb = session.get("tenant_id")
-    except Exception:
-        pass
-    if not _tid_sb:
-        try:
-            from app import get_thread_tenant
-            _tid_sb = get_thread_tenant()
-        except Exception:
-            pass
-    if not _tid_sb:
-        _tid_sb = 1  # Fallback Babymine
-    conn = get_conn(tenant_id=int(_tid_sb)); cur = conn.cursor()
+    conn = get_conn(); cur = conn.cursor()
     nuevo = 0
     try:
         delta_int = int(delta)
@@ -2434,26 +2392,7 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
 
     # Registrar movimiento con la bodega y trazabilidad completa
     try:
-        # Resolver tenant EXPLÍCITO: en el sync automático (hilo del scheduler, sin
-        # sesión Flask) la conexión quedaría sin app.tenant_id y el INSERT a
-        # movimientos violaría RLS → la venta se marcaba como procesada pero NO se
-        # registraba en Lusync. Mismo fix que en intentar_marcar_orden_atomic.
-        _tid_dv = None
-        try:
-            from flask import session, has_request_context
-            if has_request_context():
-                _tid_dv = session.get("tenant_id")
-        except Exception:
-            pass
-        if not _tid_dv:
-            try:
-                from app import get_thread_tenant
-                _tid_dv = get_thread_tenant()
-            except Exception:
-                pass
-        if not _tid_dv:
-            _tid_dv = 1  # Fallback Babymine
-        conn = get_conn(tenant_id=int(_tid_dv)); cur = conn.cursor()
+        conn = get_conn(); cur = conn.cursor()
         # NOTA: NO hacer ALTER TABLE aquí. Las columnas ya existen hace meses
         # y ALTER+COMMIT resetea app.tenant_id de sesión PG (rompe RLS para INSERT).
 
@@ -2472,7 +2411,7 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
              origen_registro, stock_antes, stock_despues)
             VALUES ('salida', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (sku, nombre, descontar, motivo_final, usuario, canal_normalizado,
-             (fecha_compra_clean or ahora_chile), orden_id, bodega, ahora_chile,
+             ahora_chile, orden_id, bodega, ahora_chile,
              fecha_compra_clean, origen_registro, stock_antes, stock_despues))
         conn.commit()
         cur.close(); release_conn(conn)

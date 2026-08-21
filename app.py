@@ -45,13 +45,6 @@ from inventario import (cargar_productos, guardar_productos, guardar_producto,
 app = Flask(__name__)
 app.secret_key = "clave_super_segura"
 
-# ── Inicialización: SECUENCIAL en el hilo principal ──
-# IMPORTANTE: los init corren directo (no en hilo de fondo). Cuando se movieron a
-# un hilo de fondo + el scheduler a otro hilo (para que Render abriera el puerto
-# rápido), el scheduler quedó corriendo en un contexto sin tenant establecido y
-# TODOS los syncs de marketplaces empezaron a fallar por RLS: las ventas se
-# marcaban como procesadas pero no se registraban en Lusync. Volvemos al arranque
-# secuencial que sí funcionaba (commit c63c23c).
 init_db()
 init_devoluciones()
 try:
@@ -78,6 +71,7 @@ init_sku_mapeo()
 init_alertas()
 init_meli_auth()
 init_bodegas()
+
 # ── Facturación electrónica SII (multi-tenant) ──
 try:
     from facturacion import init_facturacion_tables, init_uf_table
@@ -1034,11 +1028,6 @@ def _sync_meli_automatico():
         from mercadolibre import obtener_ordenes_meli
         from inventario import descontar_venta_inteligente, detectar_fulfillment_meli
         from datetime import datetime
-        try:
-            from mercadolibre import meli_headers as _meli_headers, MELI_API_URL as _MELI_API_URL
-            import requests as _req_ml
-        except Exception:
-            _meli_headers, _MELI_API_URL, _req_ml = None, None, None
         nuevas = 0
         canceladas = 0
         errores = []
@@ -1059,12 +1048,7 @@ def _sync_meli_automatico():
 
                 # ── Órdenes pagadas ──
                 if estado in ("paid", "confirmed"):
-                    # NO marcar aún: primero registramos la venta. Si marcáramos
-                    # antes y el registro fallara, la orden quedaría marcada sin
-                    # venta y nunca se reintentaría (ese era el bug: órdenes
-                    # marcadas pero no registradas en Lusync). Marcamos al final,
-                    # solo si el descuento fue exitoso.
-                    if orden_ya_procesada_texto(meli_key):
+                    if not intentar_marcar_orden_atomic(meli_key):
                         continue
 
                     # Parsear fecha de compra
@@ -1120,10 +1104,7 @@ def _sync_meli_automatico():
                             errores.append(f"MELI {order_id}/{sku_seller}→{sku_lusync}: {e}")
 
                     if items_descontados:
-                        # Registro exitoso: AHORA marcamos la orden como procesada.
-                        # Si el descuento hubiera fallado, items_descontados estaría
-                        # vacío y la orden NO se marca, para reintentarla luego.
-                        intentar_marcar_orden_atomic(meli_key)
+                        # [atomic] orden marcada al inicio — no remarcar
                         nuevas += 1
 
                 # ── Órdenes canceladas ──
@@ -1135,43 +1116,7 @@ def _sync_meli_automatico():
                         # [atomic] orden marcada al inicio — no remarcar
                         continue
 
-                    # ¿La orden es Fulfillment (Full)? En Full el stock físico vive en
-                    # la bodega de Mercado Libre, no en la central. Si una orden Full no
-                    # se entrega, ML reintegra el producto a SU stock de Full — Lusync NO
-                    # debe reintegrarlo a la bodega central, o lo contaría dos veces.
-                    _es_full_cancel = False
-                    try:
-                        _es_full_cancel = detectar_fulfillment_meli(o)
-                    except Exception:
-                        _es_full_cancel = False
-
-                    # ¿El envío alcanzó a despacharse y NO se entregó? En ese caso el
-                    # producto salió de la bodega y podría no haber vuelto (ML paga
-                    # igual). Se reintegra el stock (normalmente vuelve), pero se marca
-                    # como "pendiente de verificar" para revisión física.
-                    _ship = o.get("shipping") or {}
-                    _ship_status = (_ship.get("status") or "").lower()
-                    _ship_substatus = (_ship.get("substatus") or "").lower()
-                    # El status dentro de la orden a veces está desactualizado: si hay
-                    # shipping_id, consultar /shipments/{id} para el estado real.
-                    _ship_id = _ship.get("id")
-                    if _ship_id and _req_ml and _meli_headers and _MELI_API_URL:
-                        try:
-                            _rs = _req_ml.get(f"{_MELI_API_URL}/shipments/{_ship_id}",
-                                              headers=_meli_headers(), timeout=12)
-                            if _rs.status_code == 200:
-                                _sd = _rs.json()
-                                _ship_status = (_sd.get("status") or _ship_status).lower()
-                                _ship_substatus = (_sd.get("substatus") or _ship_substatus).lower()
-                        except Exception:
-                            pass
-                    no_entregado = (
-                        _ship_status in ("not_delivered", "not_delivered_return", "returned")
-                        or _ship_substatus in ("returning_to_sender", "returned_to_hub", "lost", "stolen", "damaged")
-                    )
-
                     items_reintegrados = []
-                    items_full = []  # Full: no se reintegra a central, ML lo maneja en su stock
                     for item in o.get("order_items", []):
                         item_data = item.get("item", {})
                         item_id_canc = item_data.get("id", "")
@@ -1189,30 +1134,14 @@ def _sync_meli_automatico():
                         except Exception:
                             sku_lusync = sku_seller
 
-                        # ── FULL: el stock lo repone ML en su bodega, no la central ──
-                        if _es_full_cancel:
-                            _nom = next((pp["nombre"] for pp in cargar_productos() if pp["sku"] == sku_lusync), sku_lusync)
-                            registrar_movimiento(
-                                "ajuste", sku_lusync, _nom, 0,
-                                f"Cancelación Full MELI orden {order_id} — stock lo repone ML en Full, no la central",
-                                usuario="Sistema", canal="MercadoLibre Full", orden_id=order_id
-                            )
-                            items_full.append(f"{_nom} (SKU: {sku_seller}→{sku_lusync}) x{cantidad}")
-                            continue
-
                         productos = cargar_productos()
                         for p in productos:
                             if p["sku"] == sku_lusync:
                                 p["stock"] += cantidad
                                 guardar_producto(p)
-                                _motivo = (
-                                    f"Cancelación MELI orden {order_id} — NO ENTREGADO, verificar retorno físico"
-                                    if no_entregado else
-                                    f"Cancelación MELI orden {order_id}"
-                                )
                                 registrar_movimiento(
                                     "entrada", p["sku"], p["nombre"], cantidad,
-                                    _motivo,
+                                    f"Cancelación MELI orden {order_id}",
                                     usuario="Sistema", canal="MercadoLibre", orden_id=order_id
                                 )
                                 sincronizar_stock_marketplaces(
@@ -1222,42 +1151,14 @@ def _sync_meli_automatico():
                                 items_reintegrados.append(f"{p['nombre']} (SKU: {sku_seller}→{sku_lusync}) x{cantidad}")
                                 break
 
-                    # Aviso para órdenes Full (no se tocó la central)
-                    if items_full:
-                        try:
-                            crear_alerta(
-                                tipo="cancelacion_full",
-                                titulo=f"Orden Full no completada: {order_id}",
-                                mensaje=("Esta orden es <b>Fulfillment (Full)</b>: el stock lo administra Mercado Libre "
-                                         "en su propia bodega. No se modificó tu stock central — el ajuste ocurre "
-                                         "automáticamente en Full.<br><br>"
-                                         "Productos (informativo):<br>" + "<br>".join(f"• {it}" for it in items_full)),
-                                sku=None
-                            )
-                        except: pass
-                        canceladas += 1
-
                     if items_reintegrados:
                         try:
-                            if no_entregado:
-                                crear_alerta(
-                                    tipo="verificar_retorno",
-                                    titulo=f"Verificar retorno físico — orden {order_id} no entregada",
-                                    mensaje=("Mercado Libre marcó esta orden como <b>no entregada</b> y reembolsó al comprador. "
-                                             "Se reintegró el stock al inventario de forma preventiva, pero el producto <b>puede o no volver</b> a tu bodega:<br><br>"
-                                             "• Si el paquete <b>vuelve</b>, el stock ya está correcto (y ML puede descontarte el pago al confirmarlo).<br>"
-                                             "• Si ML decide <b>no devolvértelo</b> (cuando el retorno cuesta más que el producto), te deja el dinero pero el producto se pierde: en ese caso debes <b>descontar el stock manualmente</b>.<br><br>"
-                                             "<b>Acción:</b> cuando sepas el desenlace, ajusta si corresponde.<br><br>"
-                                             "Productos reintegrados (por verificar):<br>" + "<br>".join(f"• {it}" for it in items_reintegrados)),
-                                    sku=sku_lusync
-                                )
-                            else:
-                                crear_alerta(
-                                    tipo="cancelacion",
-                                    titulo=f"Orden cancelada en MercadoLibre: {order_id}",
-                                    mensaje="Stock reintegrado:<br>" + "<br>".join(f"• {it}" for it in items_reintegrados),
-                                    sku=sku_lusync
-                                )
+                            crear_alerta(
+                                tipo="cancelacion",
+                                titulo=f"Orden cancelada en MercadoLibre: {order_id}",
+                                mensaje="Stock reintegrado:<br>" + "<br>".join(f"• {it}" for it in items_reintegrados),
+                                sku=sku_lusync
+                            )
                         except: pass
                         canceladas += 1
 
@@ -2313,28 +2214,8 @@ scheduler.add_job(_sync_full_meli_diario, "interval", hours=24, id="full_meli_di
 # El generador (_fact_job_rcof_diario + facturacion/rcof.py) se conserva por si el SII
 # lo solicita puntualmente, y se puede disparar manualmente vía /facturacion/rcof/generar.
 
-import os as _os_sched
-# Arrancar el scheduler solo una vez. Con el reloader de Flask o si el módulo se
-# importa más de una vez, evitamos duplicar jobs y los errores "cannot schedule
-# new futures after interpreter shutdown" (que salen cuando un scheduler duplicado
-# intenta lanzar jobs mientras el proceso original se apaga).
-if not _os_sched.environ.get("_LUSYNC_SCHEDULER_STARTED"):
-    _os_sched.environ["_LUSYNC_SCHEDULER_STARTED"] = "1"
-    # Arranque DIRECTO del scheduler (como en c63c23c). El init ya corrió
-    # secuencialmente arriba, así que las tablas existen. NO arrancar en un hilo
-    # aparte: eso dejaba el scheduler sin contexto de tenant y rompía los syncs.
-    try:
-        scheduler.start()
-    except Exception as _e_sched:
-        print(f"[Scheduler] No se pudo iniciar: {_e_sched}")
-
-    def _apagar_scheduler():
-        try:
-            if scheduler.running:
-                scheduler.shutdown(wait=False)
-        except Exception:
-            pass
-    atexit.register(_apagar_scheduler)
+scheduler.start()
+atexit.register(lambda: scheduler.shutdown(wait=False))
 
 # ── SYNC DE RECUPERACIÓN AL ARRANCAR ──
 # Busca órdenes perdidas durante caídas del servidor
@@ -4397,14 +4278,6 @@ def audit_test():
     return {"ok": True, "mensaje": "Registro de prueba creado"}
 
 # ── LOGIN / PANEL ──
-
-@app.route("/healthz")
-def _healthz():
-    """Health check para Render: responde 200 siempre que la app esté viva,
-    sin requerir sesión ni tocar la base de datos. Configura esta ruta como
-    'Health Check Path' en Render para que marque el servicio como Live."""
-    return "ok", 200
-
 
 @app.route("/")
 def home():
@@ -7328,17 +7201,6 @@ def ruta_meli_webhook():
         return jsonify({"status": "ok"}), 200
     
     try:
-        # FIX RLS (2026-08-18): los webhooks llegan SIN sesión Flask, por lo que
-        # get_conn() quedaba sin tenant y RLS ocultaba productos/mapeos. El síntoma:
-        # "[MELI Webhook] SKU 'X' no encontrado en inventario" con la orden ya
-        # marcada (atomic) → venta jamás registrada (limbo). Setear el tenant del
-        # thread hace que TODAS las consultas internas (cargar_productos,
-        # listar_sku_mapeo, etc.) resuelvan RLS igual que en los schedulers.
-        try:
-            set_thread_tenant(1)  # único tenant productivo (Babymine)
-        except Exception:
-            pass
-
         payload = request.json or {}
         topic = (payload.get("topic") or "").lower()
         
@@ -7394,13 +7256,6 @@ def ruta_meli_webhook_fbm():
         return jsonify({"status": "ok", "endpoint": "fbm_stock_operations"}), 200
     
     try:
-        # FIX RLS (2026-08-18): webhook sin sesión → setear tenant del thread
-        # para que las consultas internas resuelvan RLS (mismo fix que orders).
-        try:
-            set_thread_tenant(1)
-        except Exception:
-            pass
-
         payload = request.json or {}
         # Procesar de forma resiliente: si algo falla, devolver 200 igual
         # (MELI reintenta cada 5min hasta 7 días si recibe error)
@@ -8299,310 +8154,6 @@ def admin_estado_reconstruccion():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
-
-
-@app.route("/admin/recuperar_ordenes_atascadas", methods=["GET"])
-def admin_recuperar_ordenes_atascadas():
-    """Recupera órdenes marcadas como procesadas pero SIN venta registrada.
-    Las destilda de ordenes_procesadas para que el sync las reprocese
-    (con fecha real de compra, gracias al fix de descontar_venta_inteligente).
-
-    Query string:
-      ?dry_run=1     (default 1: solo diagnostica, NO borra)
-      ?dias=8        (ventana hacia atrás, default 8)
-      ?lote=40       (cuántas destildar por llamada, default 40 — evita saturar)
-    """
-    if not session.get("logged"):
-        return jsonify({"error": "no autorizado"}), 401
-
-    dry_run = request.args.get("dry_run", "1") == "1"   # default seguro = dry_run
-    dias    = int(request.args.get("dias", 8))
-    lote    = int(request.args.get("lote", 40))
-
-    PREFIJOS_VENTA   = ("MELI-", "FALABELLA-", "PARIS-", "RIPLEY-", "RP-", "WOO-", "FBM-OP-")
-    PREFIJOS_EXCLUIR = ("CANCEL-", "AJUSTE-", "DEV-", "TEST-", "CASO-")
-
-    def _es_recuperable(k):
-        if any(x in k for x in PREFIJOS_EXCLUIR):
-            return False
-        # Walmart marca con el customerOrderId pelado (solo dígitos, sin prefijo)
-        if k.isdigit():
-            return True
-        return k.startswith(PREFIJOS_VENTA)
-
-    try:
-        registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
-                        "recuperar_ordenes_atascadas",
-                        detalle=f"dias={dias} lote={lote} dry_run={dry_run}")
-    except Exception:
-        pass
-
-    from inventario import get_conn, release_conn
-    from collections import Counter
-
-    conn = get_conn(tenant_id=1)
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT op.order_id_texto, op.fecha
-                FROM ordenes_procesadas op
-                WHERE op.fecha > NOW() - (%s || ' days')::INTERVAL
-                  AND op.order_id_texto IS NOT NULL
-                  AND NOT EXISTS (
-                      SELECT 1 FROM movimientos m
-                      WHERE m.tipo = 'salida'
-                        AND (m.orden_id = op.order_id_texto
-                             OR m.orden_id = split_part(op.order_id_texto, '-', 2)
-                             OR op.order_id_texto LIKE '%%' || m.orden_id)
-                  )
-                ORDER BY op.fecha DESC
-            """, (dias,))
-            rows = cur.fetchall()
-
-            recuperables = [(r[0], str(r[1])) for r in rows if _es_recuperable(r[0])]
-            excluidas    = [r[0] for r in rows if not _es_recuperable(r[0])]
-            canales      = Counter(("WALMART" if k.isdigit() else k.split("-")[0]) for k, _ in recuperables)
-
-            borradas = 0
-            if not dry_run and recuperables:
-                keys = [k for k, _ in recuperables[:lote]]
-                cur.execute("DELETE FROM ordenes_procesadas WHERE order_id_texto = ANY(%s)", (keys,))
-                borradas = cur.rowcount
-                conn.commit()
-    finally:
-        release_conn(conn)
-
-    return jsonify({
-        "ok": True,
-        "dry_run": dry_run,
-        "dias": dias,
-        "total_sin_venta": len(rows),
-        "recuperables": len(recuperables),
-        "excluidas": len(excluidas),
-        "desglose_por_canal": dict(canales),
-        "destildadas_en_esta_llamada": borradas,
-        "restantes_por_destildar": len(recuperables) - borradas,
-        "muestra": [f"{f[:19]} | {k}" for k, f in recuperables[:5]],
-    })
-
-
-@app.route("/admin/verificar_recuperacion", methods=["GET"])
-def admin_verificar_recuperacion():
-    """Verifica el resultado de la recuperación: cuántas órdenes siguen sin venta
-    y, de las ventas registradas, cuántas quedaron con la FECHA REAL de compra
-    (vs. fecha de hoy). Confirma que el fix de fecha está funcionando.
-
-    Query string:
-      ?dias=8   (ventana hacia atrás, default 8)
-    """
-    if not session.get("logged"):
-        return jsonify({"error": "no autorizado"}), 401
-
-    dias = int(request.args.get("dias", 8))
-    from inventario import get_conn, release_conn
-
-    conn = get_conn(tenant_id=1)
-    try:
-        with conn.cursor() as cur:
-            # 1) ¿Cuántas siguen sin venta? (mismo criterio que la recuperación)
-            cur.execute("""
-                SELECT COUNT(*)
-                FROM ordenes_procesadas op
-                WHERE op.fecha > NOW() - (%s || ' days')::INTERVAL
-                  AND op.order_id_texto IS NOT NULL
-                  AND NOT EXISTS (
-                      SELECT 1 FROM movimientos m
-                      WHERE m.tipo='salida'
-                        AND (m.orden_id = op.order_id_texto
-                             OR m.orden_id = split_part(op.order_id_texto,'-',2)
-                             OR op.order_id_texto LIKE '%%' || m.orden_id)
-                  )
-            """, (dias,))
-            pendientes = cur.fetchone()[0]
-
-            # 2) De las ventas de marketplace, ¿cuántas tienen fecha = fecha real?
-            cur.execute("""
-                SELECT
-                  COUNT(*) AS total,
-                  COUNT(*) FILTER (WHERE fecha_compra_marketplace IS NOT NULL
-                       AND date_trunc('day', fecha) = date_trunc('day', fecha_compra_marketplace)) AS fecha_ok,
-                  COUNT(*) FILTER (WHERE date_trunc('day', fecha) = date_trunc('day', NOW())) AS fecha_hoy
-                FROM movimientos
-                WHERE tipo='salida'
-                  AND fecha > NOW() - (%s || ' days')::INTERVAL
-                  AND canal ILIKE ANY(ARRAY['%%meli%%','%%mercadolibre%%','%%falabella%%',
-                                            '%%paris%%','%%ripley%%','%%walmart%%','%%woo%%'])
-            """, (dias,))
-            total, fecha_ok, fecha_hoy = cur.fetchone()
-
-            # 3) Muestra de las últimas importadas (últimas 2h)
-            cur.execute("""
-                SELECT orden_id, canal, fecha::date, fecha_compra_marketplace::date, cantidad
-                FROM movimientos
-                WHERE tipo='salida'
-                  AND fecha_importacion > NOW() - INTERVAL '2 hours'
-                ORDER BY fecha_importacion DESC
-                LIMIT 10
-            """)
-            muestra = [
-                {"orden": str(o), "canal": c, "fecha": str(f),
-                 "fecha_compra": str(fc), "cantidad": cant}
-                for o, c, f, fc, cant in cur.fetchall()
-            ]
-    finally:
-        release_conn(conn)
-
-    return jsonify({
-        "ok": True,
-        "dias": dias,
-        "pendientes_sin_venta": pendientes,
-        "ventas_marketplace_total": total,
-        "con_fecha_real": fecha_ok,
-        "con_fecha_hoy": fecha_hoy,
-        "ultimas_importadas": muestra,
-    })
-
-
-@app.route("/admin/recuperar_directo_meli", methods=["GET"])
-def admin_recuperar_directo_meli():
-    """Recuperación DIRECTA de órdenes ML por rango de fechas.
-
-    A diferencia de destildar (que depende de la ventana de 50 órdenes del sync),
-    este endpoint pide a ML TODAS las órdenes de un rango de fechas (paginando),
-    detecta cuáles no tienen venta registrada en movimientos, y las registra
-    directamente con descontar_venta_inteligente (fix de fecha + RLS ya aplicados).
-
-    Sirve para recuperar órdenes VIEJAS que el sync ya no trae.
-
-    Query string:
-      ?dry_run=1     (default 1: solo diagnostica, NO registra)
-      ?dias=8        (rango hacia atrás, default 8)
-      ?limite=50     (máx órdenes a registrar por llamada, default 50)
-    """
-    if not session.get("logged"):
-        return jsonify({"error": "no autorizado"}), 401
-
-    from datetime import datetime, timedelta
-    import pytz as _pytz
-    TZ = _pytz.timezone('America/Santiago')
-
-    dry_run = request.args.get("dry_run", "1") == "1"
-    dias    = int(request.args.get("dias", 8))
-    limite  = int(request.args.get("limite", 50))
-
-    try:
-        registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
-                        "recuperar_directo_meli",
-                        detalle=f"dias={dias} limite={limite} dry_run={dry_run}")
-    except Exception:
-        pass
-
-    from mercadolibre import obtener_todas_ordenes_meli_rango
-    from inventario import (get_conn, release_conn, descontar_venta_inteligente,
-                            detectar_fulfillment_meli, obtener_sku_lusync_por_canal,
-                            marcar_orden_procesada_texto)
-
-    # 1) Traer TODAS las órdenes ML del rango (paginado, rompe el límite de 50)
-    ahora = datetime.now(TZ)
-    df = (ahora - timedelta(days=dias)).strftime("%Y-%m-%dT00:00:00.000-04:00")
-    dt = ahora.strftime("%Y-%m-%dT23:59:59.000-04:00")
-
-    log = [f"Rango: {df[:10]} a {dt[:10]}"]
-    try:
-        ordenes = obtener_todas_ordenes_meli_rango(df, dt, max_paginas=10)
-    except Exception as e:
-        return jsonify({"error": f"Error trayendo órdenes ML: {e}"}), 500
-    log.append(f"Órdenes ML traídas del rango: {len(ordenes)}")
-
-    # 2) Filtrar solo pagadas
-    pagadas = [o for o in ordenes if o.get("status") in ("paid", "confirmed")]
-    log.append(f"Órdenes pagadas: {len(pagadas)}")
-
-    # 3) Cruzar contra movimientos: ¿cuáles NO tienen venta registrada?
-    conn = get_conn(tenant_id=1)
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""SELECT DISTINCT orden_id FROM movimientos
-                           WHERE tipo='salida' AND fecha > NOW() - (%s || ' days')::INTERVAL
-                             AND orden_id IS NOT NULL""", (dias + 2,))
-            ya_registradas = set(str(r[0]) for r in cur.fetchall())
-    finally:
-        release_conn(conn)
-
-    faltantes = [o for o in pagadas if str(o.get("id", "")) not in ya_registradas]
-    log.append(f"Órdenes SIN venta registrada (faltantes): {len(faltantes)}")
-
-    # 4) Registrar (o simular) las faltantes
-    a_procesar = faltantes[:limite]
-    registradas = 0
-    items_total = 0
-    errores = []
-    muestra = []
-
-    for o in a_procesar:
-        order_id = str(o.get("id", ""))
-        # fecha real de compra
-        fecha_compra = None
-        try:
-            ds = (o.get("date_created", "") or "").replace("Z", "+00:00")
-            if ds:
-                fecha_compra = datetime.fromisoformat(ds)
-        except Exception:
-            pass
-
-        es_full = detectar_fulfillment_meli(o)
-
-        if len(muestra) < 8:
-            muestra.append(f"{(str(fecha_compra)[:10])} | {order_id} | {'FULL' if es_full else 'Seller'}")
-
-        if dry_run:
-            continue
-
-        hubo_item = False
-        for item in o.get("order_items", []):
-            item_data = item.get("item", {})
-            item_id = item_data.get("id", "")
-            sku_seller = ((item_data.get("seller_sku") or "").strip()
-                          or (item_data.get("seller_custom_field") or "").strip())
-            cantidad = int(item.get("quantity", 1))
-            if not sku_seller:
-                continue
-            try:
-                sku_lusync = obtener_sku_lusync_por_canal(
-                    "mercadolibre", sku_canal=sku_seller, item_id_canal=item_id) or sku_seller
-            except Exception:
-                sku_lusync = sku_seller
-            try:
-                descontar_venta_inteligente(
-                    sku=sku_lusync, cantidad=cantidad, canal="mercadolibre",
-                    fulfillment=es_full, orden_id=order_id,
-                    fecha_compra_marketplace=fecha_compra)
-                items_total += 1
-                hubo_item = True
-            except Exception as e:
-                errores.append(f"{order_id}/{sku_seller}: {str(e)[:120]}")
-
-        if hubo_item:
-            try:
-                marcar_orden_procesada_texto(f"MELI-{order_id}")
-            except Exception:
-                pass
-            registradas += 1
-
-    return jsonify({
-        "ok": True,
-        "dry_run": dry_run,
-        "dias": dias,
-        "ordenes_rango": len(ordenes),
-        "pagadas": len(pagadas),
-        "faltantes": len(faltantes),
-        "procesadas_esta_llamada": registradas,
-        "items_registrados": items_total,
-        "restantes": max(0, len(faltantes) - registradas),
-        "errores": errores[:10],
-        "muestra": muestra,
-        "log": log,
-    })
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -23113,12 +22664,6 @@ def facturacion_nota_credito_emitir():
     receptor = data.get("receptor") or {"rut": "66666666-6", "razon_social": "Consumidor Final"}
     if not receptor.get("rut"): receptor["rut"] = "66666666-6"
     if not receptor.get("razon_social"): receptor["razon_social"] = "Consumidor Final"
-    # Validar dígito verificador del RUT receptor (evita rechazo del SII por RUT inválido).
-    from facturacion.utils import validar_rut as _validar_rut_nc
-    _rr_nc = (receptor.get("rut") or "").strip()
-    if _rr_nc and _rr_nc != "66666666-6" and not _validar_rut_nc(_rr_nc):
-        return jsonify({"ok": False, "error": "El RUT del receptor (%s) no es válido: "
-                        "el dígito verificador no corresponde." % _rr_nc}), 400
 
     # 3. Reservar folio tipo 61 (ATÓMICO)
     folio_res = obtener_folio_disponible(get_conn, release_conn, tenant_id, 61, ambiente)
@@ -23177,7 +22722,7 @@ def facturacion_nota_credito_emitir():
         )
         sobre_firmado = firmar_envio_completo(
             sobre, cert["pfx_bytes"], cert["password"],
-            set_dte_id=set_id, documento_ids=[])  # Documento ya firmado por firmar_documento; evita doble firma (RSC)
+            set_dte_id=set_id, documento_ids=[documento_id])
         paso("Firmar sobre EnvioDTE", True, str(len(sobre_firmado)) + " bytes")
 
         # 6. REGISTRAR EN BD ANTES DE ENVIAR
@@ -23484,12 +23029,6 @@ def facturacion_nota_debito_emitir():
     receptor = data.get("receptor") or {"rut": "66666666-6", "razon_social": "Consumidor Final"}
     if not receptor.get("rut"): receptor["rut"] = "66666666-6"
     if not receptor.get("razon_social"): receptor["razon_social"] = "Consumidor Final"
-    # Validar dígito verificador del RUT receptor (evita rechazo del SII por RUT inválido).
-    from facturacion.utils import validar_rut as _validar_rut_nc
-    _rr_nc = (receptor.get("rut") or "").strip()
-    if _rr_nc and _rr_nc != "66666666-6" and not _validar_rut_nc(_rr_nc):
-        return jsonify({"ok": False, "error": "El RUT del receptor (%s) no es válido: "
-                        "el dígito verificador no corresponde." % _rr_nc}), 400
 
     # 3. Reservar folio tipo 61 (ATÓMICO)
     folio_res = obtener_folio_disponible(get_conn, release_conn, tenant_id, 56, ambiente)
@@ -23548,7 +23087,7 @@ def facturacion_nota_debito_emitir():
         )
         sobre_firmado = firmar_envio_completo(
             sobre, cert["pfx_bytes"], cert["password"],
-            set_dte_id=set_id, documento_ids=[])  # Documento ya firmado por firmar_documento; evita doble firma (RSC)
+            set_dte_id=set_id, documento_ids=[documento_id])
         paso("Firmar sobre EnvioDTE", True, str(len(sobre_firmado)) + " bytes")
 
         # 6. REGISTRAR EN BD ANTES DE ENVIAR
@@ -23834,14 +23373,6 @@ def facturacion_boleta_preview():
             iddoc_extra += f"<IndTraslado>{int(_it)}</IndTraslado>"
         if _td:
             iddoc_extra += f"<TipoDespacho>{int(_td)}</TipoDespacho>"
-        # Fecha/hora salida y llegada van en IdDoc (schema SII), no en Transporte
-        _trf = _guia.get("transporte") or {}
-        if _trf.get("fch_salida"):
-            iddoc_extra += f"<FchSalida>{_esc_xml_preview(_trf['fch_salida'])}</FchSalida>"
-        if _trf.get("hra_salida"):
-            iddoc_extra += f"<HraSalida>{_esc_xml_preview(_trf['hra_salida'])}</HraSalida>"
-        if _trf.get("fch_llegada"):
-            iddoc_extra += f"<FchLlegada>{_esc_xml_preview(_trf['fch_llegada'])}</FchLlegada>"
         _tr = _guia.get("transporte") or {}
         if _tr:
             _partes = ""
@@ -23862,6 +23393,14 @@ def facturacion_boleta_preview():
                 _partes += f"<CmnaDest>{_esc_xml_preview(_tr['cmna_dest'])}</CmnaDest>"
             if _tr.get("ciudad_dest"):
                 _partes += f"<CiudadDest>{_esc_xml_preview(_tr['ciudad_dest'])}</CiudadDest>"
+            # Fecha/hora de salida y llegada (opcionales, Res.154). Van al final
+            # del bloque, en el orden que define el Anexo Técnico 2.5.
+            if _tr.get("fch_salida"):
+                _partes += f"<FchSalida>{_esc_xml_preview(_tr['fch_salida'])}</FchSalida>"
+            if _tr.get("hra_salida"):
+                _partes += f"<HraSalida>{_esc_xml_preview(_tr['hra_salida'])}</HraSalida>"
+            if _tr.get("fch_llegada"):
+                _partes += f"<FchLlegada>{_esc_xml_preview(_tr['fch_llegada'])}</FchLlegada>"
             if _partes:
                 transporte_xml = "<Transporte>" + _partes + "</Transporte>"
 
@@ -24277,21 +23816,11 @@ def facturacion_boleta_pdf(boleta_id):
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            # datos_traslado guarda las fechas de salida/llegada para el PDF (no van
-            # en el XML del SII). La columna puede no existir en tenants antiguos.
-            try:
-                cur.execute("""
-                    SELECT xml_firmado, datos_traslado FROM facturacion_dtes
-                    WHERE id = %s AND tenant_id = %s
-                """, (boleta_id, tenant_id))
-                row = cur.fetchone()
-            except Exception:
-                conn.rollback()
-                cur.execute("""
-                    SELECT xml_firmado, NULL FROM facturacion_dtes
-                    WHERE id = %s AND tenant_id = %s
-                """, (boleta_id, tenant_id))
-                row = cur.fetchone()
+            cur.execute("""
+                SELECT xml_firmado FROM facturacion_dtes
+                WHERE id = %s AND tenant_id = %s
+            """, (boleta_id, tenant_id))
+            row = cur.fetchone()
     finally:
         release_conn(conn)
 
@@ -24299,13 +23828,6 @@ def facturacion_boleta_pdf(boleta_id):
         return jsonify({"ok": False, "error": "Boleta no encontrada"}), 404
 
     xml = row[0].encode("iso-8859-1", errors="replace") if isinstance(row[0], str) else row[0]
-    _datos_traslado_pdf = None
-    if len(row) > 1 and row[1]:
-        try:
-            import json as _json_tr
-            _datos_traslado_pdf = _json_tr.loads(row[1]) if isinstance(row[1], str) else row[1]
-        except Exception:
-            _datos_traslado_pdf = None
 
     # Datos de contacto del emisor para la parte visual (desde config del tenant)
     from facturacion.db import obtener_config_facturacion
@@ -24319,8 +23841,7 @@ def facturacion_boleta_pdf(boleta_id):
     }
     url_consulta = "lusync.cl/consultadte"
     pdf = generar_pdf_dte(xml, formato=formato, url_consulta=url_consulta,
-                          datos_tenant=_datos_tenant_pdf,
-                          datos_traslado=_datos_traslado_pdf)
+                          datos_tenant=_datos_tenant_pdf)
     return Response(pdf, mimetype="application/pdf",
                     headers={"Content-Disposition": 'inline; filename="boleta_' + str(boleta_id) + '.pdf"'})
 
@@ -24808,13 +24329,6 @@ def facturacion_factura_emitir():
     if faltan:
         return jsonify({"ok": False, "error": "La factura requiere receptor completo. "
                         "Faltan: " + ", ".join(faltan)}), 400
-    # Validar dígito verificador del RUT receptor antes de emitir (un RUT inválido
-    # hace que el SII rechace el documento).
-    from facturacion.utils import validar_rut as _validar_rut
-    _rut_recep_f = (receptor.get("rut") or "").strip()
-    if not _validar_rut(_rut_recep_f):
-        return jsonify({"ok": False, "error": "El RUT del receptor (%s) no es válido: "
-                        "el dígito verificador no corresponde." % _rut_recep_f}), 400
 
     items = data.get("items") or []
     if not items:
@@ -24903,7 +24417,7 @@ def facturacion_factura_emitir():
             fch_resol=fch_resol, nro_resol=nro_resol, tipo_dte=_tipo_factura, set_dte_id=set_id)
         sobre_firmado = firmar_envio_completo(
             sobre, cert["pfx_bytes"], cert["password"],
-            set_dte_id=set_id, documento_ids=[])  # Documento ya firmado por firmar_documento; evita doble firma (RSC)
+            set_dte_id=set_id, documento_ids=[documento_id])
         paso("Firmar sobre EnvioDTE", True, str(len(sobre_firmado)) + " bytes")
 
         # 6. Registrar en BD antes de enviar
@@ -25045,14 +24559,6 @@ def facturacion_guia_emitir():
                   if not (receptor.get(c) or "").strip()]
         if faltan:
             return jsonify({"ok": False, "error": "La guía requiere receptor. Faltan: " + ", ".join(faltan)}), 400
-        # Validar dígito verificador del RUT receptor: un RUT inválido hace que el
-        # SII rechace el documento (aunque el envío se procese). Se valida ANTES de
-        # gastar folio y enviar.
-        from facturacion.utils import validar_rut as _validar_rut
-        _rut_recep = (receptor.get("rut") or "").strip()
-        if not _validar_rut(_rut_recep):
-            return jsonify({"ok": False, "error": "El RUT del receptor (%s) no es válido: "
-                            "el dígito verificador no corresponde. Verifica el RUT antes de emitir." % _rut_recep}), 400
 
     # 1. Config
     config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
@@ -25137,11 +24643,6 @@ def facturacion_guia_emitir():
         paso("Generar Guía de Despacho", True, "Total " + str(total))
 
         # 5. Firmar documento + sobre
-        # El Documento se firma UNA sola vez con firmar_documento. Luego
-        # firmar_envio_completo debe firmar SOLO el SetDTE (documento_ids=[]),
-        # NO re-firmar el Documento: dos <Signature> dentro del <DTE> rompen el
-        # schema del SII (RSC "Signature not expected"). Verificado contra el XSD
-        # oficial EnvioDTE: con documento_ids=[] el sobre valida; con el id, no.
         guia_firmada = firmar_documento(guia_xml, cert["pfx_bytes"], cert["password"], documento_id)
         set_id = "SetDoc"
         sobre = armar_envio_dte(
@@ -25149,40 +24650,22 @@ def facturacion_guia_emitir():
             fch_resol=fch_resol, nro_resol=nro_resol, tipo_dte=52, set_dte_id=set_id)
         sobre_firmado = firmar_envio_completo(
             sobre, cert["pfx_bytes"], cert["password"],
-            set_dte_id=set_id, documento_ids=[])
+            set_dte_id=set_id, documento_ids=[documento_id])
         paso("Firmar sobre EnvioDTE", True, str(len(sobre_firmado)) + " bytes")
 
         # 6. Registrar en BD antes de enviar
         conn = get_conn()
         try:
             with conn.cursor() as cur:
-                # Asegurar columna datos_traslado (fechas de salida/llegada para el PDF,
-                # no van en el XML del SII). Autocreación idempotente.
-                try:
-                    cur.execute("ALTER TABLE facturacion_dtes ADD COLUMN IF NOT EXISTS datos_traslado TEXT")
-                    conn.commit()
-                except Exception:
-                    conn.rollback()
-                # Armar el JSON de fechas desde el transporte capturado
-                import json as _json_tr_ins
-                _tr_fechas = {}
-                if transporte:
-                    for _k in ("fch_salida", "hra_salida", "fch_llegada", "hra_llegada"):
-                        _val = transporte.get(_k)
-                        if _val:
-                            _tr_fechas[_k] = str(_val)
-                _datos_traslado_json = _json_tr_ins.dumps(_tr_fechas) if _tr_fechas else None
                 cur.execute("""
                     INSERT INTO facturacion_dtes
                       (tenant_id, tipo_dte, folio, rut_receptor, razon_social_receptor,
-                       monto_neto, monto_iva, monto_total, xml_firmado, estado, fecha_emision,
-                       datos_traslado)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                       monto_neto, monto_iva, monto_total, xml_firmado, estado, fecha_emision)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     RETURNING id
                 """, (tenant_id, 52, folio, receptor.get("rut", ""), receptor.get("razon_social", ""),
                       res_g["totales"]["mnt_neto"], res_g["totales"]["mnt_iva"],
-                      total, guia_firmada.decode("iso-8859-1", errors="replace"), "generado", fecha,
-                      _datos_traslado_json))
+                      total, guia_firmada.decode("iso-8859-1", errors="replace"), "generado", fecha))
                 guia_id = cur.fetchone()[0]
             conn.commit()
             paso("Registrar guía (pre-envío)", True, "ID " + str(guia_id))
@@ -25247,112 +24730,6 @@ def facturacion_guia_emitir():
         "pdf_url": ("/facturacion/boleta/" + str(guia_id) + "/pdf") if guia_id else None,
         "pasos": pasos,
     })
-
-
-@app.route("/facturacion/dte/<int:dte_id>/consultar-estado", methods=["POST"])
-def facturacion_consultar_estado(dte_id):
-    """Consulta EN VIVO el estado de un DTE en el SII por su Track ID (getEstUp).
-
-    Funciona como el bot de folios: toma el certificado del tenant, autentica
-    con el SII y pregunta por el track del envío. Actualiza el estado en la BD
-    y lo devuelve. Es el método confiable para guías y facturas (getEstDte da
-    falsos negativos con montos 0 o documentos recién emitidos).
-    """
-    if not session.get("logged"):
-        return jsonify({"ok": False, "error": "no autenticado"}), 401
-    tenant_id = session.get("tenant_id") or 1
-
-    from inventario import get_conn, release_conn
-    from facturacion.certificados import obtener_certificado
-    from facturacion.db import obtener_config_facturacion
-    from facturacion.utils import normalizar_ambiente
-    from facturacion.dtes.sii_client import consultar_estado_upload
-
-    # 1. Traer el documento y su track_id
-    conn = get_conn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""SELECT id, tipo_dte, folio, track_id_sii, estado, estado_sii
-                           FROM facturacion_dtes
-                           WHERE id=%s AND tenant_id=%s""", (dte_id, tenant_id))
-            row = cur.fetchone()
-    finally:
-        release_conn(conn)
-
-    if not row:
-        return jsonify({"ok": False, "error": "Documento no encontrado"}), 404
-    _id, tipo_dte, folio, track_id, estado_local, estado_sii_prev = row
-
-    # Si ya está en un estado final, no hace falta reconsultar
-    if estado_local in ("aceptado", "rechazado", "anulada"):
-        return jsonify({"ok": True, "estado": estado_local, "estado_sii": estado_sii_prev,
-                        "final": True, "mensaje": _estado_mensaje(estado_local, estado_sii_prev)})
-
-    if not track_id:
-        return jsonify({"ok": False, "error": "Este documento no tiene Track ID (no se alcanzó a enviar al SII)."}), 400
-
-    # 2. Config + certificado del tenant
-    config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
-    if not config:
-        return jsonify({"ok": False, "error": "No hay configuración de facturación"}), 400
-    ambiente = normalizar_ambiente(config.get("ambiente") or "certificacion")
-    cert = obtener_certificado(get_conn, release_conn, tenant_id)
-    if not cert or not cert.get("ok"):
-        return jsonify({"ok": False, "error": "No hay certificado digital cargado."}), 400
-
-    # 3. Consultar al SII por Track ID
-    try:
-        res = consultar_estado_upload(
-            pfx_bytes=cert["pfx_bytes"], password=cert["password"],
-            rut_consultante=config["rut_emisor"], rut_emisor=config["rut_emisor"],
-            track_id=str(track_id), ambiente=ambiente)
-    except Exception as e:
-        import traceback
-        print("[Estado SII] Excepción tenant=%s dte=%s: %s\n%s" %
-              (tenant_id, dte_id, e, traceback.format_exc()[:500]))
-        return jsonify({"ok": False, "error": "No se pudo consultar el estado en este momento. "
-                        "Intenta nuevamente en unos minutos."}), 502
-
-    est = (res.get("estado") or "").upper()
-
-    # 4. Interpretar y actualizar
-    if res.get("aceptado"):
-        _fact_actualizar_estado_dte(dte_id, "aceptado", estado_sii=est,
-                                    glosa=res.get("glosa") or "Aceptado por el SII",
-                                    set_fecha_aceptacion=True)
-        return jsonify({"ok": True, "estado": "aceptado", "estado_sii": est, "final": True,
-                        "mensaje": "El SII aceptó el documento.",
-                        "aceptados": res.get("aceptados"), "reparos": res.get("reparos")})
-    if res.get("rechazado"):
-        _fact_actualizar_estado_dte(dte_id, "rechazado", estado_sii=est,
-                                    glosa=res.get("glosa") or "Rechazado por el SII")
-        return jsonify({"ok": True, "estado": "rechazado", "estado_sii": est, "final": True,
-                        "mensaje": "El SII rechazó el documento: " + (res.get("glosa") or est),
-                        "rechazados": res.get("rechazados")})
-
-    # Estados no finales: EPR sin detalle aún, SOK, en proceso…
-    _mensajes_proceso = {
-        "SOK": "Recibido por el SII, validando esquema.",
-        "REC": "Recibido, en proceso de validación.",
-        "PDR": "En proceso de revisión.",
-        "": "En proceso.",
-    }
-    msg = _mensajes_proceso.get(est, "En proceso de validación en el SII (%s)." % est)
-    if est:
-        _fact_actualizar_estado_dte(dte_id, estado_local or "enviado", estado_sii=est,
-                                    glosa=res.get("glosa") or msg)
-    return jsonify({"ok": True, "estado": "en_proceso", "estado_sii": est, "final": False,
-                    "mensaje": msg + " Vuelve a consultar en unos minutos."})
-
-
-def _estado_mensaje(estado_local, estado_sii):
-    if estado_local == "aceptado":
-        return "El SII aceptó el documento."
-    if estado_local == "rechazado":
-        return "El SII rechazó el documento."
-    if estado_local == "anulada":
-        return "Documento anulado."
-    return "En proceso."
 
 
 @app.route("/facturacion/clientes", methods=["GET"])
@@ -25927,11 +25304,9 @@ def facturacion_diagnostico_sii(boleta_id):
 
 
 @app.route("/facturacion/boleta/<int:boleta_id>/consultar-estado", methods=["POST", "GET"])
-def facturacion_consultar_estado_boleta(boleta_id):
+def facturacion_consultar_estado(boleta_id):
     """LIMBO 3: consulta el estado REAL en el SII de una boleta enviada.
     Actualiza estado_sii y, si fue aceptada, marca fecha_aceptacion_sii.
-    (Método antiguo por getEstDte; el flujo nuevo usa getEstUp en
-    facturacion_consultar_estado, ruta /facturacion/dte/<id>/consultar-estado.)
     """
     if not session.get("logged"):
         return jsonify({"ok": False, "error": "no autenticado"}), 401
@@ -26055,16 +25430,15 @@ def _fact_job_consultar_estados():
     from facturacion.certificados import obtener_certificado
     from facturacion.db import obtener_config_facturacion
     from facturacion.utils import normalizar_ambiente
-    from facturacion.dtes.sii_client import consultar_estado_upload
+    from facturacion.dtes.sii_client import consultar_estado_dte
     try:
         conn = get_conn()
         try:
             with conn.cursor() as cur:
-                cur.execute("""SELECT id, tenant_id, tipo_dte, folio, track_id_sii,
+                cur.execute("""SELECT id, tenant_id, tipo_dte, folio, rut_receptor,
                                       monto_total, fecha_emision
                                FROM facturacion_dtes
                                WHERE estado IN ('enviado','en_proceso')
-                                 AND track_id_sii IS NOT NULL
                                  AND fecha_emision > (NOW() - INTERVAL '7 days')
                                ORDER BY tenant_id LIMIT 200""")
                 pendientes = cur.fetchall()
@@ -26072,12 +25446,10 @@ def _fact_job_consultar_estados():
             release_conn(conn)
         if not pendientes:
             return
-        # Agrupar por tenant para reutilizar certificado/config y token
+        # Agrupar por tenant para reutilizar certificado/config
         certs = {}
         for row in pendientes:
-            bid, tid, tipo_dte, folio, track_id, monto, fch = row
-            if not track_id:
-                continue
+            bid, tid, tipo_dte, folio, rut_recep, monto, fch = row
             try:
                 if tid not in certs:
                     cfg = obtener_config_facturacion(get_conn, release_conn, tid)
@@ -26087,22 +25459,23 @@ def _fact_job_consultar_estados():
                     continue
                 cfg, crt = certs[tid]
                 amb = normalizar_ambiente(cfg.get("ambiente") or "certificacion")
-                # getEstUp: consulta por Track ID del envío (confiable para guías/facturas,
-                # a diferencia de getEstDte que da falsos negativos con monto 0).
-                res = consultar_estado_upload(
+                fch_str = fch.strftime("%Y-%m-%d") if hasattr(fch, "strftime") else str(fch)[:10]
+                res = consultar_estado_dte(
                     pfx_bytes=crt["pfx_bytes"], password=crt["password"],
                     rut_consultante=cfg["rut_emisor"], rut_emisor=cfg["rut_emisor"],
-                    track_id=str(track_id), ambiente=amb)
+                    rut_receptor=rut_recep or "66666666-6", tipo_dte=tipo_dte,
+                    folio=folio, fecha_emision=fch_str, monto_total=int(monto or 0),
+                    ambiente=amb)
                 est = (res.get("estado") or "").upper()
-                if res.get("aceptado"):
+                if est == "DOK":
                     _fact_actualizar_estado_dte(bid, "aceptado", estado_sii=est,
                                                 glosa="Aceptado por el SII", set_fecha_aceptacion=True)
-                elif res.get("rechazado"):
+                elif est in ("FAN", "FNA", "RCT", "RCH", "RFR", "RSC"):
                     _fact_actualizar_estado_dte(bid, "rechazado", estado_sii=est,
                                                 glosa=res.get("glosa") or "Rechazado por el SII")
-                # Estados no finales (SOK/en proceso): se reintenta en la próxima corrida
+                # DNK/FAU: aún no final, se reintenta en la próxima corrida
             except Exception as e:
-                print("[Estado SII] Error dte %s: %s" % (bid, str(e)[:120]))
+                print("[Estado SII] Error boleta %s: %s" % (bid, str(e)[:120]))
     except Exception as e:
         print("[Estado SII] Error general: %s" % str(e)[:200])
 
