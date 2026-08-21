@@ -116,50 +116,48 @@ def detectar_fulfillment_paris(orden_data):
 
 def detectar_fulfillment_walmart(orden_data):
     """
-    Walmart WFS (Walmart Fulfillment Services) vs Seller envía.
+    Walmart WFS (Walmart Fulfillment Services, despacha Walmart) vs Seller (despacha el vendedor).
 
-    Campos posibles según versión del API:
-      fulfillmentInfo.fulfillmentMethod = 'WFS' o 'FULFILLED_BY_WALMART'
-      orderType o purchaseOrderType
-      shippingInfo.shipMethod
-      orderLines[].fulfillment.fulfillmentOption
+    Valores oficiales del API (confirmados en developer.walmart.com):
+      shipNodeType / fulfillmentOption:
+        "SellerFulfilled" / "Seller"  -> el vendedor despacha (descuenta stock central)
+        "WFSFulfilled"                -> Walmart despacha desde su fulfillment (NO descuenta central)
+        "3PLFulfilled"                -> logística de terceros (tampoco descuenta central)
+
+    Devuelve True si la orden es despachada por Walmart (WFS) o 3PL.
     """
     try:
-        # Path 1: fulfillmentInfo
-        fi = (orden_data.get("fulfillmentInfo") or
-              orden_data.get("fulfillment_info") or {})
-        method = (fi.get("fulfillmentMethod") or
-                  fi.get("fulfillment_method") or "").upper()
-        if "WFS" in method or "FULFILLED_BY_WALMART" in method:
-            return True
+        # Path principal: shipNodeType a nivel de orden (valor oficial del API)
+        snt = (orden_data.get("shipNodeType") or "").strip().upper()
+        if snt:
+            if "WFS" in snt or "3PL" in snt:
+                return True
+            if snt == "SELLERFULFILLED":
+                return False
 
-        # Path 2: tipo de orden
-        order_type = (orden_data.get("orderType") or
-                      orden_data.get("purchaseOrderType") or "").upper()
-        if "WFS" in order_type or "FULFILLED" in order_type:
-            return True
-
-        # Path 3: shipping info
-        ship_info = (orden_data.get("shippingInfo") or
-                     orden_data.get("shipping_info") or {})
-        ship_method = (ship_info.get("shipMethod") or
-                       ship_info.get("methodCode") or "").upper()
-        if "WFS" in ship_method:
-            return True
-
-        # Path 4: en orderLines
+        # Path por línea: fulfillment.fulfillmentOption
         order_lines = orden_data.get("orderLines", {}).get("orderLine", [])
         if isinstance(order_lines, dict):
             order_lines = [order_lines]
         for line in order_lines:
             line_fi = line.get("fulfillment", {}) or {}
-            opt = (line_fi.get("fulfillmentOption") or "").upper()
-            if opt in ("WFS", "FULFILLED_BY_WALMART"):
+            opt = (line_fi.get("fulfillmentOption") or "").strip().upper()
+            snt_line = (line_fi.get("shipNodeType") or "").strip().upper()
+            if "WFS" in opt or "WFS" in snt_line or "3PL" in opt or "3PL" in snt_line:
+                return True
+            # Si CUALQUIER línea la despacha Walmart (no es Seller), es WFS.
+            if opt and opt not in ("SELLER", "SELLERFULFILLED"):
                 return True
 
+        # Fallbacks (versiones antiguas del API)
+        fi = (orden_data.get("fulfillmentInfo") or orden_data.get("fulfillment_info") or {})
+        method = (fi.get("fulfillmentMethod") or fi.get("fulfillment_method") or "").upper()
+        if "WFS" in method or "FULFILLED_BY_WALMART" in method:
+            return True
         return False
     except Exception as e:
         print(f"[Bodegas] detectar_fulfillment_walmart error: {e}")
+        return False
         return False
 
 

@@ -390,7 +390,12 @@ def obtener_ordenes_walmart(estado="Created", fecha_desde=None, max_paginas=2, l
             pagina += 1
             params = {
                 "createdStartDate": fecha_inicio,
-                "limit": limit
+                "limit": limit,
+                # Por defecto Walmart SOLO devuelve órdenes seller-fulfilled.
+                # Para incluir también las WFS (Walmart Fulfillment Services) y 3PL,
+                # hay que pedir explícitamente shipNodeType. Sin esto, las ventas
+                # despachadas por Walmart nunca llegan a Lusync.
+                "shipNodeType": "SellerFulfilled,WFSFulfilled,3PLFulfilled",
             }
             if estado:
                 params["status"] = estado
