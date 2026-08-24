@@ -938,7 +938,7 @@ def _sync_walmart_automatico():
                 if not order_id:
                     continue
                 customer_order_id = str(o.get("customerOrderId", order_id))
-                if not intentar_marcar_orden_atomic(customer_order_id):
+                if orden_ya_procesada_texto(customer_order_id):
                     continue
 
                 lineas = o.get("orderLines", {}).get("orderLine", [])
@@ -1016,8 +1016,9 @@ def _sync_walmart_automatico():
                         errores.append(str(e))
                         print(f"[Scheduler] Error linea: {e}")
 
-                # FIX: marcar solo UNA vez después de procesar (antes había doble marcar)
-                # [atomic] orden marcada al inicio — no remarcar
+                # Registrar primero, marcar después: marca solo si hubo descuento.
+                if items_descontados:
+                    intentar_marcar_orden_atomic(customer_order_id)
                 nuevas += 1
 
         # ── CANCELACIONES WALMART — devolver stock si se canceló una orden ya procesada
@@ -1354,7 +1355,7 @@ def _sync_falabella_automatico():
 
                 # ── Órdenes nuevas (estados que descuentan stock) ──
                 if estado_orden in ("ready_to_ship", "shipped", "delivered", "pending"):
-                    if not intentar_marcar_orden_atomic(fa_key):
+                    if orden_ya_procesada_texto(fa_key):
                         continue
 
                     # FIX CRÍTICO: los items NO vienen en el objeto orden.
@@ -1445,7 +1446,8 @@ def _sync_falabella_automatico():
                         print(f"[Scheduler Falabella] {order_id} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado.get('bodega','?')}")
 
                     if items_descontados:
-                        # [atomic] orden marcada al inicio — no remarcar
+                        # Registrar primero, marcar después.
+                        intentar_marcar_orden_atomic(fa_key)
                         nuevas += 1
 
                 # ── Órdenes canceladas ──
@@ -1627,7 +1629,7 @@ def _sync_paris_automatico():
                     continue
 
                 # ── Órdenes nuevas: procesar todas las no marcadas ──
-                if not intentar_marcar_orden_atomic(pa_key):
+                if orden_ya_procesada_texto(pa_key):
                     continue
 
                 # FIX CRÍTICO: los items están en shipments[].items[], NO en o.get("items")
@@ -1705,7 +1707,8 @@ def _sync_paris_automatico():
                         print(f"[Scheduler Paris] {sub_order} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado.get('bodega','?')}")
 
                 if items_descontados:
-                    # Orden procesada exitosamente — ya está marcada atómicamente desde el inicio
+                    # Registrar primero, marcar después.
+                    intentar_marcar_orden_atomic(pa_key)
                     nuevas += 1
                 elif not items_descontados and o.get("shipments"):
                     # Todos los items fallaron (SKU sin mapeo, etc.)
@@ -1848,7 +1851,7 @@ def _sync_ripley_automatico():
                 # ── Órdenes nuevas activas ──
                 if estado not in ("WAITING_ACCEPTANCE", "WAITING_DEBIT", "SHIPPING", "SHIPPED", "RECEIVED"):
                     continue  # estado desconocido, saltar
-                if not intentar_marcar_orden_atomic(rp_key):
+                if orden_ya_procesada_texto(rp_key):
                     continue
 
                 es_fbr = detectar_fulfillment_ripley(o)
@@ -1898,7 +1901,8 @@ def _sync_ripley_automatico():
                     print(f"[Scheduler Ripley] {order_id} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado.get('bodega','?')}")
 
                 if items_descontados:
-                    # [atomic] orden marcada al inicio — no remarcar
+                    # Registrar primero, marcar después.
+                    intentar_marcar_orden_atomic(rp_key)
                     nuevas += 1
 
             except Exception as e:
@@ -1966,7 +1970,7 @@ def _sync_woo_automatico():
             try:
                 order_id = str(o.get("id", ""))
                 woo_key = f"WOO-{order_id}"
-                if not intentar_marcar_orden_atomic(woo_key):
+                if orden_ya_procesada_texto(woo_key):
                     continue
                 items_descontados = []
                 # Parsear fecha real de compra (WooCommerce: date_created en ISO)
@@ -2004,7 +2008,8 @@ def _sync_woo_automatico():
                             items_descontados.append(sku)
                             break
                 if items_descontados:
-                    # [atomic] orden marcada al inicio — no remarcar
+                    # Registrar primero, marcar después.
+                    intentar_marcar_orden_atomic(woo_key)
                     nuevas += 1
             except Exception as e:
                 errores.append(f"Woo orden: {e}")
@@ -2355,11 +2360,8 @@ def _sync_recuperacion():
                 if not order_id:
                     continue
                 customer_order_id = str(o.get("customerOrderId", order_id))
-                if not intentar_marcar_orden_atomic(customer_order_id):
+                if orden_ya_procesada_texto(customer_order_id):
                     continue
-
-                # Marcar ANTES de procesar para evitar dobles descuentos
-                # [atomic] orden marcada al inicio — no remarcar
 
                 lineas = o.get("orderLines", {}).get("orderLine", [])
                 if isinstance(lineas, dict):
@@ -2396,7 +2398,8 @@ def _sync_recuperacion():
                     except Exception as e:
                         print(f"[Recuperación] Error linea: {e}")
 
-                # [atomic] orden marcada al inicio — no remarcar
+                # Registrar primero, marcar después.
+                intentar_marcar_orden_atomic(customer_order_id)
                 recuperadas += 1
 
         # También recuperar cancelaciones
