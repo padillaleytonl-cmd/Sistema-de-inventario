@@ -2408,6 +2408,20 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
 
         ahora_chile = now_chile().replace(tzinfo=None)
 
+        # IDEMPOTENCIA: si ya existe un movimiento de venta para esta orden+SKU, no
+        # insertar de nuevo. Evita duplicados cuando el sync reprocesa una orden
+        # (por reintentos, recuperación, o solapamiento de ciclos).
+        if orden_id:
+            cur.execute("""SELECT 1 FROM movimientos
+                           WHERE orden_id = %s AND sku = %s
+                             AND tipo IN ('salida','ajuste') LIMIT 1""",
+                        (str(orden_id), sku))
+            if cur.fetchone():
+                cur.close(); release_conn(conn)
+                return {"ok": True, "sku": sku, "cantidad_descontada": 0,
+                        "bodega": bodega, "stock_antes": stock_antes,
+                        "stock_despues": stock_antes, "advertencia": "ya_registrada"}
+
         cur.execute("""INSERT INTO movimientos
             (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id,
              bodega_codigo, fecha_importacion, fecha_compra_marketplace,

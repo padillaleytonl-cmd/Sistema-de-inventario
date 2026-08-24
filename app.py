@@ -201,6 +201,124 @@ def trazar_ajuste_stock():
                             "Mirá 'stock_que_se_publicaria' en cada etapa."})
 
 
+@app.route("/admin/lusync/auditoria-ordenes")
+def auditoria_ordenes_limbo():
+    """Audita qué órdenes de cada marketplace NO están registradas en Lusync.
+
+    Uso: /admin/lusync/auditoria-ordenes?token=...  (opcional &dias=30)
+    SOLO LEE, no modifica nada. Cruza las órdenes reales de cada canal contra
+    los movimientos de venta en Lusync y lista las que quedaron en el limbo
+    (existen en el portal pero no se registraron), indicando si están marcadas.
+    """
+    import os
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN",
+                                  "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    token = request.args.get("token", "")
+    if not (session.get("logged") or session.get("is_lusync_admin")
+            or (token and token == bypass_token)):
+        return redirect("/admin/lusync/login")
+
+    from inventario import get_conn, release_conn
+    dias = int(request.args.get("dias", "30"))
+    resultado = {"generado": str(now_chile()), "dias": dias, "canales": {}}
+
+    def _registrada(cur, num, prefijo):
+        cur.execute("""SELECT 1 FROM movimientos
+                       WHERE (orden_id=%s OR orden_id=%s) AND tipo IN ('salida','ajuste')
+                       LIMIT 1""", (str(num), "%s-%s" % (prefijo, num)))
+        return cur.fetchone() is not None
+
+    def _marcada(cur, key):
+        cur.execute("SELECT 1 FROM ordenes_procesadas WHERE order_id_texto=%s LIMIT 1", (key,))
+        return cur.fetchone() is not None
+
+    conn = get_conn(tenant_id=1, is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            # ── MercadoLibre ──
+            try:
+                from mercadolibre import obtener_ordenes_meli
+                ords = obtener_ordenes_meli(limit=50, offset=0) or []
+                limbo = []
+                for o in ords:
+                    if o.get("status") not in ("paid", "confirmed"):
+                        continue
+                    oid = str(o.get("id", ""))
+                    if not _registrada(cur, oid, "MELI"):
+                        limbo.append({"id": oid,
+                                      "estado": "marcada_sin_venta" if _marcada(cur, "MELI-%s" % oid) else "no_marcada"})
+                resultado["canales"]["MercadoLibre"] = {"traidas": len(ords), "en_limbo": len(limbo), "ordenes": limbo}
+            except Exception as e:
+                resultado["canales"]["MercadoLibre"] = {"error": str(e)[:120]}
+
+            # ── Walmart ──
+            try:
+                from walmart import obtener_ordenes_walmart
+                vistos = set(); limbo = []; total = 0
+                for est in ["Created", "Acknowledged", "Shipped", "Delivered"]:
+                    for o in (obtener_ordenes_walmart(est) or []):
+                        coid = str(o.get("customerOrderId") or o.get("purchaseOrderId") or "")
+                        if not coid or coid in vistos:
+                            continue
+                        vistos.add(coid); total += 1
+                        if not _registrada(cur, coid, "WALMART"):
+                            limbo.append({"id": coid,
+                                          "estado": "marcada_sin_venta" if _marcada(cur, coid) else "no_marcada"})
+                resultado["canales"]["Walmart"] = {"traidas": total, "en_limbo": len(limbo), "ordenes": limbo[:50]}
+            except Exception as e:
+                resultado["canales"]["Walmart"] = {"error": str(e)[:120]}
+
+            # ── Falabella ──
+            try:
+                from falabella import obtener_ordenes_falabella
+                ords = obtener_ordenes_falabella(dias=dias, limit=50) or []
+                limbo = []
+                for o in ords:
+                    oid = str(o.get("OrderId") or o.get("OrderNumber") or "")
+                    if not _registrada(cur, oid, "FALABELLA"):
+                        limbo.append({"id": oid,
+                                      "estado": "marcada_sin_venta" if _marcada(cur, "FALABELLA-%s" % oid) else "no_marcada"})
+                resultado["canales"]["Falabella"] = {"traidas": len(ords), "en_limbo": len(limbo), "ordenes": limbo}
+            except Exception as e:
+                resultado["canales"]["Falabella"] = {"error": str(e)[:120]}
+
+            # ── Paris ──
+            try:
+                from paris import obtener_ordenes_paris
+                ords = obtener_ordenes_paris(dias=dias, limite=50) or []
+                limbo = []
+                for o in ords:
+                    oid = str(o.get("subOrderNumber") or o.get("id") or "")
+                    if not _registrada(cur, oid, "PARIS"):
+                        limbo.append({"id": oid,
+                                      "estado": "marcada_sin_venta" if _marcada(cur, "PARIS-%s" % oid) else "no_marcada"})
+                resultado["canales"]["Paris"] = {"traidas": len(ords), "en_limbo": len(limbo), "ordenes": limbo}
+            except Exception as e:
+                resultado["canales"]["Paris"] = {"error": str(e)[:120]}
+
+            # ── Ripley ──
+            try:
+                from ripley import obtener_ordenes_ripley
+                ords = obtener_ordenes_ripley(dias=dias, max_resultados=50) or []
+                limbo = []
+                for o in ords:
+                    oid = str(o.get("order_id") or o.get("commercial_id") or "")
+                    if not _registrada(cur, oid, "RIPLEY"):
+                        limbo.append({"id": oid,
+                                      "estado": "marcada_sin_venta" if _marcada(cur, "RIPLEY-%s" % oid) else "no_marcada"})
+                resultado["canales"]["Ripley"] = {"traidas": len(ords), "en_limbo": len(limbo), "ordenes": limbo}
+            except Exception as e:
+                resultado["canales"]["Ripley"] = {"error": str(e)[:120]}
+
+            # Totales
+            tot_limbo = sum(c.get("en_limbo", 0) for c in resultado["canales"].values() if isinstance(c, dict))
+            resultado["total_en_limbo"] = tot_limbo
+    finally:
+        release_conn(conn)
+
+    return jsonify(resultado)
+
+
 @app.route("/admin/lusync/stock/health")
 def health_check_stock_fix():
     """Dice si el fix del bug de stock está activo, SIN modificar nada.
@@ -1048,7 +1166,10 @@ def _sync_meli_automatico():
 
                 # ── Órdenes pagadas ──
                 if estado in ("paid", "confirmed"):
-                    if not intentar_marcar_orden_atomic(meli_key):
+                    # Registrar PRIMERO, marcar DESPUÉS. Si marcáramos al inicio y el
+                    # descuento fallara o se interrumpiera, la orden quedaría marcada
+                    # sin venta y nunca se reintentaría (ese es el bug del "limbo").
+                    if orden_ya_procesada_texto(meli_key):
                         continue
 
                     # Parsear fecha de compra
@@ -1104,7 +1225,10 @@ def _sync_meli_automatico():
                             errores.append(f"MELI {order_id}/{sku_seller}→{sku_lusync}: {e}")
 
                     if items_descontados:
-                        # [atomic] orden marcada al inicio — no remarcar
+                        # Registro exitoso: AHORA marcamos (registrar primero, marcar
+                        # después). Si el descuento falla, no se marca y se reintenta.
+                        # La idempotencia evita duplicados al reprocesar.
+                        intentar_marcar_orden_atomic(meli_key)
                         nuevas += 1
 
                 # ── Órdenes canceladas ──
