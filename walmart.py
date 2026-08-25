@@ -23,6 +23,7 @@ def get_token():
             "WM_SVC.NAME": "Lusync",
             "WM_QOS.CORRELATION_ID": str(uuid.uuid4()),
             "WM_MARKET": "cl",
+            "WM_GLOBAL_VERSION": "3.1",
             "Accept": "application/json",
             "Content-Type": "application/x-www-form-urlencoded"
         },
@@ -46,6 +47,9 @@ def walmart_headers():
         "WM_QOS.CORRELATION_ID": str(uuid.uuid4()),
         "WM_SEC.ACCESS_TOKEN": get_token(),
         "WM_MARKET": "cl",
+        # Global APIs: este header activa el modo Global (Chile/México/Canadá).
+        # Sin él, Walmart trata la petición como legacy (ya decomisionada).
+        "WM_GLOBAL_VERSION": "3.1",
         "Accept": "application/json",
         "Content-Type": "application/json"
     }
