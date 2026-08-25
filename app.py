@@ -22,7 +22,7 @@ from inventario import (cargar_productos, guardar_productos, guardar_producto,
                         init_db, orden_ya_procesada, marcar_orden_procesada, actualizar_precios,
                         get_configuracion, set_configuracion, set_lead_time, eliminar_producto,
                         orden_ya_procesada_texto, marcar_orden_procesada_texto, intentar_marcar_orden_atomic,
-                        init_devoluciones, generar_codigo_dev, crear_devolucion,
+                        init_devoluciones, init_devoluciones_mkt, generar_codigo_dev, crear_devolucion,
                         asignar_codigo_dev, actualizar_devolucion, listar_devoluciones,
                         get_devolucion,
                         init_audit, registrar_audit, listar_audit,
@@ -47,6 +47,10 @@ app.secret_key = "clave_super_segura"
 
 init_db()
 init_devoluciones()
+try:
+    init_devoluciones_mkt()
+except Exception as _e:
+    print(f"[init_devoluciones_mkt] {_e}")
 try:
     from inventario import init_feriados
     init_feriados()
@@ -4341,6 +4345,151 @@ def devoluciones_generar_codigo(dev_id):
                     "generar_codigo_dev", entidad="devoluciones", entidad_id=str(dev_id),
                     detalle=f"Código generado: {codigo}")
     return {"ok": True, "codigo": codigo}
+
+# ── TRAZABILIDAD DE DEVOLUCIONES DESDE MARKETPLACES ──
+# Devoluciones traídas automáticamente de las APIs (ML, Walmart, Ripley, Paris)
+# + Falabella por webhook. Separado del módulo manual de devoluciones de arriba.
+
+@app.route("/falabella/webhook", methods=["POST"])
+def falabella_webhook():
+    """Recibe notificaciones del Seller Center de Falabella.
+    Está registrado en Falabella para todos los eventos; aquí procesamos
+    especialmente onReturnStatusChanged (devoluciones). Responde 200 siempre
+    para que Falabella no reintente en exceso.
+    """
+    try:
+        payload = request.get_json(force=True, silent=True) or {}
+    except Exception:
+        payload = {}
+    evento = (payload.get("EventType") or payload.get("eventType")
+              or payload.get("Event") or "")
+    try:
+        # Determinar tenant: Falabella es del tenant 1 (producción). Si en el
+        # futuro hay más, se puede mapear por seller. Por ahora, tenant 1.
+        if "return" in str(evento).lower() or "Return" in str(evento):
+            from returns import procesar_webhook_falabella_return
+            set_thread_tenant(1, is_admin=False)
+            try:
+                res = procesar_webhook_falabella_return(payload, tenant_id=1)
+            finally:
+                clear_thread_tenant()
+            print(f"[Falabella webhook] return procesado: {res}")
+        else:
+            # Otros eventos (order, product, etc.) — por ahora solo log.
+            print(f"[Falabella webhook] evento '{evento}' recibido (sin procesar)")
+    except Exception as e:
+        print(f"[Falabella webhook] error: {e}")
+    # Siempre 200 para acuse de recibo
+    return {"received": True}, 200
+
+
+@app.route("/devoluciones-mkt/sync", methods=["POST"])
+def devoluciones_mkt_sync():
+    """Dispara manualmente el sync de devoluciones de los canales de pull."""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from returns import sincronizar_devoluciones
+    dias = int(request.args.get("dias", 30))
+    canales = request.args.get("canales")
+    canales = canales.split(",") if canales else None
+    set_thread_tenant(1, is_admin=False)
+    try:
+        resumen = sincronizar_devoluciones(tenant_id=1, dias=dias, canales=canales)
+    finally:
+        clear_thread_tenant()
+    return {"ok": True, "resumen": resumen}
+
+
+@app.route("/devoluciones-mkt")
+def devoluciones_mkt_list():
+    """Lista todas las devoluciones de marketplace con sus tiempos y alertas de plazo."""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    canal = request.args.get("canal")
+    estado = request.args.get("estado")
+    solo_accion = request.args.get("requiere_accion")
+    conn = get_conn(tenant_id=1)
+    try:
+        cur = conn.cursor()
+        q = """SELECT canal, return_id, order_id, sku, sku_canal, producto_nombre,
+                      cantidad, estado, estado_canal, motivo, tipo, monto_reembolso,
+                      moneda, tracking_number, fecha_solicitud, fecha_limite,
+                      fecha_resolucion, dias_restantes, requiere_accion
+               FROM devoluciones_marketplace WHERE 1=1"""
+        params = []
+        if canal:
+            q += " AND canal=%s"; params.append(canal)
+        if estado:
+            q += " AND estado=%s"; params.append(estado)
+        if solo_accion in ("1", "true", "yes"):
+            q += " AND requiere_accion=TRUE"
+        q += " ORDER BY (fecha_limite IS NULL), fecha_limite ASC, fecha_solicitud DESC LIMIT 500"
+        cur.execute(q, params)
+        cols = [d[0] for d in cur.description]
+        filas = [dict(zip(cols, r)) for r in cur.fetchall()]
+        # Serializar fechas
+        for f in filas:
+            for k in ("fecha_solicitud", "fecha_limite", "fecha_resolucion"):
+                if f.get(k):
+                    f[k] = f[k].isoformat()
+            if f.get("monto_reembolso") is not None:
+                f["monto_reembolso"] = float(f["monto_reembolso"])
+        # Resumen de alertas por plazo
+        cur.execute("""SELECT
+            COUNT(*) FILTER (WHERE requiere_accion AND dias_restantes IS NOT NULL AND dias_restantes < 0) AS vencidas,
+            COUNT(*) FILTER (WHERE requiere_accion AND dias_restantes IS NOT NULL AND dias_restantes BETWEEN 0 AND 2) AS por_vencer,
+            COUNT(*) FILTER (WHERE requiere_accion) AS abiertas
+            FROM devoluciones_marketplace""")
+        a = cur.fetchone()
+        cur.close()
+        alertas = {"vencidas": a[0], "por_vencer_2d": a[1], "abiertas": a[2]}
+        return {"devoluciones": filas, "total": len(filas), "alertas": alertas}
+    finally:
+        release_conn(conn)
+
+
+def _sync_devoluciones_automatico():
+    """Background: sincroniza devoluciones de los canales de pull cada tenant."""
+    if not hasattr(_sync_devoluciones_automatico, "_running"):
+        _sync_devoluciones_automatico._running = False
+    if _sync_devoluciones_automatico._running:
+        print("[Devoluciones sync] Ya hay un sync corriendo, salto")
+        return
+    _sync_devoluciones_automatico._running = True
+    try:
+        from returns import sincronizar_devoluciones
+        from inventario import get_conn as _gc, release_conn as _rc
+        try:
+            conn = _gc(is_admin=True)
+            cur = conn.cursor()
+            cur.execute("SELECT id FROM tenants WHERE estado = 'activo' ORDER BY id ASC")
+            tenant_ids = [r[0] for r in cur.fetchall()]
+            cur.close(); _rc(conn)
+        except Exception:
+            tenant_ids = [1]
+        for tid in tenant_ids:
+            try:
+                set_thread_tenant(tid, is_admin=False)
+                sincronizar_devoluciones(tenant_id=tid, dias=30)
+            except Exception as e:
+                print(f"[Devoluciones sync] tenant {tid} error: {e}")
+            finally:
+                clear_thread_tenant()
+    finally:
+        _sync_devoluciones_automatico._running = False
+
+
+# Registrar el sync de devoluciones en el scheduler (ya iniciado; APScheduler
+# admite agregar jobs después de start()). Cada 30 min, primera corrida a los 10 min.
+try:
+    scheduler.add_job(_sync_devoluciones_automatico, "interval", minutes=30,
+                      id="devoluciones_sync",
+                      next_run_time=(datetime.now() + timedelta(seconds=600)),
+                      max_instances=1, coalesce=True, misfire_grace_time=120)
+    print("[Scheduler] Job devoluciones_sync registrado (cada 30 min)")
+except Exception as _e:
+    print(f"[Scheduler] No se pudo registrar devoluciones_sync: {_e}")
+
 
 # ── PARIS ──
 

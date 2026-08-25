@@ -1048,6 +1048,60 @@ def init_devoluciones():
     cur.close()
     conn.close()
 
+
+def init_devoluciones_mkt():
+    """Tabla de trazabilidad de devoluciones traídas automáticamente desde las
+    APIs de cada marketplace (separada de 'devoluciones', que es el registro
+    manual interno). Guarda el máximo de datos que cada API expone, incluyendo
+    los tiempos/plazos (fecha de solicitud, fecha límite, fecha de resolución).
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS devoluciones_marketplace (
+            id SERIAL PRIMARY KEY,
+            canal TEXT NOT NULL,               -- mercadolibre / walmart / ripley / paris / falabella
+            return_id TEXT NOT NULL,           -- id de la devolución en el canal
+            claim_id TEXT,                     -- id del reclamo (ML) si aplica
+            order_id TEXT,                     -- orden asociada (customerOrderId, etc.)
+            sku TEXT,
+            sku_canal TEXT,
+            producto_nombre TEXT,
+            cantidad INTEGER DEFAULT 1,
+            estado TEXT,                       -- estado normalizado (abierta/en_transito/entregada/resuelta/cancelada)
+            estado_canal TEXT,                 -- estado crudo tal como lo reporta el canal
+            motivo TEXT,                       -- razón de la devolución
+            tipo TEXT,                         -- refund / replacement / return, según canal
+            monto_reembolso NUMERIC,
+            moneda TEXT DEFAULT 'CLP',
+            tracking_number TEXT,
+            transportista TEXT,
+            -- Tiempos / plazos (el foco del control):
+            fecha_solicitud TIMESTAMP,         -- cuando el cliente inició la devolución
+            fecha_limite TIMESTAMP,            -- deadline para actuar (returnByDate, etc.)
+            fecha_resolucion TIMESTAMP,        -- cuando se cerró
+            fecha_actualizacion_canal TIMESTAMP, -- last_updated que reporta el canal
+            dias_restantes INTEGER,            -- calculado: días hasta fecha_limite
+            requiere_accion BOOLEAN DEFAULT FALSE, -- si el vendedor debe hacer algo
+            acciones_disponibles TEXT,         -- acciones que el canal permite (JSON)
+            raw_json TEXT,                     -- snapshot completo de la respuesta del canal
+            primera_deteccion TIMESTAMP DEFAULT NOW(),
+            ultima_sincronizacion TIMESTAMP DEFAULT NOW(),
+            tenant_id INTEGER,
+            UNIQUE (canal, return_id)
+        )
+    """)
+    # Índice para consultas por plazo (alertas de vencimiento)
+    cur.execute("""CREATE INDEX IF NOT EXISTS idx_devmkt_limite
+                   ON devoluciones_marketplace (fecha_limite)
+                   WHERE estado NOT IN ('resuelta','cancelada')""")
+    cur.execute("""CREATE INDEX IF NOT EXISTS idx_devmkt_canal_estado
+                   ON devoluciones_marketplace (canal, estado)""")
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
 def generar_codigo_dev():
     from datetime import datetime
     conn = get_conn()
