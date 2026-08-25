@@ -371,67 +371,98 @@ def obtener_productos_walmart(limit=50, max_paginas=20, debug=False):
 
 # ── ÓRDENES CON PAGINACIÓN ──
 
-def obtener_ordenes_walmart(estado="Created", fecha_desde=None, max_paginas=2, limit=50, dias=30):
-    """Obtiene órdenes de Walmart Chile con paginación limitada para no agotar memoria.
+def obtener_ordenes_walmart(estado=None, fecha_desde=None, max_paginas=5, limit=100, dias=30):
+    """Obtiene órdenes de Walmart Chile vía Global API.
+
+    IMPORTANTE (Global API, market 'cl'):
+    - El parámetro 'status' con valores Created/Shipped/etc. NO es aceptado
+      (devuelve 400). Por eso NO se envía 'status'; se filtra en código.
+    - 'shipNodeType' para Chile solo acepta [SellerFulfilled, WFSFulfilled],
+      y NO acepta varios valores en una sola petición. Por eso se hace una
+      petición por cada tipo. WFSFulfilled trae las ventas despachadas por
+      Walmart (Full), que antes nunca llegaban a Lusync.
 
     Args:
-        estado: 'Created', 'Acknowledged', 'Shipped', 'Delivered'
-        fecha_desde: ISO date opcional. Si no se pasa, usa últimos 'dias' días
-        max_paginas: máximo de páginas a traer (default 2 = 100 órdenes max si limit=50)
-        limit: órdenes por página (Walmart soporta hasta 200)
-        dias: días hacia atrás (default 30) si no se pasa fecha_desde
+        estado: filtro opcional por estado (se filtra en código vía orderLineStatuses).
+        fecha_desde: ISO date opcional. Si no, usa últimos 'dias' días.
+        max_paginas: máximo de páginas por tipo de shipNode (default 5).
+        limit: órdenes por página (hasta 200).
+        dias: días hacia atrás (default 30) si no se pasa fecha_desde.
     """
     try:
         if fecha_desde:
             fecha_inicio = fecha_desde
         else:
             fecha_inicio = (datetime.utcnow() - timedelta(days=dias)).strftime("%Y-%m-%dT00:00:00.000Z")
+
         todas = []
-        next_cursor = None
-        pagina = 0
+        vistos = set()
+        # Chile acepta estos dos tipos; se piden por separado (no admite coma).
+        for ship_node in ("SellerFulfilled", "WFSFulfilled"):
+            next_cursor = None
+            pagina = 0
+            while pagina < max_paginas:
+                pagina += 1
+                if next_cursor and next_cursor not in ("-1", ""):
+                    cursor_qs = next_cursor.lstrip("?")
+                    url = f"{WALMART_BASE_URL}/v3/orders?{cursor_qs}"
+                    res = requests.get(url, headers=walmart_headers(), timeout=25)
+                else:
+                    params = {
+                        "createdStartDate": fecha_inicio,
+                        "limit": limit,
+                        "shipNodeType": ship_node,
+                        "productInfo": "false",
+                        "replacementInfo": "false",
+                    }
+                    res = requests.get(
+                        f"{WALMART_BASE_URL}/v3/orders",
+                        headers=walmart_headers(),
+                        params=params,
+                        timeout=25
+                    )
+                print(f"[Walmart Ordenes] {ship_node} Página:{pagina} Status:{res.status_code}")
 
-        while pagina < max_paginas:
-            pagina += 1
-            params = {
-                "createdStartDate": fecha_inicio,
-                "limit": limit,
-                # Por defecto Walmart SOLO devuelve órdenes seller-fulfilled.
-                # Para incluir también las WFS (Walmart Fulfillment Services) y 3PL,
-                # hay que pedir explícitamente shipNodeType. Sin esto, las ventas
-                # despachadas por Walmart nunca llegan a Lusync.
-                "shipNodeType": "SellerFulfilled,WFSFulfilled,3PLFulfilled",
-            }
-            if estado:
-                params["status"] = estado
-            if next_cursor and next_cursor != "-1":
-                params["nextCursor"] = next_cursor
+                if res.status_code != 200:
+                    print(f"[Walmart Ordenes] Error: {res.text[:200]}")
+                    break
 
-            res = requests.get(
-                f"{WALMART_BASE_URL}/v3/orders",
-                headers=walmart_headers(),
-                params=params,
-                timeout=20
-            )
-            print(f"[Walmart Ordenes] Estado:{estado} Página:{pagina} Status:{res.status_code}")
+                data = res.json()
+                lista = data.get("list", {})
+                meta = lista.get("meta", {})
+                ordenes = lista.get("elements", {}).get("order", [])
+                if isinstance(ordenes, dict):
+                    ordenes = [ordenes]
 
-            if res.status_code != 200:
-                print(f"[Walmart Ordenes] Error: {res.text[:200]}")
-                break
+                for o in ordenes:
+                    poid = str(o.get("purchaseOrderId", ""))
+                    if poid and poid in vistos:
+                        continue
+                    vistos.add(poid)
+                    todas.append(o)
 
-            data = res.json()
-            lista = data.get("list", {})
-            meta = lista.get("meta", {})
-            ordenes = lista.get("elements", {}).get("order", [])
+                print(f"[Walmart Ordenes] {ship_node} Página:{pagina} +{len(ordenes)} Total:{len(todas)}")
 
-            if isinstance(ordenes, dict):
-                ordenes = [ordenes]
+                next_cursor = meta.get("nextCursor")
+                if not next_cursor or next_cursor in ("-1", ""):
+                    break
 
-            todas.extend(ordenes)
-            print(f"[Walmart Ordenes] Página:{pagina} +{len(ordenes)} Total:{len(todas)}")
-
-            next_cursor = meta.get("nextCursor")
-            if not next_cursor or next_cursor == "-1":
-                break
+        # Filtrar por estado del lado del código si se pidió uno concreto.
+        if estado:
+            def _tiene_estado(o):
+                lineas = o.get("orderLines", {}).get("orderLine", [])
+                if isinstance(lineas, dict):
+                    lineas = [lineas]
+                for ln in lineas:
+                    sts = ln.get("orderLineStatuses", {}).get("orderLineStatus", [])
+                    if isinstance(sts, dict):
+                        sts = [sts]
+                    for s in sts:
+                        if (s.get("status") or "").lower() == estado.lower():
+                            return True
+                return False
+            todas = [o for o in todas if _tiene_estado(o)]
+            print(f"[Walmart Ordenes] Filtradas por estado '{estado}': {len(todas)}")
 
         return todas
     except Exception as e:
