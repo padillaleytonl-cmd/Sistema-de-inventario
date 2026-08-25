@@ -449,6 +449,46 @@ def init_db():
     cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS documento_compra_id INTEGER REFERENCES documentos_compra(id) ON DELETE SET NULL")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_mov_doc_compra ON movimientos(documento_compra_id)")
 
+    # ── Protección definitiva contra duplicados de ventas ──────────────────
+    # Un índice único parcial sobre (orden_id, sku, tipo) hace físicamente
+    # imposible insertar dos veces la misma venta, incluso si varios procesos
+    # del scheduler corren en paralelo (la idempotencia por código no basta
+    # porque el SELECT+INSERT no es atómico entre procesos distintos).
+    # Antes de crear el índice hay que eliminar duplicados preexistentes.
+    try:
+        cur.execute("""SELECT 1 FROM pg_indexes
+                       WHERE indexname='uniq_venta_orden_sku_tipo' LIMIT 1""")
+        if not cur.fetchone():
+            # Limpiar duplicados dejando el registro más antiguo (MIN id) de cada grupo
+            borrado_total = 0
+            while True:
+                cur.execute("""
+                    DELETE FROM movimientos WHERE id IN (
+                      SELECT id FROM (
+                        SELECT id, ROW_NUMBER() OVER (
+                          PARTITION BY orden_id, sku, tipo ORDER BY id) AS rn
+                        FROM movimientos
+                        WHERE tipo IN ('salida','ajuste') AND orden_id IS NOT NULL
+                      ) x WHERE x.rn > 1 LIMIT 5000)
+                """)
+                n = cur.rowcount
+                conn.commit()
+                borrado_total += n
+                if n == 0:
+                    break
+            if borrado_total:
+                print(f"[init_db] Duplicados de ventas eliminados: {borrado_total}")
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uniq_venta_orden_sku_tipo
+                ON movimientos (orden_id, sku, tipo)
+                WHERE tipo IN ('salida','ajuste') AND orden_id IS NOT NULL
+            """)
+            conn.commit()
+            print("[init_db] Índice único uniq_venta_orden_sku_tipo creado (anti-duplicados)")
+    except Exception as e:
+        conn.rollback()
+        print(f"[init_db] No se pudo crear índice anti-duplicados: {e}")
+
 
     conn.commit()
     cur.close()
@@ -2408,9 +2448,8 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
 
         ahora_chile = now_chile().replace(tzinfo=None)
 
-        # IDEMPOTENCIA: si ya existe un movimiento de venta para esta orden+SKU, no
-        # insertar de nuevo. Evita duplicados cuando el sync reprocesa una orden
-        # (por reintentos, recuperación, o solapamiento de ciclos).
+        # IDEMPOTENCIA (capa 1, rápida): si ya existe el movimiento, no reinsertar.
+        # Evita el trabajo de descuento cuando la orden ya fue procesada.
         if orden_id:
             cur.execute("""SELECT 1 FROM movimientos
                            WHERE orden_id = %s AND sku = %s
@@ -2422,16 +2461,30 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
                         "bodega": bodega, "stock_antes": stock_antes,
                         "stock_despues": stock_antes, "advertencia": "ya_registrada"}
 
+        # IDEMPOTENCIA (capa 2, atómica): ON CONFLICT respaldado por el índice único
+        # uniq_venta_orden_sku_tipo. Aunque dos procesos del scheduler corran en
+        # paralelo y ambos pasen la verificación de arriba, la BD rechaza el segundo
+        # INSERT sin error. Esta capa es la que realmente evita duplicados por
+        # concurrencia (el SELECT+INSERT de arriba no es atómico entre procesos).
         cur.execute("""INSERT INTO movimientos
             (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id,
              bodega_codigo, fecha_importacion, fecha_compra_marketplace,
              origen_registro, stock_antes, stock_despues)
-            VALUES ('salida', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            VALUES ('salida', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (orden_id, sku, tipo)
+                WHERE tipo IN ('salida','ajuste') AND orden_id IS NOT NULL
+                DO NOTHING""",
             (sku, nombre, descontar, motivo_final, usuario, canal_normalizado,
              ahora_chile, orden_id, bodega, ahora_chile,
              fecha_compra_clean, origen_registro, stock_antes, stock_despues))
+        inserto = (cur.rowcount > 0)  # 0 si el índice bloqueó un duplicado
         conn.commit()
         cur.close(); release_conn(conn)
+        if not inserto:
+            # El índice único bloqueó un duplicado: no se descontó nada realmente.
+            return {"ok": True, "sku": sku, "cantidad_descontada": 0,
+                    "bodega": bodega, "stock_antes": stock_antes,
+                    "stock_despues": stock_antes, "advertencia": "ya_registrada"}
     except Exception as e:
         print(f"[Bodegas] Error registrando movimiento: {e}")
 
