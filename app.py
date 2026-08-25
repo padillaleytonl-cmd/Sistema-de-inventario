@@ -255,8 +255,7 @@ def auditoria_ordenes_limbo():
             try:
                 from walmart import obtener_ordenes_walmart
                 vistos = set(); limbo = []; total = 0
-                for est in ["Created", "Acknowledged", "Shipped", "Delivered"]:
-                    for o in (obtener_ordenes_walmart(est) or []):
+                for o in (obtener_ordenes_walmart() or []):
                         coid = str(o.get("customerOrderId") or o.get("purchaseOrderId") or "")
                         if not coid or coid in vistos:
                             continue
@@ -931,8 +930,12 @@ def _sync_walmart_automatico():
 
         # Descuenta apenas Walmart crea la orden (Created) para evitar sobreventa en otros canales.
         # Si el cliente cancela, el bloque de cancelaciones (más abajo) reintegra el stock automáticamente.
-        for estado in ["Created", "Acknowledged", "Shipped", "Delivered"]:
-            ordenes = obtener_ordenes_walmart(estado)
+        # OPTIMIZACIÓN: obtener_ordenes_walmart ya trae TODAS las órdenes del período
+        # (Global API). Antes se llamaba 4 veces (una por estado), trayendo los mismos
+        # datos repetidos. Ahora se trae una sola vez y se procesan todas; el bloque
+        # interno ya maneja cada orden según su estado.
+        for _bloque_unico in [True]:
+            ordenes = obtener_ordenes_walmart()
             for o in ordenes:
                 order_id = o.get("purchaseOrderId")
                 if not order_id:
@@ -2353,8 +2356,9 @@ def _sync_recuperacion():
         print("[Recuperación] Buscando órdenes no procesadas...")
         productos = cargar_productos()
         recuperadas = 0
-        for estado in ["Created", "Acknowledged", "Shipped", "Delivered"]:
-            ordenes = obtener_ordenes_walmart(estado)
+        # OPTIMIZACIÓN: traer todas las órdenes una vez (no 4 veces por estado).
+        for _bloque_unico in [True]:
+            ordenes = obtener_ordenes_walmart()
             for o in ordenes:
                 order_id = o.get("purchaseOrderId")
                 if not order_id:
