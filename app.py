@@ -18,6 +18,7 @@ from mercadolibre import actualizar_stock_meli
 from falabella import actualizar_stock_falabella_lusync as actualizar_stock_falabella
 from ripley import actualizar_stock_ripley_lusync as actualizar_stock_ripley
 from inventario import (cargar_productos, guardar_productos, guardar_producto,
+                        get_conn, release_conn,
                         registrar_movimiento, cargar_movimientos, cargar_movimientos_hoy,
                         init_db, orden_ya_procesada, marcar_orden_procesada, actualizar_precios,
                         get_configuracion, set_configuracion, set_lead_time, eliminar_producto,
