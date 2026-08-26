@@ -95,74 +95,85 @@ def obtener_devoluciones_meli(dias=30):
     headers = {"Authorization": f"Bearer {token}"}
     salida = []
     try:
-        fecha_desde = (datetime.utcnow() - timedelta(days=dias)).strftime("%Y-%m-%dT00:00:00.000-00:00")
-        offset = 0
-        while True:
-            params = {
-                "date_created_from": fecha_desde,
-                "limit": 50,
-                "offset": offset,
-            }
-            r = requests.get(f"{MELI_API_URL}/post-purchase/v1/claims/search",
-                             headers=headers, params=params, timeout=25)
-            if r.status_code != 200:
-                print(f"[Returns ML] claims/search status {r.status_code}: {r.text[:150]}")
-                break
-            data = r.json()
-            claims = data.get("data") or data.get("results") or []
-            if not claims:
-                break
-            for c in claims:
-                claim_id = str(c.get("id") or c.get("claim_id") or "")
-                if not claim_id:
-                    continue
-                # Traer detalle de la devolución del claim
-                try:
-                    rr = requests.get(f"{MELI_API_URL}/post-purchase/v2/claims/{claim_id}/returns",
-                                      headers=headers, timeout=20)
-                    if rr.status_code != 200:
+        # El claims/search exige al menos un filtro. Usamos 'range' de fecha
+        # (formato ML: date_created:after:<ISO>,before:<ISO>). Iteramos por
+        # stage para cubrir reclamos con devolución en distintas etapas.
+        desde = (datetime.utcnow() - timedelta(days=dias)).strftime("%Y-%m-%dT00:00:00.000-00:00")
+        hasta = datetime.utcnow().strftime("%Y-%m-%dT23:59:59.000-00:00")
+        rango = f"date_created:after:{desde},before:{hasta}"
+        vistos_claims = set()
+        for stage in ("claim", "dispute", "recontact", "none"):
+            offset = 0
+            while True:
+                params = {
+                    "stage": stage,
+                    "range": rango,
+                    "limit": 50,
+                    "offset": offset,
+                }
+                r = requests.get(f"{MELI_API_URL}/post-purchase/v1/claims/search",
+                                 headers=headers, params=params, timeout=25)
+                if r.status_code != 200:
+                    # Si un stage no es válido, seguir con el siguiente
+                    if r.status_code == 400 and offset == 0:
+                        break
+                    print(f"[Returns ML] {stage} status {r.status_code}: {r.text[:120]}")
+                    break
+                data = r.json()
+                claims = data.get("data") or data.get("results") or []
+                if not claims:
+                    break
+                for c in claims:
+                    claim_id = str(c.get("id") or c.get("claim_id") or "")
+                    if not claim_id or claim_id in vistos_claims:
                         continue
-                    ret = rr.json()
-                except Exception:
-                    continue
-                if not ret:
-                    continue
-                returns_list = ret if isinstance(ret, list) else [ret]
-                for robj in returns_list:
-                    return_id = str(robj.get("id") or claim_id)
-                    shipments = robj.get("shipments") or []
-                    tracking = None
-                    estado_env = None
-                    if shipments:
-                        tracking = shipments[0].get("tracking_number")
-                        estado_env = shipments[0].get("status")
-                    order_id = str(c.get("resource_id") or c.get("order_id") or "")
-                    salida.append({
-                        "canal": "mercadolibre",
-                        "return_id": return_id,
-                        "claim_id": claim_id,
-                        "order_id": order_id,
-                        "sku": None, "sku_canal": None,
-                        "producto_nombre": None,
-                        "cantidad": 1,
-                        "estado": _norm_estado("mercadolibre", estado_env or c.get("status")),
-                        "estado_canal": estado_env or str(c.get("status") or ""),
-                        "motivo": c.get("reason_id") or c.get("type"),
-                        "tipo": c.get("type") or "return",
-                        "monto_reembolso": None, "moneda": "CLP",
-                        "tracking_number": tracking, "transportista": None,
-                        "fecha_solicitud": _parse_fecha(c.get("date_created")),
-                        "fecha_limite": None,
-                        "fecha_resolucion": None,
-                        "fecha_actualizacion_canal": _parse_fecha(robj.get("last_updated") or c.get("last_updated")),
-                        "acciones_disponibles": [],
-                        "raw": robj,
-                    })
-            offset += 50
-            if offset >= (data.get("paging", {}) or {}).get("total", offset):
-                break
-            if offset > 500:
-                break
+                    vistos_claims.add(claim_id)
+                    # Traer detalle de la devolución del claim
+                    try:
+                        rr = requests.get(f"{MELI_API_URL}/post-purchase/v2/claims/{claim_id}/returns",
+                                          headers=headers, timeout=20)
+                        if rr.status_code != 200:
+                            continue
+                        ret = rr.json()
+                    except Exception:
+                        continue
+                    if not ret:
+                        continue
+                    returns_list = ret if isinstance(ret, list) else [ret]
+                    for robj in returns_list:
+                        return_id = str(robj.get("id") or claim_id)
+                        shipments = robj.get("shipments") or []
+                        tracking = None
+                        estado_env = None
+                        if shipments:
+                            tracking = shipments[0].get("tracking_number")
+                            estado_env = shipments[0].get("status")
+                        order_id = str(c.get("resource_id") or c.get("order_id") or "")
+                        salida.append({
+                            "canal": "mercadolibre",
+                            "return_id": return_id,
+                            "claim_id": claim_id,
+                            "order_id": order_id,
+                            "sku": None, "sku_canal": None,
+                            "producto_nombre": None,
+                            "cantidad": 1,
+                            "estado": _norm_estado("mercadolibre", estado_env or c.get("status")),
+                            "estado_canal": estado_env or str(c.get("status") or ""),
+                            "motivo": c.get("reason_id") or c.get("type"),
+                            "tipo": c.get("type") or "return",
+                            "monto_reembolso": None, "moneda": "CLP",
+                            "tracking_number": tracking, "transportista": None,
+                            "fecha_solicitud": _parse_fecha(c.get("date_created")),
+                            "fecha_limite": None,
+                            "fecha_resolucion": None,
+                            "fecha_actualizacion_canal": _parse_fecha(robj.get("last_updated") or c.get("last_updated")),
+                            "acciones_disponibles": [],
+                            "raw": robj,
+                        })
+                offset += 50
+                total = (data.get("paging", {}) or {}).get("total", offset)
+                if offset >= total or offset > 500:
+                    break
     except Exception as e:
         print(f"[Returns ML] error: {e}")
     return salida
@@ -192,23 +203,43 @@ def obtener_devoluciones_walmart(dias=30):
                 lineas = o.get("returnOrderLines") or []
                 if isinstance(lineas, dict):
                     lineas = [lineas]
-                # tracking desde returnOrderShipments o labels
+                # tracking desde returnOrderShipments
                 tracking = None
                 transportista = None
                 shipments = o.get("returnOrderShipments") or []
                 if shipments and isinstance(shipments, list):
-                    tr = shipments[0].get("trackingNumber") or shipments[0].get("trackingNo")
-                    tracking = tr
+                    tracking = shipments[0].get("trackingNumber") or shipments[0].get("trackingNo")
+                    transportista = shipments[0].get("carrier")
                 # una fila por línea (o una sola si no hay líneas)
                 if not lineas:
                     lineas = [{}]
                 for ln in lineas:
-                    sku_canal = ln.get("sku") or ln.get("itemId")
+                    item = ln.get("item") or {}
+                    nombre = item.get("productName") or item.get("sku")
+                    sku_canal = item.get("sku")
                     order_id = str(ln.get("purchaseOrderId") or o.get("customerOrderId") or "")
+                    # Monto: buscar charge de tipo PRODUCT en charges[]
                     monto = None
-                    tra = o.get("totalRefundAmount") or {}
-                    if isinstance(tra, dict):
-                        monto = tra.get("currencyAmount")
+                    moneda = "CLP"
+                    for ch in (ln.get("charges") or []):
+                        if not isinstance(ch, dict):
+                            continue
+                        ca = ch.get("chargeAmount") or {}
+                        if ch.get("chargeType") == "PRODUCT" and isinstance(ca, dict):
+                            try:
+                                monto = float(ca.get("amount"))
+                                moneda = ca.get("currency") or "CLP"
+                            except Exception:
+                                pass
+                            break
+                    # Cantidad: puede venir como número o dict {amount}
+                    cant_raw = ln.get("returnQuantity") or ln.get("quantity") or 1
+                    if isinstance(cant_raw, dict):
+                        cant_raw = cant_raw.get("amount") or 1
+                    try:
+                        cantidad = int(float(cant_raw))
+                    except Exception:
+                        cantidad = 1
                     salida.append({
                         "canal": "walmart",
                         "return_id": return_id,
@@ -216,14 +247,14 @@ def obtener_devoluciones_walmart(dias=30):
                         "order_id": order_id,
                         "sku": None,
                         "sku_canal": sku_canal,
-                        "producto_nombre": ln.get("itemDescription") or ln.get("productName"),
-                        "cantidad": int(ln.get("returnQuantity") or ln.get("quantity") or 1),
+                        "producto_nombre": nombre,
+                        "cantidad": cantidad,
                         "estado": _norm_estado("walmart", ln.get("status") or o.get("status")),
                         "estado_canal": str(ln.get("status") or o.get("status") or ""),
                         "motivo": ln.get("returnReason") or ln.get("returnDescription"),
                         "tipo": o.get("returnType") or "return",
                         "monto_reembolso": monto,
-                        "moneda": (tra.get("currencyUnit") if isinstance(tra, dict) else None) or "CLP",
+                        "moneda": moneda,
                         "tracking_number": tracking,
                         "transportista": transportista,
                         "fecha_solicitud": _parse_fecha(o.get("returnOrderDate")),
