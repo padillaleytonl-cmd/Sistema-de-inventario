@@ -3787,7 +3787,7 @@ def devoluciones_lookup_oc():
     oc = request.args.get("oc", "").strip()
     if not oc:
         return {"error": "OC requerida"}, 400
-    conn = __import__('psycopg2').connect(__import__('os').environ.get("DATABASE_URL"))
+    conn = get_conn(tenant_id=1, is_admin=True)
     cur = conn.cursor()
     cur.execute("""
         SELECT DISTINCT m.sku, m.nombre, m.canal,
@@ -3802,7 +3802,7 @@ def devoluciones_lookup_oc():
         ORDER BY m.sku
     """, (oc,))
     rows = cur.fetchall()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     if not rows:
         return {"error": "OC no encontrada en movimientos"}, 404
     items = [{"sku": r[0], "nombre": r[1], "canal": r[2],
@@ -3855,7 +3855,7 @@ def devoluciones_buscar_orden():
             break
 
     # ── Paso 1: Buscar en BD local ─────────────────────────────────
-    conn = __import__('psycopg2').connect(__import__('os').environ.get("DATABASE_URL"))
+    conn = get_conn(tenant_id=1, is_admin=True)
     cur = conn.cursor()
     cur.execute("""
         SELECT m.sku, m.nombre, m.canal, ABS(m.cantidad) as cantidad,
@@ -3866,7 +3866,7 @@ def devoluciones_buscar_orden():
         ORDER BY m.sku
     """, (numero_limpio,))
     rows = cur.fetchall()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
 
     if rows:
         # ¡Encontrada en BD! Devolvemos toda la info al toque
@@ -4347,14 +4347,14 @@ def devoluciones_eliminar(dev_id):
                         "intento_eliminar_devolucion", entidad="devoluciones", entidad_id=str(dev_id),
                         resultado="fallido", detalle="Clave admin incorrecta")
         return {"error": "Clave incorrecta"}, 403
-    conn = __import__('psycopg2').connect(__import__('os').environ.get("DATABASE_URL"))
+    conn = get_conn(tenant_id=1, is_admin=True)
     cur = conn.cursor()
     cur.execute("SELECT codigo, oc_origen, nombre FROM devoluciones WHERE id = %s", (dev_id,))
     row = cur.fetchone()
     detalle_dev = str(row) if row else str(dev_id)
     cur.execute("DELETE FROM devoluciones WHERE id = %s", (dev_id,))
     conn.commit()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     registrar_audit(session.get("usuario","admin"), request.remote_addr,
                     "eliminar_devolucion", entidad="devoluciones", entidad_id=str(dev_id),
                     detalle=f"Devolución eliminada: {detalle_dev}", dato_antes=detalle_dev)
