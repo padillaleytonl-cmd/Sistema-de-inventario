@@ -254,7 +254,7 @@ def obtener_devoluciones_walmart(dias=30):
                     item = ln.get("item") or {}
                     nombre = item.get("productName") or item.get("sku")
                     sku_canal = item.get("sku")
-                    order_id = str(ln.get("purchaseOrderId") or o.get("customerOrderId") or "")
+                    order_id = str(o.get("customerOrderId") or ln.get("purchaseOrderId") or "")
                     # Monto: buscar charge de tipo PRODUCT en charges[]
                     monto = None
                     moneda = "CLP"
@@ -625,3 +625,89 @@ def procesar_webhook_falabella_return(payload, tenant_id=None):
     except Exception as e:
         print(f"[Returns Falabella webhook] error: {e}")
         return "error"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MATCHING: vincular una devolución física con su devolución de marketplace
+# ─────────────────────────────────────────────────────────────────────────────
+def buscar_devolucion_mkt(oc_origen=None, sku=None, canal=None, tenant_id=None):
+    """Dado lo que se conoce de una devolución física (la OC de origen que trae
+    la etiqueta, el SKU, el canal), busca la devolución de marketplace que le
+    corresponde. Devuelve una lista de candidatos (dicts), del match más fuerte
+    al más débil. Puede haber más de uno (una orden con varias devoluciones).
+
+    Estrategia de match, de más fuerte a más débil:
+      1. order_id exacto + canal + sku
+      2. order_id exacto + canal
+      3. order_id exacto (cualquier canal)
+      4. sku + canal (últimos 60 días) — cuando no hay OC clara
+    """
+    if not any([oc_origen, sku]):
+        return []
+    conn = get_conn(tenant_id=tenant_id) if tenant_id else get_conn()
+    try:
+        cur = conn.cursor()
+        cols = """id, canal, return_id, claim_id, order_id, sku, sku_canal,
+                  producto_nombre, estado, estado_canal, motivo, tipo,
+                  monto_reembolso, moneda, tracking_number, fecha_solicitud,
+                  fecha_limite, fecha_resolucion, dias_restantes, requiere_accion,
+                  acciones_disponibles, url_gestion"""
+
+        def _run(where, params):
+            cur.execute(f"SELECT {cols} FROM devoluciones_marketplace WHERE {where} "
+                        f"ORDER BY fecha_solicitud DESC LIMIT 10", params)
+            rows = cur.fetchall()
+            names = [d[0] for d in cur.description]
+            return [dict(zip(names, r)) for r in rows]
+
+        canal_norm = (canal or "").lower().strip() or None
+        candidatos = []
+        vistos = set()
+
+        def _add(lista, fuerza):
+            for r in lista:
+                if r["id"] in vistos:
+                    continue
+                vistos.add(r["id"])
+                r["_match"] = fuerza
+                candidatos.append(r)
+
+        oc = str(oc_origen).strip() if oc_origen else None
+        skv = str(sku).strip() if sku else None
+
+        if oc and canal_norm and skv:
+            _add(_run("order_id=%s AND canal=%s AND (sku=%s OR sku_canal=%s)",
+                      (oc, canal_norm, skv, skv)), "exacto_oc_canal_sku")
+        if oc and canal_norm:
+            _add(_run("order_id=%s AND canal=%s", (oc, canal_norm)), "oc_canal")
+        if oc:
+            _add(_run("order_id=%s", (oc,)), "solo_oc")
+        if skv and canal_norm:
+            _add(_run("canal=%s AND (sku=%s OR sku_canal=%s) "
+                      "AND fecha_solicitud > NOW() - INTERVAL '60 days'",
+                      (canal_norm, skv, skv)), "sku_canal_reciente")
+
+        # Serializar fechas para consumo del frontend
+        for r in candidatos:
+            for k in ("fecha_solicitud", "fecha_limite", "fecha_resolucion"):
+                if r.get(k):
+                    r[k] = r[k].isoformat()
+            if r.get("monto_reembolso") is not None:
+                try:
+                    r["monto_reembolso"] = float(r["monto_reembolso"])
+                except Exception:
+                    pass
+        return candidatos
+    except Exception as e:
+        print(f"[buscar_devolucion_mkt] error: {e}")
+        return []
+    finally:
+        release_conn(conn)
+
+
+def estado_mkt_de_devolucion(order_id, canal=None, tenant_id=None):
+    """Devuelve el estado actual en el marketplace de una devolución ya vinculada,
+    para el seguimiento de la resolución final. Se usa al refrescar una ficha.
+    """
+    cands = buscar_devolucion_mkt(oc_origen=order_id, canal=canal, tenant_id=tenant_id)
+    return cands[0] if cands else None

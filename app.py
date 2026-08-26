@@ -3754,7 +3754,19 @@ def devoluciones_get(dev_id):
     dev = get_devolucion(dev_id=dev_id)
     if not dev:
         return {"error": "no encontrada"}, 404
-    return {"devolucion": dev}
+    # Enriquecer con el estado en el marketplace (seguimiento de la resolución
+    # final): busca la devolución del canal vinculada por OC + SKU + canal.
+    mkt = None
+    try:
+        from returns import buscar_devolucion_mkt
+        cands = buscar_devolucion_mkt(
+            oc_origen=dev.get("oc_origen"), sku=dev.get("sku"),
+            canal=(dev.get("canal") or "").lower(), tenant_id=1)
+        if cands:
+            mkt = cands[0]
+    except Exception as _e:
+        print(f"[devoluciones_get] match mkt: {_e}")
+    return {"devolucion": dev, "marketplace": mkt}
 
 @app.route("/devoluciones/buscar")
 def devoluciones_buscar_codigo():
@@ -3796,6 +3808,24 @@ def devoluciones_lookup_oc():
     items = [{"sku": r[0], "nombre": r[1], "canal": r[2],
               "cantidad": r[3], "fecha": r[4]} for r in rows]
     return {"items": items, "oc": oc}
+
+
+@app.route("/devoluciones/mkt_match")
+def devoluciones_mkt_match():
+    """Dada una OC (y opcionalmente SKU y canal), devuelve la(s) devolución(es)
+    de marketplace vinculada(s), con su estado en el canal y plazo. Se usa al
+    pistolear/registrar una devolución física para identificar el reclamo del MKT.
+    """
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    oc = request.args.get("oc", "").strip()
+    sku = request.args.get("sku", "").strip() or None
+    canal = request.args.get("canal", "").strip() or None
+    if not oc and not sku:
+        return {"error": "oc o sku requerido"}, 400
+    from returns import buscar_devolucion_mkt
+    cands = buscar_devolucion_mkt(oc_origen=oc, sku=sku, canal=canal, tenant_id=1)
+    return {"encontradas": len(cands), "devoluciones_mkt": cands}
 
 
 @app.route("/devoluciones/buscar_orden", methods=["GET", "POST"])
