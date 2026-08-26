@@ -4414,7 +4414,7 @@ def devoluciones_mkt_list():
         q = """SELECT canal, return_id, order_id, sku, sku_canal, producto_nombre,
                       cantidad, estado, estado_canal, motivo, tipo, monto_reembolso,
                       moneda, tracking_number, fecha_solicitud, fecha_limite,
-                      fecha_resolucion, dias_restantes, requiere_accion
+                      fecha_resolucion, dias_restantes, requiere_accion, url_gestion
                FROM devoluciones_marketplace WHERE 1=1"""
         params = []
         if canal:
@@ -4446,6 +4446,137 @@ def devoluciones_mkt_list():
         return {"devoluciones": filas, "total": len(filas), "alertas": alertas}
     finally:
         release_conn(conn)
+
+
+@app.route("/devoluciones-mkt/panel")
+def devoluciones_mkt_panel():
+    """Panel visual de devoluciones con estados, plazos y links directos al MKT."""
+    if not session.get("logged"):
+        return redirect("/login")
+    conn = get_conn(tenant_id=1)
+    try:
+        cur = conn.cursor()
+        cur.execute("""SELECT
+            COUNT(*) FILTER (WHERE requiere_accion AND dias_restantes IS NOT NULL AND dias_restantes < 0),
+            COUNT(*) FILTER (WHERE requiere_accion AND dias_restantes IS NOT NULL AND dias_restantes BETWEEN 0 AND 2),
+            COUNT(*) FILTER (WHERE requiere_accion),
+            COUNT(*)
+            FROM devoluciones_marketplace""")
+        venc, porv, abiertas, total = cur.fetchone()
+        cur.execute("""SELECT canal, return_id, order_id, producto_nombre, sku_canal,
+                          estado, estado_canal, motivo, monto_reembolso, moneda,
+                          tracking_number, fecha_solicitud, fecha_limite, dias_restantes,
+                          requiere_accion, url_gestion
+                   FROM devoluciones_marketplace
+                   ORDER BY (fecha_limite IS NULL), fecha_limite ASC, fecha_solicitud DESC
+                   LIMIT 300""")
+        rows = cur.fetchall()
+        cur.close()
+    finally:
+        release_conn(conn)
+
+    canal_badge = {
+        "mercadolibre": "MercadoLibre", "walmart": "Walmart",
+        "paris": "Paris", "ripley": "Ripley", "falabella": "Falabella"
+    }
+
+    def color_estado(estado, dias, requiere):
+        if estado == "resuelta":
+            return "#1D9E75", "Resuelta"
+        if estado == "cancelada":
+            return "#888780", "Cancelada"
+        if estado == "en_transito":
+            return "#888780", "En tránsito"
+        if dias is not None:
+            if dias < 0:
+                return "#E24B4A", "Vencido"
+            if dias <= 2:
+                return "#EF9F27", f"{dias} día(s)"
+            return "#1D9E75", f"{dias} días"
+        return "#888780", "Abierta"
+
+    tarjetas = ""
+    for (canal, rid, oid, nombre, sku_c, estado, estado_canal, motivo, monto,
+         moneda, track, fsol, flim, dias, requiere, url) in rows:
+        color, etiqueta_tiempo = color_estado(estado, dias, requiere)
+        nombre_disp = (nombre or sku_c or "Producto")[:60]
+        estado_txt = (estado_canal or estado or "").replace("_", " ")
+        motivo_txt = (str(motivo)[:40] + " · ") if motivo else ""
+        sub = f"{rid} · {motivo_txt}{estado_txt}"
+        link_html = ""
+        if url:
+            link_html = (f'<a href="{url}" target="_blank" style="font-size:12px;'
+                         f'color:#185FA5;text-decoration:none;white-space:nowrap;">'
+                         f'Gestionar en {canal_badge.get(canal, canal)} →</a>')
+        fecha_disp = ""
+        if flim:
+            fecha_disp = f'<p style="font-size:12px;color:#888;margin:2px 0 0;">vence {flim.strftime("%d %b")}</p>'
+        elif fsol:
+            fecha_disp = f'<p style="font-size:12px;color:#888;margin:2px 0 0;">solicitada {fsol.strftime("%d %b")}</p>'
+        tarjetas += f"""
+        <div style="background:#fff;border:0.5px solid #e5e5e5;border-left:3px solid {color};
+                    border-radius:12px;padding:12px 16px;margin-bottom:10px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
+            <div style="flex:1;min-width:0;">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;">
+                <span style="font-size:11px;font-weight:500;background:#E6F1FB;color:#0C447C;
+                             padding:2px 8px;border-radius:6px;">{canal_badge.get(canal, canal)}</span>
+                <span style="font-size:13px;font-weight:500;">{nombre_disp}</span>
+              </div>
+              <p style="font-size:13px;color:#666;margin:0;">{sub}</p>
+              {link_html}
+            </div>
+            <div style="text-align:right;white-space:nowrap;">
+              <p style="font-size:13px;font-weight:500;color:{color};margin:0;">{etiqueta_tiempo}</p>
+              {fecha_disp}
+            </div>
+          </div>
+        </div>"""
+
+    html = f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Devoluciones · Lusync</title>
+    <style>
+      body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+             background:#faf9f5; color:#1a1a1a; margin:0; padding:24px; }}
+      .wrap {{ max-width:900px; margin:0 auto; }}
+      h1 {{ font-size:22px; font-weight:500; margin:0 0 4px; }}
+      .sub {{ color:#666; font-size:14px; margin:0 0 24px; }}
+      .cards {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr));
+               gap:12px; margin-bottom:24px; }}
+      .metric {{ border-radius:8px; padding:16px; }}
+      .metric p {{ margin:0; }}
+      .metric .lbl {{ font-size:13px; margin-bottom:4px; }}
+      .metric .num {{ font-size:24px; font-weight:500; }}
+      .bar {{ display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap; }}
+      .bar a {{ font-size:13px; padding:6px 12px; border:0.5px solid #ccc; border-radius:8px;
+               text-decoration:none; color:#1a1a1a; background:#fff; }}
+      .bar a:hover {{ background:#f0f0f0; }}
+    </style></head>
+    <body><div class="wrap">
+      <h1>Devoluciones de marketplaces</h1>
+      <p class="sub">Trazabilidad y control de plazos · {total} devoluciones · actualización automática cada 30 min</p>
+      <div class="cards">
+        <div class="metric" style="background:#FCEBEB;">
+          <p class="lbl" style="color:#A32D2D;">Vencidas</p>
+          <p class="num" style="color:#A32D2D;">{venc}</p></div>
+        <div class="metric" style="background:#FAEEDA;">
+          <p class="lbl" style="color:#854F0B;">Por vencer</p>
+          <p class="num" style="color:#854F0B;">{porv}</p></div>
+        <div class="metric" style="background:#f0efe8;">
+          <p class="lbl" style="color:#666;">Abiertas</p>
+          <p class="num">{abiertas}</p></div>
+        <div class="metric" style="background:#f0efe8;">
+          <p class="lbl" style="color:#666;">Total</p>
+          <p class="num">{total}</p></div>
+      </div>
+      <div class="bar">
+        <a href="/devoluciones-mkt/panel">Todas</a>
+        <a href="/devoluciones-mkt/sync" onclick="event.preventDefault();fetch('/devoluciones-mkt/sync',{{method:'POST'}}).then(()=>location.reload());">↻ Sincronizar ahora</a>
+      </div>
+      {tarjetas if tarjetas else '<p style="color:#888;">No hay devoluciones registradas aún. Pulsa "Sincronizar ahora".</p>'}
+    </div></body></html>"""
+    return html
 
 
 def _sync_devoluciones_automatico():

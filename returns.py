@@ -69,6 +69,28 @@ def _parse_fecha(valor):
     return None
 
 
+def _link_gestion(canal, order_id, return_id, claim_id=None):
+    """Genera el link directo al panel del marketplace para gestionar la devolución.
+    Lleva al vendedor a la pantalla donde puede responder/apelar en cada MKT.
+    """
+    try:
+        if canal == "mercadolibre" and claim_id:
+            # Centro de reclamos/ventas de ML
+            return f"https://www.mercadolibre.cl/ventas/{order_id}/detalle" if order_id else \
+                   f"https://myaccount.mercadolibre.cl/sales/claims/{claim_id}"
+        if canal == "walmart":
+            return "https://seller.walmart.com/returns-overview"
+        if canal == "paris":
+            return "https://sellercenter.paris.cl/returns"
+        if canal == "ripley":
+            return "https://mirakl.ripley.cl/mmp/shop/returns"
+        if canal == "falabella":
+            return "https://sellercenter.falabella.com/return/index"
+    except Exception:
+        pass
+    return None
+
+
 def _norm_estado(canal, estado_crudo):
     """Mapea el estado crudo de cada canal a un estado normalizado común."""
     e = (str(estado_crudo) or "").lower()
@@ -149,6 +171,21 @@ def obtener_devoluciones_meli(dias=30):
                             tracking = shipments[0].get("tracking_number")
                             estado_env = shipments[0].get("status")
                         order_id = str(c.get("resource_id") or c.get("order_id") or "")
+                        # Extraer las acciones del vendedor (respondent) y su plazo.
+                        # ML entrega en cada available_action un due_date = fecha
+                        # límite para ejecutar esa acción. Tomamos la más próxima.
+                        acciones = []
+                        fecha_limite = None
+                        for p in (c.get("players") or []):
+                            if p.get("role") != "respondent":
+                                continue
+                            for a in (p.get("available_actions") or []):
+                                nombre_acc = a.get("action")
+                                if nombre_acc:
+                                    acciones.append(nombre_acc)
+                                dd = _parse_fecha(a.get("due_date"))
+                                if dd and (fecha_limite is None or dd < fecha_limite):
+                                    fecha_limite = dd
                         salida.append({
                             "canal": "mercadolibre",
                             "return_id": return_id,
@@ -164,10 +201,10 @@ def obtener_devoluciones_meli(dias=30):
                             "monto_reembolso": None, "moneda": "CLP",
                             "tracking_number": tracking, "transportista": None,
                             "fecha_solicitud": _parse_fecha(c.get("date_created")),
-                            "fecha_limite": None,
+                            "fecha_limite": fecha_limite,
                             "fecha_resolucion": None,
                             "fecha_actualizacion_canal": _parse_fecha(robj.get("last_updated") or c.get("last_updated")),
-                            "acciones_disponibles": [],
+                            "acciones_disponibles": acciones,
                             "raw": robj,
                         })
                 offset += 50
@@ -447,6 +484,8 @@ def upsert_devolucion(dev, tenant_id=None):
             requiere_accion = True
 
         acciones = dev.get("acciones_disponibles") or []
+        url_gestion = _link_gestion(dev["canal"], dev.get("order_id"),
+                                    dev.get("return_id"), dev.get("claim_id"))
         raw = dev.get("raw")
         raw_json = None
         try:
@@ -461,9 +500,9 @@ def upsert_devolucion(dev, tenant_id=None):
                  tracking_number, transportista, fecha_solicitud, fecha_limite,
                  fecha_resolucion, fecha_actualizacion_canal, dias_restantes,
                  requiere_accion, acciones_disponibles, raw_json,
-                 primera_deteccion, ultima_sincronizacion, tenant_id)
+                 primera_deteccion, ultima_sincronizacion, tenant_id, url_gestion)
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-                    NOW(), NOW(), %s)
+                    NOW(), NOW(), %s, %s)
             ON CONFLICT (canal, return_id) DO UPDATE SET
                 order_id = EXCLUDED.order_id,
                 sku = COALESCE(EXCLUDED.sku, devoluciones_marketplace.sku),
@@ -485,6 +524,7 @@ def upsert_devolucion(dev, tenant_id=None):
                 requiere_accion = EXCLUDED.requiere_accion,
                 acciones_disponibles = EXCLUDED.acciones_disponibles,
                 raw_json = EXCLUDED.raw_json,
+                url_gestion = COALESCE(EXCLUDED.url_gestion, devoluciones_marketplace.url_gestion),
                 ultima_sincronizacion = NOW()
         """, (
             dev["canal"], dev["return_id"], dev.get("claim_id"), dev.get("order_id"),
@@ -494,7 +534,7 @@ def upsert_devolucion(dev, tenant_id=None):
             dev.get("moneda") or "CLP", dev.get("tracking_number"), dev.get("transportista"),
             dev.get("fecha_solicitud"), dev.get("fecha_limite"), dev.get("fecha_resolucion"),
             dev.get("fecha_actualizacion_canal"), dias_restantes, requiere_accion,
-            json.dumps(acciones, ensure_ascii=False), raw_json, tenant_id
+            json.dumps(acciones, ensure_ascii=False), raw_json, tenant_id, url_gestion
         ))
         conn.commit()
         cur.close()

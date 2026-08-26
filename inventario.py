@@ -1084,6 +1084,7 @@ def init_devoluciones_mkt():
             dias_restantes INTEGER,            -- calculado: días hasta fecha_limite
             requiere_accion BOOLEAN DEFAULT FALSE, -- si el vendedor debe hacer algo
             acciones_disponibles TEXT,         -- acciones que el canal permite (JSON)
+            url_gestion TEXT,                  -- link directo a la devolución en el panel del MKT
             raw_json TEXT,                     -- snapshot completo de la respuesta del canal
             primera_deteccion TIMESTAMP DEFAULT NOW(),
             ultima_sincronizacion TIMESTAMP DEFAULT NOW(),
@@ -1097,6 +1098,8 @@ def init_devoluciones_mkt():
                    WHERE estado NOT IN ('resuelta','cancelada')""")
     cur.execute("""CREATE INDEX IF NOT EXISTS idx_devmkt_canal_estado
                    ON devoluciones_marketplace (canal, estado)""")
+    # Columna agregada después de la creación original de la tabla (idempotente)
+    cur.execute("ALTER TABLE devoluciones_marketplace ADD COLUMN IF NOT EXISTS url_gestion TEXT")
     conn.commit()
     cur.close()
     conn.close()
