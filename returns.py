@@ -91,6 +91,82 @@ def _link_gestion(canal, order_id, return_id, claim_id=None):
     return None
 
 
+# Traducción de estados crudos de cada canal → etiqueta legible en español.
+# Se muestra el estado tal cual lo reporta el marketplace, pero legible.
+# Basado en la documentación oficial de cada canal + datos reales.
+ESTADO_CANAL_LABEL = {
+    "mercadolibre": {
+        "opened": "Reclamo abierto",
+        "closed": "Cerrado",
+        "cancelled": "Cancelado",
+        "delivered": "Producto entregado",
+        "shipped": "En camino",
+        "ready_to_ship": "Listo para enviar",
+        "in_mediation": "En mediación ML",
+        "dispute": "En disputa",
+    },
+    "walmart": {
+        "RETURN_INITIATED": "Devolución iniciada",
+        "RETURN_SHIPPED": "En camino a bodega",
+        "RETURN_DELIVERED": "Recibido",
+        "RETURN_COMPLETED": "Reembolso completado",
+        "RETURN_CANCELLED": "Cancelada",
+        "INITIATED": "Iniciada",
+        "COMPLETED": "Completada",
+        "CANCELLED": "Cancelada",
+    },
+    "paris": {
+        "request_accepted": "Solicitud aceptada",
+        "auto_accepted": "Aceptada automáticamente",
+        "review_accepted": "Revisión aceptada",
+        "review_rejected": "Revisión rechazada",
+        "return_rejected": "Devolución rechazada",
+        "in_review": "En revisión",
+        "shipped": "En camino",
+        "store_received": "Recibido en tienda",
+        "received": "Recibido",
+        "finalized": "Finalizada",
+        "refunded": "Reembolsada",
+    },
+    "ripley": {
+        "WAITING_ACCEPTANCE": "Esperando aceptación",
+        "IN_PROGRESS": "En proceso",
+        "RECEIVED": "Recibido",
+        "REFUNDED": "Reembolsado",
+        "CLOSED": "Cerrada",
+        "REFUSED": "Rechazada",
+        "OPEN": "Abierta",
+    },
+    "falabella": {
+        "returned": "Devuelto",
+        "return_waiting_for_approval": "Esperando aprobación",
+        "return_shipped_by_customer": "Enviado por cliente",
+        "return_rejected": "Devolución rechazada",
+        "return_accepted": "Devolución aceptada",
+        "appeal_accepted": "Apelación aceptada",
+        "appeal_rejected": "Apelación rechazada",
+        "delivered": "Entregado",
+        "canceled": "Cancelado",
+    },
+}
+
+
+def traducir_estado_canal(canal, estado_crudo):
+    """Devuelve la etiqueta legible del estado crudo. Si no está en el diccionario,
+    formatea el crudo (snake_case → Título) para que igual sea legible."""
+    if not estado_crudo:
+        return ""
+    mapa = ESTADO_CANAL_LABEL.get((canal or "").lower(), {})
+    # Buscar exacto y case-insensitive
+    if estado_crudo in mapa:
+        return mapa[estado_crudo]
+    for k, v in mapa.items():
+        if k.lower() == str(estado_crudo).lower():
+            return v
+    # Fallback: snake_case o MAYUS → Título legible
+    return str(estado_crudo).replace("_", " ").strip().capitalize()
+
+
 def _norm_estado(canal, estado_crudo):
     """Mapea el estado crudo de cada canal a un estado normalizado común."""
     e = (str(estado_crudo) or "").lower()
@@ -697,6 +773,8 @@ def buscar_devolucion_mkt(oc_origen=None, sku=None, canal=None, tenant_id=None):
                     r["monto_reembolso"] = float(r["monto_reembolso"])
                 except Exception:
                     pass
+            # Etiqueta legible del estado crudo del canal (lo que se muestra)
+            r["estado_label"] = traducir_estado_canal(r.get("canal"), r.get("estado_canal"))
         return candidatos
     except Exception as e:
         print(f"[buscar_devolucion_mkt] error: {e}")
