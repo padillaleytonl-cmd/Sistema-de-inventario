@@ -1160,8 +1160,6 @@ tbody td {
 
 .dev-filter-btn{padding:5px 12px;border-radius:8px;font-size:12px;cursor:pointer;border:0.5px solid var(--border);background:transparent;color:var(--muted);}
 .dev-filter-btn.active{background:var(--text);color:var(--bg);border-color:transparent;}
-.dev-vista-btn{padding:8px 16px;border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;border:0.5px solid var(--border);background:transparent;color:var(--muted);display:flex;align-items:center;}
-.dev-vista-btn.active{background:var(--bg2);color:var(--text);border-color:var(--text);}
 .dev-chip{padding:5px 12px;border-radius:8px;font-size:11px;font-weight:500;cursor:pointer;border:1.5px solid transparent;background:var(--bg2);color:var(--muted);transition:all .15s;}
 .dev-chip.sel{border-color:currentColor;}
 .dev-chip.sel[data-val="buen_estado"],.dev-chip.sel[data-val="perfecto"],.dev-chip.sel[data-val="reingresada"]{background:#EAF3DE;color:#27500A;}
@@ -2858,18 +2856,27 @@ tbody td {
       </div>
     </div>
 
-    <!-- Toggle de vista: Físicas (bodega) vs Marketplace (canales) -->
-    <div style="display:flex;gap:8px;margin-bottom:14px;">
-      <button id="devVistaFisica" class="dev-vista-btn active" onclick="cambiarVistaDev('fisica')">
-        En bodega
-      </button>
-      <button id="devVistaMkt" class="dev-vista-btn" onclick="cambiarVistaDev('mkt')">
-        En el marketplace <span id="devMktBadge" style="display:none;margin-left:5px;background:#E24B4A;color:#fff;font-size:10px;font-weight:600;padding:1px 7px;border-radius:10px;">0</span>
-      </button>
+    <!-- Mini-dashboard: trabajo por hacer -->
+    <div id="devDashboard" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px;">
+      <div class="card" style="padding:14px 16px;border-left:3px solid #378ADD;">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px;">Por procesar</div>
+        <div style="font-size:24px;font-weight:600;color:var(--text);" id="dashPorProcesar">—</div>
+      </div>
+      <div class="card" style="padding:14px 16px;border-left:3px solid #E24B4A;">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px;">Urgentes</div>
+        <div style="font-size:24px;font-weight:600;color:#C0392B;" id="dashUrgentes">—</div>
+      </div>
+      <div class="card" style="padding:14px 16px;">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px;">En bodega</div>
+        <div style="font-size:24px;font-weight:600;color:var(--text);" id="dashBodega">—</div>
+      </div>
+      <div class="card" style="padding:14px 16px;">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px;">En marketplace</div>
+        <div style="font-size:24px;font-weight:600;color:var(--text);" id="dashMkt">—</div>
+      </div>
     </div>
 
     <!-- Campo pistoleo lookup -->
-    <div id="devVistaFisicaCont">
     <div style="margin-bottom:12px;">
       <div style="display:flex;gap:8px;align-items:center;">
         <div style="position:relative;flex:0 0 320px;">
@@ -2897,25 +2904,35 @@ tbody td {
       </div>
     </div>
 
-    <!-- Filtros -->
-    <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap;">
-      <button class="dev-filter-btn active" onclick="filtrarDev('todas',this)">Todas</button>
-      <button class="dev-filter-btn" onclick="filtrarDev('pendiente',this)">Pendientes</button>
-      <button class="dev-filter-btn" onclick="filtrarDev('reingresada',this)">Reingresadas</button>
-      <button class="dev-filter-btn" onclick="filtrarDev('dado_de_baja',this)">Dadas de baja</button>
-      <button class="dev-filter-btn" onclick="filtrarDev('reenviado',this)">Reenviadas</button>
-      <button class="dev-filter-btn" onclick="filtrarDev('reembolsado',this)">Reembolsadas</button>
-      <input id="devBuscador" type="text" placeholder="Buscar OC, SKU, producto, DEV-..." style="margin-left:auto;padding:6px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);width:240px;" oninput="filtrarDevLocal(this.value)">
+    <!-- Filtros de la vista unificada -->
+    <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap;">
+      <button class="dev-filter-btn active" onclick="filtrarUnif('accionables',this)">Por procesar</button>
+      <button class="dev-filter-btn" onclick="filtrarUnif('urgentes',this)">Urgentes</button>
+      <button class="dev-filter-btn" onclick="filtrarUnif('bodega',this)">En bodega</button>
+      <button class="dev-filter-btn" onclick="filtrarUnif('marketplace',this)">En marketplace</button>
+      <button class="dev-filter-btn" onclick="filtrarUnif('todas',this)">Todas</button>
+      <input id="devBuscador" type="text" placeholder="Buscar OC, SKU, producto..." style="margin-left:auto;padding:6px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);width:220px;" oninput="renderUnif()">
+    </div>
+    <!-- Checkboxes de canal -->
+    <div id="devCanalChecks" style="display:flex;gap:12px;margin-bottom:14px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--muted);">
+      <span style="font-size:11px;">Canales:</span>
+      <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="dev-canal-check" value="mercadolibre" checked onchange="renderUnif()"> MercadoLibre</label>
+      <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="dev-canal-check" value="walmart" checked onchange="renderUnif()"> Walmart</label>
+      <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="dev-canal-check" value="paris" checked onchange="renderUnif()"> Paris</label>
+      <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="dev-canal-check" value="ripley" checked onchange="renderUnif()"> Ripley</label>
+      <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="dev-canal-check" value="falabella" checked onchange="renderUnif()"> Falabella</label>
+      <button onclick="sincronizarDevMkt(this)" style="margin-left:auto;padding:5px 12px;border:0.5px solid var(--border);border-radius:8px;font-size:11px;background:var(--bg2);color:var(--text);cursor:pointer;">↻ Sincronizar marketplace</button>
     </div>
 
-    <!-- Tabla devoluciones -->
+
+    <!-- Tabla unificada de devoluciones -->
     <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px;">
-      <div style="display:grid;grid-template-columns:110px minmax(0,1fr) 60px 90px 120px 70px;align-items:center;gap:8px;padding:7px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);">
-        <span style="font-size:10px;font-weight:500;color:var(--muted);">OC ORIGEN</span>
+      <div style="display:grid;grid-template-columns:75px 100px minmax(0,1fr) 130px 110px 90px;align-items:center;gap:8px;padding:7px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);">
+        <span style="font-size:10px;font-weight:500;color:var(--muted);">ORIGEN</span>
+        <span style="font-size:10px;font-weight:500;color:var(--muted);">CANAL · OC</span>
         <span style="font-size:10px;font-weight:500;color:var(--muted);">PRODUCTO · SKU</span>
-        <span style="font-size:10px;font-weight:500;color:var(--muted);">CANAL</span>
-        <span style="font-size:10px;font-weight:500;color:var(--muted);">FECHA</span>
         <span style="font-size:10px;font-weight:500;color:var(--muted);">ESTADO</span>
+        <span style="font-size:10px;font-weight:500;color:var(--muted);">TIEMPO</span>
         <span style="font-size:10px;font-weight:500;color:var(--muted);">ACCIÓN</span>
       </div>
       <div id="devolucionesList">
@@ -3040,31 +3057,9 @@ tbody td {
 
       </div>
     </div>
-    </div><!-- /devVistaFisicaCont -->
-
-    <!-- ── VISTA MARKETPLACE: devoluciones leídas de los canales ── -->
-    <div id="devVistaMktCont" style="display:none;">
-      <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap;">
-        <button class="dev-filter-btn active" onclick="filtrarDevMktLista('todas',this)">Todas</button>
-        <button class="dev-filter-btn" onclick="filtrarDevMktLista('abierta',this)">Abiertas</button>
-        <button class="dev-filter-btn" onclick="filtrarDevMktLista('en_transito',this)">En tránsito</button>
-        <button class="dev-filter-btn" onclick="filtrarDevMktLista('resuelta',this)">Resueltas</button>
-        <select id="devMktCanalFiltro" onchange="renderDevMktLista()" style="padding:6px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
-          <option value="">Todos los canales</option>
-          <option value="mercadolibre">MercadoLibre</option>
-          <option value="walmart">Walmart</option>
-          <option value="paris">Paris</option>
-          <option value="ripley">Ripley</option>
-          <option value="falabella">Falabella</option>
-        </select>
-        <button onclick="sincronizarDevMkt(this)" style="margin-left:auto;padding:6px 12px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);cursor:pointer;">↻ Sincronizar ahora</button>
-      </div>
-      <div id="devMktListaCont" class="card" style="padding:0;overflow:hidden;">
-        <div style="padding:40px;text-align:center;color:var(--muted);font-size:13px;">Cargando devoluciones del marketplace...</div>
-      </div>
-    </div>
-
   </div>
+
+  <!-- ── MODAL NUEVA DEVOLUCIÓN ── -->
   <div id="modalNuevaDev" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9000;align-items:center;justify-content:center;">
     <div style="background:var(--bg);border:0.5px solid var(--border);border-radius:12px;padding:24px;width:500px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.18);">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;">
@@ -4204,7 +4199,7 @@ function showSection(sec, btn){
   if(gear) gear.classList.remove('active');
   if(btn) btn.classList.add('active');
   if(sec === 'movimientos') cargarMovimientosFull();
-  if(sec === 'devoluciones'){ cargarDevoluciones('todas'); precargarBadgeDevMkt(); }
+  if(sec === 'devoluciones') cargarUnif();
   if(sec === 'audit') cargarAudit();
   if(sec === 'skumapeo') cargarSkuMapeo();
   if(sec === 'canales' && typeof cargarCanales === 'function') cargarCanales();
@@ -6137,123 +6132,141 @@ function canalBadgeHtml(canal){
   return `<span style="background:${c.bg};color:${c.color};font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;">${c.label}</span>`;
 }
 
-// ── VISTA MARKETPLACE (devoluciones leídas de los canales) ──
-let _devMktTodas = [];
-let _devMktFiltroEstado = 'todas';
+// ── VISTA UNIFICADA (bodega + marketplace) ──
+let _unifTodas = [];
+let _unifFiltro = 'accionables';
 
-const DEV_MKT_CANAL = {
+const UNIF_CANAL = {
   mercadolibre: {bg:'#FAEEDA',color:'#633806',label:'ML'},
   walmart:      {bg:'#E1F5EE',color:'#085041',label:'WM'},
   paris:        {bg:'#e0f2fe',color:'#0369a1',label:'PA'},
   ripley:       {bg:'#f3e8ff',color:'#6b21a8',label:'RI'},
   falabella:    {bg:'#dcfce7',color:'#166534',label:'FA'},
+  '':           {bg:'#eee',color:'#666',label:'—'},
 };
-const DEV_MKT_ESTADO = {
-  abierta:     {bg:'#FAEEDA',color:'#633806',label:'Abierta'},
-  en_transito: {bg:'#E6F1FB',color:'#0C447C',label:'En tránsito'},
-  resuelta:    {bg:'#EAF3DE',color:'#27500A',label:'Resuelta'},
-  cancelada:   {bg:'#F1EFE8',color:'#444441',label:'Cancelada'},
+const UNIF_ESTADO = {
+  abierta:     {bg:'#FAEEDA',color:'#633806'},
+  en_transito: {bg:'#E6F1FB',color:'#0C447C'},
+  resuelta:    {bg:'#EAF3DE',color:'#27500A'},
+  cancelada:   {bg:'#F1EFE8',color:'#444441'},
+  pendiente:   {bg:'#FAEEDA',color:'#633806'},
+  reingresada: {bg:'#EAF3DE',color:'#27500A'},
+  reenviado:   {bg:'#EEEDFE',color:'#3C3489'},
+  dado_de_baja:{bg:'#FCEBEB',color:'#791F1F'},
+  reembolsado: {bg:'#F1EFE8',color:'#444441'},
 };
 
-function cambiarVistaDev(vista){
-  const fisica = document.getElementById('devVistaFisicaCont');
-  const mkt = document.getElementById('devVistaMktCont');
-  const btnF = document.getElementById('devVistaFisica');
-  const btnM = document.getElementById('devVistaMkt');
-  if(vista==='mkt'){
-    fisica.style.display='none'; mkt.style.display='';
-    btnF.classList.remove('active'); btnM.classList.add('active');
-    if(_devMktTodas.length===0) cargarDevMkt();
-  } else {
-    fisica.style.display=''; mkt.style.display='none';
-    btnF.classList.add('active'); btnM.classList.remove('active');
-  }
-}
-
-function cargarDevMkt(){
-  fetch('/devoluciones-mkt')
+function cargarUnif(){
+  fetch('/devoluciones/unificadas')
     .then(r=>r.json())
     .then(d=>{
-      _devMktTodas = d.devoluciones || [];
-      renderDevMktLista();
-      actualizarBadgeDevMkt(d.alertas);
+      _unifTodas = d.devoluciones || [];
+      pintarDashboard(d.dashboard||{});
+      renderUnif();
     })
     .catch(e=>{
-      document.getElementById('devMktListaCont').innerHTML =
+      document.getElementById('devolucionesList').innerHTML =
         '<div style="padding:40px;text-align:center;color:var(--muted);">No se pudieron cargar las devoluciones.</div>';
     });
 }
 
-function actualizarBadgeDevMkt(alertas){
-  // El badge muestra las que requieren atención (abiertas/en curso)
-  const abiertas = _devMktTodas.filter(d=>d.estado!=='resuelta'&&d.estado!=='cancelada').length;
-  const badge = document.getElementById('devMktBadge');
-  if(badge){
-    if(abiertas>0){ badge.textContent=abiertas; badge.style.display=''; }
-    else badge.style.display='none';
-  }
+function pintarDashboard(dash){
+  const set = (id,val)=>{ const el=document.getElementById(id); if(el) el.textContent = (val!==undefined&&val!==null)?val:'0'; };
+  set('dashPorProcesar', dash.por_procesar);
+  set('dashUrgentes', dash.urgentes);
+  set('dashBodega', dash.en_bodega);
+  set('dashMkt', dash.en_marketplace);
 }
 
-function filtrarDevMktLista(estado, btn){
-  _devMktFiltroEstado = estado;
-  if(btn){ btn.parentElement.querySelectorAll('.dev-filter-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); }
-  renderDevMktLista();
+function filtrarUnif(f, btn){
+  _unifFiltro = f;
+  document.querySelectorAll('#sec-devoluciones .dev-filter-btn').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+  renderUnif();
 }
 
-function renderDevMktLista(){
-  const cont = document.getElementById('devMktListaCont');
-  const canalF = document.getElementById('devMktCanalFiltro').value;
-  let lista = _devMktTodas.slice();
-  if(_devMktFiltroEstado!=='todas') lista = lista.filter(d=>d.estado===_devMktFiltroEstado);
-  if(canalF) lista = lista.filter(d=>d.canal===canalF);
+function canalesSeleccionados(){
+  return Array.from(document.querySelectorAll('.dev-canal-check:checked')).map(c=>c.value);
+}
+
+function renderUnif(){
+  const cont = document.getElementById('devolucionesList');
+  const q = (document.getElementById('devBuscador').value||'').toLowerCase();
+  const canales = canalesSeleccionados();
+  let lista = _unifTodas.slice();
+
+  // Filtro principal
+  if(_unifFiltro==='accionables') lista = lista.filter(d=>d.accionable);
+  else if(_unifFiltro==='urgentes') lista = lista.filter(d=>d.accionable && (
+      (d.plazo_canal_dias!==null&&d.plazo_canal_dias!==undefined&&d.plazo_canal_dias<=2) ||
+      (d.dias_en_bodega!==null&&d.dias_en_bodega!==undefined&&d.dias_en_bodega>=2)));
+  else if(_unifFiltro==='bodega') lista = lista.filter(d=>d.origen==='bodega');
+  else if(_unifFiltro==='marketplace') lista = lista.filter(d=>d.origen==='marketplace');
+
+  // Filtro por canal (solo aplica a los que tienen canal)
+  lista = lista.filter(d=>!d.canal || canales.includes(d.canal));
+
+  // Búsqueda
+  if(q) lista = lista.filter(d=>
+    (d.order_id||'').toLowerCase().includes(q) ||
+    (d.sku||'').toLowerCase().includes(q) ||
+    (d.producto_nombre||'').toLowerCase().includes(q) ||
+    (d.codigo||'').toLowerCase().includes(q));
+
   if(lista.length===0){
-    cont.innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);font-size:13px;">No hay devoluciones con ese filtro.</div>';
+    cont.innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);font-size:13px;">No hay devoluciones con estos filtros.</div>';
     return;
   }
-  // Header
-  let html = '<div style="display:grid;grid-template-columns:60px minmax(0,1fr) 120px 110px 120px 90px;align-items:center;gap:8px;padding:8px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600;">'
-    + '<div>Canal</div><div>Producto · Orden</div><div>Estado canal</div><div>Solicitada</div><div>Plazo</div><div>Acción</div></div>';
+
+  let html = '';
   lista.forEach(d=>{
-    const cb = DEV_MKT_CANAL[d.canal] || {bg:'#eee',color:'#444',label:(d.canal||'').slice(0,2).toUpperCase()};
-    const eb = DEV_MKT_ESTADO[d.estado] || {bg:'#eee',color:'#444',label:d.estado};
-    const estadoLabel = d.estado_label || d.estado_canal || eb.label;
-    // Plazo
-    let plazo = '<span style="color:var(--muted);">—</span>';
-    if(d.dias_restantes!==null && d.dias_restantes!==undefined){
-      let col='#0F6E56', txt=d.dias_restantes+'d';
-      if(d.dias_restantes<0){ col='#A32D2D'; txt='Vencido'; }
-      else if(d.dias_restantes<=2){ col='#BA7517'; txt=d.dias_restantes+'d'; }
-      plazo = '<span style="color:'+col+';font-weight:500;">'+txt+'</span>';
+    const cb = UNIF_CANAL[d.canal] || UNIF_CANAL[''];
+    const eb = UNIF_ESTADO[d.estado] || {bg:'#eee',color:'#444'};
+    const estadoTxt = d.estado_label || d.estado || '—';
+    // Origen badge
+    const origenBadge = d.origen==='bodega'
+      ? '<span style="background:#EEEDFE;color:#3C3489;font-size:10px;font-weight:600;padding:2px 7px;border-radius:6px;">Bodega</span>'
+      : '<span style="background:#E6F1FB;color:#0C447C;font-size:10px;font-weight:600;padding:2px 7px;border-radius:6px;">MKT</span>';
+    // Tiempo: bodega = días en bodega; MKT ML = plazo canal; resto = —
+    let tiempo = '<span style="color:var(--muted);">—</span>';
+    if(d.origen==='bodega' && d.dias_en_bodega!==null && d.dias_en_bodega!==undefined){
+      let col='#0F6E56', txt=d.dias_en_bodega+'d en bodega';
+      if(d.dias_en_bodega>=2){ col='#BA7517'; }
+      if(d.dias_en_bodega>=4){ col='#A32D2D'; }
+      tiempo = '<span style="color:'+col+';font-weight:500;">'+txt+'</span>';
+    } else if(d.plazo_canal_dias!==null && d.plazo_canal_dias!==undefined){
+      let col='#0F6E56', txt=d.plazo_canal_dias+'d (canal)';
+      if(d.plazo_canal_dias<0){ col='#A32D2D'; txt='Vencido'; }
+      else if(d.plazo_canal_dias<=2){ col='#BA7517'; }
+      tiempo = '<span style="color:'+col+';font-weight:500;">'+txt+'</span>';
     }
-    const fecha = d.fecha_solicitud ? new Date(d.fecha_solicitud).toLocaleDateString('es-CL') : '—';
-    const prod = (d.producto_nombre||d.sku_canal||'Producto').slice(0,50);
-    const link = d.url_gestion ? '<a href="'+d.url_gestion+'" target="_blank" style="font-size:11px;color:#185FA5;text-decoration:none;">Ver en canal →</a>' : '';
-    html += '<div style="display:grid;grid-template-columns:60px minmax(0,1fr) 120px 110px 120px 90px;align-items:center;gap:8px;padding:10px 14px;border-bottom:0.5px solid var(--border);font-size:12px;">'
-      + '<div><span style="background:'+cb.bg+';color:'+cb.color+';font-size:10px;font-weight:600;padding:2px 7px;border-radius:6px;">'+cb.label+'</span></div>'
-      + '<div style="min-width:0;"><div style="color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+prod+'</div><div style="font-size:10px;color:var(--muted);font-family:monospace;">'+(d.order_id||'')+'</div></div>'
-      + '<div><span style="background:'+eb.bg+';color:'+eb.color+';font-size:10px;font-weight:500;padding:2px 8px;border-radius:20px;">'+estadoLabel+'</span></div>'
-      + '<div style="color:var(--muted);">'+fecha+'</div>'
-      + '<div>'+plazo+'</div>'
-      + '<div>'+link+'</div>'
+    const prod = (d.producto_nombre||d.sku||'Producto').slice(0,45);
+    // Acción: bodega abre ficha; MKT link al canal
+    let accion = '';
+    if(d.origen==='bodega' && d.id){
+      accion = '<button onclick="abrirFichaDev('+d.id+')" style="background:transparent;border:0.5px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;color:var(--text);">Ver</button>';
+    } else if(d.url_gestion){
+      accion = '<a href="'+d.url_gestion+'" target="_blank" style="font-size:11px;color:#185FA5;text-decoration:none;">Ver en canal →</a>';
+    }
+    html += '<div style="display:grid;grid-template-columns:75px 100px minmax(0,1fr) 130px 110px 90px;align-items:center;gap:8px;padding:10px 14px;border-bottom:0.5px solid var(--border);font-size:12px;">'
+      + '<div>'+origenBadge+'</div>'
+      + '<div><span style="background:'+cb.bg+';color:'+cb.color+';font-size:10px;font-weight:600;padding:2px 6px;border-radius:5px;">'+cb.label+'</span> <span style="font-size:10px;color:var(--muted);font-family:monospace;">'+((d.order_id||'').slice(0,12))+'</span></div>'
+      + '<div style="min-width:0;"><div style="color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+prod+'</div><div style="font-size:10px;color:var(--muted);font-family:monospace;">'+(d.sku||'')+'</div></div>'
+      + '<div><span style="background:'+eb.bg+';color:'+eb.color+';font-size:10px;font-weight:500;padding:2px 8px;border-radius:20px;">'+estadoTxt+'</span></div>'
+      + '<div>'+tiempo+'</div>'
+      + '<div>'+accion+'</div>'
       + '</div>';
   });
   cont.innerHTML = html;
 }
 
 function sincronizarDevMkt(btn){
+  const orig = btn ? btn.textContent : '';
   if(btn){ btn.textContent='Sincronizando...'; btn.disabled=true; }
   fetch('/devoluciones-mkt/sync', {method:'POST'})
     .then(r=>r.json())
-    .then(()=>{ cargarDevMkt(); if(btn){ btn.textContent='↻ Sincronizar ahora'; btn.disabled=false; } })
-    .catch(()=>{ if(btn){ btn.textContent='↻ Sincronizar ahora'; btn.disabled=false; } });
-}
-
-// Cargar el badge al entrar a la sección devoluciones (automático)
-function precargarBadgeDevMkt(){
-  fetch('/devoluciones-mkt')
-    .then(r=>r.json())
-    .then(d=>{ _devMktTodas = d.devoluciones||[]; actualizarBadgeDevMkt(d.alertas); })
-    .catch(()=>{});
+    .then(()=>{ cargarUnif(); if(btn){ btn.textContent=orig; btn.disabled=false; } })
+    .catch(()=>{ if(btn){ btn.textContent=orig; btn.disabled=false; } });
 }
 
 function cargarDevoluciones(estado){

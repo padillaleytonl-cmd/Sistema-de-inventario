@@ -4482,6 +4482,117 @@ def devoluciones_mkt_list():
         release_conn(conn)
 
 
+@app.route("/devoluciones/unificadas")
+def devoluciones_unificadas():
+    """Vista unificada: devoluciones de BODEGA (físicas) + MARKETPLACE (canales),
+    en una sola lista con columna de origen. Calcula el tiempo real de trabajo:
+      - Bodega: días desde que el producto llegó (fecha_solicitud de la física).
+      - Marketplace ML: usa el plazo real del canal (due_date) si existe.
+      - Marketplace resto: no inventa plazo; muestra estado + fecha de solicitud.
+    Devuelve también un mini-dashboard: cuántas hay por procesar y las urgentes.
+    """
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from returns import traducir_estado_canal
+    from datetime import datetime
+    hoy = now_chile().replace(tzinfo=None)
+    conn = get_conn(tenant_id=1, is_admin=True)
+    unificadas = []
+    try:
+        cur = conn.cursor()
+
+        # ── 1. Devoluciones FÍSICAS (bodega) ──
+        # Estados que requieren trabajo: pendiente (sin procesar). Los demás ya se accionaron.
+        cur.execute("""SELECT id, codigo, oc_origen, canal, sku, nombre, estado,
+                              fecha_solicitud, motivo_cliente
+                       FROM devoluciones ORDER BY fecha_solicitud DESC""")
+        for r in cur.fetchall():
+            (did, codigo, oc, canal, sku, nombre, estado, fsol, motivo) = r
+            dias_bodega = None
+            if fsol:
+                try:
+                    dias_bodega = (hoy - fsol).days
+                except Exception:
+                    dias_bodega = None
+            accionable = estado in ("pendiente", None, "")
+            unificadas.append({
+                "origen": "bodega",
+                "id": did,
+                "codigo": codigo,
+                "order_id": oc,
+                "canal": (canal or "").lower(),
+                "sku": sku,
+                "producto_nombre": nombre,
+                "estado": estado or "pendiente",
+                "estado_label": None,
+                "motivo": motivo,
+                "fecha": fsol.isoformat() if fsol else None,
+                "dias_en_bodega": dias_bodega,
+                "plazo_canal_dias": None,
+                "accionable": accionable,
+                "url_gestion": None,
+            })
+
+        # ── 2. Devoluciones MARKETPLACE (canales) ──
+        cur.execute("""SELECT canal, return_id, order_id, sku, sku_canal, producto_nombre,
+                              estado, estado_canal, motivo, fecha_solicitud, fecha_limite,
+                              dias_restantes, url_gestion
+                       FROM devoluciones_marketplace
+                       ORDER BY fecha_solicitud DESC""")
+        for r in cur.fetchall():
+            (canal, rid, oid, sku, sku_canal, nombre, estado, estado_canal,
+             motivo, fsol, flim, dias_rest, url) = r
+            # Accionable = requiere atención (no resuelta ni cancelada)
+            accionable = estado not in ("resuelta", "cancelada")
+            unificadas.append({
+                "origen": "marketplace",
+                "id": None,
+                "codigo": rid,
+                "order_id": oid,
+                "canal": (canal or "").lower(),
+                "sku": sku or sku_canal,
+                "producto_nombre": nombre,
+                "estado": estado,
+                "estado_label": traducir_estado_canal(canal, estado_canal),
+                "estado_canal": estado_canal,
+                "motivo": motivo,
+                "fecha": fsol.isoformat() if fsol else None,
+                "dias_en_bodega": None,
+                # Plazo real del canal SOLO si la API lo dio (ML due_date → dias_restantes)
+                "plazo_canal_dias": dias_rest,
+                "accionable": accionable,
+                "url_gestion": url,
+            })
+
+        # ── 3. Mini-dashboard ──
+        por_procesar = sum(1 for d in unificadas if d["accionable"])
+        # Urgentes: bodega con muchos días, o MKT con plazo de canal venciendo
+        urgentes = 0
+        mas_urgente_dias = None
+        for d in unificadas:
+            if not d["accionable"]:
+                continue
+            # Plazo del canal venciendo (ML)
+            if d["plazo_canal_dias"] is not None and d["plazo_canal_dias"] <= 2:
+                urgentes += 1
+            # Bodega: llevar mucho tiempo sin procesar (referencia: 2+ días)
+            if d["dias_en_bodega"] is not None and d["dias_en_bodega"] >= 2:
+                urgentes += 1
+                if mas_urgente_dias is None or d["dias_en_bodega"] > mas_urgente_dias:
+                    mas_urgente_dias = d["dias_en_bodega"]
+        dashboard = {
+            "por_procesar": por_procesar,
+            "urgentes": urgentes,
+            "en_bodega": sum(1 for d in unificadas if d["origen"] == "bodega" and d["accionable"]),
+            "en_marketplace": sum(1 for d in unificadas if d["origen"] == "marketplace" and d["accionable"]),
+            "mas_urgente_dias": mas_urgente_dias,
+        }
+        cur.close()
+        return {"devoluciones": unificadas, "total": len(unificadas), "dashboard": dashboard}
+    finally:
+        release_conn(conn)
+
+
 @app.route("/devoluciones-mkt/panel")
 def devoluciones_mkt_panel():
     """Panel visual de devoluciones con estados, plazos y links directos al MKT."""
