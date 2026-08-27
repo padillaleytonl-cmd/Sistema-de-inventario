@@ -1160,6 +1160,8 @@ tbody td {
 
 .dev-filter-btn{padding:5px 12px;border-radius:8px;font-size:12px;cursor:pointer;border:0.5px solid var(--border);background:transparent;color:var(--muted);}
 .dev-filter-btn.active{background:var(--text);color:var(--bg);border-color:transparent;}
+.dev-vista-btn{padding:8px 16px;border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;border:0.5px solid var(--border);background:transparent;color:var(--muted);display:flex;align-items:center;}
+.dev-vista-btn.active{background:var(--bg2);color:var(--text);border-color:var(--text);}
 .dev-chip{padding:5px 12px;border-radius:8px;font-size:11px;font-weight:500;cursor:pointer;border:1.5px solid transparent;background:var(--bg2);color:var(--muted);transition:all .15s;}
 .dev-chip.sel{border-color:currentColor;}
 .dev-chip.sel[data-val="buen_estado"],.dev-chip.sel[data-val="perfecto"],.dev-chip.sel[data-val="reingresada"]{background:#EAF3DE;color:#27500A;}
@@ -2856,7 +2858,18 @@ tbody td {
       </div>
     </div>
 
+    <!-- Toggle de vista: Físicas (bodega) vs Marketplace (canales) -->
+    <div style="display:flex;gap:8px;margin-bottom:14px;">
+      <button id="devVistaFisica" class="dev-vista-btn active" onclick="cambiarVistaDev('fisica')">
+        En bodega
+      </button>
+      <button id="devVistaMkt" class="dev-vista-btn" onclick="cambiarVistaDev('mkt')">
+        En el marketplace <span id="devMktBadge" style="display:none;margin-left:5px;background:#E24B4A;color:#fff;font-size:10px;font-weight:600;padding:1px 7px;border-radius:10px;">0</span>
+      </button>
+    </div>
+
     <!-- Campo pistoleo lookup -->
+    <div id="devVistaFisicaCont">
     <div style="margin-bottom:12px;">
       <div style="display:flex;gap:8px;align-items:center;">
         <div style="position:relative;flex:0 0 320px;">
@@ -3023,17 +3036,35 @@ tbody td {
               <div style="display:flex;align-items:center;gap:6px;"><span style="background:#F1EFE8;color:#444441;font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;">Reembolsado</span> nota de crédito emitida</div>
             </div>
           </div>
-          <div class="card" id="devMktBloque" style="padding:12px 14px;display:none;">
-            <div style="font-size:11px;font-weight:500;color:var(--text);margin-bottom:8px;">Estado en el marketplace</div>
-            <div id="devMktContent" style="font-size:12px;color:var(--muted);"></div>
-          </div>
         </div>
 
       </div>
     </div>
-  </div>
+    </div><!-- /devVistaFisicaCont -->
 
-  <!-- ── MODAL NUEVA DEVOLUCIÓN ── -->
+    <!-- ── VISTA MARKETPLACE: devoluciones leídas de los canales ── -->
+    <div id="devVistaMktCont" style="display:none;">
+      <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap;">
+        <button class="dev-filter-btn active" onclick="filtrarDevMktLista('todas',this)">Todas</button>
+        <button class="dev-filter-btn" onclick="filtrarDevMktLista('abierta',this)">Abiertas</button>
+        <button class="dev-filter-btn" onclick="filtrarDevMktLista('en_transito',this)">En tránsito</button>
+        <button class="dev-filter-btn" onclick="filtrarDevMktLista('resuelta',this)">Resueltas</button>
+        <select id="devMktCanalFiltro" onchange="renderDevMktLista()" style="padding:6px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
+          <option value="">Todos los canales</option>
+          <option value="mercadolibre">MercadoLibre</option>
+          <option value="walmart">Walmart</option>
+          <option value="paris">Paris</option>
+          <option value="ripley">Ripley</option>
+          <option value="falabella">Falabella</option>
+        </select>
+        <button onclick="sincronizarDevMkt(this)" style="margin-left:auto;padding:6px 12px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);cursor:pointer;">↻ Sincronizar ahora</button>
+      </div>
+      <div id="devMktListaCont" class="card" style="padding:0;overflow:hidden;">
+        <div style="padding:40px;text-align:center;color:var(--muted);font-size:13px;">Cargando devoluciones del marketplace...</div>
+      </div>
+    </div>
+
+  </div>
   <div id="modalNuevaDev" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9000;align-items:center;justify-content:center;">
     <div style="background:var(--bg);border:0.5px solid var(--border);border-radius:12px;padding:24px;width:500px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.18);">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;">
@@ -4173,7 +4204,7 @@ function showSection(sec, btn){
   if(gear) gear.classList.remove('active');
   if(btn) btn.classList.add('active');
   if(sec === 'movimientos') cargarMovimientosFull();
-  if(sec === 'devoluciones') cargarDevoluciones('todas');
+  if(sec === 'devoluciones'){ cargarDevoluciones('todas'); precargarBadgeDevMkt(); }
   if(sec === 'audit') cargarAudit();
   if(sec === 'skumapeo') cargarSkuMapeo();
   if(sec === 'canales' && typeof cargarCanales === 'function') cargarCanales();
@@ -6106,6 +6137,125 @@ function canalBadgeHtml(canal){
   return `<span style="background:${c.bg};color:${c.color};font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;">${c.label}</span>`;
 }
 
+// ── VISTA MARKETPLACE (devoluciones leídas de los canales) ──
+let _devMktTodas = [];
+let _devMktFiltroEstado = 'todas';
+
+const DEV_MKT_CANAL = {
+  mercadolibre: {bg:'#FAEEDA',color:'#633806',label:'ML'},
+  walmart:      {bg:'#E1F5EE',color:'#085041',label:'WM'},
+  paris:        {bg:'#e0f2fe',color:'#0369a1',label:'PA'},
+  ripley:       {bg:'#f3e8ff',color:'#6b21a8',label:'RI'},
+  falabella:    {bg:'#dcfce7',color:'#166534',label:'FA'},
+};
+const DEV_MKT_ESTADO = {
+  abierta:     {bg:'#FAEEDA',color:'#633806',label:'Abierta'},
+  en_transito: {bg:'#E6F1FB',color:'#0C447C',label:'En tránsito'},
+  resuelta:    {bg:'#EAF3DE',color:'#27500A',label:'Resuelta'},
+  cancelada:   {bg:'#F1EFE8',color:'#444441',label:'Cancelada'},
+};
+
+function cambiarVistaDev(vista){
+  const fisica = document.getElementById('devVistaFisicaCont');
+  const mkt = document.getElementById('devVistaMktCont');
+  const btnF = document.getElementById('devVistaFisica');
+  const btnM = document.getElementById('devVistaMkt');
+  if(vista==='mkt'){
+    fisica.style.display='none'; mkt.style.display='';
+    btnF.classList.remove('active'); btnM.classList.add('active');
+    if(_devMktTodas.length===0) cargarDevMkt();
+  } else {
+    fisica.style.display=''; mkt.style.display='none';
+    btnF.classList.add('active'); btnM.classList.remove('active');
+  }
+}
+
+function cargarDevMkt(){
+  fetch('/devoluciones-mkt')
+    .then(r=>r.json())
+    .then(d=>{
+      _devMktTodas = d.devoluciones || [];
+      renderDevMktLista();
+      actualizarBadgeDevMkt(d.alertas);
+    })
+    .catch(e=>{
+      document.getElementById('devMktListaCont').innerHTML =
+        '<div style="padding:40px;text-align:center;color:var(--muted);">No se pudieron cargar las devoluciones.</div>';
+    });
+}
+
+function actualizarBadgeDevMkt(alertas){
+  // El badge muestra las que requieren atención (abiertas/en curso)
+  const abiertas = _devMktTodas.filter(d=>d.estado!=='resuelta'&&d.estado!=='cancelada').length;
+  const badge = document.getElementById('devMktBadge');
+  if(badge){
+    if(abiertas>0){ badge.textContent=abiertas; badge.style.display=''; }
+    else badge.style.display='none';
+  }
+}
+
+function filtrarDevMktLista(estado, btn){
+  _devMktFiltroEstado = estado;
+  if(btn){ btn.parentElement.querySelectorAll('.dev-filter-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); }
+  renderDevMktLista();
+}
+
+function renderDevMktLista(){
+  const cont = document.getElementById('devMktListaCont');
+  const canalF = document.getElementById('devMktCanalFiltro').value;
+  let lista = _devMktTodas.slice();
+  if(_devMktFiltroEstado!=='todas') lista = lista.filter(d=>d.estado===_devMktFiltroEstado);
+  if(canalF) lista = lista.filter(d=>d.canal===canalF);
+  if(lista.length===0){
+    cont.innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);font-size:13px;">No hay devoluciones con ese filtro.</div>';
+    return;
+  }
+  // Header
+  let html = '<div style="display:grid;grid-template-columns:60px minmax(0,1fr) 120px 110px 120px 90px;align-items:center;gap:8px;padding:8px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600;">'
+    + '<div>Canal</div><div>Producto · Orden</div><div>Estado canal</div><div>Solicitada</div><div>Plazo</div><div>Acción</div></div>';
+  lista.forEach(d=>{
+    const cb = DEV_MKT_CANAL[d.canal] || {bg:'#eee',color:'#444',label:(d.canal||'').slice(0,2).toUpperCase()};
+    const eb = DEV_MKT_ESTADO[d.estado] || {bg:'#eee',color:'#444',label:d.estado};
+    const estadoLabel = d.estado_label || d.estado_canal || eb.label;
+    // Plazo
+    let plazo = '<span style="color:var(--muted);">—</span>';
+    if(d.dias_restantes!==null && d.dias_restantes!==undefined){
+      let col='#0F6E56', txt=d.dias_restantes+'d';
+      if(d.dias_restantes<0){ col='#A32D2D'; txt='Vencido'; }
+      else if(d.dias_restantes<=2){ col='#BA7517'; txt=d.dias_restantes+'d'; }
+      plazo = '<span style="color:'+col+';font-weight:500;">'+txt+'</span>';
+    }
+    const fecha = d.fecha_solicitud ? new Date(d.fecha_solicitud).toLocaleDateString('es-CL') : '—';
+    const prod = (d.producto_nombre||d.sku_canal||'Producto').slice(0,50);
+    const link = d.url_gestion ? '<a href="'+d.url_gestion+'" target="_blank" style="font-size:11px;color:#185FA5;text-decoration:none;">Ver en canal →</a>' : '';
+    html += '<div style="display:grid;grid-template-columns:60px minmax(0,1fr) 120px 110px 120px 90px;align-items:center;gap:8px;padding:10px 14px;border-bottom:0.5px solid var(--border);font-size:12px;">'
+      + '<div><span style="background:'+cb.bg+';color:'+cb.color+';font-size:10px;font-weight:600;padding:2px 7px;border-radius:6px;">'+cb.label+'</span></div>'
+      + '<div style="min-width:0;"><div style="color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+prod+'</div><div style="font-size:10px;color:var(--muted);font-family:monospace;">'+(d.order_id||'')+'</div></div>'
+      + '<div><span style="background:'+eb.bg+';color:'+eb.color+';font-size:10px;font-weight:500;padding:2px 8px;border-radius:20px;">'+estadoLabel+'</span></div>'
+      + '<div style="color:var(--muted);">'+fecha+'</div>'
+      + '<div>'+plazo+'</div>'
+      + '<div>'+link+'</div>'
+      + '</div>';
+  });
+  cont.innerHTML = html;
+}
+
+function sincronizarDevMkt(btn){
+  if(btn){ btn.textContent='Sincronizando...'; btn.disabled=true; }
+  fetch('/devoluciones-mkt/sync', {method:'POST'})
+    .then(r=>r.json())
+    .then(()=>{ cargarDevMkt(); if(btn){ btn.textContent='↻ Sincronizar ahora'; btn.disabled=false; } })
+    .catch(()=>{ if(btn){ btn.textContent='↻ Sincronizar ahora'; btn.disabled=false; } });
+}
+
+// Cargar el badge al entrar a la sección devoluciones (automático)
+function precargarBadgeDevMkt(){
+  fetch('/devoluciones-mkt')
+    .then(r=>r.json())
+    .then(d=>{ _devMktTodas = d.devoluciones||[]; actualizarBadgeDevMkt(d.alertas); })
+    .catch(()=>{});
+}
+
 function cargarDevoluciones(estado){
   fetch('/devoluciones?estado='+estado)
     .then(r=>r.json())
@@ -6235,61 +6385,7 @@ function abrirFichaDev(id){
 
       document.getElementById('devFicha').style.display = '';
       document.getElementById('devFicha').scrollIntoView({behavior:'smooth', block:'start'});
-      renderDevMkt(d.marketplace);
     });
-}
-
-// Colores por estado normalizado (para el borde/acento del bloque marketplace)
-const MKT_NORM_COLOR = {
-  abierta:     {bg:'#FAEEDA',color:'#633806'},
-  en_transito: {bg:'#E6F1FB',color:'#0C447C'},
-  resuelta:    {bg:'#EAF3DE',color:'#27500A'},
-  cancelada:   {bg:'#F1EFE8',color:'#444441'},
-};
-
-function renderDevMkt(mkt){
-  const bloque = document.getElementById('devMktBloque');
-  const cont = document.getElementById('devMktContent');
-  if(!bloque || !cont) return;
-  if(!mkt){
-    bloque.style.display = '';
-    cont.innerHTML = '<span style="color:var(--muted);">Sin devolución vinculada en el marketplace todavía. Se enlazará cuando el canal la reporte.</span>';
-    return;
-  }
-  bloque.style.display = '';
-  const nc = MKT_NORM_COLOR[mkt.estado] || {bg:'#F1EFE8',color:'#444441'};
-  // El estado que se muestra es el CRUDO del canal, traducido (estado_label)
-  const estadoTxt = mkt.estado_label || mkt.estado_canal || mkt.estado || '—';
-  // Plazo / días restantes
-  let plazoHtml = '';
-  if(mkt.dias_restantes !== null && mkt.dias_restantes !== undefined){
-    let col = '#0F6E56', txt = mkt.dias_restantes + ' días restantes';
-    if(mkt.dias_restantes < 0){ col='#A32D2D'; txt='Plazo vencido'; }
-    else if(mkt.dias_restantes <= 2){ col='#BA7517'; txt=mkt.dias_restantes+' día(s) · urgente'; }
-    plazoHtml = `<div style="margin-top:8px;font-size:12px;font-weight:500;color:${col};">${txt}</div>`;
-  }
-  let accHtml = '';
-  try {
-    const acc = typeof mkt.acciones_disponibles === 'string' ? JSON.parse(mkt.acciones_disponibles) : (mkt.acciones_disponibles||[]);
-    if(acc && acc.length){
-      accHtml = `<div style="margin-top:10px;"><div style="font-size:10px;color:var(--muted);margin-bottom:4px;">Acciones en el canal</div>
-        <div style="display:flex;gap:4px;flex-wrap:wrap;">${acc.map(a=>`<span style="font-size:10px;background:var(--bg2);border:0.5px solid var(--border);border-radius:6px;padding:2px 7px;color:var(--text);">${a}</span>`).join('')}</div></div>`;
-    }
-  } catch(e){}
-  const link = mkt.url_gestion ? `<a href="${mkt.url_gestion}" target="_blank" style="display:inline-block;margin-top:12px;font-size:12px;color:#185FA5;text-decoration:none;font-weight:500;">Procesar en el marketplace →</a>` : '';
-  const fechaLim = mkt.fecha_limite ? ('Vence: ' + new Date(mkt.fecha_limite).toLocaleDateString('es-CL')) : '';
-  cont.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">
-      <span style="font-size:11px;font-weight:500;padding:4px 12px;border-radius:20px;background:${nc.bg};color:${nc.color};">${estadoTxt}</span>
-      <span style="font-size:10px;color:var(--muted);font-family:monospace;">${mkt.estado_canal||''}</span>
-    </div>
-    <div style="font-size:11px;color:var(--muted);">Reclamo/return: <span style="font-family:monospace;color:var(--text);">${mkt.return_id||'—'}</span></div>
-    ${mkt.motivo?`<div style="font-size:12px;color:var(--text);margin-top:6px;">Motivo canal: ${mkt.motivo}</div>`:''}
-    ${mkt.tracking_number?`<div style="font-size:11px;color:var(--muted);margin-top:4px;">Tracking: ${mkt.tracking_number}</div>`:''}
-    ${fechaLim?`<div style="font-size:11px;color:var(--muted);margin-top:4px;">${fechaLim}</div>`:''}
-    ${plazoHtml}
-    ${accHtml}
-    ${link}`;
 }
 
 // Chips interactivos

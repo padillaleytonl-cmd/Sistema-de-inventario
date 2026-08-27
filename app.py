@@ -4458,6 +4458,7 @@ def devoluciones_mkt_list():
         cur.execute(q, params)
         cols = [d[0] for d in cur.description]
         filas = [dict(zip(cols, r)) for r in cur.fetchall()]
+        from returns import traducir_estado_canal
         # Serializar fechas
         for f in filas:
             for k in ("fecha_solicitud", "fecha_limite", "fecha_resolucion"):
@@ -4465,6 +4466,8 @@ def devoluciones_mkt_list():
                     f[k] = f[k].isoformat()
             if f.get("monto_reembolso") is not None:
                 f["monto_reembolso"] = float(f["monto_reembolso"])
+            # Estado traducido legible (el crudo tal como lo reporta el canal)
+            f["estado_label"] = traducir_estado_canal(f.get("canal"), f.get("estado_canal"))
         # Resumen de alertas por plazo
         cur.execute("""SELECT
             COUNT(*) FILTER (WHERE requiere_accion AND dias_restantes IS NOT NULL AND dias_restantes < 0) AS vencidas,
