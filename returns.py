@@ -751,6 +751,11 @@ def buscar_devolucion_mkt(oc_origen=None, sku=None, canal=None, tenant_id=None):
         oc = str(oc_origen).strip() if oc_origen else None
         skv = str(sku).strip() if sku else None
 
+        # El matching SIEMPRE exige que la orden (order_id) coincida. Nunca se
+        # vincula solo por SKU+canal, porque un mismo producto (SKU) aparece en
+        # muchas órdenes distintas y eso pegaría la devolución de otra orden
+        # (falso positivo). Mejor no vincular que vincular mal: si la orden no
+        # tiene devolución en el canal, el bloque dirá que no hay vínculo.
         if oc and canal_norm and skv:
             _add(_run("order_id=%s AND canal=%s AND (sku=%s OR sku_canal=%s)",
                       (oc, canal_norm, skv, skv)), "exacto_oc_canal_sku")
@@ -758,10 +763,6 @@ def buscar_devolucion_mkt(oc_origen=None, sku=None, canal=None, tenant_id=None):
             _add(_run("order_id=%s AND canal=%s", (oc, canal_norm)), "oc_canal")
         if oc:
             _add(_run("order_id=%s", (oc,)), "solo_oc")
-        if skv and canal_norm:
-            _add(_run("canal=%s AND (sku=%s OR sku_canal=%s) "
-                      "AND fecha_solicitud > NOW() - INTERVAL '60 days'",
-                      (canal_norm, skv, skv)), "sku_canal_reciente")
 
         # Serializar fechas para consumo del frontend
         for r in candidatos:
