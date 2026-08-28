@@ -1019,7 +1019,13 @@ def _sync_walmart_automatico():
                         if not es_wfs:
                             stock_total = resultado.get("stock_despues", 0)
                             sincronizar_stock_marketplaces(sku_lusync, stock_total, contexto="walmart_orden_bg")
-                        items_descontados.append(sku_lusync)
+                        # Solo contar como descontado si el movimiento se registró de
+                        # verdad (ok:True). Si el registro falló (ok:False), NO marcar
+                        # la orden para que se reintente en el próximo ciclo.
+                        if resultado.get("ok"):
+                            items_descontados.append(sku_lusync)
+                        else:
+                            errores.append(f"Walmart {customer_order_id}/{sku_lusync}: no registrado")
                     except Exception as e:
                         errores.append(str(e))
                         print(f"[Scheduler] Error linea: {e}")
@@ -1212,7 +1218,7 @@ def _sync_meli_automatico():
 
                         # Descuento inteligente (Full vs Central)
                         try:
-                            descontar_venta_inteligente(
+                            _res_ml = descontar_venta_inteligente(
                                 sku=sku_lusync,
                                 cantidad=cantidad,
                                 canal="mercadolibre",
@@ -1220,7 +1226,13 @@ def _sync_meli_automatico():
                                 orden_id=order_id,
                                 fecha_compra_marketplace=fecha_compra
                             )
-                            items_descontados.append((sku_lusync, cantidad))
+                            # Solo contar como descontado si el movimiento se registró
+                            # de verdad (ok:True). Si falló (ok:False), no marcar la
+                            # orden para que se reintente en el próximo ciclo.
+                            if _res_ml and _res_ml.get("ok"):
+                                items_descontados.append((sku_lusync, cantidad))
+                            else:
+                                errores.append(f"MELI {order_id}/{sku_lusync}: no registrado")
 
                             # Sync a otros canales SOLO si fue Seller (Full no afecta otras bodegas)
                             if not es_full:
