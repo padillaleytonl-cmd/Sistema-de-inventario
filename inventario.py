@@ -2491,8 +2491,21 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
     canal_normalizado = normalizar_canal(canal) if canal else "Sistema"
 
     # Registrar movimiento con la bodega y trazabilidad completa
+    # FIX LIMBO: obtener el tenant del thread y forzarlo en la conexión con
+    # is_admin=True, para que el INSERT de movimientos NUNCA sea bloqueado por
+    # RLS (antes usaba get_conn() sin tenant y a veces RLS lo rechazaba; el
+    # error se tragaba y la función igual retornaba ok:True, dejando la orden
+    # marcada como procesada pero sin movimiento = "limbo").
+    _tid = None
     try:
-        conn = get_conn(); cur = conn.cursor()
+        from app import get_thread_tenant
+        _tid = get_thread_tenant()
+    except Exception:
+        _tid = None
+    registro_ok = False
+    try:
+        conn = get_conn(tenant_id=_tid, is_admin=True) if _tid else get_conn(is_admin=True)
+        cur = conn.cursor()
         # NOTA: NO hacer ALTER TABLE aquí. Las columnas ya existen hace meses
         # y ALTER+COMMIT resetea app.tenant_id de sesión PG (rompe RLS para INSERT).
 
@@ -2537,6 +2550,7 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
         inserto = (cur.rowcount > 0)  # 0 si el índice bloqueó un duplicado
         conn.commit()
         cur.close(); release_conn(conn)
+        registro_ok = True  # el INSERT se ejecutó sin excepción (RLS no bloqueó)
         if not inserto:
             # El índice único bloqueó un duplicado: no se descontó nada realmente.
             return {"ok": True, "sku": sku, "cantidad_descontada": 0,
@@ -2544,6 +2558,21 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
                     "stock_despues": stock_antes, "advertencia": "ya_registrada"}
     except Exception as e:
         print(f"[Bodegas] Error registrando movimiento: {e}")
+
+    # Si el INSERT del movimiento falló (ej. RLS), NO reportar ok:True, para que
+    # el sync no marque la orden como procesada y la reintente en el próximo ciclo.
+    if not registro_ok:
+        return {
+            "ok": False,
+            "sku": sku,
+            "cantidad_solicitada": cantidad,
+            "cantidad_descontada": 0,
+            "bodega": bodega,
+            "stock_antes": stock_antes,
+            "stock_despues": stock_antes,
+            "advertencia": "no_registrado",
+            "error": "El movimiento no se pudo registrar (posible RLS)."
+        }
 
     return {
         "ok": True,
