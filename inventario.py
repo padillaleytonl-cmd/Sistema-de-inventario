@@ -173,11 +173,28 @@ def _get_pool():
     global _pool
     if _pool is None or _pool.closed:
         _pool = psycopg2_pool.ThreadedConnectionPool(
-            minconn=1,
-            maxconn=5,
+            minconn=3,
+            maxconn=12,
             dsn=os.environ.get("DATABASE_URL")
         )
     return _pool
+
+
+def precalentar_pool():
+    """Pre-crea varias conexiones al arranque para que las primeras cargas del
+    usuario no paguen el costo de abrir conexiones nuevas (~1s cada una). Es una
+    optimización de infraestructura: no afecta sincronizaciones ni marketplaces.
+    """
+    try:
+        pool = _get_pool()
+        conns = []
+        for _ in range(3):
+            conns.append(pool.getconn())
+        for c in conns:
+            pool.putconn(c)
+        print("[Perf] Pool de conexiones pre-calentado (3 listas)")
+    except Exception as e:
+        print(f"[Perf] precalentar_pool: {e}")
 
 def get_conn(tenant_id=None, is_admin=False):
     """Obtiene una conexión del pool. Usar con try/finally para devolverla.
@@ -249,21 +266,24 @@ def get_conn(tenant_id=None, is_admin=False):
 def _set_rls_context(conn, tenant_id, is_admin=False):
     """Setea app.tenant_id y app.is_admin en la conexión.
     Las queries siguientes que toquen tablas con RLS habilitado filtrarán por este tenant.
+    OPTIMIZACIÓN: los dos set_config se combinan en UNA sola sentencia para hacer
+    un único round-trip a la BD (antes eran 2, y con la latencia de red cada uno
+    costaba ~0.2s → ahora la mitad).
     """
     if not conn or conn.closed:
         return
+    sql = "SELECT set_config('app.tenant_id', %s, false), set_config('app.is_admin', %s, false)"
+    params = (str(int(tenant_id)), 'true' if is_admin else 'false')
     try:
         cur = conn.cursor()
-        cur.execute("SELECT set_config('app.tenant_id', %s, false)", (str(int(tenant_id)),))
-        cur.execute("SELECT set_config('app.is_admin', %s, false)", ('true' if is_admin else 'false',))
+        cur.execute(sql, params)
         cur.close()
     except Exception as e:
         # Si hay transacción rota, intentar rollback y reintentar
         try:
             conn.rollback()
             cur = conn.cursor()
-            cur.execute("SELECT set_config('app.tenant_id', %s, false)", (str(int(tenant_id)),))
-            cur.execute("SELECT set_config('app.is_admin', %s, false)", ('true' if is_admin else 'false',))
+            cur.execute(sql, params)
             cur.close()
         except Exception:
             print(f"[_set_rls_context] Error: {e}")

@@ -58,6 +58,11 @@ try:
 except Exception as _e:
     print(f"[asegurar_columnas_movimientos] {_e}")
 try:
+    from inventario import precalentar_pool
+    precalentar_pool()
+except Exception as _e:
+    print(f"[precalentar_pool] {_e}")
+try:
     from inventario import init_feriados
     init_feriados()
 except Exception as e:
