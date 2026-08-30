@@ -827,10 +827,13 @@ def _calcular_stock_antes(sku, tipo, cantidad):
     else:
         return actual
 
-def cargar_movimientos(limite=20):
-    conn = get_conn()
+def asegurar_columnas_movimientos():
+    """Crea (una sola vez, al arranque) las columnas e índices que la pantalla de
+    Movimientos necesita. Antes esto se ejecutaba en CADA carga, lo que tomaba
+    locks de esquema y ralentizaba la vista. Ahora corre una vez.
+    """
+    conn = get_conn(is_admin=True)
     cur = conn.cursor()
-    # Asegurar que las columnas existen antes de leerlas
     try:
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS usuario TEXT DEFAULT 'Sistema'")
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS canal TEXT DEFAULT 'Sistema'")
@@ -839,9 +842,24 @@ def cargar_movimientos(limite=20):
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS origen_registro TEXT DEFAULT 'sistema'")
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS stock_antes INTEGER")
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS stock_despues INTEGER")
+        # Índice en fecha DESC: acelera el ORDER BY fecha de la pantalla Movimientos
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_mov_fecha ON movimientos (fecha DESC)")
         conn.commit()
-    except:
+        print("[Perf] Columnas e índice de movimientos verificados")
+    except Exception as e:
         conn.rollback()
+        print(f"[Perf] asegurar_columnas_movimientos: {e}")
+    finally:
+        cur.close(); release_conn(conn)
+
+
+def cargar_movimientos(limite=20):
+    conn = get_conn()
+    cur = conn.cursor()
+    # NOTA: los ALTER TABLE de columnas ya no se ejecutan aquí. Esas columnas
+    # ya existen y correrlas en cada carga tomaba locks de esquema innecesarios
+    # que ralentizaban la pantalla de Movimientos. La creación/verificación de
+    # columnas se hace una sola vez al arranque en asegurar_columnas_movimientos().
     cur.execute("""
         SELECT tipo, sku, nombre, cantidad, motivo,
                TO_CHAR(fecha, 'DD/MM/YYYY'), TO_CHAR(fecha, 'HH24:MI'),
