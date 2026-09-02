@@ -44,16 +44,27 @@ def leer_stock_full_meli(max_items=200):
                 vistos += 1
                 try:
                     ri = requests.get(f"{MELI_API_URL}/items/{item_id}",
-                                      headers=H, params={"attributes": "id,seller_custom_field,inventory_id,variations"},
+                                      headers=H, params={"attributes": "id,seller_custom_field,inventory_id,seller_sku,attributes,variations"},
                                       timeout=15)
                     d = ri.json()
+
+                    def _sku_de(obj):
+                        # Buscar SKU en varias ubicaciones posibles de ML
+                        s = obj.get("seller_custom_field") or obj.get("seller_sku")
+                        if s:
+                            return s
+                        for a in (obj.get("attributes") or []):
+                            if a.get("id") == "SELLER_SKU":
+                                return a.get("value_name") or a.get("values", [{}])[0].get("name")
+                        return None
+
                     # Recolectar (inventory_id, sku_canal, item_id, variation_id)
                     invs = []
                     if d.get("inventory_id"):
-                        invs.append((d["inventory_id"], d.get("seller_custom_field"), item_id, None))
+                        invs.append((d["inventory_id"], _sku_de(d), item_id, None))
                     for v in d.get("variations", []):
                         if v.get("inventory_id"):
-                            invs.append((v["inventory_id"], v.get("seller_custom_field"), item_id, v.get("id")))
+                            invs.append((v["inventory_id"], _sku_de(v), item_id, v.get("id")))
                     for inv_id, sku_canal, iid, vid in invs:
                         rf = requests.get(f"{MELI_API_URL}/inventories/{inv_id}/stock/fulfillment",
                                           headers=H, timeout=15)
