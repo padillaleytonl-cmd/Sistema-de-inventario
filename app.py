@@ -4789,6 +4789,43 @@ except Exception as _e:
     print(f"[Scheduler] No se pudo registrar devoluciones_sync: {_e}")
 
 
+# ── STOCK FULFILLMENT (lectura del stock Full por canal + cruce con Lusync) ──
+# Solo lectura. No toca syncs ni registro. ML (Full), Walmart (WFS) y
+# Falabella (FBF vía GetStock) exponen stock Full por API.
+
+@app.route("/stock-fulfillment")
+def stock_fulfillment_data():
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    canales = request.args.get("canales")
+    canales = canales.split(",") if canales else None
+    set_thread_tenant(1, is_admin=False)
+    try:
+        from stock_fulfillment import cruzar_stock_fulfillment
+        filas = cruzar_stock_fulfillment(canales=canales)
+    finally:
+        clear_thread_tenant()
+    return {"filas": filas, "total": len(filas)}
+
+
+@app.route("/stock-fulfillment/reconciliar")
+def stock_fulfillment_reconciliar():
+    """Detecta descuadres entre el stock Full de Lusync y el que reporta el canal.
+    SOLO detecta y alerta — no ajusta nada. El usuario decide si corregir.
+    Prueba inicial: MercadoLibre. ?canal=mercadolibre|walmart|falabella
+    """
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    canal = request.args.get("canal", "mercadolibre").strip().lower()
+    set_thread_tenant(1, is_admin=False)
+    try:
+        from stock_fulfillment import reconciliar_stock_full
+        resultado = reconciliar_stock_full(canal)
+    finally:
+        clear_thread_tenant()
+    return resultado
+
+
 # ── PARIS ──
 
 @app.route("/paris/test")
