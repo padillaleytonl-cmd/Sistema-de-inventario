@@ -439,6 +439,13 @@ def obtener_ordenes_walmart(estado=None, fecha_desde=None, max_paginas=5, limit=
                     if poid and poid in vistos:
                         continue
                     vistos.add(poid)
+                    # La Global API de Chile NO devuelve shipNodeType dentro de
+                    # cada orden, pero nosotros SÍ sabemos de qué tipo es porque
+                    # la pedimos con ese filtro. Estampamos el valor para que el
+                    # detector de Full (detectar_fulfillment_walmart) lo reconozca
+                    # y registre las WFS en la bodega Full (no en central).
+                    if not o.get("shipNodeType"):
+                        o["shipNodeType"] = ship_node
                     todas.append(o)
 
                 print(f"[Walmart Ordenes] {ship_node} Página:{pagina} +{len(ordenes)} Total:{len(todas)}")
