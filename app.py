@@ -1066,6 +1066,13 @@ def _sync_walmart_automatico():
                 if isinstance(lineas, dict):
                     lineas = [lineas]
 
+                # ¿La orden cancelada era Full (WFS) o Seller?
+                # Full → reponer bodega WALMART_FBM (no toca central).
+                # Seller → reponer central (como siempre).
+                # (Las devoluciones post-entrega NO llegan aquí: van por la API de
+                #  returns y las maneja el módulo de devoluciones hacia central.)
+                cancel_es_wfs = detectar_fulfillment_walmart(o)
+
                 productos = cargar_productos()
                 items_cancelados = []  # para alerta consolidada
                 for linea in lineas:
@@ -1084,15 +1091,28 @@ def _sync_walmart_automatico():
 
                         for p in productos:
                             if p["sku"] == sku:
-                                p["stock"] = p["stock"] + cantidad
-                                guardar_producto(p)
-                                registrar_movimiento("entrada", p["sku"], p["nombre"],
-                                                    cantidad, "Cancelación Walmart",
-                                                    usuario="Sistema", canal="Walmart",
-                                                    orden_id=customer_order_id)
-                                sincronizar_stock_marketplaces(p["sku"], p["stock"], contexto="walmart_cancelacion")
+                                if cancel_es_wfs:
+                                    # Venta Full cancelada (no llegó al cliente):
+                                    # reponer la bodega Full. NO toca stock central
+                                    # ni re-sincroniza (Full no afecta central).
+                                    from inventario import ajustar_stock_bodega
+                                    ajustar_stock_bodega(sku, "WALMART_FBM", cantidad)
+                                    registrar_movimiento("entrada", p["sku"], p["nombre"],
+                                                        cantidad, "Cancelación Walmart Full (bodega FBM)",
+                                                        usuario="Sistema", canal="Walmart",
+                                                        orden_id=customer_order_id)
+                                    print(f"[Scheduler] CANCELACIÓN FULL SKU:{sku} +{cantidad} → WALMART_FBM")
+                                else:
+                                    # Venta Seller cancelada: reponer central (como siempre)
+                                    p["stock"] = p["stock"] + cantidad
+                                    guardar_producto(p)
+                                    registrar_movimiento("entrada", p["sku"], p["nombre"],
+                                                        cantidad, "Cancelación Walmart",
+                                                        usuario="Sistema", canal="Walmart",
+                                                        orden_id=customer_order_id)
+                                    sincronizar_stock_marketplaces(p["sku"], p["stock"], contexto="walmart_cancelacion")
+                                    print(f"[Scheduler] CANCELACIÓN SKU:{sku} +{cantidad} Stock:{p['stock']}")
                                 items_cancelados.append(f"{p['nombre']} (SKU: {sku}) x{cantidad}")
-                                print(f"[Scheduler] CANCELACIÓN SKU:{sku} +{cantidad} Stock:{p['stock']}")
                     except Exception as e:
                         print(f"[Scheduler] Error cancelación linea: {e}")
 
