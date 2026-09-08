@@ -280,7 +280,15 @@ def obtener_config_facturacion(get_conn_func, release_conn_func, tenant_id):
     Usa información_schema para detectar qué columnas existen en BD y devolver
     solo las que están — esto hace la función robusta a migraciones incompletas.
     """
-    conn = get_conn_func(); cur = conn.cursor()
+    # El tenant va al contexto de la conexion: con RLS activo en las tablas de
+    # facturacion, una conexion sin contexto no ve ninguna fila. El try/except
+    # mantiene la compatibilidad con un get_conn sin ese parametro (mismo patron
+    # que facturacion/cafs.py).
+    try:
+        conn = get_conn_func(tenant_id=tenant_id)
+    except TypeError:
+        conn = get_conn_func()
+    cur = conn.cursor()
     try:
         # Detectar qué columnas existen en la tabla (robustez)
         cur.execute("""
@@ -434,7 +442,15 @@ def registrar_activacion_dte(get_conn_func, release_conn_func, tenant_id,
         - Si hay desactivación previa, crea nueva fila (historia)
         - Se cobra mes completo independiente de cuándo se activó/desactivó
     """
-    conn = get_conn_func(); cur = conn.cursor()
+    # El tenant va al contexto de la conexion: con RLS activo en las tablas de
+    # facturacion, una conexion sin contexto no ve ninguna fila. El try/except
+    # mantiene la compatibilidad con un get_conn sin ese parametro (mismo patron
+    # que facturacion/cafs.py).
+    try:
+        conn = get_conn_func(tenant_id=tenant_id)
+    except TypeError:
+        conn = get_conn_func()
+    cur = conn.cursor()
     try:
         # ¿Ya tiene una activa? (no duplicar)
         cur.execute("""
@@ -472,7 +488,15 @@ def registrar_desactivacion_dte(get_conn_func, release_conn_func, tenant_id, tip
     IMPORTANTE: el cobro sigue hasta fin de mes. Esto solo registra la fecha
     para que el ciclo de cobro mensual sepa que no debe renovar el cargo.
     """
-    conn = get_conn_func(); cur = conn.cursor()
+    # El tenant va al contexto de la conexion: con RLS activo en las tablas de
+    # facturacion, una conexion sin contexto no ve ninguna fila. El try/except
+    # mantiene la compatibilidad con un get_conn sin ese parametro (mismo patron
+    # que facturacion/cafs.py).
+    try:
+        conn = get_conn_func(tenant_id=tenant_id)
+    except TypeError:
+        conn = get_conn_func()
+    cur = conn.cursor()
     try:
         cur.execute("""
             UPDATE facturacion_dte_activaciones
@@ -493,7 +517,15 @@ def registrar_desactivacion_dte(get_conn_func, release_conn_func, tenant_id, tip
 def obtener_historial_activaciones(get_conn_func, release_conn_func, tenant_id):
     """Devuelve histórico de activaciones del tenant (para auditoría / mostrar al cliente)."""
     from .utils import TIPOS_DTE
-    conn = get_conn_func(); cur = conn.cursor()
+    # El tenant va al contexto de la conexion: con RLS activo en las tablas de
+    # facturacion, una conexion sin contexto no ve ninguna fila. El try/except
+    # mantiene la compatibilidad con un get_conn sin ese parametro (mismo patron
+    # que facturacion/cafs.py).
+    try:
+        conn = get_conn_func(tenant_id=tenant_id)
+    except TypeError:
+        conn = get_conn_func()
+    cur = conn.cursor()
     try:
         cur.execute("""
             SELECT id, tipo_dte, fecha_activacion, fecha_desactivacion,
@@ -532,7 +564,15 @@ def guardar_config_facturacion(get_conn_func, release_conn_func, tenant_id, data
               ambiente, emite_boleta, emite_factura, emite_nota_credito,
               emite_nota_debito, emite_guia_despacho, activo
     """
-    conn = get_conn_func(); cur = conn.cursor()
+    # El tenant va al contexto de la conexion: con RLS activo en las tablas de
+    # facturacion, una conexion sin contexto no ve ninguna fila. El try/except
+    # mantiene la compatibilidad con un get_conn sin ese parametro (mismo patron
+    # que facturacion/cafs.py).
+    try:
+        conn = get_conn_func(tenant_id=tenant_id)
+    except TypeError:
+        conn = get_conn_func()
+    cur = conn.cursor()
     try:
         # Verificar si ya existe
         cur.execute("SELECT 1 FROM facturacion_config_tenant WHERE tenant_id = %s", (tenant_id,))

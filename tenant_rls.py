@@ -34,6 +34,25 @@ TABLAS_TENANT = [
     "pos_sesiones",
     "alertas",
     "audit_log",
+    # ── Facturación electrónica ───────────────────────────────────────────
+    # Estas son las tablas más sensibles del sistema: guardan el certificado
+    # digital de cada contribuyente, sus folios del SII y sus documentos
+    # tributarios. Hasta ahora quedaban FUERA de RLS, o sea que el aislamiento
+    # entre clientes dependía de que cada WHERE tenant_id estuviera escrito a
+    # mano. Un solo olvido en un JOIN filtra el certificado de un cliente a
+    # otro — que es, legalmente, darle a alguien la capacidad de firmar
+    # documentos tributarios en nombre de un tercero.
+    #
+    # Agregarlas acá solo CREA las políticas (init_rls_policies). RLS sigue
+    # apagado hasta que se llame habilitar_rls(tabla) — hazlo de a una y
+    # corriendo antes test_aislamiento_dry_run().
+    "facturacion_config_tenant",
+    "facturacion_certificados",
+    "facturacion_cafs",
+    "facturacion_dtes",
+    "facturacion_dte_activaciones",
+    "facturacion_clientes",
+    "facturacion_rcof",
 ]
 
 POLICY_NAME = "tenant_isolation"

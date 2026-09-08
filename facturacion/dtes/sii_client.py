@@ -764,4 +764,7 @@ def consultar_estado_dte(
         "aceptado": estado == "DOK",
         "status": r.status_code,
         "respuesta_cruda": texto[:1500],
+        # Se devuelve para que quien consulta muchos documentos seguidos reutilice
+        # el token en vez de firmar una semilla nueva por cada consulta.
+        "token_usado": token,
     }

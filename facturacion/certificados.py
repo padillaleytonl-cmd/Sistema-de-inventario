@@ -201,7 +201,15 @@ def subir_certificado(get_conn_func, release_conn_func, tenant_id, pfx_bytes,
         return {"ok": False, "error": f"Error encriptando: {str(e)[:200]}"}
 
     # Guardar
-    conn = get_conn_func(); cur = conn.cursor()
+    # El tenant va al contexto de la conexion: con RLS activo en
+    # facturacion_certificados, una conexion sin contexto no ve ninguna fila.
+    # El try/except mantiene la compatibilidad con un get_conn sin ese parametro
+    # (mismo patron que facturacion/cafs.py).
+    try:
+        conn = get_conn_func(tenant_id=tenant_id)
+    except TypeError:
+        conn = get_conn_func()
+    cur = conn.cursor()
     try:
         # Si vamos a activar, desactivar los demás
         if activar:
@@ -256,7 +264,15 @@ def obtener_certificado(get_conn_func, release_conn_func, tenant_id, certificado
         dict: {ok, pfx_bytes, password, metadata, error}
         IMPORTANTE: el .pfx desencriptado solo debe vivir en memoria, jamás escribir a disco.
     """
-    conn = get_conn_func(); cur = conn.cursor()
+    # El tenant va al contexto de la conexion: con RLS activo en
+    # facturacion_certificados, una conexion sin contexto no ve ninguna fila.
+    # El try/except mantiene la compatibilidad con un get_conn sin ese parametro
+    # (mismo patron que facturacion/cafs.py).
+    try:
+        conn = get_conn_func(tenant_id=tenant_id)
+    except TypeError:
+        conn = get_conn_func()
+    cur = conn.cursor()
     try:
         if certificado_id:
             cur.execute("""
@@ -313,7 +329,15 @@ def listar_certificados_tenant(get_conn_func, release_conn_func, tenant_id):
     Para mostrar en UI: nombre, RUT, fechas, estado.
     Resiliente a tabla faltante.
     """
-    conn = get_conn_func(); cur = conn.cursor()
+    # El tenant va al contexto de la conexion: con RLS activo en
+    # facturacion_certificados, una conexion sin contexto no ve ninguna fila.
+    # El try/except mantiene la compatibilidad con un get_conn sin ese parametro
+    # (mismo patron que facturacion/cafs.py).
+    try:
+        conn = get_conn_func(tenant_id=tenant_id)
+    except TypeError:
+        conn = get_conn_func()
+    cur = conn.cursor()
     try:
         # Verificar que la tabla exista
         cur.execute("""
@@ -364,7 +388,15 @@ def listar_certificados_tenant(get_conn_func, release_conn_func, tenant_id):
 
 def eliminar_certificado(get_conn_func, release_conn_func, tenant_id, certificado_id):
     """Elimina un certificado del tenant. Si era el activo, no queda ninguno activo."""
-    conn = get_conn_func(); cur = conn.cursor()
+    # El tenant va al contexto de la conexion: con RLS activo en
+    # facturacion_certificados, una conexion sin contexto no ve ninguna fila.
+    # El try/except mantiene la compatibilidad con un get_conn sin ese parametro
+    # (mismo patron que facturacion/cafs.py).
+    try:
+        conn = get_conn_func(tenant_id=tenant_id)
+    except TypeError:
+        conn = get_conn_func()
+    cur = conn.cursor()
     try:
         cur.execute("""
             DELETE FROM facturacion_certificados

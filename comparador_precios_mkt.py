@@ -265,10 +265,10 @@ def comparar_precios_marketplaces():
     # Control de acceso: acepta sesión normal, sesión super-admin, o token bypass
     # (misma lógica flexible que usan los otros endpoints del sistema).
     import os
-    bypass_token = os.environ.get(
-        "ADMIN_BYPASS_TOKEN",
-        "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw",
-    )
+    # Sin default: si la variable no esta configurada, bypass_token queda ""
+    # y el "token_recibido and ..." de abajo corta antes de comparar, asi que
+    # nadie entra con un token vacio. No quites ese "and".
+    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "")
     token_recibido = request.headers.get("x-admin-token") or request.args.get("token")
     autorizado = (
         session.get("logged")

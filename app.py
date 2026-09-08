@@ -44,6 +44,31 @@ from inventario import (cargar_productos, guardar_productos, guardar_producto,
                         actualizar_nombres_bodegas)
 
 app = Flask(__name__)
+
+# ── Token de bypass admin ─────────────────────────────────────────────────
+# Varios endpoints administrativos aceptan ?token=XXX como alternativa al login.
+# Ese token sale SOLO del entorno: si ADMIN_BYPASS_TOKEN no esta configurada, se
+# usa un valor aleatorio distinto en cada arranque, que ninguna URL puede igualar
+# — o sea, el bypass queda apagado y solo se entra con login.
+#
+# Antes habia un valor por defecto escrito en el codigo, repetido 78 veces y
+# visible en el HTML que la app le entrega al navegador. Ese token hay que darlo
+# por comprometido.
+_ADMIN_BYPASS_CONFIGURADO = bool(os.environ.get("ADMIN_BYPASS_TOKEN", "").strip())
+_ADMIN_BYPASS_TOKEN = (
+    os.environ.get("ADMIN_BYPASS_TOKEN", "").strip()
+    or "bypass-apagado-" + __import__("secrets").token_urlsafe(32)
+)
+if not _ADMIN_BYPASS_CONFIGURADO:
+    print("[Lusync] ADMIN_BYPASS_TOKEN no configurada: el acceso por ?token= "
+          "esta DESHABILITADO. Los endpoints admin piden login.")
+
+
+def _admin_bypass_token():
+    """El token de bypass admin vigente. Nunca mostrarlo en una pagina."""
+    return _ADMIN_BYPASS_TOKEN
+
+
 app.secret_key = "clave_super_segura"
 
 init_db()
@@ -140,8 +165,7 @@ def ver_sync_log():
     Uso: /admin/lusync/stock/sync-log?token=...   (opcional &sku=XXX para filtrar)
     """
     import os
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN",
-                                  "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     token = request.args.get("token", "")
     if not (session.get("logged") or session.get("is_lusync_admin")
             or (token and token == bypass_token)):
@@ -169,8 +193,7 @@ def trazar_ajuste_stock():
     se descuadra. Solo toca la bodega CENTRAL, NO publica a canales.
     """
     import os
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN",
-                                  "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     token = request.args.get("token", "")
     if not (session.get("logged") or session.get("is_lusync_admin")
             or (token and token == bypass_token)):
@@ -226,8 +249,7 @@ def auditoria_ordenes_limbo():
     (existen en el portal pero no se registraron), indicando si están marcadas.
     """
     import os
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN",
-                                  "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     token = request.args.get("token", "")
     if not (session.get("logged") or session.get("is_lusync_admin")
             or (token and token == bypass_token)):
@@ -342,8 +364,7 @@ def health_check_stock_fix():
     las bodegas (que CENTRAL sea 'propia'). Sirve para confirmar el deploy.
     """
     import os
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN",
-                                  "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     token = request.args.get("token", "")
     if not (session.get("logged") or session.get("is_lusync_admin")
             or (token and token == bypass_token)):
@@ -384,8 +405,7 @@ def recuperar_stock_lote():
     query corregida. Devuelve el detalle de qué se publicó por cada SKU.
     """
     import os
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN",
-                                  "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     token = request.args.get("token", "")
     if not (session.get("logged") or session.get("is_lusync_admin")
             or (token and token == bypass_token)):
@@ -461,10 +481,7 @@ def reparar_central_stock():
     Woo sin inicializar su bodega CENTRAL.
     """
     import os
-    bypass_token = os.environ.get(
-        "ADMIN_BYPASS_TOKEN",
-        "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw",
-    )
+    bypass_token = _admin_bypass_token()
     token = request.args.get("token", "")
     if not (session.get("logged") or session.get("is_lusync_admin")
             or (token and token == bypass_token)):
@@ -5116,7 +5133,7 @@ def admin_mapear_sku():
     GET/POST params: sku_lusync, canal, sku_canal, token
     Ejemplo: /admin/mapear_sku?sku_lusync=SDCMR001&canal=paris&sku_canal=SDCR2021-1&token=XXX
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     _json_data = (request.get_json(silent=True) or {}) if request.is_json else {}
     token_recibido = request.args.get("token") or _json_data.get("token", "")
     autorizado = session.get("logged") or (token_recibido == bypass_token)
@@ -5872,7 +5889,7 @@ def admin_revertir_duplicados(numero_orden):
     de los duplicados (los anteriores).
     Params: token, canal (opcional, default=paris), keep=last|first
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     token = request.args.get("token", "")
     if not session.get("logged") and token != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
@@ -10784,8 +10801,8 @@ def admin_cargar_full_meli_ui():
 
   <div class="card">
     <label>🔑 Token de acceso</label>
-    <input type="text" id="token" placeholder="Pega aquí tu token..." value="lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw">
-    <p class="help">Token para acceder al endpoint sin login. Cambialo en Render como variable ADMIN_BYPASS_TOKEN si quieres.</p>
+    <input type="text" id="token" placeholder="Pega aquí tu token..." value="">
+    <p class="help">Token para acceder al endpoint sin login. Es el valor de la variable ADMIN_BYPASS_TOKEN en Render.</p>
   </div>
 
   <div class="card">
@@ -10936,7 +10953,7 @@ function ejecutar(dryRun) {
 def admin_reprocesar_ordenes():
     """Borra marcas de órdenes específicas para que el scheduler las re-procese."""
     # Bypass por token
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     token_recibido = request.args.get("token", "")
     autorizado = session.get("logged") or (token_recibido and token_recibido == bypass_token)
     if not autorizado:
@@ -11083,7 +11100,7 @@ def admin_reprocesar_ordenes():
 @app.route("/admin/forzar_sync_canal", methods=["GET"])
 def admin_forzar_sync_canal():
     """Fuerza la ejecución del scheduler de un canal específico (en background)."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     token_recibido = request.args.get("token", "")
     autorizado = session.get("logged") or (token_recibido and token_recibido == bypass_token)
     if not autorizado:
@@ -11121,14 +11138,14 @@ def admin_forzar_sync_canal():
         "canal": canal,
         "scheduler_ejecutado": True,
         "mensaje": f"Scheduler {canal} corriendo en background. Las órdenes se procesarán en los próximos segundos.",
-        "verificar_resultado": f"/admin/movimientos_por_fecha?desde=2026-05-01&hasta=2026-05-06&canal={canal}&token={bypass_token}"
+        "verificar_resultado": f"/admin/movimientos_por_fecha?desde=2026-05-01&hasta=2026-05-06&canal={canal}"
     })
 
 
 @app.route("/admin/sync_meli_rango", methods=["GET"])
 def admin_sync_meli_rango():
     """Fuerza sync de órdenes MELI en rango de fechas específico (con paginación)."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     token_recibido = request.args.get("token", "")
     autorizado = session.get("logged") or (token_recibido and token_recibido == bypass_token)
     if not autorizado:
@@ -11252,7 +11269,7 @@ def admin_sync_meli_rango():
 @app.route("/admin/movimientos_por_fecha", methods=["GET"])
 def admin_movimientos_por_fecha():
     """Devuelve movimientos filtrados por rango de fechas (sin tope)."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     token_recibido = request.args.get("token", "")
     autorizado = session.get("logged") or (token_recibido and token_recibido == bypass_token)
     if not autorizado:
@@ -11357,7 +11374,7 @@ def admin_movimientos_por_fecha():
 def admin_walmart_orden_raw(orden):
     """Devuelve la respuesta cruda de la API de Walmart para una orden,
     para diagnosticar qué campos de fecha trae."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN","lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error":"no autorizado"}),401
     try:
@@ -11383,7 +11400,7 @@ def admin_rellenar_fechas_compra():
 
     Params: canal (paris|walmart|falabella|mercadolibre|web|todos), limite (default 100), token
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN","lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error":"no autorizado"}),401
 
@@ -11536,7 +11553,7 @@ def admin_rellenar_fechas_compra():
 @app.route("/admin/diagnostico_mapeo", methods=["GET"])
 def admin_diagnostico_mapeo():
     """Lista TODOS los mapeos para un canal + item_id o sku_canal específicos."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN","lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error":"no autorizado"}),401
     canal = (request.args.get("canal") or "").lower().strip()
@@ -11573,7 +11590,7 @@ def admin_diagnostico_mapeo():
 def admin_falabella_orden_raw(order_id):
     """Devuelve la respuesta cruda de Falabella para una orden, para ver qué campos trae.
     Útil para identificar el "número amigable" vs el OrderId interno."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN","lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error":"no autorizado"}),401
     try:
@@ -11601,7 +11618,7 @@ def admin_movimiento_detalle(orden):
       Ver:       /admin/movimiento_detalle/1153216340?token=XXX
       Corregir:  /admin/movimiento_detalle/1153216340?numero_orden=3235355242&fecha_compra=2026-05-08T20:30:00&token=XXX
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN","lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error":"no autorizado"}),401
 
@@ -11680,7 +11697,7 @@ def admin_paris_test_stock():
     """Prueba los distintos formatos de actualización de stock en Paris para diagnosticar.
     Uso: /admin/paris_test_stock?sku_seller=CDBRWA001&sku_marketplace=MKM0RWUKKM-1&cantidad=6&token=XXX
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN","lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error":"no autorizado"}),401
 
@@ -11908,7 +11925,7 @@ def ruta_stats_ingresos_periodo():
 @app.route("/admin/tenancy/diagnostico", methods=["GET"])
 def admin_tenancy_diagnostico():
     """Verifica el estado de la migración multi-tenant."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
     try:
@@ -11922,7 +11939,7 @@ def admin_tenancy_diagnostico():
 @app.route("/admin/tenancy/init", methods=["POST", "GET"])
 def admin_tenancy_init():
     """Fuerza re-inicialización de tenancy (idempotente). Útil si falló al arranque."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
     try:
@@ -11938,7 +11955,7 @@ def admin_tenancy_init():
 @app.route("/admin/tenancy/tenants", methods=["GET"])
 def admin_tenancy_tenants():
     """Lista todos los tenants."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
     try:
@@ -11954,7 +11971,7 @@ def admin_tenancy_crear_super_admin():
     Solo funcional cuando lusync_admins está vacío (auto-bloqueado después).
     Body JSON: {email, password, nombre, token}
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if (request.json or {}).get("token") != bypass_token:
         return jsonify({"error": "Token admin requerido"}), 401
 
@@ -11990,7 +12007,7 @@ def admin_tenancy_crear_super_admin():
 @app.route("/admin/rls/estado", methods=["GET"])
 def admin_rls_estado():
     """Reporta qué tablas tienen RLS habilitado, cuántas políticas, etc."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
     try:
@@ -12007,7 +12024,7 @@ def admin_rls_estado():
 @app.route("/admin/rls/habilitar/<tabla>", methods=["POST", "GET"])
 def admin_rls_habilitar(tabla):
     """ACTIVA RLS en una tabla. Cuidado: las queries sin contexto verán vacío."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
     try:
@@ -12020,7 +12037,7 @@ def admin_rls_habilitar(tabla):
 @app.route("/admin/rls/deshabilitar/<tabla>", methods=["POST", "GET"])
 def admin_rls_deshabilitar(tabla):
     """DESACTIVA RLS en una tabla. ROLLBACK rápido."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
     try:
@@ -12034,7 +12051,7 @@ def admin_rls_deshabilitar(tabla):
 def admin_rls_habilitar_todas():
     """ACTIVA RLS en TODAS las tablas. ATENCIÓN: si una función olvida setear tenant context,
     sus queries devolverán vacío. Rollback rápido con /admin/rls/deshabilitar_todas."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
     try:
@@ -12049,7 +12066,7 @@ def admin_rls_habilitar_todas():
 def admin_rls_deshabilitar_todas():
     """ROLLBACK DE EMERGENCIA: desactiva RLS en TODAS las tablas.
     Las políticas quedan creadas pero dormidas (comportamiento idéntico a hoy)."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     # Permitir POST con body O GET con token param
     auth_ok = (request.json or {}).get("token") == bypass_token if request.method == "POST" else request.args.get("token") == bypass_token
     if not auth_ok:
@@ -12064,7 +12081,7 @@ def admin_rls_deshabilitar_todas():
 @app.route("/admin/rls/test_aislamiento", methods=["GET"])
 def admin_rls_test_aislamiento():
     """Test seguro: simula qué pasaría con cada tenant SIN tocar nada."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
     try:
@@ -12099,7 +12116,7 @@ def requiere_lusync_admin(func):
             return func(*args, **kwargs)
         
         # 2. Token bypass (header o query param)
-        bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+        bypass_token = _admin_bypass_token()
         token_recibido = request.headers.get("x-admin-token") or request.args.get("token")
         if token_recibido and token_recibido == bypass_token:
             return func(*args, **kwargs)
@@ -12712,8 +12729,8 @@ def admin_lusync_dashboard():
                     <a href="/admin/lusync/marketplaces" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">🛍️ Marketplaces</a>
 
                     <div style="font-size:9px;text-transform:uppercase;color:#888780;letter-spacing:0.1em;padding:4px 8px;font-weight:600;margin-top:14px;">Sistema</div>
-                    <a href="/admin/rls/health_check?token=lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw" target="_blank" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">🩺 Health check</a>
-                    <a href="/admin/tenancy/diagnostico?token=lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw" target="_blank" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">🔍 Diagnóstico</a>
+                    <a href="/admin/rls/health_check" target="_blank" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">🩺 Health check</a>
+                    <a href="/admin/tenancy/diagnostico" target="_blank" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">🔍 Diagnóstico</a>
                     <a href="/admin/lusync/fernet_key" style="padding:8px 10px;border-radius:6px;font-size:13px;color:#c8c6bd;text-decoration:none;display:block;">🔐 Fernet Key</a>
 
                     <div style="position:absolute;bottom:18px;left:14px;width:202px;border-top:1px solid #2a2926;padding-top:14px;">
@@ -13000,7 +13017,7 @@ def admin_rls_normalizar_canales_historicos():
     """Corrige movimientos históricos con canal mal capitalizado.
     Convierte 'mercadolibre' → 'MercadoLibre' y similares.
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
     try:
@@ -13067,7 +13084,7 @@ def admin_rls_normalizar_canales_historicos():
 @app.route("/admin/rls/listar_canales", methods=["GET"])
 def admin_rls_listar_canales():
     """Lista todos los canales distintos en movimientos para detectar mal capitalizados."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
     try:
@@ -13098,7 +13115,7 @@ def admin_rls_forzar_sync_woo():
     """Fuerza un sync inmediato de Woo y muestra resultados paso a paso.
     Útil para probar si una orden se procesa correctamente sin esperar el scheduler.
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
 
@@ -13299,7 +13316,7 @@ def admin_rls_debug_woo_completadas():
     """Lista órdenes Woo en estado processing/completed de los últimos N días
     y verifica si tienen movimiento de venta en BD.
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
 
@@ -13392,7 +13409,7 @@ def admin_rls_debug_woo_completadas():
 def admin_rls_debug_woo_canceladas():
     """Debug: lista las órdenes canceladas recientes en Woo y diagnostica
     por qué no se reflejan en movimientos."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
 
@@ -13490,7 +13507,7 @@ def admin_rls_debug_meli_orden():
     Muestra TODOS los campos relacionados con precio/envío/descuentos.
     Uso: ?order_id=2000016417889134
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
 
@@ -13606,7 +13623,7 @@ def admin_rls_debug_meli_orden():
 @app.route("/admin/rls/debug_paris_falabella_detalle", methods=["GET"])
 def admin_rls_debug_paris_falabella_detalle():
     """Debug profundo: Paris detalle de orden + Falabella items con precio."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
 
@@ -13722,7 +13739,7 @@ def admin_rls_debug_reporte_mkts():
     """Diagnostica cada MKT individualmente: status, cant órdenes, keys del primer JSON.
     Permite identificar por qué un MKT no trae datos o trae precio en 0.
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
 
@@ -13891,7 +13908,7 @@ def admin_rls_debug_ventas_dia():
     """Debug: lista TODOS los movimientos de venta del día actual (o el día especificado)
     incluyendo canal, origen, cantidad y precio donde sea posible.
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
 
@@ -13963,7 +13980,7 @@ def admin_rls_comparar_movimientos():
     """Compara cuántos movimientos ve Babymine (tenant=1) vs admin (bypass).
     Si los números difieren, hay movimientos sin tenant_id correctamente seteado.
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
     try:
@@ -14043,7 +14060,7 @@ def admin_rls_comparar_movimientos():
 @app.route("/admin/rls/comparar_ordenes", methods=["GET"])
 def admin_rls_comparar_ordenes():
     """Compara qué órdenes procesadas ve Babymine vs admin."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
     try:
@@ -15639,7 +15656,7 @@ def admin_tenancy_form_crear_usuario_babymine():
     """Form para crear el primer usuario de Babymine (contacto@babymine.cl)
     y actualizar el email de contacto del tenant.
     Solo accesible con token admin."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if request.args.get("token") != bypass_token and request.form.get("token") != bypass_token:
         return "<h1>No autorizado</h1>", 401
 
@@ -15652,7 +15669,8 @@ def admin_tenancy_form_crear_usuario_babymine():
             <p style="color:#666;font-size:13px;margin-bottom:24px;">Crea el usuario admin de Babymine con email <code>contacto@babymine.cl</code> y actualiza email contacto del tenant.</p>
 
             <form method="POST" action="/admin/tenancy/form_crear_usuario_babymine">
-                <input type="hidden" name="token" value="lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw">
+                <input type="hidden" name="token" value="">
+                <script>document.currentScript.previousElementSibling.value = new URLSearchParams(location.search).get("token") || "";</script>
 
                 <div style="margin-bottom:14px;">
                     <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Email (no editar)</label>
@@ -15707,9 +15725,9 @@ def admin_tenancy_form_crear_usuario_babymine():
     rol = (request.form.get("rol") or "admin").strip()
 
     if password != password2:
-        return "<h2>❌ Las contraseñas no coinciden</h2><a href='/admin/tenancy/form_crear_usuario_babymine?token=" + bypass_token + "'>Volver</a>", 400
+        return "<h2>❌ Las contraseñas no coinciden</h2><a href='javascript:history.back()'>Volver</a>", 400
     if len(password) < 8:
-        return "<h2>❌ Contraseña muy corta (mín 8)</h2><a href='/admin/tenancy/form_crear_usuario_babymine?token=" + bypass_token + "'>Volver</a>", 400
+        return "<h2>❌ Contraseña muy corta (mín 8)</h2><a href='javascript:history.back()'>Volver</a>", 400
 
     try:
         from tenancy import crear_usuario
@@ -15771,7 +15789,7 @@ def admin_tenancy_form_crear_usuario_babymine():
 @app.route("/admin/tenancy/form_crear_super_admin", methods=["GET"])
 def admin_tenancy_form_crear_super_admin():
     """Formulario HTML simple para crear el primer super-admin Lusync sin curl."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if request.args.get("token") != bypass_token:
         return "<h1>No autorizado</h1>", 401
 
@@ -15864,7 +15882,7 @@ def admin_tenancy_form_crear_super_admin():
                         email: email,
                         password: password,
                         nombre: nombre,
-                        token: '{bypass_token}'
+                        token: (new URLSearchParams(location.search).get('token') || '')
                     }})
                 }});
                 const data = await res.json();
@@ -15892,7 +15910,7 @@ def admin_tenancy_form_crear_super_admin():
 @app.route("/admin/rls/test_marcar_orden", methods=["GET"])
 def admin_rls_test_marcar_orden():
     """Prueba directa de intentar_marcar_orden_atomic para diagnosticar bloqueo RLS."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
     try:
@@ -15941,7 +15959,7 @@ def admin_rls_test_marcar_orden():
 @app.route("/admin/rls/listar_todas_policies", methods=["GET"])
 def admin_rls_listar_todas_policies():
     """Lista TODAS las políticas RLS de TODAS las tablas, sin filtrar por nombre."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
     try:
@@ -16002,7 +16020,7 @@ def admin_rls_test_scheduler_manual():
     """Ejecuta UNA llamada manual de un scheduler y captura toda la salida.
     Útil para diagnosticar por qué no aparecen logs de schedulers automáticos.
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
 
@@ -16064,7 +16082,7 @@ def admin_rls_health_check():
     """Verificación completa del sistema multi-tenant.
     Devuelve un reporte de salud con TODOS los aspectos críticos.
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
 
@@ -16224,7 +16242,7 @@ def admin_rls_health_check():
 @app.route("/admin/rls/inspeccionar_policy/<tabla>", methods=["GET"])
 def admin_rls_inspeccionar_policy(tabla):
     """Inspecciona la política RLS de una tabla específica."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
     try:
@@ -16261,7 +16279,7 @@ def admin_rls_diagnostico_owner():
     """Diagnostica si el usuario BD es OWNER de las tablas (eso bypasea RLS).
     También verifica que la política realmente esté aplicándose.
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
     try:
@@ -16334,7 +16352,7 @@ def admin_rls_diagnostico_owner():
 @app.route("/admin/rls/recrear_policies", methods=["POST", "GET"])
 def admin_rls_recrear_policies():
     """DROP + CREATE de todas las políticas. Útil cuando cambia la definición."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
     try:
@@ -16350,7 +16368,7 @@ def admin_rls_verificar_context():
     """Verifica que get_conn() esté aplicando el tenant context correctamente.
     Lee las variables app.tenant_id y app.is_admin de la conexión actual.
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
     try:
@@ -16426,7 +16444,7 @@ def admin_rls_forzar_tenant_sesion():
     Usage: /admin/rls/forzar_tenant_sesion?tenant=2&token=...
     Para limpiar: /admin/rls/forzar_tenant_sesion?tenant=1&token=...
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
 
@@ -16453,7 +16471,7 @@ def admin_diagnostico_dashboard():
     """Compara qué cuenta cada función de stats para entender inconsistencias.
     Uso: /admin/diagnostico_dashboard?desde=2026-05-12&hasta=2026-05-12&token=XXX
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN","lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error":"no autorizado"}),401
 
@@ -16530,7 +16548,7 @@ def admin_diagnostico_dashboard():
 @app.route("/admin/diagnostico_bd", methods=["GET"])
 def admin_diagnostico_bd():
     """Verifica constraints anti-duplicado en la BD."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN","lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error":"no autorizado"}),401
     try:
@@ -16562,7 +16580,7 @@ def admin_diagnostico_bd():
 def admin_diagnostico_stock():
     """Diagnóstico completo del stock de un SKU."""
     # Bypass por token (igual que importar)
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     token_recibido = request.args.get("token", "")
     autorizado = session.get("logged") or (token_recibido and token_recibido == bypass_token)
     if not autorizado:
@@ -16670,10 +16688,9 @@ def admin_importar_stock_full_meli():
     - dry_run=1: simula sin escribir
     - token=XXX: bypass de login (para carga inicial via curl/script)
               Token configurable via env ADMIN_BYPASS_TOKEN
-              Default: lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw
     """
     # Verificación: login normal O token válido
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     token_recibido = request.args.get("token", "")
     autorizado = session.get("logged") or (token_recibido and token_recibido == bypass_token)
     
@@ -17839,7 +17856,7 @@ def admin_debug_falabella_ordenes():
     """Diagnóstico profundo de por qué Falabella no registra órdenes.
     Uso: /admin/debug_falabella_ordenes?dias=7&token=XXX
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     token = request.args.get("token", "")
     if token != bypass_token and not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
@@ -18142,7 +18159,7 @@ def admin_debug_falabella_items():
     """Muestra la respuesta RAW de GetOrderItems para una orden específica.
     Uso: /admin/debug_falabella_items?order_id=1152896462&token=XXX
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     token = request.args.get("token", "")
     if token != bypass_token and not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
@@ -18175,7 +18192,7 @@ def admin_normalizar_canales():
     nombre canónico usado en el dashboard.
     Uso: /admin/normalizar_canales?token=XXX
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if request.args.get("token") != bypass_token and not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
     try:
@@ -18254,7 +18271,7 @@ def admin_test_flujo_venta():
       canal   = Canal que origina la venta (Walmart, Falabella, Paris, Ripley, MercadoLibre, Web)
       simular = 1 (default) solo simula sin tocar nada | 0 = ejecuta real (CUIDADO)
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if request.args.get("token") != bypass_token and not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
 
@@ -18423,7 +18440,7 @@ def admin_autodescubrir_publicaciones():
       canal   = meli | falabella | walmart | paris | ripley | todos
       ejecutar= 0 (default, solo diagnostica) | 1 (guarda los mapeos encontrados)
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if request.args.get("token") != bypass_token and not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
 
@@ -18921,7 +18938,7 @@ def admin_debug_meli_item():
     Muestra la estructura RAW de un item de MELI para debug de variantes.
     Uso: /admin/debug_meli_item?item_id=MLC2749905118&token=XXX
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if request.args.get("token") != bypass_token and not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
 
@@ -19804,7 +19821,7 @@ def admin_importar_excel_paris():
 def admin_debug_paris_ordenes():
     """Debug: muestra el JSON raw de las últimas órdenes de Paris para ver estructura de variantes."""
     if not session.get("logged"):
-        bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+        bypass_token = _admin_bypass_token()
         if request.args.get("token") != bypass_token:
             return jsonify({"error": "no autorizado"}), 401
     try:
@@ -20838,7 +20855,7 @@ def admin_sync_masivo_todos():
 def admin_test_sync_sku():
     """Debug: prueba el sync de un SKU a todos los canales y devuelve el resultado completo."""
     if not session.get("logged"):
-        bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+        bypass_token = _admin_bypass_token()
         if request.args.get("token") != bypass_token:
             return jsonify({"error": "no autorizado"}), 401
     sku = request.args.get("sku", "").strip()
@@ -20928,7 +20945,7 @@ def admin_corregir_stock_bodega():
     GET con: ?sku=XXX&bodega=CENTRAL&cantidad=1&token=...
     """
     if not session.get("logged"):
-        bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+        bypass_token = _admin_bypass_token()
         if request.args.get("token") != bypass_token:
             return jsonify({"error": "no autorizado"}), 401
     try:
@@ -20965,7 +20982,7 @@ def admin_corregir_stock_bodega():
 def admin_test_canal_directo():
     """Prueba MELI o Falabella directamente y devuelve el resultado HTTP exacto."""
     if not session.get("logged"):
-        bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+        bypass_token = _admin_bypass_token()
         if request.args.get("token") != bypass_token:
             return jsonify({"error": "no autorizado"}), 401
     canal = request.args.get("canal", "").lower()
@@ -21031,7 +21048,7 @@ def admin_auto_descubrir_variantes_meli():
 
     Devuelve resumen detallado por publicación.
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if request.args.get("token") != bypass_token and not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
 
@@ -21216,7 +21233,7 @@ def admin_auto_descubrir_variantes_meli():
 @app.route("/admin/debug_mapeos_sku")
 def admin_debug_mapeos_sku():
     """Muestra todos los mapeos de un SKU Lusync en todos los canales."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if request.args.get("token") != bypass_token and not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
     sku = request.args.get("sku", "").strip()
@@ -21269,7 +21286,7 @@ def admin_debug_meli_stock_locations():
     Uso: ?user_product_id=MLCU3179719354&token=XXX
          ó ?item_id=MLC1529109001&token=XXX (busca user_product_ids de variantes)
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if request.args.get("token") != bypass_token and not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
 
@@ -21367,7 +21384,7 @@ def admin_limpiar_mapeos_huerfanos():
 
     Uso: ?token=XXX&dry_run=1 (default) o dry_run=0 para ejecutar
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if request.args.get("token") != bypass_token and not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
 
@@ -21431,7 +21448,7 @@ def admin_limpiar_mapeos_huerfanos():
 @app.route("/admin/debug_paris_stock_sku")
 def admin_debug_paris_stock_sku():
     """Consulta el stock de un SKU específico en Paris."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if request.args.get("token") != bypass_token and not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
     sku = request.args.get("sku", "").strip()
@@ -21488,7 +21505,7 @@ def admin_verificar_stock_todos_canales():
     Compara con el stock de Lusync.
     Uso: ?sku=XXX&token=YYY
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if request.args.get("token") != bypass_token and not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
     sku = request.args.get("sku", "").strip()
@@ -21655,7 +21672,7 @@ def admin_enriquecer_mapeos_paris():
     Consulta la API de Paris y para cada sku_seller encontrado, llena el item_id_canal.
     Uso: ?token=XXX&dry_run=1 (default) o dry_run=0 para ejecutar
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if request.args.get("token") != bypass_token and not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
     dry_run = request.args.get("dry_run", "1") == "1"
@@ -21752,7 +21769,7 @@ def admin_debug_paris_actualizar_raw():
     y devuelve el payload + respuesta completa para diagnosticar.
     Uso: ?sku=PBEAMG001&cantidad=7&token=YYY
     """
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if request.args.get("token") != bypass_token and not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
     sku = request.args.get("sku", "").strip()
@@ -21822,7 +21839,7 @@ def admin_debug_paris_actualizar_raw():
 @app.route("/admin/debug_paris_funcion_codigo")
 def admin_debug_paris_funcion_codigo():
     """Muestra el código fuente de actualizar_stock_paris para diagnosticar el payload."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if request.args.get("token") != bypass_token and not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
     try:
@@ -21837,7 +21854,7 @@ def admin_debug_paris_funcion_codigo():
 @app.route("/admin/debug_paris_raw_call")
 def admin_debug_paris_raw_call():
     """Llama Paris directamente y muestra el body completo de la respuesta."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if request.args.get("token") != bypass_token and not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
     sku = request.args.get("sku", "MK30WHVEX8-1").strip()
@@ -21878,7 +21895,7 @@ def admin_debug_paris_raw_call():
 @app.route("/admin/debug_paris_warehouses")
 def admin_debug_paris_warehouses():
     """Lista todos los warehouses configurados en Paris."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if request.args.get("token") != bypass_token and not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
 
@@ -21944,7 +21961,7 @@ def admin_debug_paris_warehouses():
 @app.route("/admin/debug_paris_seller_nodes")
 def admin_debug_paris_seller_nodes():
     """Lista los nodos/bodegas del seller en Paris según la documentación oficial."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if request.args.get("token") != bypass_token and not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
 
@@ -21992,7 +22009,7 @@ def admin_debug_paris_seller_nodes():
 @app.route("/admin/paris_force_relogin")
 def admin_paris_force_relogin():
     """Limpia el cache de token de Paris y fuerza re-autenticación."""
-    bypass_token = os.environ.get("ADMIN_BYPASS_TOKEN", "lcTDX2fjcH3hiZFvv8apEwPd-eiCIqFdkKqJIVy1bVw")
+    bypass_token = _admin_bypass_token()
     if request.args.get("token") != bypass_token and not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
 
@@ -23519,7 +23536,11 @@ def _fact_actualizar_estado_dte(boleta_id, estado, track_id=None, estado_sii=Non
                                 glosa=None, set_fecha_envio=False, set_fecha_aceptacion=False):
     """Actualiza el estado de un DTE registrado. Helper central de trazabilidad."""
     from inventario import get_conn, release_conn
-    conn = get_conn()
+    # Contexto admin a proposito: este helper lo llaman los jobs del scheduler, que
+    # corren SIN sesion Flask y sin tenant. Actualiza un DTE por su id, que el
+    # llamador ya identifico. Con RLS activo en facturacion_dtes, un get_conn() pelado
+    # no encontraria la fila y el UPDATE fallaria en silencio.
+    conn = get_conn(tenant_id=0, is_admin=True)
     try:
         sets = ["estado = %s"]
         vals = [estado]
@@ -23866,7 +23887,11 @@ def _fact_actualizar_estado_dte(boleta_id, estado, track_id=None, estado_sii=Non
                                 glosa=None, set_fecha_envio=False, set_fecha_aceptacion=False):
     """Actualiza el estado de un DTE registrado. Helper central de trazabilidad."""
     from inventario import get_conn, release_conn
-    conn = get_conn()
+    # Contexto admin a proposito: este helper lo llaman los jobs del scheduler, que
+    # corren SIN sesion Flask y sin tenant. Actualiza un DTE por su id, que el
+    # llamador ya identifico. Con RLS activo en facturacion_dtes, un get_conn() pelado
+    # no encontraria la fila y el UPDATE fallaria en silencio.
+    conn = get_conn(tenant_id=0, is_admin=True)
     try:
         sets = ["estado = %s"]
         vals = [estado]
@@ -24265,7 +24290,12 @@ def consultadte_verificar():
         if "-" not in rut_norm and len(rut_norm) >= 2:
             rut_norm = rut_norm[:-1] + "-" + rut_norm[-1]
         from inventario import get_conn, release_conn
-        conn = get_conn()
+        # Contexto admin a proposito: esta pagina es PUBLICA y sin login. El que
+        # verifica es el receptor de un DTE y no pertenece a ningun tenant, asi que
+        # la busqueda tiene que cruzar todos. No es una fuga: para que devuelva algo
+        # hay que acertar tipo + folio + fecha + monto + RUT del emisor, todos datos
+        # que ya estan impresos en el documento que la persona tiene en la mano.
+        conn = get_conn(tenant_id=0, is_admin=True)
         try:
             with conn.cursor() as cur:
                 # Buscar la boleta: el rut_emisor en config puede tener puntos o no
@@ -24290,6 +24320,7 @@ def consultadte_verificar():
                  34:"Factura Exenta",61:"Nota de Crédito",56:"Nota de Débito",52:"Guía de Despacho"}
         estado_map = {"generado":"Generado", "enviado":"Enviado al SII",
                       "en_proceso":"En proceso en SII", "aceptado":"Aceptado por el SII",
+                      "aceptado_reparos":"Aceptado con reparos",
                       "revisar":"Revisar datos", "rechazado":"Rechazado por el SII",
                       "error_envio":"Error de envío"}
         return jsonify({
@@ -24820,7 +24851,10 @@ def _fact_ambiente_es_produccion(tenant_id):
     correo) DEBEN llamar esto antes de ejecutar. En certificación devuelve False.
     """
     from inventario import get_conn, release_conn
-    conn = get_conn()
+    # El tenant llega por parametro: se pasa al contexto para que la consulta
+    # siga funcionando cuando facturacion_config_tenant tenga RLS, incluso si
+    # quien llama es un job sin sesion.
+    conn = get_conn(tenant_id=tenant_id)
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT ambiente FROM facturacion_config_tenant WHERE tenant_id=%s", (tenant_id,))
@@ -24855,7 +24889,7 @@ def facturacion_descargar_zip():
     from flask import Response
     import io, zipfile
 
-    where = ["tenant_id = %s", "estado IN ('enviado','en_proceso','aceptado','rechazado','revisar','error_envio')"]
+    where = ["tenant_id = %s", "estado IN ('enviado','en_proceso','aceptado','aceptado_reparos','rechazado','revisar','error_envio')"]
     params = [tenant_id]
     # Si vienen IDs específicos (selección manual), filtrar por ellos
     if ids_param:
@@ -25540,11 +25574,14 @@ def _fact_mapear_estado_sii(estado_sii):
                    "PRD": "En proceso",
                    "CRT": "Carátula OK",
                    "EPR": "Envío en proceso"}
-    aceptados = {"RPR": "Aceptado por el SII",
-                 "DOK": "Aceptado por el SII",
+    aceptados = {"DOK": "Aceptado por el SII",
                  "ACEPTADO": "Aceptado por el SII"}
-    reparos = {"RLV": "Aceptado con reparos",
-               "RPRREP": "Aceptado con reparos"}
+    # RPR = "Procesado con Reparos". NO es aceptacion limpia: el SII recibio el
+    # envio y lo proceso, pero con observaciones. Es exactamente lo que pasó con
+    # los folios 11-15 en certificacion, y por eso hubo que emitir el set 16-20.
+    # Mostrarlo como "Aceptado" seria afirmar algo que el SII no dijo.
+    reparos = {"RPR": "Aceptado con reparos",
+               "RLV": "Aceptado con reparos"}
     rechazados = {"RCT": "Rechazado por carátula",
                   "RFR": "Rechazado por firma",
                   "RPT": "Rechazado",
@@ -26057,21 +26094,51 @@ def facturacion_consultar_estado(boleta_id):
 
 
 def _fact_job_consultar_estados():
-    """LIMBO 3 (automático): cada cierto tiempo consulta el estado real en el SII
-    de las boletas que están 'enviado'/'en_proceso' y las actualiza usando getEstDte
-    (consulta por datos del documento, vía pública). Solo marca estados finales.
+    """LIMBO 3 (automático): consulta en el SII el estado real de los DTE que
+    quedaron en 'enviado'/'en_proceso' y los cierra.
+
+    Usa DOS vías, porque ninguna sola alcanza:
+
+      1. Por TRACK ID (consultar_estado_envio, REST de boletas). Es la ÚNICA que
+         distingue "aceptado con reparos" de aceptado limpio: devuelve los
+         contadores aceptados/rechazados/reparos del envío. Solo sirve para
+         boletas (39/41): los endpoints son los de boleta electrónica.
+      2. Por DATOS del documento (getEstDte, SOAP). Sirve para cualquier tipo de
+         DTE, pero solo responde DOK/DNK/FAU: un envío aceptado CON REPAROS
+         igual contesta DOK. Por eso no puede ser la única fuente.
+
+    Entonces: si es boleta y tiene track id, se pregunta primero por track id, y
+    se cae a getEstDte solo si esa vía no concluye.
+
+    Los tokens se piden UNA VEZ POR TENANT y se reutilizan. Antes se pedía uno
+    por documento: hasta 200 autenticaciones firmadas por corrida, cada 15
+    minutos, contra los servidores del SII.
     """
     from inventario import get_conn, release_conn
     from facturacion.certificados import obtener_certificado
     from facturacion.db import obtener_config_facturacion
     from facturacion.utils import normalizar_ambiente
-    from facturacion.dtes.sii_client import consultar_estado_dte
+    from facturacion.dtes.sii_client import (autenticar, consultar_estado_dte,
+                                             consultar_estado_envio)
+
+    # Horas que un DTE puede quedarse en DNK/FAU antes de pedir intervención
+    # humana. DNK = el SII lo tiene pero los datos no coinciden; eso no se
+    # arregla solo, y antes se reintentaba en silencio hasta que el documento
+    # salía de la ventana de 7 días y quedaba en 'enviado' para siempre.
+    HORAS_PARA_REVISAR = 24
+
     try:
-        conn = get_conn()
+        # Contexto admin: este job corre en el scheduler, sin sesion Flask, y
+        # barre los DTE de TODOS los tenants. Con RLS activo, un get_conn() pelado
+        # no devolveria ni una fila y el job quedaria sin trabajo que hacer, en
+        # silencio y sin un solo error en los logs.
+        conn = get_conn(tenant_id=0, is_admin=True)
         try:
             with conn.cursor() as cur:
                 cur.execute("""SELECT id, tenant_id, tipo_dte, folio, rut_receptor,
-                                      monto_total, fecha_emision
+                                      monto_total, fecha_emision, track_id_sii,
+                                      EXTRACT(EPOCH FROM (NOW() - COALESCE(fecha_envio_sii,
+                                                                           fecha_emision)))/3600
                                FROM facturacion_dtes
                                WHERE estado IN ('enviado','en_proceso')
                                  AND fecha_emision > (NOW() - INTERVAL '7 days')
@@ -26081,10 +26148,13 @@ def _fact_job_consultar_estados():
             release_conn(conn)
         if not pendientes:
             return
-        # Agrupar por tenant para reutilizar certificado/config
-        certs = {}
+
+        certs = {}        # tenant -> (config, certificado)
+        tok_rest = {}     # tenant -> token REST de boletas (o None si falló)
+        tok_soap = {}     # tenant -> token del WS clásico (o None si falló)
+
         for row in pendientes:
-            bid, tid, tipo_dte, folio, rut_recep, monto, fch = row
+            bid, tid, tipo_dte, folio, rut_recep, monto, fch, track_id, horas = row
             try:
                 if tid not in certs:
                     cfg = obtener_config_facturacion(get_conn, release_conn, tid)
@@ -26094,23 +26164,94 @@ def _fact_job_consultar_estados():
                     continue
                 cfg, crt = certs[tid]
                 amb = normalizar_ambiente(cfg.get("ambiente") or "certificacion")
+                horas = float(horas or 0)
+                cerrado = False
+
+                # ── Vía 1: por track id (la única que ve los reparos) ────────
+                if track_id and int(tipo_dte) in (39, 41):
+                    if tid not in tok_rest:
+                        try:
+                            tok_rest[tid] = autenticar(crt["pfx_bytes"], crt["password"], amb)
+                        except Exception as e:
+                            tok_rest[tid] = None
+                            print("[Estado SII] Tenant %s: no se pudo autenticar en la API "
+                                  "de boletas (%s). Se consulta solo por datos." % (tid, str(e)[:100]))
+                    if tok_rest.get(tid):
+                        env = consultar_estado_envio(track_id=str(track_id), token=tok_rest[tid],
+                                                     rut_emisor=cfg["rut_emisor"], ambiente=amb)
+                        if env.get("ok"):
+                            est_env = (env.get("estado_envio") or "").upper()
+                            rech = env.get("rechazados")
+                            reps = env.get("reparos")
+                            acep = env.get("aceptados")
+                            if rech is not None or reps is not None:
+                                rech_n = int(rech or 0)
+                                reps_n = int(reps or 0)
+                                acep_n = int(acep or 0)
+                                if rech_n > 0:
+                                    _fact_actualizar_estado_dte(
+                                        bid, "rechazado", estado_sii=est_env or "RCH",
+                                        glosa="Rechazado por el SII (%d rechazado(s) en el envío)" % rech_n)
+                                    cerrado = True
+                                elif reps_n > 0:
+                                    # NO es aceptación limpia. El SII procesó el envío
+                                    # con observaciones y hay que mirarlas.
+                                    _fact_actualizar_estado_dte(
+                                        bid, "aceptado_reparos", estado_sii=est_env or "RPR",
+                                        glosa="Aceptado con reparos por el SII (%d con reparo)" % reps_n,
+                                        set_fecha_aceptacion=True)
+                                    cerrado = True
+                                elif acep_n > 0:
+                                    _fact_actualizar_estado_dte(
+                                        bid, "aceptado", estado_sii=est_env or "EPR",
+                                        glosa="Aceptado por el SII", set_fecha_aceptacion=True)
+                                    cerrado = True
+                            if not cerrado and est_env:
+                                # Sin contadores: interpretar el código del envío.
+                                # Solo se cierra si el estado ya es final.
+                                interno, glosa = _fact_mapear_estado_sii(est_env)
+                                if interno in ("aceptado", "aceptado_reparos", "rechazado"):
+                                    _fact_actualizar_estado_dte(
+                                        bid, interno, estado_sii=est_env, glosa=glosa,
+                                        set_fecha_aceptacion=interno.startswith("aceptado"))
+                                    cerrado = True
+
+                if cerrado:
+                    continue
+
+                # ── Vía 2: por datos del documento (getEstDte) ───────────────
                 fch_str = fch.strftime("%Y-%m-%d") if hasattr(fch, "strftime") else str(fch)[:10]
                 res = consultar_estado_dte(
                     pfx_bytes=crt["pfx_bytes"], password=crt["password"],
                     rut_consultante=cfg["rut_emisor"], rut_emisor=cfg["rut_emisor"],
                     rut_receptor=rut_recep or "66666666-6", tipo_dte=tipo_dte,
                     folio=folio, fecha_emision=fch_str, monto_total=int(monto or 0),
-                    ambiente=amb)
+                    ambiente=amb, token=tok_soap.get(tid))
+                if res.get("token_usado") and not tok_soap.get(tid):
+                    tok_soap[tid] = res["token_usado"]
                 est = (res.get("estado") or "").upper()
                 if est == "DOK":
+                    # OJO: DOK no descarta reparos. Si el documento tiene track id
+                    # y la vía 1 no pudo responder, esto es lo mejor disponible.
                     _fact_actualizar_estado_dte(bid, "aceptado", estado_sii=est,
                                                 glosa="Aceptado por el SII", set_fecha_aceptacion=True)
                 elif est in ("FAN", "FNA", "RCT", "RCH", "RFR", "RSC"):
                     _fact_actualizar_estado_dte(bid, "rechazado", estado_sii=est,
                                                 glosa=res.get("glosa") or "Rechazado por el SII")
-                # DNK/FAU: aún no final, se reintenta en la próxima corrida
+                elif est in ("DNK", "FAU") and horas >= HORAS_PARA_REVISAR:
+                    # Deja de reintentarse en silencio: pasa a manos humanas.
+                    detalle = ("El SII tiene el documento pero los datos no coinciden"
+                               if est == "DNK" else
+                               "El SII no registra el documento")
+                    _fact_actualizar_estado_dte(
+                        bid, "revisar", estado_sii=est,
+                        glosa="%s (%s tras %d h). Revisa folio, monto, fecha y receptor."
+                              % (detalle, est, int(horas)))
+                    print("[Estado SII] DTE %s (tipo %s folio %s) marcado 'revisar': %s tras %d h"
+                          % (bid, tipo_dte, folio, est, int(horas)))
+                # DNK/FAU recientes: se reintenta en la próxima corrida
             except Exception as e:
-                print("[Estado SII] Error boleta %s: %s" % (bid, str(e)[:120]))
+                print("[Estado SII] Error DTE %s: %s" % (bid, str(e)[:120]))
     except Exception as e:
         print("[Estado SII] Error general: %s" % str(e)[:200])
 
@@ -26132,8 +26273,9 @@ def _fact_job_rcof_diario():
 
     try:
         ayer = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-        # Agrupar boletas del día anterior por tenant
-        conn = get_conn()
+        # Agrupar boletas del día anterior por tenant.
+        # Contexto admin: corre sin sesion y necesita ver todos los tenants.
+        conn = get_conn(tenant_id=0, is_admin=True)
         try:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -26216,7 +26358,9 @@ except Exception as _e:
 def _fact_registrar_rcof(tenant_id, fecha, ambiente, xml_firmado, resumenes):
     """Guarda el RCOF generado para auditoría (tabla facturacion_rcof si existe)."""
     from inventario import get_conn, release_conn
-    conn = get_conn()
+    # El tenant llega por parametro; se pasa al contexto porque quien llama es el
+    # job del RCOF, que no tiene sesion.
+    conn = get_conn(tenant_id=tenant_id)
     try:
         with conn.cursor() as cur:
             cur.execute("""
@@ -28128,7 +28272,7 @@ def admin_lusync_sii_test_envio():
                  f"{emisor['razon_social']} · {emisor['rut']}")
 
             # Leer CAF de Boleta 39 de la BD
-            conn = get_conn()
+            conn = get_conn(tenant_id=tenant_id)
             try:
                 with conn.cursor() as cur:
                     cur.execute("""
@@ -28423,7 +28567,7 @@ def admin_lusync_sii_diag_folios():
     from inventario import get_conn, release_conn
     from facturacion.dtes.caf_parser import parsear_caf_xml
     rangos = {}
-    conn = get_conn()
+    conn = get_conn(tenant_id=tenant_id)
     try:
         with conn.cursor() as cur:
             for tipo in (33, 61, 56):
@@ -28585,7 +28729,7 @@ def admin_lusync_sii_test_set_basico():
             paso("Datos del emisor", True, f"{emisor['razon_social']} · {emisor['rut']}")
 
             from facturacion.dtes.caf_parser import parsear_caf_xml
-            conn = get_conn()
+            conn = get_conn(tenant_id=tenant_id)
             try:
                 with conn.cursor() as cur:
                     for tipo in (33, 61, 56):
@@ -29038,7 +29182,7 @@ def admin_lusync_sii_test_set_guias():
             paso("Datos del emisor", True, f"{emisor['razon_social']} · {emisor['rut']}")
 
             from facturacion.dtes.caf_parser import parsear_caf_xml
-            conn = get_conn()
+            conn = get_conn(tenant_id=tenant_id)
             try:
                 with conn.cursor() as cur:
                     cur.execute("""
@@ -29333,7 +29477,7 @@ def admin_lusync_sii_test_set_fact_exenta():
             paso("Datos del emisor", True, f"{emisor['razon_social']} · {emisor['rut']}")
 
             from facturacion.dtes.caf_parser import parsear_caf_xml
-            conn = get_conn()
+            conn = get_conn(tenant_id=tenant_id)
             try:
                 with conn.cursor() as cur:
                     for tipo in (34, 61, 56):
@@ -30323,7 +30467,7 @@ def admin_lusync_sii_test_set_fact_compra():
             paso("Datos del emisor", True, f"{emisor['razon_social']} · {emisor['rut']}")
 
             from facturacion.dtes.caf_parser import parsear_caf_xml
-            conn = get_conn()
+            conn = get_conn(tenant_id=tenant_id)
             try:
                 with conn.cursor() as cur:
                     for tipo in (46, 61, 56):
@@ -30592,7 +30736,7 @@ def admin_lusync_sii_test_set_exportacion():
 
             # ─── Cargar CAF 110, 112, 111 ───
             cafs = {}
-            conn = get_conn()
+            conn = get_conn(tenant_id=tenant_id)
             try:
                 with conn.cursor() as cur:
                     for tipo in (110, 112, 111):
@@ -30839,7 +30983,7 @@ def admin_lusync_sii_test_set_exportacion2():
             paso("Datos del emisor", True, f"{rut_emisor}")
 
             # CAF 110 (los 3 casos son tipo 110)
-            conn = get_conn()
+            conn = get_conn(tenant_id=tenant_id)
             try:
                 with conn.cursor() as cur:
                     cur.execute("""
@@ -31095,7 +31239,7 @@ def admin_lusync_sii_test_set_boletas():
             }
             paso("Leer datos del emisor", True, f"{emisor['razon_social']} · {emisor['rut']}")
 
-            conn = get_conn()
+            conn = get_conn(tenant_id=tenant_id)
             try:
                 with conn.cursor() as cur:
                     cur.execute("""
@@ -31298,7 +31442,7 @@ def admin_lusync_sii_test_pdf_boleta():
     try:
         config = obtener_config_facturacion(get_conn, release_conn, tenant_id) or {}
         # CAF de boletas tipo 39
-        conn = get_conn()
+        conn = get_conn(tenant_id=tenant_id)
         try:
             with conn.cursor() as cur:
                 cur.execute("""

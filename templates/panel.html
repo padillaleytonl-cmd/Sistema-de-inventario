@@ -15028,7 +15028,7 @@ function conRenderPagina(){
     const yaAnulado = doc.estado==='anulada' || doc.estado==='anulado'
       || (doc.motivo_anulacion && doc.motivo_anulacion.indexOf('Anulada con NC')>=0);
     const anulable = ![61,56].includes(tipoNum)
-      && ['enviado','en_proceso','aceptado'].includes(doc.estado)
+      && ['enviado','en_proceso','aceptado','aceptado_reparos','revisar'].includes(doc.estado)
       && !yaAnulado;
     if(anulable){
       const dNC = {id:doc.id, tipo:tipoNum, folio:doc.folio,
@@ -15150,7 +15150,7 @@ function conPag(delta){
 // ═══════════ MENÚ 3 PUNTITOS (descargas) ═══════════
 function dtMenuPuntitos(doc){
   // Solo habilitado cuando el documento ya fue enviado al SII
-  const habilitado = ['enviado','en_proceso','aceptado','rechazado'].includes(doc.estado);
+  const habilitado = ['enviado','en_proceso','aceptado','aceptado_reparos','revisar','rechazado'].includes(doc.estado);
   if(!habilitado) return '';
   // Guardamos las URLs en data-attrs y dejamos el menú como elemento flotante global
   const datos = encodeURIComponent(JSON.stringify({
@@ -15198,7 +15198,7 @@ function dtToggleMenu(btn, datosEnc){
   menu.appendChild(last);
   // Anular con Nota de Crédito: solo para boletas/facturas (no para NC tipo 61)
   // y solo si fue aceptada o enviada (existe en el SII para referenciar)
-  if(![61,56].includes(Number(d.tipo)) && ['enviado','en_proceso','aceptado'].includes(d.estado)){
+  if(![61,56].includes(Number(d.tipo)) && ['enviado','en_proceso','aceptado','aceptado_reparos','revisar'].includes(d.estado)){
     last.style.borderBottom='1px solid var(--border)';
     const ncOpt=opt(null,'🧾 Anular con Nota de Crédito',null,()=>dtAbrirNotaCredito(d));
     ncOpt.style.borderBottom='none';
