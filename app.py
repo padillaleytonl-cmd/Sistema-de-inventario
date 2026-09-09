@@ -26429,7 +26429,43 @@ def _fact_job_consultar_estados():
                         if env2.get("token_usado") and not tok_soap.get(tid):
                             tok_soap[tid] = env2["token_usado"]
                         est_sobre = (env2.get("estado") or "").upper()
-                        if est_sobre:
+
+                        # Los CONTADORES mandan sobre el código. El SII contesta
+                        # EPR ("Envío Procesado"), que por sí solo es intermedio, y
+                        # adjunta el resultado real: INFORMADOS/ACEPTADOS/RECHAZADOS/
+                        # REPAROS. Mirando solo el código, un envío con ACEPTADOS=1 y
+                        # RECHAZADOS=0 se quedaría "en proceso" para siempre.
+                        _st = env2.get("estadisticas") or {}
+                        def _num(v):
+                            try:
+                                return int(v)
+                            except (TypeError, ValueError):
+                                return None
+                        _acep, _rech, _reps = _num(_st.get("aceptados")), _num(_st.get("rechazados")), _num(_st.get("reparos"))
+                        if not cerrado and (_acep is not None or _rech is not None):
+                            if (_rech or 0) > 0:
+                                _fact_actualizar_estado_dte(
+                                    bid, "rechazado", estado_sii=est_sobre or "RCH",
+                                    glosa="El SII rechazó el documento en el envío (%d rechazado/s)" % _rech)
+                                cerrado = True
+                                print("[Estado SII] DTE %s (folio %s) RECHAZADO en el envío"
+                                      % (bid, folio))
+                            elif (_reps or 0) > 0:
+                                _fact_actualizar_estado_dte(
+                                    bid, "aceptado_reparos", estado_sii=est_sobre or "RPR",
+                                    glosa="Aceptado con reparos por el SII (%d con reparo)" % _reps,
+                                    set_fecha_aceptacion=True)
+                                cerrado = True
+                            elif (_acep or 0) > 0:
+                                _fact_actualizar_estado_dte(
+                                    bid, "aceptado", estado_sii=est_sobre or "EPR",
+                                    glosa="Aceptado por el SII", set_fecha_aceptacion=True)
+                                cerrado = True
+                                print("[Estado SII] DTE %s (tipo %s folio %s) ACEPTADO "
+                                      "(envío procesado, 0 rechazos, 0 reparos)"
+                                      % (bid, tipo_dte, folio))
+
+                        if not cerrado and est_sobre:
                             interno, glosa = _fact_mapear_estado_sii(est_sobre)
                             glosa_sii = env2.get("glosa") or glosa
                             if interno == "rechazado":
