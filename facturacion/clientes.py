@@ -14,6 +14,27 @@ facturacion_cafs). No expone datos entre tenants.
 from typing import Dict, List, Optional
 
 
+def _conn_tenant(get_conn, tenant_id):
+    """Conexión con el tenant puesto en el contexto de la base de datos.
+
+    Estas funciones ya reciben el tenant_id y lo usan en el WHERE, pero abrían la
+    conexión con get_conn() a secas, que toma el tenant de la sesión Flask. Mientras
+    ambos coinciden funciona; el día que alguien llame a listar_clientes() desde un
+    job del scheduler (sin sesión) y facturacion_clientes tenga RLS activo, la
+    consulta devuelve cero filas sin dar error.
+
+    El try/except mantiene la compatibilidad con un get_conn que no acepte ese
+    parámetro. Mismo patrón que facturacion/cafs.py y facturacion/certificados.py.
+
+    init_clientes() queda afuera a propósito: solo crea la tabla, no lee datos de
+    ningún tenant, y no recibe tenant_id.
+    """
+    try:
+        return get_conn(tenant_id=tenant_id)
+    except TypeError:
+        return get_conn()
+
+
 def _crear_tabla(cur):
     """Crea la tabla de clientes si no existe. Idempotente."""
     cur.execute("""
@@ -65,7 +86,7 @@ _COLS = ("id, rut, razon_social, giro, direccion, comuna, ciudad, telefono, emai
 def listar_clientes(get_conn, release_conn, tenant_id, q: str = None,
                     limite: int = 50) -> List[Dict]:
     """Lista los clientes del tenant. Si se pasa q, filtra por nombre o RUT."""
-    conn = get_conn()
+    conn = _conn_tenant(get_conn, tenant_id)
     try:
         with conn.cursor() as cur:
             _crear_tabla(cur)
@@ -89,7 +110,7 @@ def listar_clientes(get_conn, release_conn, tenant_id, q: str = None,
 
 
 def obtener_cliente(get_conn, release_conn, tenant_id, cliente_id) -> Optional[Dict]:
-    conn = get_conn()
+    conn = _conn_tenant(get_conn, tenant_id)
     try:
         with conn.cursor() as cur:
             _crear_tabla(cur)
@@ -131,7 +152,7 @@ def guardar_cliente(get_conn, release_conn, tenant_id, datos: Dict) -> Dict:
         "email": (datos.get("email") or "").strip() or None,
     }
 
-    conn = get_conn()
+    conn = _conn_tenant(get_conn, tenant_id)
     try:
         with conn.cursor() as cur:
             _crear_tabla(cur)
@@ -172,7 +193,7 @@ def guardar_cliente(get_conn, release_conn, tenant_id, datos: Dict) -> Dict:
 
 def eliminar_cliente(get_conn, release_conn, tenant_id, cliente_id) -> Dict:
     """Baja lógica del cliente (activo=FALSE). No borra para preservar historial."""
-    conn = get_conn()
+    conn = _conn_tenant(get_conn, tenant_id)
     try:
         with conn.cursor() as cur:
             _crear_tabla(cur)
