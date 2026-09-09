@@ -13,6 +13,15 @@
   --violet-light: #60a5fa;
   --bg: #f0f1fa;
   --white: #ffffff;
+  /* --card y --bg2 se usan en todo el panel (188 veces entre las dos) pero nunca
+     se habían definido. Un background:var(--card) con la variable inexistente no
+     pinta nada: queda transparente. Por eso el desplegable de búsqueda de clientes
+     se veía "del color del fondo" y su texto se mezclaba con el formulario de
+     abajo. Mismo motivo detrás de cualquier otro fondo que se viera transparente.
+     --card  = superficie de tarjeta/menú, sobre --bg
+     --bg2   = fondo suave de inputs y filas en hover */
+  --card: #ffffff;
+  --bg2: #f7f8fc;
   --border: rgba(0,0,0,0.08);
   --text: #1a1a2e;
   --muted: #6b7280;
