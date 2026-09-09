@@ -2311,8 +2311,18 @@ scheduler.add_job(_sync_autocorreccion, "interval", minutes=60, id="autocorrecci
 # Esta es la "red de seguridad" del sistema FBM automático.
 # ════════════════════════════════════════════════════════════════════════════
 
+@con_tenant_default
 def _sync_full_meli_diario():
-    """Verifica stock MELI Full real vs Lusync. Ajusta si hay diferencias."""
+    """Verifica stock MELI Full real vs Lusync. Ajusta si hay diferencias.
+
+    El decorador NO es decorativo: este job llama a cargar_productos(),
+    get_stock_bodega() y ajustar_stock_bodega(), que abren su conexión con
+    get_conn() sin argumentos. Corriendo en el scheduler no hay sesión Flask, así
+    que sin el decorador la conexión queda sin tenant y, con RLS habilitado en
+    productos o stock_bodega, la consulta devuelve CERO filas sin dar error:
+    el job concluye que no hay nada que ajustar y MELI Full se desincroniza en
+    silencio. Los otros jobs de marketplace ya lo tenían; este quedó afuera.
+    """
     if _sync_locks.get("full_meli", {}).get("running"):
         print("[Scheduler Full MELI] Ya hay un sync corriendo, salto")
         return
@@ -2415,7 +2425,14 @@ atexit.register(lambda: scheduler.shutdown(wait=False))
 
 # ── SYNC DE RECUPERACIÓN AL ARRANCAR ──
 # Busca órdenes perdidas durante caídas del servidor
+@con_tenant_default
 def _sync_recuperacion():
+    """Recupera órdenes de Walmart que no se procesaron durante una caída.
+
+    Mismo motivo que en _sync_full_meli_diario: usa cargar_productos() y demás
+    helpers que abren la conexión sin tenant. Sin el decorador, con RLS activo no
+    ve ningún producto y no recupera nada, sin dar error.
+    """
     try:
         print("[Recuperación] Buscando órdenes no procesadas...")
         productos = cargar_productos()
