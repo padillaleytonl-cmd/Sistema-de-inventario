@@ -390,8 +390,29 @@ def consultar_estado_envio(
     except Exception:
         pass
 
+    # Un HTTP 200 NO alcanza para decir que la consulta sirvió: el SII (y sus
+    # proxies) devuelven páginas de error con código 200. Pasó de verdad: al
+    # consultar en certificación un track id que vivía en producción, la respuesta
+    # fue un HTML de JBoss diciendo "HTTP Status 404" con status 200, y el
+    # diagnóstico lo mostró como paso exitoso con "(sin estado)". Para que ok sea
+    # True tiene que haber un estado o al menos un contador interpretable.
+    hay_datos = estado_envio is not None or any(
+        v is not None for v in (aceptados, rechazados, reparos, informados))
+    parece_html = texto.lstrip()[:200].lower().startswith(("<html", "<!doctype"))
+
+    error = None
+    if resp.status_code != 200:
+        error = f"El SII respondió HTTP {resp.status_code}"
+    elif parece_html:
+        error = ("El SII devolvió una página HTML en vez de datos. Suele significar "
+                 "que el track id no existe en este ambiente (¿consultaste "
+                 "certificación un envío de producción, o al revés?)")
+    elif not hay_datos:
+        error = "El SII respondió, pero sin un estado interpretable"
+
     return {
-        "ok": resp.status_code == 200,
+        "ok": resp.status_code == 200 and hay_datos,
+        "error": error,
         "status": resp.status_code,
         "estado_envio": estado_envio,
         "informados": informados,

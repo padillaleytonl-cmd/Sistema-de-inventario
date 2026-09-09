@@ -28566,8 +28566,22 @@ def admin_lusync_sii_test_estado():
     from facturacion.db import obtener_config_facturacion
 
     tenant_id = request.args.get("tenant_id", default=3, type=int)
-    ambiente = request.args.get("ambiente", default="certificacion")
     trackid = request.args.get("trackid", default="")
+
+    # El ambiente sale de la configuración REAL del tenant, no de un default fijo.
+    # Antes era "certificacion" salvo que se pasara ?ambiente=: con el tenant en
+    # producción, este diagnóstico le preguntaba a apicert.sii.cl por un track id
+    # que vive en rahue, y el SII contestaba un 404 en HTML. El resultado parecía
+    # un problema del documento cuando era la herramienta mirando el lugar
+    # equivocado. Se puede seguir forzando con ?ambiente=certificacion.
+    ambiente = request.args.get("ambiente", default="").strip()
+    if not ambiente:
+        try:
+            from facturacion.utils import normalizar_ambiente as _norm_amb
+            _cfg_amb = obtener_config_facturacion(get_conn, release_conn, tenant_id)
+            ambiente = _norm_amb((_cfg_amb or {}).get("ambiente") or "certificacion")
+        except Exception:
+            ambiente = "certificacion"
 
     pasos = []
     def paso(nombre, ok, detalle=""):
