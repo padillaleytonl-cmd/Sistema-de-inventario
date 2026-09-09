@@ -25933,7 +25933,94 @@ def admin_probar_urls_estado():
                 fila.update({"error": str(e)[:200], "SIRVE": False})
             resultados.append(fila)
 
-        gana = [f for f in resultados if f.get("SIRVE")]
+
+        # ── FASE 2: el endpoint que SÍ existe ────────────────────────────
+        # De las 7 variantes de arriba, 6 dan 404 (el recurso no existe) y
+        # boleta.electronica.estado devuelve un SOAP Fault "Acceso Denegado (from
+        # client)". Eso significa que el recurso EXISTE, que habla SOAP —no REST—
+        # y que rechaza la autenticación. Acá se prueba cómo entrar: distintos
+        # verbos, distintas formas de mandar el token, y certificado de cliente
+        # (mTLS), que es lo que el SII suele exigir en sus servicios internos.
+        url_estado = f"https://{host_api}/recursos/v1/boleta.electronica.estado/{rut_num}-{rut_dv}-{trackid}"
+        url_estado_base = f"https://{host_api}/recursos/v1/boleta.electronica.estado"
+
+        soap_min = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">'
+            '<soapenv:Body>'
+            f'<getEstEnvio><TrackId>{trackid}</TrackId>'
+            f'<RutEmisor>{rut_num}</RutEmisor><DvEmisor>{rut_dv}</DvEmisor>'
+            f'<Token>{token}</Token></getEstEnvio>'
+            '</soapenv:Body></soapenv:Envelope>'
+        ).encode("utf-8")
+
+        def _probar(nombre, metodo, url, **kw):
+            fila = {"variante": nombre, "metodo": metodo, "url": url}
+            try:
+                r = _req.request(metodo, url, timeout=25, **kw)
+                cuerpo = (r.text or "")[:300]
+                fila.update({
+                    "http": r.status_code,
+                    "content_type": r.headers.get("Content-Type", ""),
+                    "respuesta": cuerpo,
+                    "acceso_denegado": "Acceso Denegado" in cuerpo,
+                    "SIRVE": r.status_code == 200 and "Acceso Denegado" not in cuerpo
+                             and not cuerpo.lstrip()[:60].lower().startswith(("<html", "<!doctype")),
+                })
+            except Exception as e:
+                fila.update({"error": str(e)[:200], "SIRVE": False})
+            return fila
+
+        h_soap = {"User-Agent": USER_AGENT_SII, "Content-Type": "text/xml; charset=utf-8",
+                  "SOAPAction": ""}
+        fase2 = []
+        fase2.append(_probar("POST SOAP + Cookie TOKEN", "POST", url_estado_base,
+                             data=soap_min, headers=dict(h_soap, Cookie="TOKEN=%s" % token)))
+        fase2.append(_probar("POST SOAP + Authorization Bearer", "POST", url_estado_base,
+                             data=soap_min,
+                             headers=dict(h_soap, Authorization="Bearer %s" % token)))
+        fase2.append(_probar("POST SOAP sin auth (control)", "POST", url_estado_base,
+                             data=soap_min, headers=h_soap))
+        fase2.append(_probar("GET con Cookie TOKEN (control)", "GET", url_estado,
+                             headers={"User-Agent": USER_AGENT_SII,
+                                      "Cookie": "TOKEN=%s" % token}))
+
+        # mTLS: el certificado digital como credencial de cliente TLS. Se escriben
+        # cert y clave a archivos temporales porque requests solo acepta rutas; se
+        # borran en el finally pase lo que pase — son material sensible.
+        import tempfile, os as _os
+        from cryptography.hazmat.primitives.serialization import (
+            Encoding, PrivateFormat, NoEncryption)
+        from facturacion.dtes.firma import cargar_pfx
+        _cert_path = _key_path = None
+        try:
+            _pk, _crt, _b64, _m, _e = cargar_pfx(cert["pfx_bytes"], cert["password"])
+            fd1, _cert_path = tempfile.mkstemp(suffix=".pem"); _os.close(fd1)
+            fd2, _key_path = tempfile.mkstemp(suffix=".pem"); _os.close(fd2)
+            with open(_cert_path, "wb") as f:
+                f.write(_crt.public_bytes(Encoding.PEM))
+            with open(_key_path, "wb") as f:
+                f.write(_pk.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()))
+            fase2.append(_probar("GET con certificado de cliente (mTLS)", "GET", url_estado,
+                                 headers={"User-Agent": USER_AGENT_SII,
+                                          "Cookie": "TOKEN=%s" % token},
+                                 cert=(_cert_path, _key_path)))
+            fase2.append(_probar("POST SOAP con certificado de cliente (mTLS)", "POST",
+                                 url_estado_base, data=soap_min,
+                                 headers=dict(h_soap, Cookie="TOKEN=%s" % token),
+                                 cert=(_cert_path, _key_path)))
+        except Exception as e:
+            fase2.append({"variante": "mTLS", "error": "No se pudo preparar el certificado: "
+                          + str(e)[:200], "SIRVE": False})
+        finally:
+            for _p in (_cert_path, _key_path):
+                if _p:
+                    try:
+                        _os.remove(_p)
+                    except OSError:
+                        pass
+
+        gana = [f for f in (resultados + fase2) if f.get("SIRVE")]
         return jsonify({
             "ok": True,
             "trackid": trackid,
@@ -25943,6 +26030,7 @@ def admin_probar_urls_estado():
             "conclusion": ("Sirve: " + gana[0]["url"]) if gana else
                           "Ninguna variante devolvió JSON. Ver el detalle de cada una.",
             "resultados": resultados,
+            "fase2_endpoint_que_existe": fase2,
         })
     except Exception as e:
         import traceback
