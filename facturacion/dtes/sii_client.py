@@ -451,6 +451,9 @@ DTEWS = {
         "seed":  "https://maullin.sii.cl/DTEWS/CrSeed.jws?WSDL",
         "token": "https://maullin.sii.cl/DTEWS/GetTokenFromSeed.jws?WSDL",
         "query": "https://maullin.sii.cl/DTEWS/QueryEstDte.jws",
+        # Estado del ENVIO (el sobre) por track id. Es el hermano de QueryEstDte
+        # y el unico que dice si el SII acepto o rechazo el sobre, y por que.
+        "query_envio": "https://maullin.sii.cl/DTEWS/QueryEstUp.jws",
         "upload": "https://maullin.sii.cl/cgi_dte/UPL/DTEUpload",
         "upload_host": "maullin.sii.cl",
     },
@@ -458,6 +461,7 @@ DTEWS = {
         "seed":  "https://palena.sii.cl/DTEWS/CrSeed.jws?WSDL",
         "token": "https://palena.sii.cl/DTEWS/GetTokenFromSeed.jws?WSDL",
         "query": "https://palena.sii.cl/DTEWS/QueryEstDte.jws",
+        "query_envio": "https://palena.sii.cl/DTEWS/QueryEstUp.jws",
         "upload": "https://palena.sii.cl/cgi_dte/UPL/DTEUpload",
         "upload_host": "palena.sii.cl",
     },
@@ -809,6 +813,101 @@ def consultar_estado_dte(
         "respuesta_cruda": texto[:1500],
         # Se devuelve para que quien consulta muchos documentos seguidos reutilice
         # el token en vez de firmar una semilla nueva por cada consulta.
+        "token_usado": token,
+    }
+
+
+def consultar_estado_envio_dte(
+    pfx_bytes: bytes, password: str,
+    rut_emisor: str, track_id: str,
+    ambiente: str = "certificacion",
+    token: str = None,
+) -> dict:
+    """Estado del ENVÍO (el sobre) por track id — getEstUp, circuito tradicional.
+
+    Esta es la pieza que faltaba. El sistema enviaba el sobre, recibía un track id
+    y lo daba por "enviado", pero NUNCA preguntaba si el SII lo había aceptado. Si
+    el sobre se rechaza (esquema, firma, carátula), los DTE que venían adentro no
+    quedan registrados, y después getEstDte responde FAU — "documento no recibido"—
+    sin decir por qué. El motivo real vive acá.
+
+    No sirve para boletas 39/41: esas viajan por la API REST (pangal/rahue) y su
+    envío se consulta con consultar_estado_envio(). Esto es para facturas, notas de
+    crédito y débito, y guías, que van por DTEUpload.
+
+    Estados típicos del sobre:
+        EPR  Envío procesado          RCT  Rechazado por error de carátula
+        RFR  Rechazado por firma      RSC  Rechazado por esquema
+        RCH  Rechazado                SOK  Esquema OK (intermedio)
+        VOF  Error interno del SII    -RCT/RCH cierran el envío-
+
+    Returns:
+        dict {ok, estado, glosa, detalle, errores, respuesta_cruda, token_usado}
+    """
+    def _split(rut):
+        rut = rut.replace(".", "").replace("-", "").replace(" ", "").upper()
+        return rut[:-1], rut[-1]
+
+    if token is None:
+        token = _dtews_obtener_token(pfx_bytes, password, ambiente)
+
+    rut_num, rut_dv = _split(rut_emisor)
+    url = DTEWS[ambiente]["query_envio"]
+
+    # Mismo patrón que getEstDte, que ya está confirmado funcionando contra palena:
+    # el namespace del método es la URL del propio .jws.
+    soap = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" '
+        'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+        'xmlns:xsd="http://www.w3.org/2001/XMLSchema">'
+        '<SOAP-ENV:Body>'
+        f'<m:getEstUp xmlns:m="{url}">'
+        f'<RutCompania xsi:type="xsd:string">{rut_num}</RutCompania>'
+        f'<DvCompania xsi:type="xsd:string">{rut_dv}</DvCompania>'
+        f'<TrackId xsi:type="xsd:string">{track_id}</TrackId>'
+        f'<Token xsi:type="xsd:string">{token}</Token>'
+        '</m:getEstUp>'
+        '</SOAP-ENV:Body></SOAP-ENV:Envelope>'
+    )
+    try:
+        r = requests.post(url, data=soap.encode("ISO-8859-1"),
+                          headers={"Content-Type": "text/xml; charset=utf-8",
+                                   "User-Agent": USER_AGENT, "SOAPAction": ""},
+                          timeout=TIMEOUT)
+    except Exception as e:
+        raise SIIError(f"No se pudo conectar a QueryEstUp: {e}")
+
+    texto = r.text
+
+    def _buscar(tag):
+        m = (re.search(rf"<{tag}>([^<]*)</{tag}>", texto) or
+             re.search(rf"&lt;{tag}&gt;([^&]*)&lt;/{tag}&gt;", texto))
+        return m.group(1).strip() if m else None
+
+    estado = _buscar("ESTADO")
+    glosa = _buscar("GLOSA_ESTADO") or _buscar("GLOSA")
+    glosa_err = _buscar("GLOSA_ERR")
+    # El detalle de los rechazos viene en bloques repetidos
+    errores = re.findall(r"(?:<|&lt;)DETALLE_REP_RECH(?:>|&gt;)(.*?)(?:</|&lt;/)DETALLE_REP_RECH",
+                         texto, re.S)[:5]
+    estadisticas = {
+        "informados": _buscar("INFORMADOS"),
+        "aceptados": _buscar("ACEPTADOS"),
+        "rechazados": _buscar("RECHAZADOS"),
+        "reparos": _buscar("REPAROS"),
+    }
+
+    return {
+        "ok": r.status_code == 200 and estado is not None,
+        "estado": estado,
+        "glosa": glosa,
+        "glosa_error": glosa_err,
+        "estadisticas": estadisticas,
+        "errores": [e.strip()[:300] for e in errores],
+        "status": r.status_code,
+        "url": url,
+        "respuesta_cruda": texto[:2000],
         "token_usado": token,
     }
 

@@ -28628,9 +28628,40 @@ def admin_lusync_sii_test_estado():
                 paso("Respuesta del SII", True,
                      _html.escape(str(res.get("respuesta_cruda", ""))[:600]))
             else:
-                paso(f"Consultar estado (track {trackid})", False,
+                paso(f"Consultar estado por API de boletas (track {trackid})", False,
                      _html.escape(str(res.get("error") or res.get("respuesta_cruda", ""))[:600]))
-                error_fatal = True
+
+                # Segunda vía: getEstUp, el estado del SOBRE en el circuito
+                # tradicional (facturas, NC, ND, guías). Es la única que dice si el
+                # SII aceptó o rechazó el envío y por qué. La API REST de arriba
+                # solo sirve para boletas 39/41, así que para todo lo demás este es
+                # el camino correcto, no un plan B.
+                try:
+                    from facturacion.dtes.sii_client import consultar_estado_envio_dte
+                    res2 = consultar_estado_envio_dte(
+                        pfx_bytes=cert["pfx_bytes"], password=cert["password"],
+                        rut_emisor=rut_emisor, track_id=trackid, ambiente=ambiente)
+                    if res2.get("ok"):
+                        est2 = res2.get("estado") or "(sin estado)"
+                        stats = res2.get("estadisticas") or {}
+                        paso(f"Estado del SOBRE (getEstUp, track {trackid})", True,
+                             _html.escape("Estado: %s · %s · Informados:%s Aceptados:%s "
+                                          "Rechazados:%s Reparos:%s" % (
+                                              est2, res2.get("glosa") or "",
+                                              stats.get("informados"), stats.get("aceptados"),
+                                              stats.get("rechazados"), stats.get("reparos"))))
+                        if res2.get("errores"):
+                            paso("Motivo del rechazo", False,
+                                 _html.escape(" | ".join(res2["errores"])[:600]))
+                        paso("Respuesta del SII (getEstUp)", True,
+                             _html.escape(str(res2.get("respuesta_cruda", ""))[:900]))
+                    else:
+                        paso(f"Estado del SOBRE (getEstUp, track {trackid})", False,
+                             _html.escape(str(res2.get("respuesta_cruda", ""))[:600]))
+                        error_fatal = True
+                except Exception as e2:
+                    paso("Estado del SOBRE (getEstUp)", False, _html.escape(str(e2)[:400]))
+                    error_fatal = True
 
     except Exception as e:
         import traceback
