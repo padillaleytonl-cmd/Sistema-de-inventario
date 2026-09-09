@@ -24286,13 +24286,6 @@ document.getElementById('form').addEventListener('submit', async function(e){
         error_envio:      ['err',  'No fue enviado al SII',         'Hubo un error al enviarlo y el SII no lo recibió. No sirve como comprobante hasta que el emisor lo reenvíe.']
       };
       var p = presentacion[d.estado_interno] || ['warn', 'Documento registrado', 'El documento está en el sistema. Su estado ante el SII no pudo determinarse.'];
-      // Las boletas (39/41) no tienen consulta de estado en el SII: se validan por
-      // el Registro de Ventas. Decirle al receptor que espere una confirmación lo
-      // manda a esperar algo que no va a llegar, así que el texto es otro.
-      if ((d.tipo === 39 || d.tipo === 41) && (d.estado_interno === 'enviado' || d.estado_interno === 'en_proceso')) {
-        p = ['ok', '✓ Boleta emitida y enviada al SII',
-             'La boleta fue enviada al SII, que acusó recibo del envío. El SII no ofrece consulta pública del estado de boletas: su validación queda registrada en el Registro de Ventas del emisor.'];
-      }
       box.className = 'result ' + p[0];
       box.innerHTML = '<h3>' + p[1] + '</h3>' +
         '<div class="row-dato"><b>Emisor:</b> ' + (d.razon_social||'—') + '</div>' +
@@ -26390,7 +26383,7 @@ def _fact_job_consultar_estados():
                                       monto_total, fecha_emision, track_id_sii,
                                       EXTRACT(EPOCH FROM (NOW() - COALESCE(fecha_envio_sii,
                                                                            fecha_emision)))/3600,
-                                      estado, estado_sii
+                                      estado
                                FROM facturacion_dtes
                                WHERE estado IN ('enviado','en_proceso')
                                  AND fecha_emision > (NOW() - INTERVAL '7 days')
@@ -26424,7 +26417,7 @@ def _fact_job_consultar_estados():
                       % (bid, str(e)[:100]))
 
         for row in pendientes:
-            bid, tid, tipo_dte, folio, rut_recep, monto, fch, track_id, horas, estado_actual, estado_sii_actual = row
+            bid, tid, tipo_dte, folio, rut_recep, monto, fch, track_id, horas, estado_actual = row
             try:
                 if tid not in certs:
                     cfg = obtener_config_facturacion(get_conn, release_conn, tid)
@@ -26569,32 +26562,6 @@ def _fact_job_consultar_estados():
                               % (bid, str(e)[:120]))
 
                 if cerrado:
-                    continue
-
-                # ── Las BOLETAS no se consultan por getEstDte ────────────────
-                # getEstDte busca en el registro de DTE tradicionales, y las
-                # boletas 39/41 viven en otro circuito. Preguntarle por una boleta
-                # devuelve FAU ("Documento No Recibido"), que NO significa que el
-                # SII no la tenga: significa que no está donde se preguntó. Guardar
-                # ese FAU era afirmar algo falso sobre un documento válido.
-                #
-                # Probado contra producción (2026-09-09), ninguna vía sirve para
-                # boletas: la API REST de estado responde 404, el recurso
-                # boleta.electronica.estado niega el acceso a todos —también sin
-                # credenciales—, y getEstUp no conoce sus track id (ESTADO -11).
-                # El SII valida las boletas por el Registro de Ventas, no por
-                # consulta individual.
-                #
-                # Entonces: se deja el estado como está y se dice la verdad en la
-                # glosa. Enviada y con acuse del SII es lo que de verdad sabemos.
-                if int(tipo_dte) in (39, 41):
-                    _sii_prev = (estado_sii_actual or "").strip().upper()
-                    if _sii_prev in ("", "FAU", "DNK"):
-                        _fact_actualizar_estado_dte(
-                            bid, estado_actual, estado_sii="ENVIADA",
-                            glosa=("Enviada al SII con acuse de recibo (track %s). El SII no "
-                                   "expone consulta de estado para boletas: la validación "
-                                   "definitiva se ve en el Registro de Ventas." % track_id))
                     continue
 
                 # ── Vía 2: por datos del documento (getEstDte) ───────────────
