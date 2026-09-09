@@ -26223,7 +26223,8 @@ def _fact_job_consultar_estados():
     from facturacion.db import obtener_config_facturacion
     from facturacion.utils import normalizar_ambiente
     from facturacion.dtes.sii_client import (autenticar, consultar_estado_dte,
-                                             consultar_estado_envio)
+                                             consultar_estado_envio,
+                                             consultar_estado_envio_dte)
 
     # Horas que un DTE puede quedarse en DNK/FAU antes de pedir intervención
     # humana. DNK = el SII lo tiene pero los datos no coinciden; eso no se
@@ -26345,6 +26346,45 @@ def _fact_job_consultar_estados():
                                     registrar_respuesta(bid, estado_actual, est_env, glosa)
                                     print("[Estado SII] DTE %s (folio %s): el SII responde %s "
                                           "(%s). Sigue en proceso." % (bid, folio, est_env, glosa))
+
+                # ── Vía 1b: el SOBRE de los DTE tradicionales (getEstUp) ────
+                # Facturas, NC, ND y guías viajan por DTEUpload, no por la API de
+                # boletas. Si el SII rechaza el sobre (esquema, firma, carátula),
+                # los documentos que iban adentro NUNCA quedan registrados y
+                # getEstDte responde FAU para siempre, sin decir por qué.
+                # Sin esto, un rechazo puede pasar meses inadvertido: es
+                # exactamente lo que pasó con las guías de agosto en RSC.
+                if not cerrado and track_id and int(tipo_dte) not in (39, 41):
+                    try:
+                        env2 = consultar_estado_envio_dte(
+                            pfx_bytes=crt["pfx_bytes"], password=crt["password"],
+                            rut_emisor=cfg["rut_emisor"], track_id=str(track_id),
+                            ambiente=amb, token=tok_soap.get(tid))
+                        if env2.get("token_usado") and not tok_soap.get(tid):
+                            tok_soap[tid] = env2["token_usado"]
+                        est_sobre = (env2.get("estado") or "").upper()
+                        if est_sobre:
+                            interno, glosa = _fact_mapear_estado_sii(est_sobre)
+                            glosa_sii = env2.get("glosa") or glosa
+                            if interno == "rechazado":
+                                detalle = "; ".join(env2.get("errores") or [])[:200]
+                                _fact_actualizar_estado_dte(
+                                    bid, "rechazado", estado_sii=est_sobre,
+                                    glosa=("El SII rechazó el envío: %s%s" % (
+                                        glosa_sii, (" — " + detalle) if detalle else "")))
+                                cerrado = True
+                                print("[Estado SII] DTE %s (tipo %s folio %s) RECHAZADO en el "
+                                      "sobre: %s (%s)" % (bid, tipo_dte, folio, est_sobre, glosa_sii))
+                            elif interno in ("aceptado", "aceptado_reparos"):
+                                _fact_actualizar_estado_dte(
+                                    bid, interno, estado_sii=est_sobre, glosa=glosa_sii,
+                                    set_fecha_aceptacion=True)
+                                cerrado = True
+                            else:
+                                registrar_respuesta(bid, estado_actual, est_sobre, glosa_sii)
+                    except Exception as e:
+                        print("[Estado SII] No se pudo consultar el sobre de %s: %s"
+                              % (bid, str(e)[:120]))
 
                 if cerrado:
                     continue
