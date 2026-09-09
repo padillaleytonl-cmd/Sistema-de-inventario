@@ -231,6 +231,26 @@ def emitir_boleta_core(tenant_id, items, receptor=None, ambiente=None,
         if actualizar_estado_fn:
             actualizar_estado_fn(boleta_id, "enviado", track_id=track_id,
                                  estado_sii=resultado.get("estado"), set_fecha_envio=True)
+
+        # Guardar lo que el SII contestó al recibir el envío. Hasta ahora se leía el
+        # track id y el resto se descartaba, así que si el SII avisaba algo en esa
+        # respuesta nadie lo veía nunca. Con las boletas quedando como "no recibidas"
+        # pese a tener acuse, esta respuesta es de las pocas evidencias que quedan de
+        # qué pasó realmente en el envío.
+        try:
+            _conn_r = get_conn(tenant_id=tenant_id) if _acepta_tenant(get_conn) else get_conn()
+            try:
+                with _conn_r.cursor() as _cur:
+                    _cur.execute(
+                        "UPDATE facturacion_dtes SET respuesta_envio_sii = %s WHERE id = %s",
+                        (str(resultado.get("respuesta_cruda") or "")[:4000], boleta_id))
+                _conn_r.commit()
+            finally:
+                release_conn(_conn_r)
+        except Exception as _e:
+            # No es motivo para fallar la emisión: la boleta ya se envió.
+            print("[Facturación] No se pudo guardar la respuesta del envío: %s" % str(_e)[:150])
+
         paso("Enviar al SII", True, "Track ID: " + str(track_id))
 
     except Exception as e:

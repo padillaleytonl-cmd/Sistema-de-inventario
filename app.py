@@ -26177,7 +26177,8 @@ def facturacion_diagnostico_sii(boleta_id):
     try:
         with conn.cursor() as cur:
             cur.execute("""SELECT tipo_dte, folio, rut_receptor, monto_total,
-                                  fecha_emision, xml_firmado, tenant_id
+                                  fecha_emision, xml_firmado, tenant_id,
+                                  respuesta_envio_sii, track_id_sii
                            FROM facturacion_dtes WHERE id=%s AND tenant_id=%s""",
                         (boleta_id, tenant_id))
             row = cur.fetchone()
@@ -26214,7 +26215,12 @@ def facturacion_diagnostico_sii(boleta_id):
         "coincide_fecha": (fch_xml == fecha_bd_str),
         "coincide_monto": (str(mnt_xml) == str(int(monto_bd or 0))),
         "coincide_receptor": (rut_xml == rut_recep_bd),
-        "nota": "Si algún 'coincide_*' es false, ese dato es el que difiere entre el XML timbrado y la BD (causa del DNK)."
+        "nota": "Si algún 'coincide_*' es false, ese dato es el que difiere entre el XML timbrado y la BD (causa del DNK).",
+        # Lo que el SII contestó al recibir el envío. Se guarda desde 2026-09-09;
+        # los documentos anteriores no lo tienen. Es la evidencia de qué pasó en el
+        # envío, que hasta ahora se descartaba.
+        "track_id": row[8] if len(row) > 8 else None,
+        "respuesta_del_sii_al_enviar": row[7] if len(row) > 7 else None,
     })
 
 

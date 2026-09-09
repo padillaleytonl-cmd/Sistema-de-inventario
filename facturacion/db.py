@@ -175,10 +175,16 @@ def init_facturacion_tables(get_conn_func, release_conn_func=None, enable_rls_fu
         # de esquema (RSC) era imposible saber qué se había mandado: había que
         # reconstruirlo, y la reconstrucción no era fiel. Sin esto, cada rechazo se
         # diagnostica adivinando.
+        # respuesta_envio_sii: lo que el SII contesta al RECIBIR el envío. Se
+        # descartaba: del JSON solo se leía el track id y el resto se tiraba. Si el
+        # SII avisa algo ahí —una advertencia, un estado distinto de REC— nadie se
+        # enteraba. Es el otro extremo del par: xml_envio_sii es lo que mandamos,
+        # esto es lo que contestó.
         cur.execute("""
             DO $$
             BEGIN
               BEGIN ALTER TABLE facturacion_dtes ADD COLUMN xml_envio_sii TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
+              BEGIN ALTER TABLE facturacion_dtes ADD COLUMN respuesta_envio_sii TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
             END $$;
         """)
         cur.execute("""
