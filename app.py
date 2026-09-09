@@ -24189,6 +24189,8 @@ button:disabled{opacity:0.6;cursor:wait;}
 .result{margin-top:18px;padding:18px;border-radius:12px;display:none;}
 .result.ok{background:#eaf3ee;border:1px solid #bfe0cd;color:#0e6b4f;}
 .result.err{background:#fdf2f2;border:1px solid #fbcaca;color:#a01818;}
+.result.warn{background:#fef9e7;border:1px solid #f5e2a3;color:#8a6100;}
+.result.gris{background:#f4f4f2;border:1px solid #ddd;color:#4a4a48;}
 .result h3{margin:0 0 8px;font-size:16px;}
 .result .row-dato{font-size:13.5px;margin:4px 0;}
 .result .row-dato b{display:inline-block;min-width:120px;color:#374151;}
@@ -24255,16 +24257,32 @@ document.getElementById('form').addEventListener('submit', async function(e){
     });
     const d = await r.json();
     if (d.ok && d.encontrada) {
-      box.className = 'result ok';
-      box.innerHTML = '<h3>✓ Documento válido</h3>' +
+      // El documento existe, pero eso NO lo hace valido: puede estar anulado,
+      // rechazado por el SII, o no haberse enviado nunca. El titulo y el color
+      // tienen que decir la verdad, porque quien mira esto es el receptor.
+      var presentacion = {
+        aceptado:         ['ok',   '✓ Documento válido',            'El SII confirmó la recepción de este documento y sus datos coinciden con los que ingresaste.'],
+        aceptado_reparos: ['warn', 'Aceptado con reparos',          'El SII procesó el documento con observaciones. Existe y está registrado, pero conviene consultarlo con el emisor.'],
+        anulada:          ['gris', 'Documento anulado',             'Este documento existió, pero fue anulado con una nota de crédito. Ya no tiene validez como comprobante.'],
+        anulado:          ['gris', 'Documento anulado',             'Este documento existió, pero fue anulado con una nota de crédito. Ya no tiene validez como comprobante.'],
+        rechazado:        ['err',  'Rechazado por el SII',          'El SII rechazó este documento. No es un comprobante válido: pídele al emisor que lo reemita.'],
+        revisar:          ['warn', 'Los datos no coinciden con el SII', 'El documento está registrado, pero el SII informa que sus datos no coinciden. Consúltalo con el emisor.'],
+        enviado:          ['warn', 'Enviado, esperando al SII',     'El documento fue enviado al SII y todavía no hay confirmación. Vuelve a consultar más tarde.'],
+        en_proceso:       ['warn', 'En proceso en el SII',          'El SII está procesando este documento. Vuelve a consultar más tarde.'],
+        generado:         ['err',  'No fue enviado al SII',         'Este documento se generó pero NO llegó al SII. No sirve como comprobante hasta que el emisor lo envíe.'],
+        error_envio:      ['err',  'No fue enviado al SII',         'Hubo un error al enviarlo y el SII no lo recibió. No sirve como comprobante hasta que el emisor lo reenvíe.']
+      };
+      var p = presentacion[d.estado_interno] || ['warn', 'Documento registrado', 'El documento está en el sistema. Su estado ante el SII no pudo determinarse.'];
+      box.className = 'result ' + p[0];
+      box.innerHTML = '<h3>' + p[1] + '</h3>' +
         '<div class="row-dato"><b>Emisor:</b> ' + (d.razon_social||'—') + '</div>' +
         '<div class="row-dato"><b>Tipo:</b> ' + d.tipo_nombre + '</div>' +
         '<div class="row-dato"><b>Folio:</b> ' + d.folio + '</div>' +
         '<div class="row-dato"><b>Fecha:</b> ' + d.fecha + '</div>' +
         '<div class="row-dato"><b>Monto:</b> $' + Number(d.monto).toLocaleString('es-CL') + '</div>' +
-        '<div class="row-dato"><b>Estado SII:</b> ' + d.estado_sii + '</div>' +
+        '<div class="row-dato"><b>Estado:</b> ' + d.estado_sii + '</div>' +
         (d.track_id ? '<div class="row-dato"><b>Track ID SII:</b> ' + d.track_id + '</div>' : '') +
-        '<p style="margin:14px 0 0;font-size:12.5px;color:#0e6b4f;">Los datos coinciden con un documento registrado en el sistema y enviado al SII.</p>';
+        '<p style="margin:14px 0 0;font-size:12.5px;">' + p[2] + '</p>';
     } else {
       box.className = 'result err';
       box.innerHTML = '<h3>No se encontró el documento</h3>' +
@@ -24370,9 +24388,11 @@ def consultadte_verificar():
             return jsonify({"ok": True, "encontrada": False})
         tipos = {39:"Boleta Electrónica",41:"Boleta Exenta",33:"Factura Electrónica",
                  34:"Factura Exenta",61:"Nota de Crédito",56:"Nota de Débito",52:"Guía de Despacho"}
-        estado_map = {"generado":"Generado", "enviado":"Enviado al SII",
+        estado_map = {"generado":"Generado, sin enviar al SII", "enviado":"Enviado al SII",
                       "en_proceso":"En proceso en SII", "aceptado":"Aceptado por el SII",
                       "aceptado_reparos":"Aceptado con reparos",
+                      "anulada":"Anulada con nota de crédito",
+                      "anulado":"Anulado con nota de crédito",
                       "revisar":"Revisar datos", "rechazado":"Rechazado por el SII",
                       "error_envio":"Error de envío"}
         return jsonify({
@@ -24382,6 +24402,10 @@ def consultadte_verificar():
             "fecha": row[2].strftime("%Y-%m-%d") if hasattr(row[2], "strftime") else str(row[2]),
             "monto": row[3],
             "estado_sii": estado_map.get(row[4], row[4] or "—"),
+            # Estado interno crudo: la página lo usa para decidir si el documento
+            # se presenta como válido, con reparos, anulado o no enviado. Antes solo
+            # se devolvía el texto legible y la página pintaba TODO de verde.
+            "estado_interno": row[4] or "",
             "track_id": row[5],
             "razon_social": row[7],
         })
