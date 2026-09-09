@@ -179,13 +179,13 @@ def emitir_boleta_core(tenant_id, items, receptor=None, ambiente=None,
                     INSERT INTO facturacion_dtes
                       (tenant_id, tipo_dte, folio, rut_receptor, razon_social_receptor,
                        monto_neto, monto_iva, monto_total, xml_firmado, estado,
-                       fecha_emision)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                       fecha_emision, xml_envio_sii)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     RETURNING id
                 """, (tenant_id, tipo_dte, folio, receptor["rut"], receptor["razon_social"],
                       res_bol["totales"]["mnt_neto"], res_bol["totales"]["mnt_iva"],
                       total, boleta_xml.decode("iso-8859-1", errors="replace"), "generado",
-                      fecha))
+                      fecha, sobre_firmado.decode("iso-8859-1", errors="replace")))
                 boleta_id = cur.fetchone()[0]
             conn.commit()
             paso("Registrar boleta (pre-envío)", True, "ID " + str(boleta_id) + " · estado: generado")

@@ -23401,12 +23401,14 @@ def facturacion_nota_credito_emitir():
                 cur.execute("""
                     INSERT INTO facturacion_dtes
                       (tenant_id, tipo_dte, folio, rut_receptor, razon_social_receptor,
-                       monto_neto, monto_iva, monto_total, xml_firmado, estado, fecha_emision)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                       monto_neto, monto_iva, monto_total, xml_firmado, estado, fecha_emision,
+                       xml_envio_sii)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     RETURNING id
                 """, (tenant_id, 61, folio, receptor["rut"], receptor["razon_social"],
                       res_nc["totales"]["mnt_neto"], res_nc["totales"]["mnt_iva"],
-                      total, nc_firmada.decode("iso-8859-1", errors="replace"), "generado", fecha))
+                      total, nc_firmada.decode("iso-8859-1", errors="replace"), "generado", fecha,
+                      sobre_firmado.decode("iso-8859-1", errors="replace")))
                 nc_id = cur.fetchone()[0]
             conn.commit()
             paso("Registrar NC (pre-envío)", True, "ID " + str(nc_id))
@@ -23773,12 +23775,14 @@ def facturacion_nota_debito_emitir():
                 cur.execute("""
                     INSERT INTO facturacion_dtes
                       (tenant_id, tipo_dte, folio, rut_receptor, razon_social_receptor,
-                       monto_neto, monto_iva, monto_total, xml_firmado, estado, fecha_emision)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                       monto_neto, monto_iva, monto_total, xml_firmado, estado, fecha_emision,
+                       xml_envio_sii)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     RETURNING id
                 """, (tenant_id, 61, folio, receptor["rut"], receptor["razon_social"],
                       res_nc["totales"]["mnt_neto"], res_nc["totales"]["mnt_iva"],
-                      total, nc_firmada.decode("iso-8859-1", errors="replace"), "generado", fecha))
+                      total, nc_firmada.decode("iso-8859-1", errors="replace"), "generado", fecha,
+                      sobre_firmado.decode("iso-8859-1", errors="replace")))
                 nc_id = cur.fetchone()[0]
             conn.commit()
             paso("Registrar ND (pre-envío)", True, "ID " + str(nc_id))
@@ -24457,13 +24461,31 @@ def facturacion_boleta_envio_sii(boleta_id):
         conn = get_conn()
         try:
             with conn.cursor() as cur:
-                cur.execute("""SELECT xml_firmado, folio, tipo_dte FROM facturacion_dtes
+                cur.execute("""SELECT xml_firmado, folio, tipo_dte, xml_envio_sii
+                               FROM facturacion_dtes
                                WHERE id=%s AND tenant_id=%s""", (boleta_id, tenant_id))
                 row = cur.fetchone()
         finally:
             release_conn(conn)
         if not row or not row[0]:
             return jsonify({"ok": False, "error": "XML no disponible para esa boleta"}), 404
+
+        # Si el sobre REAL está guardado se entrega ese, sin reconstruir nada. Una
+        # reconstrucción nunca es fiel —se re-firma con otro timestamp y puede
+        # diferir de lo que viajó—, y para diagnosticar un rechazo del SII hay que
+        # mirar lo enviado, no una aproximación. Los documentos emitidos antes de
+        # que se guardara el sobre caen a la reconstrucción de más abajo.
+        if row[3]:
+            from flask import Response as _Resp
+            _cfg_amb = obtener_config_facturacion(get_conn, release_conn, tenant_id) or {}
+            _amb = normalizar_ambiente(_cfg_amb.get("ambiente") or "certificacion")
+            _raiz = "EnvioBOLETA" if int(row[2]) in (39, 41) else "EnvioDTE"
+            return _Resp(row[3].encode("iso-8859-1", errors="replace"),
+                         mimetype="application/xml",
+                         headers={"Content-Disposition":
+                                  'attachment; filename="%s_T%s_F%s_%s_ENVIADO.xml"'
+                                  % (_raiz, row[2], row[1], _amb)})
+
         dte_xml = row[0]
         folio = row[1]
         tipo_dte = row[2]
@@ -25197,12 +25219,14 @@ def facturacion_factura_emitir():
                 cur.execute("""
                     INSERT INTO facturacion_dtes
                       (tenant_id, tipo_dte, folio, rut_receptor, razon_social_receptor,
-                       monto_neto, monto_iva, monto_total, xml_firmado, estado, fecha_emision)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                       monto_neto, monto_iva, monto_total, xml_firmado, estado, fecha_emision,
+                       xml_envio_sii)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     RETURNING id
                 """, (tenant_id, _tipo_factura, folio, receptor["rut"], receptor["razon_social"],
                       res_fac["totales"]["mnt_neto"], res_fac["totales"]["mnt_iva"],
-                      total, fac_firmada.decode("iso-8859-1", errors="replace"), "generado", fecha))
+                      total, fac_firmada.decode("iso-8859-1", errors="replace"), "generado", fecha,
+                      sobre_firmado.decode("iso-8859-1", errors="replace")))
                 fac_id = cur.fetchone()[0]
             conn.commit()
             paso("Registrar factura (pre-envío)", True, "ID " + str(fac_id))
@@ -25433,12 +25457,14 @@ def facturacion_guia_emitir():
                 cur.execute("""
                     INSERT INTO facturacion_dtes
                       (tenant_id, tipo_dte, folio, rut_receptor, razon_social_receptor,
-                       monto_neto, monto_iva, monto_total, xml_firmado, estado, fecha_emision)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                       monto_neto, monto_iva, monto_total, xml_firmado, estado, fecha_emision,
+                       xml_envio_sii)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     RETURNING id
                 """, (tenant_id, 52, folio, receptor.get("rut", ""), receptor.get("razon_social", ""),
                       res_g["totales"]["mnt_neto"], res_g["totales"]["mnt_iva"],
-                      total, guia_firmada.decode("iso-8859-1", errors="replace"), "generado", fecha))
+                      total, guia_firmada.decode("iso-8859-1", errors="replace"), "generado", fecha,
+                      sobre_firmado.decode("iso-8859-1", errors="replace")))
                 guia_id = cur.fetchone()[0]
             conn.commit()
             paso("Registrar guía (pre-envío)", True, "ID " + str(guia_id))

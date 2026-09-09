@@ -170,6 +170,17 @@ def init_facturacion_tables(get_conn_func, release_conn_func=None, enable_rls_fu
                   UNIQUE (tenant_id, tipo_dte, folio)
             )
         """)
+        # El SOBRE tal cual se envió al SII. Hasta ahora solo se guardaba el DTE
+        # firmado, no el sobre, así que cuando el SII rechazaba un envío por error
+        # de esquema (RSC) era imposible saber qué se había mandado: había que
+        # reconstruirlo, y la reconstrucción no era fiel. Sin esto, cada rechazo se
+        # diagnostica adivinando.
+        cur.execute("""
+            DO $$
+            BEGIN
+              BEGIN ALTER TABLE facturacion_dtes ADD COLUMN xml_envio_sii TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
+            END $$;
+        """)
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_facturacion_dte_tenant_fecha
             ON facturacion_dtes(tenant_id, fecha_emision DESC)
