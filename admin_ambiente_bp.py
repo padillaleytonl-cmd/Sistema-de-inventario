@@ -30,7 +30,7 @@ def _guard():
 def _estado_tenant(tenant_id):
     """Lee ambiente actual + conteo de CAF por ambiente del tenant."""
     from inventario import get_conn, release_conn
-    conn = get_conn()
+    conn = get_conn(tenant_id=tenant_id)
     try:
         with conn.cursor() as cur:
             cur.execute("""SELECT rut_emisor, razon_social, ambiente
@@ -158,7 +158,7 @@ def admin_tenant_ambiente_cambiar(tenant_id):
                                      "Carga folios reales antes de pasar a producción."}), 409
 
     from inventario import get_conn, release_conn
-    conn = get_conn()
+    conn = get_conn(tenant_id=tenant_id)
     try:
         with conn.cursor() as cur:
             cur.execute("""UPDATE facturacion_config_tenant
