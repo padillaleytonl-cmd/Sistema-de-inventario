@@ -25838,146 +25838,112 @@ def admin_probar_token_soap():
 
 @app.route("/admin/lusync/sii/probar-urls-estado", methods=["GET"])
 def admin_probar_urls_estado():
-    """SOLO ADMIN. Prueba varias variantes de URL del SII para consultar estado
-    de un track id. Devuelve el status HTTP y los primeros chars de respuesta de
-    cada una. Sirve para descubrir cuál es la URL correcta cuando todas dan 404.
+    """SOLO ADMIN. Descubre cuál es la URL correcta para consultar el estado de un
+    envío de BOLETAS (39/41) en el SII.
 
-    Uso: /admin/lusync/sii/probar-urls-estado?trackid=0249504588&tenant_id=3
+    Por qué existe: el envío de boletas va por la API REST (pangal/rahue) y devuelve
+    un track id, pero la URL que usamos para consultar su estado responde una página
+    HTML de error 404. La consulta por datos (getEstDte) tampoco sirve para boletas:
+    contesta FAU porque busca en el registro de DTE tradicionales, que es otro
+    circuito. Resultado: hoy no hay forma de confirmar que el SII aceptó una boleta.
+
+    Como la documentación pública del SII no expone el path, este endpoint prueba
+    las variantes candidatas con un token válido y muestra qué contesta cada una.
+    La que devuelva JSON es la buena.
+
+    Uso: /admin/lusync/sii/probar-urls-estado?trackid=23691343411&tenant_id=1
     """
     try:
         if not session.get("logged"):
             return jsonify({"ok": False, "error": "no autenticado"}), 401
-        if session.get("rol") != "admin":
+        if session.get("rol") != "admin" and not session.get("is_lusync_admin"):
             return jsonify({"ok": False, "error": "solo admin"}), 403
-        tenant_id = int(request.args.get("tenant_id", session.get("tenant_id") or 1))
-        trackid = (request.args.get("trackid") or "").strip()
-        if not trackid:
-            return jsonify({"ok": False, "error": "Pasa ?trackid=NUMERO"}), 400
-        from facturacion.certificados import obtener_certificado
+
+        import re as _re_probe
+        import requests as _req
+        from inventario import get_conn, release_conn
         from facturacion.db import obtener_config_facturacion
+        from facturacion.certificados import obtener_certificado
         from facturacion.utils import normalizar_ambiente
         from facturacion.dtes.sii_client import autenticar
-        from inventario import get_conn, release_conn
-        import requests as _req
+
+        tenant_id = request.args.get("tenant_id", default=1, type=int)
+        trackid = (request.args.get("trackid", "") or "").strip()
+        if not trackid:
+            return jsonify({"ok": False, "error": "Falta ?trackid="}), 400
+
         config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
         cert = obtener_certificado(get_conn, release_conn, tenant_id)
         if not cert.get("ok"):
             return jsonify({"ok": False, "error": "Certificado no disponible"}), 400
         ambiente = normalizar_ambiente(config.get("ambiente") or "certificacion")
-        # Autenticar (mismo token que se usa para enviar)
+
+        # Token de la API de boletas (el mismo que se usa para enviarlas)
         token = autenticar(cert["pfx_bytes"], cert["password"], ambiente)
-        rut = (config["rut_emisor"] or "").replace(".", "").replace("-", "")
+
+        rut = (config["rut_emisor"] or "").replace(".", "").replace("-", "").upper()
         rut_num, rut_dv = rut[:-1], rut[-1]
-        host = "apicert.sii.cl" if ambiente == "certificacion" else "api.sii.cl"
 
-        # La URL que respondió SOAP fault "Acceso Denegado" probablemente es SOAP/POST.
-        # Voy a probarla con POST SOAP en vez de GET.
-        url_existe = f"https://{host}/recursos/v1/boleta.electronica.estado/{rut_num}-{rut_dv}/{trackid}"
-        # Variantes de getEstUp con SOAP POST a la URL ganadora
-        soap_envelope = (
-            '<?xml version="1.0" encoding="UTF-8"?>'
-            '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" '
-            'xmlns:xsd="http://www.w3.org/2001/XMLSchema" '
-            'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
-            '<soapenv:Body>'
-            f'<getEstUp xmlns="https://palena.sii.cl/DTEWS/services/wsDTECorreos">'
-            f'<RutEmpresa xsi:type="xsd:string">{rut_num}</RutEmpresa>'
-            f'<DvEmpresa xsi:type="xsd:string">{rut_dv}</DvEmpresa>'
-            f'<TrackId xsi:type="xsd:string">{trackid}</TrackId>'
-            f'<Token xsi:type="xsd:string">{token}</Token>'
-            '</getEstUp>'
-            '</soapenv:Body></soapenv:Envelope>'
-        )
+        # api/apicert es el host de consultas; rahue/pangal el de envío. Se prueban
+        # los dos porque no está documentado cuál atiende el estado.
+        host_api = "apicert.sii.cl" if ambiente == "certificacion" else "api.sii.cl"
+        host_envio = "pangal.sii.cl" if ambiente == "certificacion" else "rahue.sii.cl"
+
+        candidatas = [
+            ("actual (la que da 404)",
+             f"https://{host_api}/recursos/v1/boleta.electronica.envio/{rut_num}-{rut_dv}-{trackid}/estado"),
+            ("host de envío en vez del de consultas",
+             f"https://{host_envio}/recursos/v1/boleta.electronica.envio/{rut_num}-{rut_dv}-{trackid}/estado"),
+            ("solo track id",
+             f"https://{host_api}/recursos/v1/boleta.electronica.envio/{trackid}/estado"),
+            ("estado antes del identificador",
+             f"https://{host_api}/recursos/v1/boleta.electronica.envio/estado/{rut_num}-{rut_dv}-{trackid}"),
+            ("recurso boleta.electronica.estado",
+             f"https://{host_api}/recursos/v1/boleta.electronica.estado/{rut_num}-{rut_dv}-{trackid}"),
+            ("rut y track separados por /",
+             f"https://{host_api}/recursos/v1/boleta.electronica.envio/{rut_num}-{rut_dv}/{trackid}/estado"),
+            ("sin sufijo .envio",
+             f"https://{host_api}/recursos/v1/boleta.electronica/{rut_num}-{rut_dv}-{trackid}/estado"),
+        ]
+
+        USER_AGENT_SII = "Mozilla/4.0 (compatible; PROG 1.0; Windows NT 5.0)"
         resultados = []
-        # PRUEBA A: POST SOAP a la URL que dijo "Acceso Denegado"
-        try:
-            r = _req.post(url_existe, data=soap_envelope.encode("utf-8"),
-                          headers={"Content-Type": "text/xml; charset=utf-8",
-                                   "SOAPAction": "", "Cookie": f"TOKEN={token}"},
-                          timeout=15, allow_redirects=False)
-            resultados.append({"prueba": "POST SOAP a URL ganadora", "url": url_existe,
-                               "status": r.status_code,
-                               "content_type": r.headers.get("Content-Type", "")[:80],
-                               "respuesta": (r.text or "")[:600]})
-        except Exception as e:
-            resultados.append({"prueba": "POST SOAP", "url": url_existe, "error": str(e)[:200]})
-
-        # PRUEBA B: GET con Accept=*/* (a veces el SII responde distinto)
-        try:
-            r = _req.get(url_existe,
-                         headers={"Cookie": f"TOKEN={token}", "Accept": "*/*",
-                                  "User-Agent": "Mozilla/4.0 (compatible; PROG 1.0; Windows NT)"},
-                         timeout=15, allow_redirects=False)
-            resultados.append({"prueba": "GET Accept */*", "url": url_existe,
-                               "status": r.status_code,
-                               "content_type": r.headers.get("Content-Type", "")[:80],
-                               "respuesta": (r.text or "")[:600]})
-        except Exception as e:
-            resultados.append({"prueba": "GET *", "url": url_existe, "error": str(e)[:200]})
-
-        # PRUEBA C: GET sin slash al RUT (todo junto: rutdv)
-        url_var = f"https://{host}/recursos/v1/boleta.electronica.estado/{rut_num}{rut_dv}/{trackid}"
-        try:
-            r = _req.get(url_var,
-                         headers={"Cookie": f"TOKEN={token}", "Accept": "application/json",
-                                  "User-Agent": "Mozilla/4.0 (compatible; PROG 1.0; Windows NT)"},
-                         timeout=15, allow_redirects=False)
-            resultados.append({"prueba": "GET rutdv junto", "url": url_var,
-                               "status": r.status_code,
-                               "content_type": r.headers.get("Content-Type", "")[:80],
-                               "respuesta": (r.text or "")[:600]})
-        except Exception as e:
-            resultados.append({"prueba": "GET rutdv", "url": url_var, "error": str(e)[:200]})
-
-        # PRUEBA D: ¿Y si es boleta.electronica.envio/{rut}/{dv}/{trackid}/estado?
-        url_d = f"https://{host}/recursos/v1/boleta.electronica.envio/{rut_num}/{rut_dv}/{trackid}/estado"
-        try:
-            r = _req.get(url_d,
-                         headers={"Cookie": f"TOKEN={token}", "Accept": "application/json",
-                                  "User-Agent": "Mozilla/4.0 (compatible; PROG 1.0; Windows NT)"},
-                         timeout=15, allow_redirects=False)
-            resultados.append({"prueba": "GET envio rut/dv/trackid/estado", "url": url_d,
-                               "status": r.status_code,
-                               "content_type": r.headers.get("Content-Type", "")[:80],
-                               "respuesta": (r.text or "")[:600]})
-        except Exception as e:
-            resultados.append({"prueba": "GET envio rut/dv", "url": url_d, "error": str(e)[:200]})
-
-        # PRUEBA F: La GRAN HIPÓTESIS — usar el certificado del emisor como TLS cliente (mTLS)
-        # "Acceso Denegado (from client)" puede significar que el SII exige TLS mutuo
-        # para consultar estado de boletas, no solo el token cookie.
-        import tempfile, ssl
-        from cryptography.hazmat.primitives.serialization import pkcs12, Encoding, PrivateFormat, NoEncryption, BestAvailableEncryption
-        try:
-            # Extraer cert + key del PFX a archivos PEM temporales
-            pk, cert_obj, _addn = pkcs12.load_key_and_certificates(
-                cert["pfx_bytes"], cert["password"].encode() if cert["password"] else None)
-            cert_pem = cert_obj.public_bytes(Encoding.PEM)
-            key_pem = pk.private_bytes(Encoding.PEM, PrivateFormat.TraditionalOpenSSL, NoEncryption())
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pem") as fc:
-                fc.write(cert_pem); fc.write(key_pem); cert_file = fc.name
-            url_mtls = f"https://{host}/recursos/v1/boleta.electronica.estado/{rut_num}-{rut_dv}/{trackid}"
+        for nombre, url in candidatas:
+            fila = {"variante": nombre, "url": url}
             try:
-                r = _req.get(url_mtls,
-                             headers={"Cookie": f"TOKEN={token}", "Accept": "application/json",
-                                      "User-Agent": "Mozilla/4.0 (compatible; PROG 1.0; Windows NT)"},
-                             cert=cert_file,
-                             timeout=20, allow_redirects=False)
-                resultados.append({"prueba": "GET con mTLS (cert cliente)", "url": url_mtls,
-                                   "status": r.status_code,
-                                   "content_type": r.headers.get("Content-Type", "")[:80],
-                                   "respuesta": (r.text or "")[:800]})
+                r = _req.get(url, timeout=25, headers={
+                    "User-Agent": USER_AGENT_SII,
+                    "Accept": "application/json",
+                    "Cookie": "TOKEN=%s" % token,
+                })
+                cuerpo = (r.text or "")[:300]
+                es_html = cuerpo.lstrip()[:60].lower().startswith(("<html", "<!doctype"))
+                m_cod = _re_probe.search(r"HTTP Status (\d{3})", cuerpo) if es_html else None
+                fila.update({
+                    "http": r.status_code,
+                    "content_type": r.headers.get("Content-Type", ""),
+                    "parece": ("HTML de error %s" % (m_cod.group(1) if m_cod else "?")) if es_html
+                              else ("JSON" if cuerpo.lstrip()[:1] in "{[" else "otro"),
+                    "respuesta": cuerpo,
+                })
+                # Lo que buscamos: algo que NO sea la página de error
+                fila["SIRVE"] = (r.status_code == 200 and not es_html
+                                 and cuerpo.lstrip()[:1] in "{[")
             except Exception as e:
-                resultados.append({"prueba": "GET con mTLS", "url": url_mtls, "error": str(e)[:300]})
-            import os as _os
-            try: _os.unlink(cert_file)
-            except Exception: pass
-        except Exception as e:
-            resultados.append({"prueba": "mTLS setup", "error": "No se pudo extraer cert: "+str(e)[:200]})
-        return jsonify({"ok": True, "trackid": trackid, "ambiente": ambiente,
-                        "rut_emisor": config["rut_emisor"],
-                        "token_obtenido": bool(token),
-                        "resultados": resultados})
+                fila.update({"error": str(e)[:200], "SIRVE": False})
+            resultados.append(fila)
+
+        gana = [f for f in resultados if f.get("SIRVE")]
+        return jsonify({
+            "ok": True,
+            "trackid": trackid,
+            "ambiente": ambiente,
+            "rut_emisor": config["rut_emisor"],
+            "token_obtenido": bool(token),
+            "conclusion": ("Sirve: " + gana[0]["url"]) if gana else
+                          "Ninguna variante devolvió JSON. Ver el detalle de cada una.",
+            "resultados": resultados,
+        })
     except Exception as e:
         import traceback
         return jsonify({"ok": False, "error": "Error interno: " + str(e)[:300],
