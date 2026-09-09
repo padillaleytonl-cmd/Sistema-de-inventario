@@ -23391,7 +23391,13 @@ def facturacion_nota_credito_emitir():
         )
         sobre_firmado = firmar_envio_completo(
             sobre, cert["pfx_bytes"], cert["password"],
-            set_dte_id=set_id, documento_ids=[documento_id])
+            set_dte_id=set_id,
+            # documento_ids VACIO: la NC ya viene firmada por firmar_documento de
+            # arriba. Pasar el id aca le agregaba una SEGUNDA <Signature> identica al
+            # <Documento>, y el schema del SII admite una sola: por eso el SII
+            # respondia RSC (Rechazado por Error en Schema) y el DTE nunca quedaba
+            # registrado. Aca solo corresponde firmar el SetDTE.
+            documento_ids=[])
         paso("Firmar sobre EnvioDTE", True, str(len(sobre_firmado)) + " bytes")
 
         # 6. REGISTRAR EN BD ANTES DE ENVIAR
@@ -23765,7 +23771,10 @@ def facturacion_nota_debito_emitir():
         )
         sobre_firmado = firmar_envio_completo(
             sobre, cert["pfx_bytes"], cert["password"],
-            set_dte_id=set_id, documento_ids=[documento_id])
+            set_dte_id=set_id,
+            # documento_ids VACIO: el documento ya viene firmado (ver nota en la NC).
+            # Firmarlo de nuevo duplicaba la <Signature> y el SII rechazaba por schema.
+            documento_ids=[])
         paso("Firmar sobre EnvioDTE", True, str(len(sobre_firmado)) + " bytes")
 
         # 6. REGISTRAR EN BD ANTES DE ENVIAR
@@ -25209,7 +25218,10 @@ def facturacion_factura_emitir():
             fch_resol=fch_resol, nro_resol=nro_resol, tipo_dte=_tipo_factura, set_dte_id=set_id)
         sobre_firmado = firmar_envio_completo(
             sobre, cert["pfx_bytes"], cert["password"],
-            set_dte_id=set_id, documento_ids=[documento_id])
+            set_dte_id=set_id,
+            # documento_ids VACIO: el documento ya viene firmado (ver nota en la NC).
+            # Firmarlo de nuevo duplicaba la <Signature> y el SII rechazaba por schema.
+            documento_ids=[])
         paso("Firmar sobre EnvioDTE", True, str(len(sobre_firmado)) + " bytes")
 
         # 6. Registrar en BD antes de enviar
@@ -25447,7 +25459,10 @@ def facturacion_guia_emitir():
             fch_resol=fch_resol, nro_resol=nro_resol, tipo_dte=52, set_dte_id=set_id)
         sobre_firmado = firmar_envio_completo(
             sobre, cert["pfx_bytes"], cert["password"],
-            set_dte_id=set_id, documento_ids=[documento_id])
+            set_dte_id=set_id,
+            # documento_ids VACIO: el documento ya viene firmado (ver nota en la NC).
+            # Firmarlo de nuevo duplicaba la <Signature> y el SII rechazaba por schema.
+            documento_ids=[])
         paso("Firmar sobre EnvioDTE", True, str(len(sobre_firmado)) + " bytes")
 
         # 6. Registrar en BD antes de enviar
