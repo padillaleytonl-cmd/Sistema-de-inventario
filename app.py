@@ -24485,25 +24485,50 @@ def facturacion_boleta_envio_sii(boleta_id):
         if not fch_resol: fch_resol = "2026-05-15"
         ambiente = normalizar_ambiente(config.get("ambiente") or "certificacion")
 
-        from facturacion.dtes.envio_boleta import armar_envio_boleta
         from facturacion.dtes.firma import firmar_envio_completo
 
         set_id = "SetDoc"
         # Extraer el ID del Documento (ej F22T39) para firmar la referencia
         import re as _re
-        m = _re.search(r'<Documento\s+ID="([^"]+)"', dte_xml.decode("iso-8859-1", errors="ignore"))
+        _dte_txt = dte_xml.decode("iso-8859-1", errors="ignore")
+        m = _re.search(r'<Documento\s+ID="([^"]+)"', _dte_txt)
         documento_id = m.group(1) if m else "F%sT%s" % (folio, tipo_dte)
 
-        sobre = armar_envio_boleta(
-            dtes_firmados=[dte_xml],
-            rut_emisor=config["rut_emisor"], rut_envia=rut_envia,
-            fch_resol=fch_resol, nro_resol=nro_resol,
-            tipo_dte=tipo_dte, set_dte_id=set_id,
-        )
+        # El sobre depende del TIPO de documento. Antes esta reconstrucción usaba
+        # siempre armar_envio_boleta, así que una nota de crédito se descargaba
+        # metida en un <EnvioBOLETA> con schema EnvioBOLETA_v11.xsd, que solo admite
+        # 39 y 41. Eso hacía ver como error de esquema del envío algo que era un
+        # error del visor.
+        es_boleta = int(tipo_dte) in (39, 41)
+        if es_boleta:
+            from facturacion.dtes.envio_boleta import armar_envio_boleta
+            sobre = armar_envio_boleta(
+                dtes_firmados=[dte_xml],
+                rut_emisor=config["rut_emisor"], rut_envia=rut_envia,
+                fch_resol=fch_resol, nro_resol=nro_resol,
+                tipo_dte=tipo_dte, set_dte_id=set_id,
+            )
+            nombre_sobre = "EnvioBOLETA"
+        else:
+            from facturacion.dtes.envio_dte import armar_envio_dte
+            sobre = armar_envio_dte(
+                dtes_firmados=[dte_xml],
+                rut_emisor=config["rut_emisor"], rut_envia=rut_envia,
+                fch_resol=fch_resol, nro_resol=nro_resol,
+                tipo_dte=tipo_dte, set_dte_id=set_id,
+            )
+            nombre_sobre = "EnvioDTE"
+
+        # El documento guardado YA viene firmado. Volver a pasarlo por
+        # documento_ids le agregaba una SEGUNDA <Signature> idéntica, y el schema
+        # admite una sola: el XML descargado quedaba inválido aunque el enviado no
+        # lo estuviera. Acá solo corresponde firmar el SetDTE.
+        ya_firmado = "<Signature" in _dte_txt
         sobre_firmado = firmar_envio_completo(
             sobre, cert["pfx_bytes"], cert["password"],
-            set_dte_id=set_id, documento_ids=[documento_id])
-        fname = "EnvioBOLETA_T%s_F%s_%s.xml" % (tipo_dte, folio, ambiente)
+            set_dte_id=set_id,
+            documento_ids=[] if ya_firmado else [documento_id])
+        fname = "%s_T%s_F%s_%s.xml" % (nombre_sobre, tipo_dte, folio, ambiente)
         return Response(sobre_firmado, mimetype="application/xml",
                         headers={"Content-Disposition": 'attachment; filename="%s"' % fname})
     except Exception as e:
