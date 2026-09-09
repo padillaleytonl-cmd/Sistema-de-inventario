@@ -26027,7 +26027,25 @@ def admin_probar_urls_estado():
                     except OSError:
                         pass
 
-        gana = [f for f in (resultados + fase2) if f.get("SIRVE")]
+        # ── FASE 3: el track id con ceros a la izquierda ─────────────────
+        # El SII documenta que los track id de BOLETA tienen 15 digitos, y el
+        # ejemplo que quedo en este mismo codigo era "0249504588": con cero
+        # adelante. Nuestra respuesta de envio los guarda como numero
+        # (j.get("trackid")), asi que si venian con ceros a la izquierda se
+        # perdieron, y la URL de estado apunta a un track que no existe. Eso
+        # explicaria el 404 sin que la URL este mal.
+        fase3 = []
+        for _largo in (15, 14, 13, 12):
+            _t = trackid.zfill(_largo)
+            if _t == trackid:
+                continue
+            fase3.append(_probar(
+                "track rellenado a %d digitos (%s)" % (_largo, _t), "GET",
+                f"https://{host_api}/recursos/v1/boleta.electronica.envio/{rut_num}-{rut_dv}-{_t}/estado",
+                headers={"User-Agent": USER_AGENT_SII, "Accept": "application/json",
+                         "Cookie": "TOKEN=%s" % token}))
+
+        gana = [f for f in (resultados + fase2 + fase3) if f.get("SIRVE")]
         return jsonify({
             "ok": True,
             "trackid": trackid,
@@ -26038,6 +26056,7 @@ def admin_probar_urls_estado():
                           "Ninguna variante devolvió JSON. Ver el detalle de cada una.",
             "resultados": resultados,
             "fase2_endpoint_que_existe": fase2,
+            "fase3_track_con_ceros": fase3,
         })
     except Exception as e:
         import traceback
