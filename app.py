@@ -26242,7 +26242,8 @@ def _fact_job_consultar_estados():
                 cur.execute("""SELECT id, tenant_id, tipo_dte, folio, rut_receptor,
                                       monto_total, fecha_emision, track_id_sii,
                                       EXTRACT(EPOCH FROM (NOW() - COALESCE(fecha_envio_sii,
-                                                                           fecha_emision)))/3600
+                                                                           fecha_emision)))/3600,
+                                      estado
                                FROM facturacion_dtes
                                WHERE estado IN ('enviado','en_proceso')
                                  AND fecha_emision > (NOW() - INTERVAL '7 days')
@@ -26257,8 +26258,26 @@ def _fact_job_consultar_estados():
         tok_rest = {}     # tenant -> token REST de boletas (o None si falló)
         tok_soap = {}     # tenant -> token del WS clásico (o None si falló)
 
+        def registrar_respuesta(bid, estado_actual, codigo, glosa):
+            """Guarda lo último que contestó el SII SIN cambiar el estado interno.
+
+            El documento sigue 'enviado' —que es la verdad— pero deja de ser una
+            caja negra: el panel puede mostrar qué respondió el SII y cuándo. Un
+            documento que lleva horas en 'enviado' porque el SII contesta FAU (no lo
+            registra) es un problema muy distinto de uno que nadie consultó todavía,
+            y hasta ahora los dos se veían igual.
+            """
+            if not codigo:
+                return
+            try:
+                _fact_actualizar_estado_dte(bid, estado_actual, estado_sii=codigo,
+                                            glosa=glosa)
+            except Exception as e:
+                print("[Estado SII] No se pudo registrar la respuesta de %s: %s"
+                      % (bid, str(e)[:100]))
+
         for row in pendientes:
-            bid, tid, tipo_dte, folio, rut_recep, monto, fch, track_id, horas = row
+            bid, tid, tipo_dte, folio, rut_recep, monto, fch, track_id, horas, estado_actual = row
             try:
                 if tid not in certs:
                     cfg = obtener_config_facturacion(get_conn, release_conn, tid)
@@ -26319,6 +26338,13 @@ def _fact_job_consultar_estados():
                                         bid, interno, estado_sii=est_env, glosa=glosa,
                                         set_fecha_aceptacion=interno.startswith("aceptado"))
                                     cerrado = True
+                                else:
+                                    # Intermedio (REC, SOK, FOK, PRD, CRT, EPR): el SII
+                                    # todavía lo está procesando. No se cierra, pero se
+                                    # deja registrado qué contestó.
+                                    registrar_respuesta(bid, estado_actual, est_env, glosa)
+                                    print("[Estado SII] DTE %s (folio %s): el SII responde %s "
+                                          "(%s). Sigue en proceso." % (bid, folio, est_env, glosa))
 
                 if cerrado:
                     continue
@@ -26353,7 +26379,20 @@ def _fact_job_consultar_estados():
                               % (detalle, est, int(horas)))
                     print("[Estado SII] DTE %s (tipo %s folio %s) marcado 'revisar': %s tras %d h"
                           % (bid, tipo_dte, folio, est, int(horas)))
-                # DNK/FAU recientes: se reintenta en la próxima corrida
+                elif est:
+                    # DNK/FAU recientes: todavía no es final y se reintenta, pero se
+                    # registra qué contestó el SII para no dejarlo como caja negra.
+                    detalle = {"DNK": "El SII lo tiene pero los datos no coinciden",
+                               "FAU": "El SII todavía no registra el documento"}.get(
+                                   est, res.get("glosa") or "")
+                    registrar_respuesta(bid, estado_actual, est, detalle)
+                    print("[Estado SII] DTE %s (tipo %s folio %s): el SII responde %s (%s). "
+                          "Lleva %d h, se reintenta." % (bid, tipo_dte, folio, est, detalle, int(horas)))
+                else:
+                    # Ni siquiera hubo respuesta legible: eso es un problema de conexión
+                    # o de formato, no del documento. Se ve en los logs.
+                    print("[Estado SII] DTE %s (folio %s): el SII no devolvió un estado "
+                          "legible. Respuesta: %s" % (bid, folio, str(res.get("respuesta_cruda", ""))[:200]))
             except Exception as e:
                 print("[Estado SII] Error DTE %s: %s" % (bid, str(e)[:120]))
     except Exception as e:
