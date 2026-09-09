@@ -811,3 +811,116 @@ def consultar_estado_dte(
         # el token en vez de firmar una semilla nueva por cada consulta.
         "token_usado": token,
     }
+
+
+def consultar_estado_dte_av(
+    pfx_bytes: bytes, password: str,
+    rut_emisor: str, rut_receptor: str,
+    tipo_dte: int, folio: int, fecha_emision: str, monto_total: int,
+    firma_dte: str,
+    ambiente: str = "certificacion",
+    token: str = None,
+    rut_consultante: str = None,
+) -> dict:
+    """Consulta AVANZADA de estado (getEstDteAv): igual que getEstDte pero
+    verificando además la firma del documento.
+
+    Por qué importa: getEstDte responde DOK/DNK/FAU sobre los datos. La avanzada
+    agrega el campo RECIBIDO (SI/NO), que es lo único que distingue "el SII no
+    tiene este documento" de "lo tiene pero algún dato no calza". Sin eso, un FAU
+    es ambiguo.
+
+    OJO con `firma_dte`: el SII pide los PRIMEROS 10 CARACTERES de la firma del
+    documento, igual que su formulario público de consulta. Acá se trunca a 10 por
+    las dudas de que llegue completa.
+
+    Esta función NO existía: app.py la importaba y el import fallaba, así que la
+    consulta manual de estado nunca funcionó para un documento firmado — es decir,
+    para ninguno. Por eso, si el SII no devuelve un estado interpretable, esta
+    función cae automáticamente a consultar_estado_dte en vez de dejar al llamador
+    sin respuesta.
+    """
+    def _split(rut):
+        rut = rut.replace(".", "").replace("-", "").replace(" ", "").upper()
+        return rut[:-1], rut[-1]
+
+    rut_consultante = rut_consultante or rut_emisor
+
+    if token is None:
+        token = _dtews_obtener_token(pfx_bytes, password, ambiente)
+
+    rc, dvc = _split(rut_consultante)
+    re_, dvr_e = _split(rut_emisor)
+    rr, dvr_r = _split(rut_receptor)
+    y, m, d = fecha_emision.split("-")
+    fecha_sii = f"{d}-{m}-{y}"
+    firma = (firma_dte or "").strip()[:10]
+
+    url = DTEWS[ambiente]["query"]
+    soap = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" '
+        'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+        'xmlns:xsd="http://www.w3.org/2001/XMLSchema">'
+        '<SOAP-ENV:Body>'
+        f'<m:getEstDteAv xmlns:m="{url}">'
+        f'<RutConsultante xsi:type="xsd:string">{rc}</RutConsultante>'
+        f'<DvConsultante xsi:type="xsd:string">{dvc}</DvConsultante>'
+        f'<RutCompania xsi:type="xsd:string">{re_}</RutCompania>'
+        f'<DvCompania xsi:type="xsd:string">{dvr_e}</DvCompania>'
+        f'<RutReceptor xsi:type="xsd:string">{rr}</RutReceptor>'
+        f'<DvReceptor xsi:type="xsd:string">{dvr_r}</DvReceptor>'
+        f'<TipoDte xsi:type="xsd:string">{tipo_dte}</TipoDte>'
+        f'<FolioDte xsi:type="xsd:string">{folio}</FolioDte>'
+        f'<FechaEmisionDte xsi:type="xsd:string">{fecha_sii}</FechaEmisionDte>'
+        f'<MontoDte xsi:type="xsd:string">{int(monto_total)}</MontoDte>'
+        f'<FirmaDte xsi:type="xsd:string">{firma}</FirmaDte>'
+        f'<Token xsi:type="xsd:string">{token}</Token>'
+        '</m:getEstDteAv>'
+        '</SOAP-ENV:Body></SOAP-ENV:Envelope>'
+    )
+    try:
+        r = requests.post(url, data=soap.encode("ISO-8859-1"),
+                          headers={"Content-Type": "text/xml; charset=utf-8",
+                                   "User-Agent": USER_AGENT, "SOAPAction": ""},
+                          timeout=TIMEOUT)
+        texto = r.text
+        status = r.status_code
+    except Exception as e:
+        raise SIIError(f"No se pudo conectar a QueryEstDte (avanzada): {e}")
+
+    def _buscar(tag):
+        m = (re.search(rf"<{tag}>([^<]+)</{tag}>", texto) or
+             re.search(rf"&lt;{tag}&gt;([^&]+)&lt;/{tag}&gt;", texto))
+        return m.group(1).strip() if m else None
+
+    estado = _buscar("ESTADO")
+    glosa = _buscar("GLOSA") or _buscar("GLOSA_ESTADO")
+    recibido = _buscar("RECIBIDO")
+    estado_dte = _buscar("ESTADO_DTE")
+
+    # Si la avanzada no dio un estado utilizable, se usa la básica: es preferible
+    # una respuesta menos precisa a ninguna respuesta.
+    if not (estado or estado_dte):
+        basica = consultar_estado_dte(
+            pfx_bytes=pfx_bytes, password=password,
+            rut_consultante=rut_consultante, rut_emisor=rut_emisor,
+            rut_receptor=rut_receptor, tipo_dte=tipo_dte, folio=folio,
+            fecha_emision=fecha_emision, monto_total=monto_total,
+            ambiente=ambiente, token=token)
+        basica["via"] = "getEstDte (la avanzada no devolvió estado)"
+        basica["respuesta_avanzada"] = texto[:800]
+        return basica
+
+    final = estado_dte or estado
+    return {
+        "ok": status == 200 and final is not None,
+        "estado": final,
+        "glosa": glosa,
+        "recibido": recibido,          # "SI" / "NO": el dato que desambigua el FAU
+        "aceptado": final == "DOK",
+        "status": status,
+        "via": "getEstDteAv",
+        "respuesta_cruda": texto[:1500],
+        "token_usado": token,
+    }
