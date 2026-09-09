@@ -272,7 +272,9 @@ def enviar_boletas(
 
     # Separar RUT y DV
     def _split_rut(rut):
-        rut = rut.replace(".", "").replace("-", "")
+        # .upper() por el digito verificador: un RUT escrito "18849272-k" le mandaba
+        # al SII un dv en minuscula, que no lo acepta.
+        rut = rut.replace(".", "").replace("-", "").replace(" ", "").upper()
         return rut[:-1], rut[-1]
     rut_e_num, rut_e_dv = _split_rut(rut_emisor)
     rut_env_num, rut_env_dv = _split_rut(rut_envia)
@@ -340,7 +342,9 @@ def consultar_estado_envio(
         dict {ok, estado, respuesta_cruda}
     """
     def _split_rut(rut):
-        rut = rut.replace(".", "").replace("-", "")
+        # .upper() por el digito verificador: un RUT escrito "18849272-k" le mandaba
+        # al SII un dv en minuscula, que no lo acepta.
+        rut = rut.replace(".", "").replace("-", "").replace(" ", "").upper()
         return rut[:-1], rut[-1]
     rut_num, rut_dv = _split_rut(rut_emisor)
 
@@ -622,7 +626,9 @@ def enviar_dte(
     host = DTEWS[ambiente]["upload_host"]
 
     def _split_rut(rut):
-        rut = rut.replace(".", "").replace("-", "")
+        # .upper() por el digito verificador: un RUT escrito "18849272-k" le mandaba
+        # al SII un dv en minuscula, que no lo acepta.
+        rut = rut.replace(".", "").replace("-", "").replace(" ", "").upper()
         return rut[:-1], rut[-1]
     rut_e_num, rut_e_dv = _split_rut(rut_emisor)
     rut_env_num, rut_env_dv = _split_rut(rut_envia)
@@ -633,7 +639,11 @@ def enviar_dte(
         "Cookie": f"TOKEN={token}",
         "Cache-Control": "no-cache",
     }
-    # multipart/form-data: el SII espera 'archivo' con tipo text/xml ISO-8859-1.
+    # multipart/form-data con el campo 'archivo'. Va como "text/xml" a secas, SIN
+    # declarar charset: asi es como certificaron las NC y las facturas contra el SII.
+    # El XML ya trae su propia declaracion de encoding ISO-8859-1 adentro. No cambiar
+    # esto "para que quede igual que en enviar_boletas": son endpoints distintos y este
+    # es el que esta probado.
     files = {
         "archivo": ("EnvioDTE.xml", envio_xml, "text/xml"),
     }
@@ -705,7 +715,8 @@ def consultar_estado_dte(
         aceptado=True solo si estado=="DOK".
     """
     def _split(rut):
-        rut = rut.replace(".", "").replace("-", "")
+        # .upper() por el digito verificador K, igual que en _split_rut
+        rut = rut.replace(".", "").replace("-", "").replace(" ", "").upper()
         return rut[:-1], rut[-1]
 
     if token is None:
@@ -725,7 +736,13 @@ def consultar_estado_dte(
         'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
         'xmlns:xsd="http://www.w3.org/2001/XMLSchema">'
         '<SOAP-ENV:Body>'
-        '<m:getEstDte xmlns:m="http://maullin.sii.cl/DTEWS/QueryEstDte.jws">'
+        # El namespace del metodo tiene que ser el del servidor al que se consulta.
+        # Estaba fijo en maullin (certificacion), asi que en produccion se le pedia a
+        # palena una operacion declarada en el namespace de otro host: Axis usa ese
+        # namespace para despachar el metodo y contesta soapenv:Fault. Se quedaba sin
+        # consulta de estados justo al pasar a produccion. Mismo criterio que
+        # _dtews_obtener_token, que ya usaba la URL del ambiente.
+        f'<m:getEstDte xmlns:m="{url}">'
         f'<RutConsultante xsi:type="xsd:string">{rc}</RutConsultante>'
         f'<DvConsultante xsi:type="xsd:string">{dvc}</DvConsultante>'
         f'<RutCompania xsi:type="xsd:string">{re_}</RutCompania>'

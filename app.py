@@ -23477,6 +23477,9 @@ def facturacion_nota_credito_emitir():
         if nc_id:
             try: _fact_actualizar_estado_dte(nc_id, "error_envio", glosa=str(e)[:300])
             except Exception: pass
+        else:
+            # Murió antes de registrar el documento: el folio no se usó, vuelve al pool
+            _fact_devolver_folio(tenant_id, folio_res, folio)
         return jsonify({"ok": False, "error": str(e)[:300], "folio": folio, "nc_id": nc_id, "pasos": pasos}), 500
 
     return jsonify({
@@ -23846,6 +23849,9 @@ def facturacion_nota_debito_emitir():
         if nc_id:
             try: _fact_actualizar_estado_dte(nc_id, "error_envio", glosa=str(e)[:300])
             except Exception: pass
+        else:
+            # Murió antes de registrar el documento: el folio no se usó, vuelve al pool
+            _fact_devolver_folio(tenant_id, folio_res, folio)
         return jsonify({"ok": False, "error": str(e)[:300], "folio": folio, "nc_id": nc_id, "pasos": pasos}), 500
 
     return jsonify({
@@ -24267,12 +24273,41 @@ def consultadte_pagina():
     return Response(_CONSULTADTE_HTML, mimetype="text/html; charset=utf-8")
 
 
+def _consultadte_limite_ok(ip, _historial={}, maximo=30, ventana_seg=60):
+    """Freno simple por IP para la verificación pública.
+
+    Es el único endpoint sin login que consulta la base, así que sin esto cualquiera
+    puede dispararle miles de combinaciones de folio y monto sin costo. El límite es
+    holgado a propósito: una persona verificando su boleta hace una consulta, no treinta
+    por minuto.
+
+    Vive en memoria del proceso: si algún día corren varias instancias, cada una lleva
+    su propia cuenta. Alcanza para frenar un script suelto; no reemplaza un WAF.
+    """
+    import time
+    ahora = time.time()
+    intentos = [t for t in _historial.get(ip, []) if ahora - t < ventana_seg]
+    # Limpieza oportunista: sin esto el dict crece con cada IP que pasó alguna vez
+    if len(_historial) > 5000:
+        _historial.clear()
+    intentos.append(ahora)
+    _historial[ip] = intentos
+    return len(intentos) <= maximo
+
+
 @app.route("/consultadte/verificar", methods=["POST"])
 def consultadte_verificar():
     """Verifica los datos de un DTE contra la BD de Lusync (público, sin login).
     Devuelve si el documento existe y los datos coinciden (anti-fraude).
     Body: {tipo, folio, fecha (YYYY-MM-DD), rut (sin puntos), monto}
     """
+    # X-Forwarded-For: detrás del proxy de Render, remote_addr es siempre el proxy
+    ip = (request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+          or request.remote_addr or "?")
+    if not _consultadte_limite_ok(ip):
+        return jsonify({"ok": False,
+                        "error": "Demasiadas consultas seguidas. Espera un minuto."}), 429
+
     try:
         data = request.get_json(silent=True) or {}
         try:
@@ -25158,6 +25193,9 @@ def facturacion_factura_emitir():
         if fac_id:
             try: _fact_actualizar_estado_dte(fac_id, "error_envio", glosa=str(e)[:300])
             except Exception: pass
+        else:
+            # Murió antes de registrar el documento: el folio no se usó, vuelve al pool
+            _fact_devolver_folio(tenant_id, folio_res, folio)
         return jsonify({"ok": False, "error": str(e)[:300], "folio": folio, "fac_id": fac_id, "pasos": pasos}), 500
 
     return jsonify({
@@ -25391,6 +25429,9 @@ def facturacion_guia_emitir():
         if guia_id:
             try: _fact_actualizar_estado_dte(guia_id, "error_envio", glosa=str(e)[:300])
             except Exception: pass
+        else:
+            # Murió antes de registrar el documento: el folio no se usó, vuelve al pool
+            _fact_devolver_folio(tenant_id, folio_res, folio)
         return jsonify({"ok": False, "error": str(e)[:300], "folio": folio, "guia_id": guia_id, "pasos": pasos}), 500
 
     return jsonify({
@@ -25556,6 +25597,28 @@ def facturacion_documentos_listar():
         "por_pagina": por_pagina,
         "total_paginas": total_paginas,
     })
+
+
+def _fact_devolver_folio(tenant_id, folio_res, folio):
+    """Devuelve al pool un folio reservado que no se llegó a emitir.
+
+    Los endpoints de emisión reservan el folio ANTES de generar y firmar. Si el
+    documento nunca llegó a registrarse en facturacion_dtes, ese folio no se usó y
+    tiene que volver al pool; si no, cada error de red o certificado se come un
+    folio, y los folios no emitidos hay que declararlos como anulados ante el SII.
+
+    La decisión de si se puede devolver o no la toma liberar_folio(): si otra venta
+    simultánea ya avanzó el contador, se prefiere el hueco antes que arriesgar un
+    folio duplicado.
+    """
+    try:
+        from facturacion.cafs import liberar_folio
+        from inventario import get_conn, release_conn
+        return liberar_folio(get_conn, release_conn, tenant_id,
+                             (folio_res or {}).get("caf_id"), folio)
+    except Exception as e:  # nunca debe tapar el error original de la emisión
+        print("[Facturación] No se pudo devolver el folio %s: %s" % (folio, str(e)[:150]))
+        return {"ok": False, "liberado": False}
 
 
 def _fact_mapear_estado_sii(estado_sii):

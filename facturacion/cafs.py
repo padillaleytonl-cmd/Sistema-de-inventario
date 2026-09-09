@@ -352,9 +352,67 @@ def obtener_folio_disponible(get_conn_func, release_conn_func, tenant_id,
 
 def marcar_folio_usado(get_conn_func, release_conn_func, caf_id, folio):
     """No-op para la BD: ya quedó marcado al hacer obtener_folio_disponible.
-    Esta función existe para hacer rollback si algo falla en la emisión.
-
-    En Fase 2 implementamos la lógica de rollback: si falla la emisión SII,
-    devolvemos el folio al pool con un endpoint admin.
+    Para devolver un folio que no se llegó a usar, ver liberar_folio().
     """
     return {"ok": True, "mensaje": "Folio ya quedó reservado al obtenerlo"}
+
+
+def liberar_folio(get_conn_func, release_conn_func, tenant_id, caf_id, folio):
+    """Devuelve al pool un folio reservado que NO se llegó a emitir.
+
+    Cuándo se usa: la reserva es atómica y ocurre ANTES de generar y firmar el
+    documento. Si algo falla en el medio (el .pfx no se puede leer, el XML no se
+    arma, se cae la red), ese folio quedaba consumido para siempre sin haberse
+    emitido nada. Ante el SII eso es un folio faltante, y los folios no emitidos
+    hay que declararlos como anulados.
+
+    Solo se devuelve si NADIE tomó un folio después: la condición
+    `folio_actual = folio + 1` en el UPDATE lo garantiza sin necesidad de lockear.
+    Si otra venta simultánea ya avanzó el contador, devolverlo crearía un duplicado
+    —dos documentos con el mismo folio, que el SII rechaza—, así que en ese caso se
+    prefiere el hueco y se avisa para declararlo.
+
+    Returns:
+        dict: {ok, liberado: bool, mensaje}
+    """
+    conn = None
+    cur = None
+    try:
+        try:
+            conn = get_conn_func(tenant_id=tenant_id)
+        except TypeError:
+            conn = get_conn_func()
+        cur = conn.cursor()
+
+        cur.execute("""
+            UPDATE facturacion_cafs
+               SET folio_actual = %s, agotado = FALSE, fecha_agotamiento = NULL
+             WHERE id = %s AND folio_actual = %s
+        """, (folio, caf_id, folio + 1))
+        liberado = cur.rowcount > 0
+        conn.commit()
+
+        if liberado:
+            print(f"[Facturación] Folio {folio} devuelto al pool (CAF {caf_id})")
+            return {"ok": True, "liberado": True,
+                    "mensaje": f"Folio {folio} devuelto al pool"}
+
+        print(f"[Facturación] El folio {folio} (CAF {caf_id}) NO se pudo devolver: "
+              f"otra emisión ya avanzó el contador. Queda como folio no emitido y hay "
+              f"que declararlo como anulado ante el SII.")
+        return {"ok": True, "liberado": False,
+                "mensaje": (f"El folio {folio} quedó sin emitir y no se pudo devolver "
+                            f"(otra emisión avanzó el contador). Declararlo como anulado.")}
+    except Exception as e:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        return {"ok": False, "liberado": False,
+                "mensaje": f"Error liberando folio: {str(e)[:200]}"}
+    finally:
+        if cur is not None:
+            cur.close()
+        if conn is not None:
+            release_conn_func(conn)

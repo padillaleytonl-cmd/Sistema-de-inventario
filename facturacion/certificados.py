@@ -27,17 +27,36 @@ from cryptography.x509.oid import NameOID
 # ─────────────────────────────────────────────────────────────────────────────
 # FERNET — encriptación simétrica
 # ─────────────────────────────────────────────────────────────────────────────
+def hay_key_fernet():
+    """True si LUSYNC_FERNET_KEY está configurada de verdad en el entorno."""
+    return bool((os.environ.get("LUSYNC_FERNET_KEY") or "").strip())
+
+
 def _get_fernet():
     """Obtiene una instancia de Fernet con la KEY del env.
-    Si no hay key, genera una temporal en memoria (modo dev) y avisa.
+
+    Si no hay key configurada usa una temporal en memoria, SOLO para que el
+    servidor pueda arrancar en desarrollo. Dos cosas cambiaron respecto de antes:
+
+      1. La clave NO se imprime nunca. Antes se escribía completa en los logs de
+         Render, donde queda guardada y visible para cualquiera con acceso.
+      2. La subida de certificados se bloquea mientras no haya key (ver
+         subir_certificado). La clave temporal muere con el proceso: todo .pfx
+         cifrado con ella queda irrecuperable en el siguiente redespliegue, y el
+         cliente se entera recién cuando el agente no puede firmar.
+
+    No se corta el arranque a propósito: si el servidor está corriendo en
+    producción, tumbarlo por esto sería peor que avisarlo fuerte.
     """
     key = os.environ.get("LUSYNC_FERNET_KEY")
     if not key:
-        # Modo dev: generar temporal en memoria (NO recomendado en producción)
         if not hasattr(_get_fernet, "_temp_key"):
             _get_fernet._temp_key = Fernet.generate_key().decode()
-            print(f"⚠ [Facturación] LUSYNC_FERNET_KEY no configurada — usando temporal: {_get_fernet._temp_key}")
-            print("⚠ [Facturación] Configura la variable en Render para que sobreviva reinicios.")
+            print("⚠ [Facturación] LUSYNC_FERNET_KEY no configurada. Se usa una clave "
+                  "temporal en memoria: los certificados que se cifren con ella NO se "
+                  "van a poder leer después de reiniciar.")
+            print("⚠ [Facturación] La subida de certificados queda BLOQUEADA hasta que "
+                  "configures LUSYNC_FERNET_KEY en el entorno.")
         key = _get_fernet._temp_key
     if isinstance(key, str):
         key = key.encode()
@@ -188,6 +207,18 @@ def subir_certificado(get_conn_func, release_conn_func, tenant_id, pfx_bytes,
     Returns:
         dict: {ok, certificado_id, metadata, error}
     """
+    # Sin key de cifrado configurada NO se guarda nada. Con la clave temporal el
+    # certificado quedaría escrito pero ilegible tras el próximo reinicio, y el
+    # cliente lo descubriría el día que su agente no pueda firmar una boleta.
+    # Mejor un error claro ahora que un certificado muerto después.
+    if not hay_key_fernet():
+        return {
+            "ok": False,
+            "error": ("El servidor no tiene configurada la clave de cifrado "
+                      "(LUSYNC_FERNET_KEY). No se puede guardar un certificado digital "
+                      "de forma segura hasta que se configure."),
+        }
+
     # Validar primero
     metadata = validar_pfx(pfx_bytes, password)
     if not metadata.get("ok"):

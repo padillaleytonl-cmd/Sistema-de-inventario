@@ -113,6 +113,22 @@ def emitir_boleta_core(tenant_id, items, receptor=None, ambiente=None,
     boleta_id = None
     total = 0
 
+    def _devolver_folio(motivo):
+        """Devuelve el folio al pool si la emisión murió antes de registrar nada.
+
+        Solo se llama mientras NO exista la fila en facturacion_dtes: una vez que el
+        documento está guardado (aunque sea en estado 'generado'), el folio le
+        pertenece y es reintentable. Sin esto, cada .pfx ilegible o cada caída de red
+        se comía un folio en silencio.
+        """
+        from facturacion.cafs import liberar_folio
+        res = liberar_folio(get_conn, release_conn, tenant_id,
+                            folio_res.get("caf_id"), folio)
+        if res.get("liberado"):
+            paso("Devolver folio", True, "Folio " + str(folio) + " vuelve al pool (" + motivo + ")")
+        else:
+            paso("Devolver folio", False, res.get("mensaje", ""))
+
     try:
         from facturacion.dtes.caf_parser import parsear_caf_xml
         from facturacion.dtes.boleta import generar_boleta_xml
@@ -177,6 +193,7 @@ def emitir_boleta_core(tenant_id, items, receptor=None, ambiente=None,
             conn.rollback()
             release_conn(conn)
             paso("Registrar boleta (pre-envío)", False, str(e)[:200])
+            _devolver_folio("no se pudo registrar la boleta")
             return {"ok": False, "folio": folio,
                     "error": "No se pudo registrar la boleta antes de enviar: " + str(e)[:200],
                     "pasos": pasos}
@@ -222,6 +239,12 @@ def emitir_boleta_core(tenant_id, items, receptor=None, ambiente=None,
         if boleta_id and actualizar_estado_fn:
             try:
                 actualizar_estado_fn(boleta_id, "error_envio", glosa=str(e)[:300])
+            except Exception:
+                pass
+        else:
+            # Murió antes de registrar el documento: el folio no llegó a usarse.
+            try:
+                _devolver_folio("falló la generación")
             except Exception:
                 pass
         return {"ok": False, "error": str(e)[:300], "folio": folio,
