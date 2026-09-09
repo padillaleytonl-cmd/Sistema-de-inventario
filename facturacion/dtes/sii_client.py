@@ -402,17 +402,22 @@ def consultar_estado_envio(
 
     error = None
     if resp.status_code != 200:
-        error = f"El SII respondió HTTP {resp.status_code}"
+        error = f"El SII respondió HTTP {resp.status_code} en {url}"
     elif parece_html:
-        error = ("El SII devolvió una página HTML en vez de datos. Suele significar "
-                 "que el track id no existe en este ambiente (¿consultaste "
-                 "certificación un envío de producción, o al revés?)")
+        # El cuerpo suele traer el codigo real ("HTTP Status 404") aunque el status
+        # de la respuesta sea 200. Extraerlo ahorra muchisimo tiempo de diagnostico.
+        m_cod = re.search(r"HTTP Status (\d{3})", texto)
+        codigo = m_cod.group(1) if m_cod else "?"
+        error = (f"El SII devolvió una página HTML (error {codigo}) en vez de datos. "
+                 f"URL consultada: {url} — revisa que el track id exista en este "
+                 f"ambiente y que el RUT del emisor sea el que envió el documento.")
     elif not hay_datos:
-        error = "El SII respondió, pero sin un estado interpretable"
+        error = f"El SII respondió sin un estado interpretable. URL: {url}"
 
     return {
         "ok": resp.status_code == 200 and hay_datos,
         "error": error,
+        "url": url,
         "status": resp.status_code,
         "estado_envio": estado_envio,
         "informados": informados,
