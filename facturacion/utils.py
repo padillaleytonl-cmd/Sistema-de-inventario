@@ -155,3 +155,80 @@ def normalizar_ambiente(ambiente):
     if a in ("prod", "produccion", "producción", "production"):
         return AMBIENTE_PRODUCCION
     return AMBIENTE_CERTIFICACION
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RESOLUCIÓN SII DE LA CARÁTULA (FchResol / NroResol)
+# ─────────────────────────────────────────────────────────────────────────────
+# El SII no autoriza "al contribuyente" de una sola vez: autoriza cada familia de
+# documentos por separado, y cada sobre debe declarar LA SUYA. El propio XSD lo
+# dice en los campos de la carátula del EnvioBOLETA:
+#
+#   FchResol -> "Fecha de Resolucion que Autoriza la Emision de Boletas"
+#   NroResol -> "Numero de Resolucion que Autoriza la Emision de Boletas"
+#
+# No es la resolución del Sistema de Factura Electrónica. Para Grupo PH SPA son
+# dos fechas distintas: facturas desde el 27-08-2019 (resolución 80 del
+# 22-08-2014) y boletas desde el 30-12-2020. Mientras las boletas viajaron con la
+# resolución de facturas, el SII recibía el sobre, entregaba track id... y al
+# validarlo no registraba el documento.
+#
+# El formato del sobre NO cambia: es exactamente el que pasó certificación
+# (TrackID 249504588, set SOK). Lo único que cambia es de dónde sale este par.
+
+TIPOS_DTE_BOLETA = (39, 41)
+
+# Par usado en certificación. Solo se usa como último recurso, cuando el tenant
+# todavía no tiene ninguna resolución cargada.
+RESOLUCION_CERTIFICACION = ("2026-05-15", 0)
+
+
+def es_boleta(tipo_dte):
+    """True si el documento pertenece a la familia boleta (39 afecta, 41 exenta)."""
+    try:
+        return int(tipo_dte) in TIPOS_DTE_BOLETA
+    except (TypeError, ValueError):
+        return False
+
+
+def _fecha_a_texto(v):
+    """Normaliza una fecha (date, datetime o str) al 'YYYY-MM-DD' que pide el SII."""
+    if not v:
+        return None
+    if isinstance(v, str):
+        return v.strip() or None
+    try:
+        return v.isoformat()
+    except AttributeError:
+        return str(v)
+
+
+def resolucion_para(config, tipo_dte):
+    """Devuelve (fch_resol, nro_resol) para la carátula del sobre de `tipo_dte`.
+
+    Boletas y su Reporte de Consumo de Folios leen `resolucion_boleta_*`; el resto
+    de los DTE sigue leyendo `resolucion_sii_*`, que es lo que ya venía funcionando
+    (las notas de crédito en producción se aceptan con ese par).
+
+    Si el tenant todavía no cargó la resolución de boletas, se cae a la general:
+    así nadie cambia de comportamiento hasta que alguien la configure.
+    """
+    config = config or {}
+
+    if es_boleta(tipo_dte):
+        fecha = _fecha_a_texto(config.get("resolucion_boleta_fecha"))
+        numero = config.get("resolucion_boleta_numero")
+        if fecha:
+            return fecha, int(numero) if numero is not None else 0
+
+    fecha = _fecha_a_texto(config.get("resolucion_sii_fecha"))
+    numero = config.get("resolucion_sii_numero")
+    if fecha:
+        return fecha, int(numero) if numero is not None else 0
+
+    return RESOLUCION_CERTIFICACION
+
+
+def resolucion_rcof(config):
+    """Resolución del Reporte de Consumo de Folios: es un documento de boletas."""
+    return resolucion_para(config, 39)

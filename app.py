@@ -24138,12 +24138,16 @@ def facturacion_boleta_preview():
     ).encode("iso-8859-1", errors="replace")
 
     url_consulta = "lusync.cl/consultadte"
+    # La leyenda impresa cita la resolución que autoriza ESTE documento: las
+    # boletas llevan la suya, no la del sistema de factura electrónica.
+    from facturacion.utils import resolucion_para as _resol_para
+    _f_res, _n_res = _resol_para(config, tipo_dte)
     _datos_tenant_pdf = {
         "telefono": config.get("telefono"),
         "correo": config.get("email"),
-        "resolucion_numero": config.get("resolucion_sii_numero"),
-        "resolucion_anio": _anio_desde_fecha_resol(config.get("resolucion_sii_fecha")),
-        "resolucion_fecha": config.get("resolucion_sii_fecha"),
+        "resolucion_numero": _n_res,
+        "resolucion_anio": _anio_desde_fecha_resol(_f_res),
+        "resolucion_fecha": _f_res,
     }
     pdf = generar_pdf_dte(xml, formato=formato, url_consulta=url_consulta,
                           datos_tenant=_datos_tenant_pdf)
@@ -24507,13 +24511,10 @@ def facturacion_boleta_envio_sii(boleta_id):
         if not cert.get("ok"):
             return jsonify({"ok": False, "error": "Certificado no disponible"}), 400
         rut_envia = cert["metadata"].get("rut", "")
-        nro_resol = config.get("resolucion_sii_numero")
-        fch_resol = config.get("resolucion_sii_fecha")
-        if fch_resol and not isinstance(fch_resol, str):
-            try: fch_resol = fch_resol.isoformat()
-            except Exception: fch_resol = str(fch_resol)
-        if nro_resol is None: nro_resol = 0
-        if not fch_resol: fch_resol = "2026-05-15"
+        # La carátula se arma con la resolución de la familia del documento: las
+        # boletas tienen la suya, distinta de la del sistema de factura electrónica.
+        from facturacion.utils import resolucion_para
+        fch_resol, nro_resol = resolucion_para(config, tipo_dte)
         ambiente = normalizar_ambiente(config.get("ambiente") or "certificacion")
 
         from facturacion.dtes.firma import firmar_envio_completo
@@ -24615,7 +24616,7 @@ def facturacion_boleta_pdf(boleta_id):
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT xml_firmado FROM facturacion_dtes
+                SELECT xml_firmado, tipo_dte FROM facturacion_dtes
                 WHERE id = %s AND tenant_id = %s
             """, (boleta_id, tenant_id))
             row = cur.fetchone()
@@ -24630,12 +24631,16 @@ def facturacion_boleta_pdf(boleta_id):
     # Datos de contacto del emisor para la parte visual (desde config del tenant)
     from facturacion.db import obtener_config_facturacion
     _cfg = obtener_config_facturacion(get_conn, release_conn, tenant_id) or {}
+    # Esta ruta sirve cualquier DTE, no solo boletas: la resolución impresa se
+    # elige por el tipo del documento (ver facturacion/utils.resolucion_para).
+    from facturacion.utils import resolucion_para as _resol_para
+    _f_res, _n_res = _resol_para(_cfg, row[1])
     _datos_tenant_pdf = {
         "telefono": _cfg.get("telefono"),
         "correo": _cfg.get("email"),
-        "resolucion_numero": _cfg.get("resolucion_sii_numero"),
-        "resolucion_anio": _anio_desde_fecha_resol(_cfg.get("resolucion_sii_fecha")),
-        "resolucion_fecha": _cfg.get("resolucion_sii_fecha"),
+        "resolucion_numero": _n_res,
+        "resolucion_anio": _anio_desde_fecha_resol(_f_res),
+        "resolucion_fecha": _f_res,
     }
     url_consulta = "lusync.cl/consultadte"
     pdf = generar_pdf_dte(xml, formato=formato, url_consulta=url_consulta,
@@ -26057,12 +26062,26 @@ def admin_probar_urls_estado():
                         "trace": traceback.format_exc()[:800]}), 500
 
 
-@app.route("/facturacion/config/resolucion", methods=["POST"])
+@app.route("/facturacion/config/resolucion", methods=["GET", "POST"])
 def facturacion_actualizar_resolucion():
-    """SOLO ADMIN. Actualiza FchResol y NroResol de la empresa.
-    Estos campos van en la Carátula del EnvioBOLETA. Si están mal, el SII recibe
-    el envío, le da track id, pero al validar lo descarta silenciosamente (FAU).
-    Body JSON: {fecha: 'YYYY-MM-DD', numero: int}
+    """SOLO ADMIN. Lee y actualiza las resoluciones SII que van en la Carátula.
+
+    El SII autoriza cada familia de documentos por separado, y cada sobre declara
+    LA SUYA. Por eso hay dos pares:
+
+      ambito='general'  -> resolucion_sii_*     · la del Sistema de Factura
+                           Electrónica. La usan los EnvioDTE: facturas, notas de
+                           crédito/débito, guías.
+      ambito='boleta'   -> resolucion_boleta_*  · la que autoriza la emisión de
+                           BOLETAS. La usan el EnvioBOLETA y el RCOF.
+
+    Si están mal, el SII recibe el envío, entrega track id... y al validarlo no
+    registra el documento. Es exactamente lo que pasaba con las boletas mientras
+    viajaban con la resolución de facturas.
+
+    GET  -> devuelve los dos pares tal como están hoy.
+    POST -> body JSON {fecha: 'YYYY-MM-DD', numero: int, ambito: 'general'|'boleta'}
+            `ambito` es opcional y por defecto 'general' (comportamiento previo).
     """
     try:
         if not session.get("logged"):
@@ -26070,7 +26089,46 @@ def facturacion_actualizar_resolucion():
         if session.get("rol") != "admin":
             return jsonify({"ok": False, "error": "Solo admin puede ajustar la resolución SII"}), 403
         tenant_id = session.get("tenant_id") or 1
+        from inventario import get_conn, release_conn
+
+        def _leer():
+            """Devuelve los dos pares de resolución del tenant."""
+            conn = get_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""SELECT resolucion_sii_fecha, resolucion_sii_numero,
+                                          resolucion_boleta_fecha, resolucion_boleta_numero
+                                   FROM facturacion_config_tenant WHERE tenant_id=%s""",
+                                (tenant_id,))
+                    r = cur.fetchone()
+            finally:
+                release_conn(conn)
+            if not r:
+                return None
+            return {
+                "general": {"fecha": str(r[0]) if r[0] else None, "numero": r[1],
+                            "usan": "facturas, notas de crédito/débito, guías (EnvioDTE)"},
+                "boleta": {"fecha": str(r[2]) if r[2] else None, "numero": r[3],
+                           "usan": "boletas 39/41 y el RCOF (EnvioBOLETA)"},
+            }
+
+        if request.method == "GET":
+            actual = _leer()
+            if actual is None:
+                return jsonify({"ok": False, "error": "Este tenant no tiene configuración de facturación"}), 404
+            # Qué se está usando HOY para una boleta, contando el fallback
+            from facturacion.utils import resolucion_para
+            from facturacion.db import obtener_config_facturacion
+            cfg = obtener_config_facturacion(get_conn, release_conn, tenant_id) or {}
+            f_bol, n_bol = resolucion_para(cfg, 39)
+            return jsonify({"ok": True, "resoluciones": actual,
+                            "efectiva_boleta": {"fecha": f_bol, "numero": n_bol,
+                                                "heredada_de_general": not actual["boleta"]["fecha"]}})
+
         data = request.get_json(silent=True) or {}
+        ambito = (data.get("ambito") or "general").strip().lower()
+        if ambito not in ("general", "boleta"):
+            return jsonify({"ok": False, "error": "ambito debe ser 'general' o 'boleta'"}), 400
         fecha = (data.get("fecha") or "").strip()
         numero = data.get("numero")
         if numero is None:
@@ -26083,27 +26141,33 @@ def facturacion_actualizar_resolucion():
         import re as _re
         if fecha and not _re.match(r'^\d{4}-\d{2}-\d{2}$', fecha):
             return jsonify({"ok": False, "error": "La fecha debe ir en formato YYYY-MM-DD"}), 400
-        from inventario import get_conn, release_conn
+
+        # Los nombres de columna salen de este mapeo, nunca del body.
+        col_fecha = "resolucion_boleta_fecha" if ambito == "boleta" else "resolucion_sii_fecha"
+        col_numero = "resolucion_boleta_numero" if ambito == "boleta" else "resolucion_sii_numero"
+
+        anterior = _leer()
         conn = get_conn()
         try:
             with conn.cursor() as cur:
-                # Ver valores actuales para devolverlos
-                cur.execute("""SELECT resolucion_sii_fecha, resolucion_sii_numero
-                               FROM facturacion_config_tenant WHERE tenant_id=%s""", (tenant_id,))
-                anterior = cur.fetchone()
-                cur.execute("""UPDATE facturacion_config_tenant
-                               SET resolucion_sii_fecha=%s, resolucion_sii_numero=%s,
-                                   fecha_actualizacion=NOW()
-                               WHERE tenant_id=%s""",
+                cur.execute("UPDATE facturacion_config_tenant"
+                            " SET " + col_fecha + "=%s, " + col_numero + "=%s,"
+                            "     fecha_actualizacion=NOW()"
+                            " WHERE tenant_id=%s",
                             (fecha or None, numero, tenant_id))
                 conn.commit()
         finally:
             release_conn(conn)
+
+        afecta = ("boletas 39/41 y el RCOF" if ambito == "boleta"
+                  else "facturas, notas de crédito/débito y guías")
         return jsonify({"ok": True,
-                        "anterior": {"fecha": str(anterior[0]) if anterior and anterior[0] else None,
-                                     "numero": anterior[1] if anterior else None} if anterior else None,
+                        "ambito": ambito,
+                        "anterior": (anterior or {}).get(ambito),
                         "nuevo": {"fecha": fecha, "numero": numero},
-                        "mensaje": "Resolución SII actualizada. El próximo envío usará FchResol=%s, NroResol=%s." % (fecha, numero)})
+                        "resoluciones": _leer(),
+                        "mensaje": "Resolución de %s actualizada. El próximo envío de %s usará "
+                                   "FchResol=%s, NroResol=%s." % (ambito, afecta, fecha, numero)})
     except Exception as e:
         import traceback
         return jsonify({"ok": False, "error": "Error interno: " + str(e)[:300],
@@ -26670,10 +26734,10 @@ def _fact_job_rcof_diario():
                     continue
                 ambiente = normalizar_ambiente(config.get("ambiente") or "certificacion")
                 rut_envia = cert["metadata"].get("rut", config["rut_emisor"])
-                nro_resol = config.get("resolucion_sii_numero") or 0
-                fch_resol = config.get("resolucion_sii_fecha") or "2014-08-22"
-                if not isinstance(fch_resol, str):
-                    fch_resol = fch_resol.isoformat()
+                # El RCOF informa consumo de FOLIOS DE BOLETA: va con la
+                # resolución que autoriza boletas, no con la de facturas.
+                from facturacion.utils import resolucion_rcof
+                fch_resol, nro_resol = resolucion_rcof(config)
 
                 resumenes = []
                 for r in resumenes_data:
@@ -26814,10 +26878,9 @@ def facturacion_rcof_generar_manual():
         return jsonify({"ok": False, "error": "No hubo boletas emitidas el " + str(fecha)}), 400
 
     rut_envia = cert["metadata"].get("rut", config["rut_emisor"])
-    nro_resol = config.get("resolucion_sii_numero") or 0
-    fch_resol = config.get("resolucion_sii_fecha") or "2014-08-22"
-    if not isinstance(fch_resol, str):
-        fch_resol = fch_resol.isoformat()
+    # Mismo criterio que el job nocturno: el RCOF es un documento de boletas.
+    from facturacion.utils import resolucion_rcof
+    fch_resol, nro_resol = resolucion_rcof(config)
 
     resumenes = []
     for tipo, n, neto, iva, total, fmin, fmax in filas:
@@ -27526,6 +27589,15 @@ h1{{margin:0 0 4px;font-size:22px;}}
                 <div><label>Teléfono</label><input id="telefono"></div>
                 <div><label>Resolución SII (número)</label><input id="res_num" type="number" placeholder="80"></div>
                 <div><label>Resolución SII (fecha)</label><input id="res_fecha" type="date"></div>
+                <div><label>Resolución BOLETAS (número)</label><input id="res_bol_num" type="number" placeholder="0"></div>
+                <div><label>Resolución BOLETAS (fecha)</label><input id="res_bol_fecha" type="date"></div>
+                <div class="full-span" style="font-size:12px;color:#6b7280;line-height:1.5;">
+                    El SII autoriza las boletas con una resolución <strong>propia</strong>, distinta de la del
+                    Sistema de Factura Electrónica, y cada sobre declara la suya en la carátula.
+                    La fecha es la que aparece como autorización de BOLETA ELECTRÓNICA en
+                    <em>Consulta de contribuyentes autorizados</em> del SII. Si se deja en blanco,
+                    las boletas siguen usando la resolución general.
+                </div>
                 <div class="full-span" style="border-top:1px solid #e5e7eb;padding-top:12px;margin-top:4px;">
                     <label>Ambiente SII *</label>
                     <select id="ambiente">
@@ -27684,6 +27756,8 @@ async function cargarConfig(){{
         set('telefono', c.telefono);
         set('res_num', c.resolucion_sii_numero);
         set('res_fecha', c.resolucion_sii_fecha);
+        set('res_bol_num', c.resolucion_boleta_numero);
+        set('res_bol_fecha', c.resolucion_boleta_fecha);
         set('ambiente', c.ambiente || 'certificacion');
         setChk('em_boleta', c.emite_boleta !== false);
         setChk('em_boleta_exenta', c.emite_boleta_exenta);
@@ -27807,6 +27881,16 @@ function cerrarModal(){{
     _modalCbActual = null;
 }}
 
+// El numero de resolucion de boletas suele ser 0, y `parseInt(v) || null` lo
+// convierte en null: hay que separar "campo vacio" de "cero".
+function numOrNull(id){{
+    const e = document.getElementById(id);
+    const v = e ? e.value.trim() : '';
+    if(v === '') return null;
+    const n = parseInt(v, 10);
+    return isNaN(n) ? null : n;
+}}
+
 async function guardarConfig(ev){{
     ev.preventDefault();
     const data = {{
@@ -27817,8 +27901,10 @@ async function guardarConfig(ev){{
         comuna: document.getElementById('comuna').value.trim(),
         email: document.getElementById('email').value.trim(),
         telefono: document.getElementById('telefono').value.trim(),
-        resolucion_sii_numero: parseInt(document.getElementById('res_num').value) || null,
+        resolucion_sii_numero: numOrNull('res_num'),
         resolucion_sii_fecha: document.getElementById('res_fecha').value || null,
+        resolucion_boleta_numero: numOrNull('res_bol_num'),
+        resolucion_boleta_fecha: document.getElementById('res_bol_fecha').value || null,
         ambiente: document.getElementById('ambiente').value,
         emite_boleta: document.getElementById('em_boleta').checked,
         emite_boleta_exenta: document.getElementById('em_boleta_exenta').checked,

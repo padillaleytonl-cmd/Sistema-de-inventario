@@ -42,7 +42,7 @@ def emitir_boleta_core(tenant_id, items, receptor=None, ambiente=None,
     from facturacion.certificados import obtener_certificado
     from facturacion.db import obtener_config_facturacion
     from facturacion.cafs import obtener_folio_disponible
-    from facturacion.utils import normalizar_ambiente
+    from facturacion.utils import normalizar_ambiente, resolucion_para
 
     pasos = []
     def paso(nombre, ok, detalle=""):
@@ -75,17 +75,13 @@ def emitir_boleta_core(tenant_id, items, receptor=None, ambiente=None,
         "correo": config.get("email"),
     }
 
-    nro_resol = config.get("resolucion_sii_numero")
-    fch_resol = config.get("resolucion_sii_fecha")
-    if fch_resol and not isinstance(fch_resol, str):
-        try:
-            fch_resol = fch_resol.isoformat()
-        except Exception:
-            fch_resol = str(fch_resol)
-    if nro_resol is None:
-        nro_resol = 0
-    if not fch_resol:
-        fch_resol = "2014-08-22"
+    # La carátula debe declarar la resolución que autoriza ESTA familia de
+    # documentos. Para boletas (39/41) no es la del sistema de factura
+    # electrónica: el SII las autoriza por separado. Ver facturacion/utils.py.
+    fch_resol, nro_resol = resolucion_para(config, tipo_dte)
+    paso("Resolución SII (carátula)", True,
+         "FchResol " + str(fch_resol) + " · NroResol " + str(nro_resol) +
+         (" (resolución de boletas)" if tipo_dte in (39, 41) else ""))
 
     # 2. Certificado .pfx
     cert = obtener_certificado(get_conn, release_conn, tenant_id)

@@ -43,6 +43,11 @@ def init_facturacion_tables(get_conn_func, release_conn_func=None, enable_rls_fu
                 email TEXT,
                 resolucion_sii_fecha DATE,
                 resolucion_sii_numero INTEGER,
+                -- El SII autoriza las boletas con una resolucion PROPIA, distinta
+                -- de la del sistema de factura electronica, y cada sobre declara
+                -- la suya en la caratula. Ver facturacion/utils.resolucion_para().
+                resolucion_boleta_fecha DATE,
+                resolucion_boleta_numero INTEGER,
                 ambiente TEXT DEFAULT 'certificacion',
                 emite_boleta BOOLEAN DEFAULT TRUE,
                 emite_boleta_exenta BOOLEAN DEFAULT FALSE,
@@ -73,6 +78,8 @@ def init_facturacion_tables(get_conn_func, release_conn_func=None, enable_rls_fu
               BEGIN ALTER TABLE facturacion_config_tenant ADD COLUMN emite_fact_exportacion BOOLEAN DEFAULT FALSE; EXCEPTION WHEN duplicate_column THEN NULL; END;
               BEGIN ALTER TABLE facturacion_config_tenant ADD COLUMN emite_nc_exportacion BOOLEAN DEFAULT FALSE; EXCEPTION WHEN duplicate_column THEN NULL; END;
               BEGIN ALTER TABLE facturacion_config_tenant ADD COLUMN emite_nd_exportacion BOOLEAN DEFAULT FALSE; EXCEPTION WHEN duplicate_column THEN NULL; END;
+              BEGIN ALTER TABLE facturacion_config_tenant ADD COLUMN resolucion_boleta_fecha DATE; EXCEPTION WHEN duplicate_column THEN NULL; END;
+              BEGIN ALTER TABLE facturacion_config_tenant ADD COLUMN resolucion_boleta_numero INTEGER; EXCEPTION WHEN duplicate_column THEN NULL; END;
             END $$;
         """)
 
@@ -322,6 +329,7 @@ def obtener_config_facturacion(get_conn_func, release_conn_func, tenant_id):
         columnas_deseadas = [
             "rut_emisor", "razon_social", "giro", "direccion", "comuna", "ciudad",
             "telefono", "email", "resolucion_sii_fecha", "resolucion_sii_numero",
+            "resolucion_boleta_fecha", "resolucion_boleta_numero",
             "ambiente", "emite_boleta", "emite_factura", "emite_nota_credito",
             "emite_nota_debito", "emite_guia_despacho", "activo",
             "fecha_creacion", "fecha_actualizacion",
@@ -363,6 +371,8 @@ def obtener_config_facturacion(get_conn_func, release_conn_func, tenant_id):
             "email": _val("email"),
             "resolucion_sii_fecha": (lambda v: v.isoformat() if v else None)(_val("resolucion_sii_fecha")),
             "resolucion_sii_numero": _val("resolucion_sii_numero"),
+            "resolucion_boleta_fecha": (lambda v: v.isoformat() if v else None)(_val("resolucion_boleta_fecha")),
+            "resolucion_boleta_numero": _val("resolucion_boleta_numero"),
             "ambiente": _val("ambiente", "certificacion"),
             "emite_boleta": bool(_val("emite_boleta", False)),
             "emite_factura": bool(_val("emite_factura", False)),
@@ -578,6 +588,7 @@ def guardar_config_facturacion(get_conn_func, release_conn_func, tenant_id, data
     Args:
         data: dict con campos opcionales: rut_emisor, razon_social, giro, direccion,
               comuna, ciudad, telefono, email, resolucion_sii_fecha, resolucion_sii_numero,
+              resolucion_boleta_fecha, resolucion_boleta_numero,
               ambiente, emite_boleta, emite_factura, emite_nota_credito,
               emite_nota_debito, emite_guia_despacho, activo
     """
@@ -598,6 +609,7 @@ def guardar_config_facturacion(get_conn_func, release_conn_func, tenant_id, data
         campos_actualizables = [
             "rut_emisor", "razon_social", "giro", "direccion", "comuna", "ciudad",
             "telefono", "email", "resolucion_sii_fecha", "resolucion_sii_numero",
+            "resolucion_boleta_fecha", "resolucion_boleta_numero",
             "ambiente", "emite_boleta", "emite_factura", "emite_nota_credito",
             "emite_nota_debito", "emite_guia_despacho", "activo",
             "emite_boleta_exenta", "emite_factura_exenta", "emite_factura_compra",
