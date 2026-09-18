@@ -15058,6 +15058,7 @@ function conRenderPagina(){
         </span>
         <button onclick="conDescargarUno(${doc.id},'carta')" title="Descargar PDF carta" style="background:var(--bg2);border:1px solid var(--border);color:#534AB7;padding:6px 9px;border-radius:7px;font-size:13px;cursor:pointer;margin-left:4px;">📄</button>
         <button onclick="conDescargarUno(${doc.id},'xml')" title="Descargar XML" style="background:var(--bg2);border:1px solid var(--border);color:#534AB7;padding:6px 9px;border-radius:7px;font-size:13px;cursor:pointer;margin-left:4px;">&lt;/&gt;</button>
+        <button onclick="conDescargarUno(${doc.id},'sobre')" title="Descargar el sobre enviado al SII (con carátula y firmas)" style="background:var(--bg2);border:1px solid var(--border);color:#534AB7;padding:6px 9px;border-radius:7px;font-size:13px;cursor:pointer;margin-left:4px;">✉</button>
         ${btnAnular}
       </td></tr>`;
   });
@@ -15069,7 +15070,7 @@ function conRenderPagina(){
       <button onclick="conPag(1)" ${_conPag>=_conTotalPaginas?'disabled':''} style="padding:7px 14px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;cursor:${_conPag>=_conTotalPaginas?'not-allowed':'pointer'};font-family:inherit;font-size:13px;opacity:${_conPag>=_conTotalPaginas?'.5':'1'};">Siguiente →</button>
     </div>`;
   }
-  h+='<div style="margin-top:12px;font-size:11px;color:var(--muted);display:flex;gap:16px;flex-wrap:wrap;"><span><span style="font-weight:700;padding:1px 6px;border-radius:5px;background:#E6F1FB;color:#185FA5;">A</span> venta afecta (con IVA)</span><span><span style="font-weight:700;padding:1px 6px;border-radius:5px;background:#FAEEDA;color:#854F0B;">E</span> venta exenta (sin IVA)</span><span>🖨 imprimir · 📄 PDF carta · &lt;/&gt; XML</span></div>';
+  h+='<div style="margin-top:12px;font-size:11px;color:var(--muted);display:flex;gap:16px;flex-wrap:wrap;"><span><span style="font-weight:700;padding:1px 6px;border-radius:5px;background:#E6F1FB;color:#185FA5;">A</span> venta afecta (con IVA)</span><span><span style="font-weight:700;padding:1px 6px;border-radius:5px;background:#FAEEDA;color:#854F0B;">E</span> venta exenta (sin IVA)</span><span>🖨 imprimir · 📄 PDF carta · &lt;/&gt; XML · ✉ sobre enviado al SII</span></div>';
   cont.innerHTML=h;
   conActualizarSelBar();
 }
@@ -15103,6 +15104,10 @@ function conImprimir(id, formato){
 }
 function conDescargarUno(id, formato){
   if(formato==='xml'){ window.open('/facturacion/boleta/'+id+'/xml', '_blank'); }
+  // El sobre no es lo mismo que el XML del documento: la caratula —donde van
+  // FchResol y NroResol— y la firma del envio viven solo en el sobre. Es lo que
+  // hay que mirar para saber que recibio el SII.
+  else if(formato==='sobre'){ window.open('/facturacion/boleta/'+id+'/envio-sii', '_blank'); }
   else { window.open('/facturacion/boleta/'+id+'/pdf?formato='+formato, '_blank'); }
 }
 
