@@ -26259,7 +26259,11 @@ def facturacion_diagnostico_sii(boleta_id):
         release_conn(conn)
     if not row:
         return jsonify({"ok": False, "error": "Boleta %s no existe en la BD" % boleta_id}), 404
-    tipo_dte, folio, rut_recep_bd, monto_bd, fecha_bd, xml = row
+    # El SELECT trae 9 columnas. Desempaquetar 6 tiraba ValueError y el endpoint
+    # respondia 500 sin llegar a mostrar nada: justamente la respuesta del SII,
+    # que es el dato por el que existe.
+    (tipo_dte, folio, rut_recep_bd, monto_bd, fecha_bd, xml,
+     _tenant_fila, respuesta_envio_sii, track_id_sii) = row
     xml = xml or ""
     # Extraer valores REALES timbrados en el XML
     def _x(tag):
@@ -26283,8 +26287,8 @@ def facturacion_diagnostico_sii(boleta_id):
         # Lo que el SII contestó al recibir el envío. Se guarda desde 2026-09-09;
         # los documentos anteriores no lo tienen. Es la evidencia de qué pasó en el
         # envío, que hasta ahora se descartaba.
-        "track_id": row[8] if len(row) > 8 else None,
-        "respuesta_del_sii_al_enviar": row[7] if len(row) > 7 else None,
+        "track_id": track_id_sii,
+        "respuesta_del_sii_al_enviar": respuesta_envio_sii,
     })
 
 
