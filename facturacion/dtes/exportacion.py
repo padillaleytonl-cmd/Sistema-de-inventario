@@ -26,6 +26,7 @@ Reglas de cálculo (exportación, montos en moneda extranjera):
 """
 from __future__ import annotations
 from datetime import datetime
+from .tiempo import timestamp_sii
 from typing import List, Dict, Optional
 
 from .caf_parser import CAFParsed
@@ -379,7 +380,7 @@ def generar_exportacion_xml(
 
     # ─── 8. TED (el monto del TED es MntTotal en moneda extranjera) ───
     if timestamp_firma is None:
-        timestamp_firma = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        timestamp_firma = timestamp_sii()
     primer_item = detalles[0]['nombre'][:40] if detalles else 'Item'
     ted = construir_ted(
         caf=caf, folio=folio, fecha_emision=fecha_emision,

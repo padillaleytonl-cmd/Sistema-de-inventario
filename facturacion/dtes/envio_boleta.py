@@ -26,6 +26,7 @@ RUT del SII (receptor) es constante: 60803000-K
 from __future__ import annotations
 import re
 from datetime import datetime
+from .tiempo import timestamp_sii
 from typing import List
 
 from lxml import etree
@@ -70,7 +71,7 @@ def armar_envio_boleta(
         bytes del EnvioBOLETA sin firma (listo para firmar_envio)
     """
     if tmst_firma_env is None:
-        tmst_firma_env = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        tmst_firma_env = timestamp_sii()
 
     nro_dte = len(dtes_firmados)
 

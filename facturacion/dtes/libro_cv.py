@@ -28,6 +28,7 @@ DocumentoConsumoFolios), conservando el namespace.
 """
 
 from datetime import datetime
+from .tiempo import sello_id, timestamp_sii
 from typing import Dict, List, Optional
 
 
@@ -210,9 +211,9 @@ def generar_libro_xml(
     rut_emisor = _normalizar_rut(rut_emisor)
     rut_envia = _normalizar_rut(rut_envia)
     if libro_id is None:
-        libro_id = "LIBRO_" + datetime.now().strftime("%Y%m%d%H%M%S")
+        libro_id = "LIBRO_" + sello_id()
     if tmst_firma is None:
-        tmst_firma = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        tmst_firma = timestamp_sii()
 
     # Carátula — el orden de tags es CRÍTICO para el schema
     car_partes = [

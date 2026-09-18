@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import re
 from datetime import datetime
+from .tiempo import timestamp_sii
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
@@ -81,7 +82,7 @@ def construir_dd(
         bytes con el XML del <DD>, formato exacto requerido por SII.
     """
     if timestamp_emision is None:
-        timestamp_emision = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        timestamp_emision = timestamp_sii()
     
     # Validación de formato fecha
     if not re.match(r'^\d{4}-\d{2}-\d{2}$', fecha_emision):

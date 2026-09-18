@@ -20,6 +20,7 @@ Reglas de cálculo (boleta, precios INCLUYEN IVA):
 """
 from __future__ import annotations
 from datetime import datetime
+from .tiempo import timestamp_sii
 from typing import List, Dict, Optional
 
 from .caf_parser import CAFParsed
@@ -179,7 +180,7 @@ def generar_boleta_xml(
         dict con xml(bytes), folio, totales, ted(bytes), documento_id
     """
     if timestamp_firma is None:
-        timestamp_firma = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        timestamp_firma = timestamp_sii()
 
     # 1. Totales
     totales = calcular_totales_boleta(items)

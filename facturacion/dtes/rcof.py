@@ -40,6 +40,7 @@ igual que la boleta se firma sobre <Documento>.
 """
 
 from datetime import datetime
+from .tiempo import sello_id, timestamp_sii
 from typing import List, Dict, Optional
 
 
@@ -143,10 +144,10 @@ def generar_rcof_xml(
         dict con xml(bytes), documento_id
     """
     if tmst_firma is None:
-        tmst_firma = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        tmst_firma = timestamp_sii()
     if documento_id is None:
         # ID único para el RCOF
-        documento_id = "RCOF_" + datetime.now().strftime("%Y%m%d%H%M%S")
+        documento_id = "RCOF_" + sello_id()
 
     # El SII espera los RUT sin puntos, solo con guión (ej '76922862-4').
     def _normalizar_rut(rut: str) -> str:

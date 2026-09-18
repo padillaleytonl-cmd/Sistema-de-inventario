@@ -32,6 +32,7 @@ Diferencias clave con EnvioBOLETA:
 from __future__ import annotations
 import re
 from datetime import datetime
+from .tiempo import timestamp_sii
 from typing import List, Dict
 
 RUT_SII = "60803000-K"
@@ -74,7 +75,7 @@ def armar_envio_dte(
         bytes del EnvioDTE sin firma (listo para firmar_envio_completo)
     """
     if tmst_firma_env is None:
-        tmst_firma_env = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        tmst_firma_env = timestamp_sii()
 
     # El schema SII exige RUT sin puntos: [0-9]+-([0-9]|K)
     rut_emisor = str(rut_emisor).replace('.', '').strip()

@@ -16,6 +16,7 @@ Reusa los helpers de factura.py (escape, formato, cálculo de totales).
 """
 from __future__ import annotations
 from datetime import datetime
+from .tiempo import timestamp_sii
 from typing import List, Dict, Optional
 
 from .caf_parser import CAFParsed
@@ -215,7 +216,7 @@ def generar_factura_compra_xml(
 
     # 7. TED (el monto del TED es MntTotal)
     if timestamp_firma is None:
-        timestamp_firma = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        timestamp_firma = timestamp_sii()
     primer_item_nombre = items_calc[0].get('nombre', 'Producto')[:40] if items_calc else 'Producto'
     ted = construir_ted(
         caf=caf, folio=folio, fecha_emision=fecha_emision,

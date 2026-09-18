@@ -32,6 +32,7 @@ ANULADO/MODIFICADO:
 """
 
 from datetime import datetime
+from .tiempo import sello_id, timestamp_sii
 from typing import Dict, List, Optional
 
 
@@ -140,9 +141,9 @@ def generar_libro_guia_xml(
     rut_emisor = _normalizar_rut(rut_emisor)
     rut_envia = _normalizar_rut(rut_envia)
     if libro_id is None:
-        libro_id = "LIBROGUIA_" + datetime.now().strftime("%Y%m%d%H%M%S")
+        libro_id = "LIBROGUIA_" + sello_id()
     if tmst_firma is None:
-        tmst_firma = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        tmst_firma = timestamp_sii()
 
     car_partes = [
         f"<RutEmisorLibro>{rut_emisor}</RutEmisorLibro>",
