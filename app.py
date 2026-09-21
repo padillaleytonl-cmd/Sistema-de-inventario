@@ -26227,6 +26227,68 @@ def facturacion_ajustar_folio():
                         "trace": traceback.format_exc()[:500]}), 500
 
 
+@app.route("/facturacion/diagnostico-sii", methods=["GET"])
+def facturacion_diagnostico_sii_por_folio():
+    """El mismo diagnóstico, pero buscando por FOLIO en vez de por el id interno.
+
+    El id interno no aparece en ninguna pantalla: pedirlo obligaba a buscarlo en
+    el historial de descargas del navegador. El folio, en cambio, está a la vista
+    en el listado y es el número con el que uno habla del documento.
+
+        /facturacion/diagnostico-sii?folio=25210
+        /facturacion/diagnostico-sii?folio=279&tipo=61   (si el folio se repite
+                                                          entre tipos de DTE)
+
+    Si hay más de un documento con ese folio y no se indica el tipo, toma el más
+    reciente y lo dice en la respuesta.
+    """
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    tenant_id = session.get("tenant_id") or 1
+
+    folio = (request.args.get("folio") or "").strip()
+    if not folio.isdigit():
+        return jsonify({"ok": False,
+                        "error": "Indica el folio, por ejemplo /facturacion/diagnostico-sii?folio=25210"}), 400
+    tipo = (request.args.get("tipo") or "").strip()
+
+    from inventario import get_conn, release_conn
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            if tipo.isdigit():
+                cur.execute("""SELECT id, tipo_dte FROM facturacion_dtes
+                               WHERE tenant_id=%s AND folio=%s AND tipo_dte=%s
+                               ORDER BY id DESC""",
+                            (tenant_id, int(folio), int(tipo)))
+            else:
+                cur.execute("""SELECT id, tipo_dte FROM facturacion_dtes
+                               WHERE tenant_id=%s AND folio=%s
+                               ORDER BY id DESC""",
+                            (tenant_id, int(folio)))
+            filas = cur.fetchall()
+    finally:
+        release_conn(conn)
+
+    if not filas:
+        return jsonify({"ok": False,
+                        "error": "No hay ningún documento con folio %s en esta empresa" % folio}), 404
+
+    respuesta = facturacion_diagnostico_sii(filas[0][0])
+    # Ojo: ante un error el delegado devuelve la tupla (respuesta, codigo), que no
+    # tiene get_json(). Solo se le agrega el aviso cuando contesto bien.
+    if len(filas) > 1 and hasattr(respuesta, "get_json"):
+        # Varios documentos comparten el folio (tipos distintos): avisar cuál se usó.
+        cuerpo = respuesta.get_json()
+        if isinstance(cuerpo, dict):
+            cuerpo["aviso"] = ("Hay %d documentos con folio %s (tipos: %s). Se muestra el más "
+                               "reciente, tipo %s. Agrega &tipo=NN para elegir otro."
+                               % (len(filas), folio,
+                                  ", ".join(str(f[1]) for f in filas), filas[0][1]))
+            return jsonify(cuerpo)
+    return respuesta
+
+
 @app.route("/facturacion/boleta/<int:boleta_id>/diagnostico-sii", methods=["GET"])
 def facturacion_diagnostico_sii(boleta_id):
     """Extrae del XML timbrado los valores REALES (FchEmis, MntTotal, RUTRecep) y
