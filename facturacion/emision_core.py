@@ -42,7 +42,7 @@ def emitir_boleta_core(tenant_id, items, receptor=None, ambiente=None,
     from facturacion.certificados import obtener_certificado
     from facturacion.db import obtener_config_facturacion
     from facturacion.cafs import obtener_folio_disponible
-    from facturacion.utils import normalizar_ambiente, resolucion_para
+    from facturacion.utils import normalizar_ambiente, resolucion_para, validar_rut
 
     pasos = []
     def paso(nombre, ok, detalle=""):
@@ -97,6 +97,20 @@ def emitir_boleta_core(tenant_id, items, receptor=None, ambiente=None,
         receptor["rut"] = "66666666-6"
     if not receptor.get("razon_social"):
         receptor["razon_social"] = "Consumidor Final"
+
+    # El RUT del receptor se valida ACA, antes de reservar el folio. El SII
+    # rechaza el documento con codigo 110 "RUT Receptor Invalido", pero recien
+    # al procesar el sobre: entrega track id, contesta REC, y el rechazo queda
+    # en una consulta que nadie mira. Resultado: folio quemado y una boleta que
+    # parece enviada. Es lo que paso con 76922864-4, cuyo digito verificador
+    # correcto es 0.
+    if not validar_rut(receptor["rut"]):
+        return {"ok": False,
+                "error": "El RUT del receptor no es valido: " + str(receptor["rut"]) +
+                         ". Revisa el digito verificador; el SII rechaza el documento "
+                         "por RUT Receptor Invalido y el folio se pierde.",
+                "pasos": pasos}
+    paso("Validar RUT receptor", True, receptor["rut"])
 
     # 3. Reservar folio (ATÓMICO)
     folio_res = obtener_folio_disponible(get_conn, release_conn, tenant_id, tipo_dte, ambiente)
