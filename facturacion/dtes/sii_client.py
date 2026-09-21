@@ -466,6 +466,7 @@ def consultar_estado_envio(
     # Interpretar la respuesta JSON del SII
     estado_envio = None       # EPR, RCH, etc. (estado del sobre)
     aceptados = rechazados = reparos = informados = None
+    detalle = []              # un item por documento rechazado o con reparos
     aceptado_final = None     # True si las boletas quedaron aceptadas sin reparos
     try:
         j = resp.json()
@@ -486,6 +487,34 @@ def consultar_estado_envio(
         if rechazados is not None and reparos is not None:
             aceptado_final = (int(rechazados) == 0 and int(reparos) == 0
                               and int(aceptados or 0) > 0)
+
+        # detalle_rep_rech es donde el SII explica POR QUE rechazo cada documento.
+        # Veniamos descartandolo y quedandonos solo con el contador, asi que el
+        # motivo ("RUT Receptor Invalido [76922864-4]") no llegaba a ninguna parte.
+        for d in (j.get("detalle_rep_rech") or []):
+            if not isinstance(d, dict):
+                continue
+            motivos = []
+            for err in (d.get("error") or []):
+                if not isinstance(err, dict):
+                    continue
+                txt = str(err.get("descripcion") or "").strip()
+                det = str(err.get("detalle") or "").strip()
+                cod = err.get("codigo")
+                if det:
+                    txt = "%s %s" % (txt, det)
+                if cod is not None:
+                    txt = "%s (codigo %s)" % (txt, cod)
+                if txt.strip():
+                    motivos.append(txt.strip())
+            detalle.append({
+                "tipo": d.get("tipo"),
+                "folio": d.get("folio"),
+                "estado": (d.get("estado") or "").upper(),
+                "descripcion": d.get("descripcion"),
+                "motivos": motivos,
+                "motivo": " · ".join(motivos) if motivos else (d.get("descripcion") or ""),
+            })
     except Exception:
         pass
 
@@ -524,8 +553,24 @@ def consultar_estado_envio(
         "rechazados": rechazados,
         "reparos": reparos,
         "aceptado_sin_reparos": aceptado_final,
+        "detalle_rechazos": detalle,
         "respuesta_cruda": texto[:1500],
     }
+
+
+def buscar_rechazo(detalle_rechazos, tipo_dte, folio):
+    """Busca en detalle_rechazos el item de un documento concreto.
+
+    Devuelve el dict del documento o None si el SII no lo reporto como
+    rechazado ni con reparos.
+    """
+    for d in (detalle_rechazos or []):
+        try:
+            if int(d.get("folio")) == int(folio) and int(d.get("tipo")) == int(tipo_dte):
+                return d
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════

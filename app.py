@@ -26354,6 +26354,132 @@ def facturacion_diagnostico_sii(boleta_id):
     })
 
 
+def _fact_estado_real_boleta(cert, config, ambiente, tipo_dte, folio,
+                             rut_receptor, monto_total, fecha_emision,
+                             track_id=None, token=None):
+    """Estado REAL de una boleta (39/41) segun el SII. Fuente unica de verdad.
+
+    Pregunta dos cosas, porque ninguna de las dos alcanza sola:
+
+      1. El estado del DOCUMENTO (REST, por tipo y folio) -> DOK / DNK / FAU.
+         Dice si el SII lo tiene, pero no por que no lo tiene.
+      2. El estado del SOBRE (REST, por track id) -> trae detalle_rep_rech, que
+         es donde el SII escribe el motivo del rechazo.
+
+    Regla que no se negocia: 'aceptado' SOLO con DOK. Cualquier respuesta dudosa
+    -consulta fallida, token vencido, HTML de error- devuelve None y el estado
+    guardado NO se toca. Marcar como aceptado algo que el SII rechazo es peor que
+    no saber: durante semanas la 25209 figuro "Enviado al SII" mientras el SII la
+    tenia rechazada por RUT Receptor Invalido.
+
+    Returns:
+        dict {estado, estado_sii, glosa, motivo, fuente} o None si no se pudo
+        determinar con certeza.
+    """
+    from facturacion.dtes.sii_client import (autenticar, consultar_estado_boleta,
+                                             consultar_estado_envio, buscar_rechazo)
+
+    if token is None:
+        try:
+            token = autenticar(cert["pfx_bytes"], cert["password"], ambiente)
+        except Exception as e:
+            app.logger.warning("[estado boleta] no se pudo autenticar: %s", str(e)[:200])
+            return None
+
+    try:
+        doc = consultar_estado_boleta(
+            token=token, rut_emisor=config["rut_emisor"], tipo_dte=tipo_dte,
+            folio=folio, rut_receptor=rut_receptor, monto_total=monto_total,
+            fecha_emision=fecha_emision, ambiente=ambiente)
+    except Exception as e:
+        app.logger.warning("[estado boleta] folio %s: %s", folio, str(e)[:200])
+        return None
+
+    if not doc.get("ok"):
+        # La consulta no sirvio (404, HTML, token vencido). No sabemos nada.
+        return None
+
+    estado_sii = (doc.get("estado") or "").upper()
+    glosa_sii = doc.get("glosa") or ""
+
+    if estado_sii == "DOK":
+        return {"estado": "aceptado", "estado_sii": "DOK",
+                "glosa": glosa_sii or "Aceptada por el SII",
+                "motivo": None, "fuente": "documento"}
+
+    if estado_sii == "DNK":
+        return {"estado": "revisar", "estado_sii": "DNK",
+                "glosa": glosa_sii or ("El SII tiene el documento pero los datos no "
+                                       "coinciden con los registrados"),
+                "motivo": None, "fuente": "documento"}
+
+    if estado_sii in ("FNA", "FAN"):
+        return {"estado": "rechazado", "estado_sii": estado_sii,
+                "glosa": glosa_sii or "Documento no autorizado por el SII",
+                "motivo": None, "fuente": "documento"}
+
+    if estado_sii in ("ANC", "AND"):
+        return {"estado": "anulado", "estado_sii": estado_sii,
+                "glosa": glosa_sii or "Documento anulado", "motivo": None,
+                "fuente": "documento"}
+
+    if estado_sii != "FAU":
+        # Estado que no conocemos: se informa sin inventar una interpretacion.
+        return {"estado": "en_proceso", "estado_sii": estado_sii,
+                "glosa": glosa_sii or ("Estado SII: " + estado_sii),
+                "motivo": None, "fuente": "documento"}
+
+    # FAU: el SII no lo tiene. Puede estar en cola o haber sido rechazado.
+    # El sobre lo aclara, y ademas dice por que.
+    if not track_id:
+        return {"estado": "en_proceso", "estado_sii": "FAU",
+                "glosa": ("El SII todavia no registra este documento y no hay track id "
+                          "para revisar el envio"),
+                "motivo": None, "fuente": "documento"}
+
+    try:
+        env = consultar_estado_envio(track_id=str(track_id), token=token,
+                                     rut_emisor=config["rut_emisor"], ambiente=ambiente)
+    except Exception as e:
+        app.logger.warning("[estado sobre] track %s: %s", track_id, str(e)[:200])
+        env = {"ok": False}
+
+    if not env.get("ok"):
+        return {"estado": "en_proceso", "estado_sii": "FAU",
+                "glosa": "El SII todavia no registra este documento",
+                "motivo": None, "fuente": "documento"}
+
+    estado_env = (env.get("estado_envio") or "").upper()
+    rech = buscar_rechazo(env.get("detalle_rechazos"), tipo_dte, folio)
+
+    if rech and rech.get("estado") in ("RCH", "RECHAZADO"):
+        return {"estado": "rechazado", "estado_sii": "RCH",
+                "glosa": "Rechazada por el SII: " + (rech.get("motivo") or "sin detalle"),
+                "motivo": rech.get("motivo"), "fuente": "sobre",
+                "errores": rech.get("motivos")}
+
+    if estado_env in ("RCH", "RSC", "RFR", "RCT", "RPT", "RCO"):
+        return {"estado": "rechazado", "estado_sii": estado_env,
+                "glosa": "El SII rechazo el envio completo (estado %s)" % estado_env,
+                "motivo": None, "fuente": "sobre"}
+
+    if estado_env == "REC":
+        return {"estado": "en_proceso", "estado_sii": "REC",
+                "glosa": "El SII recibio el envio y todavia lo esta validando",
+                "motivo": None, "fuente": "sobre"}
+
+    if rech:
+        # Reparos: el SII lo acepto, pero observado.
+        return {"estado": "revisar", "estado_sii": estado_env or "EPR",
+                "glosa": "Aceptada con reparos: " + (rech.get("motivo") or "sin detalle"),
+                "motivo": rech.get("motivo"), "fuente": "sobre"}
+
+    return {"estado": "en_proceso", "estado_sii": "FAU",
+            "glosa": ("El envio figura procesado (%s) pero el SII aun no registra este "
+                      "folio" % (estado_env or "?")),
+            "motivo": None, "fuente": "sobre"}
+
+
 @app.route("/facturacion/boleta/<int:boleta_id>/consultar-estado", methods=["POST", "GET"])
 def facturacion_consultar_estado(boleta_id):
     """LIMBO 3: consulta el estado REAL en el SII de una boleta enviada.
@@ -26412,6 +26538,40 @@ def facturacion_consultar_estado(boleta_id):
     cert = obtener_certificado(get_conn, release_conn, tenant_id)
     if not cert.get("ok"):
         return jsonify({"ok": False, "error": "Certificado no disponible"}), 400
+
+    # Las BOLETAS van por su propio circuito. getEstDte es el de facturas: para una
+    # boleta contesta, pero nunca dice por qué fue rechazada. El motivo vive en el
+    # detalle del sobre, y por eso acá se consultan las dos cosas.
+    if int(tipo_dte) in (39, 41):
+        real = _fact_estado_real_boleta(
+            cert=cert, config=config, ambiente=ambiente, tipo_dte=int(tipo_dte),
+            folio=int(folio), rut_receptor=rut_receptor, monto_total=monto_total,
+            fecha_emision=fecha_str, track_id=track_id)
+        if real is None:
+            # No se pudo determinar. NO se toca el estado guardado: dejar una
+            # boleta como "aceptada" porque la consulta falló es justo el error
+            # que esto viene a evitar.
+            return jsonify({"ok": False,
+                            "error": "No se pudo confirmar el estado con el SII. "
+                                     "El estado guardado se deja como estaba.",
+                            "track_id": track_id}), 502
+
+        _fact_actualizar_estado_dte(
+            boleta_id, real["estado"], estado_sii=real.get("estado_sii"),
+            glosa=real.get("glosa"),
+            set_fecha_aceptacion=(real["estado"] == "aceptado"))
+
+        return jsonify({"ok": True, "estado": real["estado"],
+                        "estado_sii": real.get("estado_sii"),
+                        "glosa": real.get("glosa"),
+                        "motivo_rechazo": real.get("motivo"),
+                        "errores_sii": real.get("errores"),
+                        "track_id": track_id,
+                        "datos_consultados": {"tipo": tipo_dte, "folio": folio,
+                                              "fecha_xml": fecha_str,
+                                              "monto_xml": monto_total,
+                                              "receptor_xml": rut_receptor},
+                        "respuesta_al_enviar": (row[8] or "")[:2500] if len(row) > 8 else ""})
 
     # Consulta por DATOS del documento (getEstDte, SOAP, vía pública documentada).
     # No depende del track id ni del endpoint REST que daba 404.
@@ -26512,6 +26672,8 @@ def _fact_job_consultar_estados():
     # salía de la ventana de 7 días y quedaba en 'enviado' para siempre.
     HORAS_PARA_REVISAR = 24
 
+    import re as _re_job
+
     try:
         # Contexto admin: este job corre en el scheduler, sin sesion Flask, y
         # barre los DTE de TODOS los tenants. Con RLS activo, un get_conn() pelado
@@ -26524,7 +26686,7 @@ def _fact_job_consultar_estados():
                                       monto_total, fecha_emision, track_id_sii,
                                       EXTRACT(EPOCH FROM (NOW() - COALESCE(fecha_envio_sii,
                                                                            fecha_emision)))/3600,
-                                      estado
+                                      estado, xml_firmado
                                FROM facturacion_dtes
                                WHERE estado IN ('enviado','en_proceso')
                                  AND fecha_emision > (NOW() - INTERVAL '7 days')
@@ -26558,7 +26720,8 @@ def _fact_job_consultar_estados():
                       % (bid, str(e)[:100]))
 
         for row in pendientes:
-            bid, tid, tipo_dte, folio, rut_recep, monto, fch, track_id, horas, estado_actual = row
+            (bid, tid, tipo_dte, folio, rut_recep, monto, fch, track_id, horas,
+             estado_actual, xml_doc) = row
             try:
                 if tid not in certs:
                     cfg = obtener_config_facturacion(get_conn, release_conn, tid)
@@ -26571,61 +26734,60 @@ def _fact_job_consultar_estados():
                 horas = float(horas or 0)
                 cerrado = False
 
-                # ── Vía 1: por track id (la única que ve los reparos) ────────
-                if track_id and int(tipo_dte) in (39, 41):
+                # ── Vía 1: circuito de boletas (documento + sobre) ──────────
+                # Misma función que usa el botón del panel, para que las dos vías
+                # no puedan discrepar. Antes acá se leían los CONTADORES del sobre,
+                # que son del envío completo: con varias boletas en un mismo sobre,
+                # un solo rechazo las marcaba todas. El detalle por folio evita eso,
+                # y además trae el motivo escrito por el SII.
+                if int(tipo_dte) in (39, 41):
                     if tid not in tok_rest:
                         try:
                             tok_rest[tid] = autenticar(crt["pfx_bytes"], crt["password"], amb)
                         except Exception as e:
                             tok_rest[tid] = None
                             print("[Estado SII] Tenant %s: no se pudo autenticar en la API "
-                                  "de boletas (%s). Se consulta solo por datos." % (tid, str(e)[:100]))
+                                  "de boletas (%s)." % (tid, str(e)[:100]))
                     if tok_rest.get(tid):
-                        env = consultar_estado_envio(track_id=str(track_id), token=tok_rest[tid],
-                                                     rut_emisor=cfg["rut_emisor"], ambiente=amb)
-                        if env.get("ok"):
-                            est_env = (env.get("estado_envio") or "").upper()
-                            rech = env.get("rechazados")
-                            reps = env.get("reparos")
-                            acep = env.get("aceptados")
-                            if rech is not None or reps is not None:
-                                rech_n = int(rech or 0)
-                                reps_n = int(reps or 0)
-                                acep_n = int(acep or 0)
-                                if rech_n > 0:
-                                    _fact_actualizar_estado_dte(
-                                        bid, "rechazado", estado_sii=est_env or "RCH",
-                                        glosa="Rechazado por el SII (%d rechazado(s) en el envío)" % rech_n)
-                                    cerrado = True
-                                elif reps_n > 0:
-                                    # NO es aceptación limpia. El SII procesó el envío
-                                    # con observaciones y hay que mirarlas.
-                                    _fact_actualizar_estado_dte(
-                                        bid, "aceptado_reparos", estado_sii=est_env or "RPR",
-                                        glosa="Aceptado con reparos por el SII (%d con reparo)" % reps_n,
-                                        set_fecha_aceptacion=True)
-                                    cerrado = True
-                                elif acep_n > 0:
-                                    _fact_actualizar_estado_dte(
-                                        bid, "aceptado", estado_sii=est_env or "EPR",
-                                        glosa="Aceptado por el SII", set_fecha_aceptacion=True)
-                                    cerrado = True
-                            if not cerrado and est_env:
-                                # Sin contadores: interpretar el código del envío.
-                                # Solo se cierra si el estado ya es final.
-                                interno, glosa = _fact_mapear_estado_sii(est_env)
-                                if interno in ("aceptado", "aceptado_reparos", "rechazado"):
-                                    _fact_actualizar_estado_dte(
-                                        bid, interno, estado_sii=est_env, glosa=glosa,
-                                        set_fecha_aceptacion=interno.startswith("aceptado"))
-                                    cerrado = True
-                                else:
-                                    # Intermedio (REC, SOK, FOK, PRD, CRT, EPR): el SII
-                                    # todavía lo está procesando. No se cierra, pero se
-                                    # deja registrado qué contestó.
-                                    registrar_respuesta(bid, estado_actual, est_env, glosa)
-                                    print("[Estado SII] DTE %s (folio %s): el SII responde %s "
-                                          "(%s). Sigue en proceso." % (bid, folio, est_env, glosa))
+                        # Los datos de la consulta salen del XML TIMBRADO, no de la
+                        # base: el SII los compara contra lo que viajó firmado y
+                        # cualquier desfase devuelve DNK en vez del estado real.
+                        _xd = xml_doc or ""
+                        def _tim(tag, respaldo):
+                            m = _re_job.search(r"<%s>([^<]+)</%s>" % (tag, tag), _xd)
+                            return m.group(1).strip() if m else respaldo
+                        _fch_str = (fch.strftime("%Y-%m-%d") if hasattr(fch, "strftime")
+                                    else str(fch)[:10])
+                        _fecha = _tim("FchEmis", _fch_str)[:10]
+                        _monto = _tim("MntTotal", str(int(monto or 0)))
+                        _recep = _tim("RUTRecep", rut_recep or "66666666-6")
+
+                        real = _fact_estado_real_boleta(
+                            cert=crt, config=cfg, ambiente=amb, tipo_dte=int(tipo_dte),
+                            folio=int(folio), rut_receptor=_recep,
+                            monto_total=int(_monto) if str(_monto).isdigit() else 0,
+                            fecha_emision=_fecha, track_id=track_id,
+                            token=tok_rest[tid])
+
+                        if real is None:
+                            # Sin certeza no se toca nada. Marcar un documento como
+                            # aceptado porque la consulta falló es peor que no saber.
+                            print("[Estado SII] DTE %s (folio %s): no se pudo confirmar "
+                                  "con el SII; se deja como está." % (bid, folio))
+                        elif real["estado"] in ("aceptado", "rechazado", "anulado", "revisar"):
+                            _fact_actualizar_estado_dte(
+                                bid, real["estado"], estado_sii=real.get("estado_sii"),
+                                glosa=real.get("glosa"),
+                                set_fecha_aceptacion=(real["estado"] == "aceptado"))
+                            cerrado = True
+                            if real["estado"] == "rechazado":
+                                print("[Estado SII] DTE %s (folio %s) RECHAZADO: %s"
+                                      % (bid, folio, real.get("motivo") or real.get("glosa")))
+                        else:
+                            registrar_respuesta(bid, estado_actual,
+                                                real.get("estado_sii"), real.get("glosa"))
+                            print("[Estado SII] DTE %s (folio %s): %s. Sigue en proceso."
+                                  % (bid, folio, real.get("glosa")))
 
                 # ── Vía 1b: el SOBRE de los DTE tradicionales (getEstUp) ────
                 # Facturas, NC, ND y guías viajan por DTEUpload, no por la API de
@@ -28930,6 +29092,104 @@ def admin_lusync_sii_test_envio():
     </div>
     </body></html>"""
     return html
+
+
+@app.route("/admin/lusync/sii/resync-estado", methods=["GET", "POST"])
+@requiere_lusync_admin
+def admin_lusync_sii_resync_estado():
+    """Re-consulta al SII el estado de boletas y corrige lo guardado.
+
+    Uso: /admin/lusync/sii/resync-estado?tenant_id=1&folios=25208,25209,25210
+
+    El job automatico solo mira los ultimos 7 dias, asi que los documentos viejos
+    que quedaron mal etiquetados no los alcanza. Esto los arregla a mano, usando
+    exactamente la misma funcion (_fact_estado_real_boleta), para que no haya dos
+    criterios distintos conviviendo.
+
+    Si el SII no contesta con certeza, el documento NO se toca y se informa como
+    'sin_cambio'. Preferimos dejarlo como esta antes que inventar un estado.
+    """
+    from inventario import get_conn, release_conn
+    from facturacion.certificados import obtener_certificado
+    from facturacion.db import obtener_config_facturacion
+    from facturacion.utils import normalizar_ambiente
+    from facturacion.dtes.sii_client import autenticar
+    import re as _re_rs
+
+    tenant_id = request.args.get("tenant_id", default=1, type=int)
+    crudo = (request.args.get("folios") or request.args.get("folio") or "").strip()
+    folios = [f.strip() for f in crudo.split(",") if f.strip().isdigit()]
+    if not folios:
+        return jsonify({"ok": False,
+                        "error": "Indica los folios: ?tenant_id=1&folios=25208,25209"}), 400
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT id, tipo_dte, folio, rut_receptor, monto_total,
+                                  fecha_emision, track_id_sii, estado, xml_firmado
+                           FROM facturacion_dtes
+                           WHERE tenant_id=%s AND tipo_dte IN (39,41)
+                             AND folio = ANY(%s)
+                           ORDER BY folio""",
+                        (tenant_id, [int(f) for f in folios]))
+            filas = cur.fetchall()
+    finally:
+        release_conn(conn)
+
+    if not filas:
+        return jsonify({"ok": False, "error": "No se encontro ninguna boleta con esos folios"}), 404
+
+    config = obtener_config_facturacion(get_conn, release_conn, tenant_id) or {}
+    cert = obtener_certificado(get_conn, release_conn, tenant_id)
+    if not cert.get("ok"):
+        return jsonify({"ok": False, "error": "Certificado: " + str(cert.get("error"))}), 400
+    ambiente = normalizar_ambiente(request.args.get("ambiente")
+                                   or config.get("ambiente") or "certificacion")
+    try:
+        token = autenticar(cert["pfx_bytes"], cert["password"], ambiente)
+    except Exception as e:
+        return jsonify({"ok": False, "error": "No se pudo autenticar: " + str(e)[:300]}), 502
+
+    resultados = []
+    for (bid, tipo_dte, folio, rut_rec, monto, fecha, track_id, estado_previo, xml) in filas:
+        xml = xml or ""
+        def _tim(tag, respaldo):
+            m = _re_rs.search(r"<%s>([^<]+)</%s>" % (tag, tag), xml)
+            return m.group(1).strip() if m else respaldo
+        f_str = fecha.strftime("%Y-%m-%d") if hasattr(fecha, "strftime") else str(fecha)[:10]
+        _fecha = _tim("FchEmis", f_str)[:10]
+        _monto = _tim("MntTotal", str(int(monto or 0)))
+        _recep = _tim("RUTRecep", rut_rec or "66666666-6")
+
+        real = _fact_estado_real_boleta(
+            cert=cert, config=config, ambiente=ambiente, tipo_dte=int(tipo_dte),
+            folio=int(folio), rut_receptor=_recep,
+            monto_total=int(_monto) if str(_monto).isdigit() else 0,
+            fecha_emision=_fecha, track_id=track_id, token=token)
+
+        if real is None:
+            resultados.append({"folio": folio, "estado_previo": estado_previo,
+                               "estado_nuevo": None, "cambio": False,
+                               "nota": "El SII no contesto con certeza; no se toco nada"})
+            continue
+
+        cambio = (real["estado"] != estado_previo)
+        if cambio:
+            _fact_actualizar_estado_dte(
+                bid, real["estado"], estado_sii=real.get("estado_sii"),
+                glosa=real.get("glosa"),
+                set_fecha_aceptacion=(real["estado"] == "aceptado"))
+        resultados.append({"folio": folio, "estado_previo": estado_previo,
+                           "estado_nuevo": real["estado"],
+                           "estado_sii": real.get("estado_sii"),
+                           "cambio": cambio, "glosa": real.get("glosa"),
+                           "motivo_sii": real.get("motivo")})
+
+    return jsonify({"ok": True, "tenant_id": tenant_id, "ambiente": ambiente,
+                    "revisados": len(resultados),
+                    "corregidos": sum(1 for r in resultados if r.get("cambio")),
+                    "resultados": resultados})
 
 
 @app.route("/admin/lusync/sii/estado-boleta", methods=["GET"])
