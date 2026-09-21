@@ -14701,6 +14701,14 @@ async function dtConsultarEstado(id){
       lineas.push('');
       lineas.push('Descargar el sobre del envío:');
       lineas.push('  '+location.origin+'/facturacion/boleta/'+id+'/envio-sii');
+      if(d.respuesta_al_enviar){
+        lineas.push('');
+        lineas.push('────────────────────────────');
+        lineas.push('LO QUE CONTESTÓ EL SII AL RECIBIR EL ENVÍO:');
+        lineas.push('(es el momento del envío, no esta consulta)');
+        lineas.push('');
+        lineas.push(d.respuesta_al_enviar);
+      }
       if(d.respuesta_sii){
         lineas.push('');
         lineas.push('Respuesta cruda del SII (consulta automática):');

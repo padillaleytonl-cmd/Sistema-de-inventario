@@ -26373,7 +26373,8 @@ def facturacion_consultar_estado(boleta_id):
     try:
         with conn.cursor() as cur:
             cur.execute("""SELECT track_id_sii, estado, tipo_dte, folio, rut_receptor,
-                                  monto_total, fecha_emision, xml_firmado
+                                  monto_total, fecha_emision, xml_firmado,
+                                  respuesta_envio_sii
                            FROM facturacion_dtes
                            WHERE id=%s AND tenant_id=%s""", (boleta_id, tenant_id))
             row = cur.fetchone()
@@ -26469,7 +26470,11 @@ def facturacion_consultar_estado(boleta_id):
                     "datos_consultados": {"tipo": tipo_dte, "folio": folio,
                                           "fecha_xml": fecha_str, "monto_xml": monto_total,
                                           "receptor_xml": rut_receptor},
-                    "respuesta_sii": res.get("respuesta_cruda", "")[:2500]})
+                    "respuesta_sii": res.get("respuesta_cruda", "")[:2500],
+                    # Lo que el SII contesto cuando RECIBIO el sobre, no ahora al
+                    # consultarlo. Son dos momentos distintos y el primero es el
+                    # que dice si el envio entro o se descarto.
+                    "respuesta_al_enviar": (row[8] or "")[:2500] if len(row) > 8 else ""})
 
 
 def _fact_job_consultar_estados():
