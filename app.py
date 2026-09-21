@@ -28932,6 +28932,106 @@ def admin_lusync_sii_test_envio():
     return html
 
 
+@app.route("/admin/lusync/sii/estado-boleta", methods=["GET"])
+@requiere_lusync_admin
+def admin_lusync_sii_estado_boleta():
+    """Le pregunta al SII por UNA boleta, por tipo y folio.
+
+    Uso: /admin/lusync/sii/estado-boleta?tenant_id=1&folio=25210
+
+    Es la consulta que corresponde a las boletas. El circuito de facturas
+    (getEstDte / getEstUp) no conoce sus track id y contesta -11, y la ruta del
+    estado del sobre que veniamos usando llevaba un "/estado" de mas, asi que el
+    SII respondia 404 en HTML. Ver la especificacion oficial:
+    https://www4c.sii.cl/bolcoreinternetui/api/openapi.yaml
+
+    Los datos de la consulta salen del XML TIMBRADO, no de la base: el SII
+    compara receptor, monto y fecha contra lo que viajo firmado, y cualquier
+    desfase devuelve DNK en vez del estado real.
+    """
+    from inventario import get_conn, release_conn
+    from facturacion.certificados import obtener_certificado
+    from facturacion.db import obtener_config_facturacion
+    from facturacion.utils import normalizar_ambiente
+    from facturacion.dtes.sii_client import autenticar, consultar_estado_boleta
+
+    tenant_id = request.args.get("tenant_id", default=1, type=int)
+    folio = (request.args.get("folio") or "").strip()
+    if not folio.isdigit():
+        return jsonify({"ok": False,
+                        "error": "Indica el folio: ?tenant_id=1&folio=25210"}), 400
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT tipo_dte, folio, xml_firmado, track_id_sii,
+                                  rut_receptor, monto_total, fecha_emision
+                           FROM facturacion_dtes
+                           WHERE tenant_id=%s AND folio=%s AND tipo_dte IN (39,41)
+                           ORDER BY id DESC LIMIT 1""", (tenant_id, int(folio)))
+            row = cur.fetchone()
+    finally:
+        release_conn(conn)
+    if not row:
+        return jsonify({"ok": False,
+                        "error": "No hay boleta con folio %s en el tenant %s" % (folio, tenant_id)}), 404
+
+    tipo_dte, folio_bd, xml, track_id, rut_rec_bd, monto_bd, fecha_bd = row
+    xml = xml or ""
+
+    # Los valores EXACTOS que se timbraron
+    import re as _re_eb
+    def _del_xml(tag, respaldo):
+        m = _re_eb.search(r"<%s>([^<]+)</%s>" % (tag, tag), xml)
+        return m.group(1).strip() if m else respaldo
+
+    fecha_xml = _del_xml("FchEmis",
+                         fecha_bd.strftime("%Y-%m-%d") if hasattr(fecha_bd, "strftime")
+                         else str(fecha_bd)[:10])
+    monto_xml = _del_xml("MntTotal", str(int(monto_bd or 0)))
+    rut_rec_xml = _del_xml("RUTRecep", rut_rec_bd or "66666666-6")
+
+    config = obtener_config_facturacion(get_conn, release_conn, tenant_id) or {}
+    cert = obtener_certificado(get_conn, release_conn, tenant_id)
+    if not cert.get("ok"):
+        return jsonify({"ok": False, "error": "Certificado: " + str(cert.get("error"))}), 400
+    ambiente = normalizar_ambiente(request.args.get("ambiente")
+                                   or config.get("ambiente") or "certificacion")
+
+    try:
+        token = autenticar(cert["pfx_bytes"], cert["password"], ambiente)
+    except Exception as e:
+        return jsonify({"ok": False, "error": "No se pudo autenticar: " + str(e)[:300]}), 502
+
+    res = consultar_estado_boleta(
+        token=token, rut_emisor=config.get("rut_emisor"), tipo_dte=int(tipo_dte),
+        folio=int(folio_bd), rut_receptor=rut_rec_xml,
+        monto_total=int(monto_xml) if str(monto_xml).isdigit() else 0,
+        fecha_emision=fecha_xml, ambiente=ambiente)
+
+    return jsonify({
+        "ok": res.get("ok", False),
+        "ambiente": ambiente,
+        "consultado_con_lo_timbrado": {"tipo": tipo_dte, "folio": folio_bd,
+                                       "fecha": fecha_xml, "monto": monto_xml,
+                                       "receptor": rut_rec_xml},
+        "track_id_del_envio": track_id,
+        "estado": res.get("estado"),
+        "glosa": res.get("glosa"),
+        "que_significa": {
+            "DOK": "Recibido y validado por el SII",
+            "DNK": "Recibido, pero los datos de la consulta no coinciden",
+            "FAU": "El SII NO tiene este documento",
+            "FNA": "Documento no autorizado", "FAN": "Documento no autorizado",
+            "ANC": "Anulada", "AND": "Anulada",
+        }.get(str(res.get("estado") or ""), "ver respuesta cruda"),
+        "url_consultada": res.get("url"),
+        "http": res.get("http"),
+        "error": res.get("error"),
+        "respuesta_cruda": res.get("respuesta_cruda"),
+    })
+
+
 @app.route("/admin/lusync/sii/test-estado", methods=["GET"])
 @requiere_lusync_admin
 def admin_lusync_sii_test_estado():

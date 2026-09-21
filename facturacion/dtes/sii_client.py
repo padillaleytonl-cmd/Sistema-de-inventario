@@ -44,15 +44,22 @@ ENDPOINTS = {
         "semilla": "https://apicert.sii.cl/recursos/v1/boleta.electronica.semilla",
         "token":   "https://apicert.sii.cl/recursos/v1/boleta.electronica.token",
         "envio":   "https://pangal.sii.cl/recursos/v1/boleta.electronica.envio",
-        # Estado del envío: {rut}-{dv}-{trackid}/estado  (track id boletas = 15 díg)
-        "estado_envio": "https://apicert.sii.cl/recursos/v1/boleta.electronica.envio/{rut}-{dv}-{trackid}/estado",
+        # Estado del SOBRE por track id. Ojo: NO lleva "/estado" al final. Se lo
+        # veniamos agregando y el SII contestaba 404 en HTML, lo que nos hizo
+        # creer durante semanas que no se podia consultar el estado de una boleta.
+        # Ver https://www4c.sii.cl/bolcoreinternetui/api/openapi.yaml
+        "estado_envio": "https://apicert.sii.cl/recursos/v1/boleta.electronica.envio/{rut}-{dv}-{trackid}",
+        # Estado de UNA boleta, por tipo y folio. Esta si termina en /estado y
+        # ademas exige receptor, monto y fecha como parametros de consulta.
+        "estado_boleta": "https://apicert.sii.cl/recursos/v1/boleta.electronica/{rut}-{dv}-{tipo}-{folio}/estado",
         "host_envio": "pangal.sii.cl",
     },
     "produccion": {
         "semilla": "https://api.sii.cl/recursos/v1/boleta.electronica.semilla",
         "token":   "https://api.sii.cl/recursos/v1/boleta.electronica.token",
         "envio":   "https://rahue.sii.cl/recursos/v1/boleta.electronica.envio",
-        "estado_envio": "https://api.sii.cl/recursos/v1/boleta.electronica.envio/{rut}-{dv}-{trackid}/estado",
+        "estado_envio": "https://api.sii.cl/recursos/v1/boleta.electronica.envio/{rut}-{dv}-{trackid}",
+        "estado_boleta": "https://api.sii.cl/recursos/v1/boleta.electronica/{rut}-{dv}-{tipo}-{folio}/estado",
         "host_envio": "rahue.sii.cl",
     },
 }
@@ -328,6 +335,98 @@ def enviar_boletas(
         "respuesta_cruda": texto[:500],
         "status": resp.status_code,
     }
+
+
+def consultar_estado_boleta(
+    token: str,
+    rut_emisor: str,
+    tipo_dte: int,
+    folio: int,
+    rut_receptor: str,
+    monto_total: int,
+    fecha_emision: str,
+    ambiente: str = "certificacion",
+) -> dict:
+    """Estado de UNA boleta en el SII, por tipo y folio.
+
+    Es la consulta que corresponde a las boletas: el circuito de facturas
+    (getEstDte / getEstUp por SOAP) no conoce sus track id y contesta -11.
+
+    Segun la especificacion oficial del SII, la ruta es
+
+        GET /boleta.electronica/{rut}-{dv}-{tipo}-{folio}/estado
+            ?rut_receptor=&dv_receptor=&monto=&fechaEmision=DD-MM-YYYY
+
+    y los datos de la consulta tienen que ser EXACTAMENTE los timbrados en el
+    XML, no los recalculados desde la base: cualquier desfase devuelve DNK.
+
+    Args:
+        fecha_emision: 'AAAA-MM-DD' (se convierte al DD-MM-AAAA que pide el SII)
+
+    Returns:
+        dict {ok, estado, glosa, url, http, respuesta_cruda}
+        Estados posibles: DOK (recibido y validado), DNK (recibido, datos no
+        coinciden), FAU (no recibido), FNA/FAN (no autorizado), ANC/AND
+        (anulada), y los TMD/TMC/MMD/MMC de descuadre de monto o fecha.
+    """
+    def _split_rut(rut):
+        rut = str(rut).replace(".", "").replace("-", "").replace(" ", "").upper()
+        return rut[:-1], rut[-1]
+
+    rut_num, rut_dv = _split_rut(rut_emisor)
+    rec_num, rec_dv = _split_rut(rut_receptor or "66666666-6")
+
+    # El SII pide la fecha al reves de como viaja en el XML
+    f = str(fecha_emision or "").strip()
+    if len(f) == 10 and f[4] == "-":
+        f = "%s-%s-%s" % (f[8:10], f[5:7], f[0:4])
+
+    url = ENDPOINTS[ambiente]["estado_boleta"].format(
+        rut=rut_num, dv=rut_dv, tipo=int(tipo_dte), folio=int(folio))
+    params = {
+        "rut_receptor": rec_num,
+        "dv_receptor": rec_dv,
+        "monto": int(monto_total or 0),
+        "fechaEmision": f,
+    }
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json",
+        "Cookie": "TOKEN=%s" % token,
+    }
+    try:
+        resp = requests.get(url, params=params, headers=headers, timeout=TIMEOUT)
+    except Exception as e:
+        return {"ok": False, "error": "No se pudo conectar a %s: %s" % (url, e), "url": url}
+
+    texto = resp.text or ""
+    salida = {"url": url, "parametros": params, "http": resp.status_code,
+              "respuesta_cruda": texto[:1000]}
+
+    if "NO ESTA AUTENTICADO" in texto.upper():
+        salida.update({"ok": False, "error": "Token vencido o invalido"})
+        return salida
+
+    # Un 404 en HTML significa que la ruta no existe, no que el documento no este.
+    if texto.lstrip()[:60].lower().startswith(("<html", "<!doctype")):
+        salida.update({"ok": False,
+                       "error": "El SII contesto HTML (%s), no datos. La URL no existe "
+                                "en este ambiente." % resp.status_code})
+        return salida
+
+    try:
+        j = resp.json()
+    except ValueError:
+        salida.update({"ok": False, "error": "El SII no devolvio JSON"})
+        return salida
+
+    estado = j.get("estado") or j.get("codigo") or j.get("status")
+    salida.update({"ok": bool(estado), "estado": estado,
+                   "glosa": j.get("glosa") or j.get("descripcion") or j.get("mensaje"),
+                   "json": j})
+    if not estado:
+        salida["error"] = "El SII contesto sin campo 'estado'"
+    return salida
 
 
 def consultar_estado_envio(
