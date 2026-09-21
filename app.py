@@ -26064,24 +26064,17 @@ def admin_probar_urls_estado():
 
 @app.route("/facturacion/config/resolucion", methods=["GET", "POST"])
 def facturacion_actualizar_resolucion():
-    """SOLO ADMIN. Lee y actualiza las resoluciones SII que van en la Carátula.
+    """SOLO ADMIN. Lee y actualiza la resolución SII que va en la Carátula.
 
-    El SII autoriza cada familia de documentos por separado, y cada sobre declara
-    LA SUYA. Por eso hay dos pares:
+    Es UNA sola para todos los tipos de documento. Hubo una version que guardaba
+    una resolucion aparte para boletas, porque el XSD del EnvioBOLETA describe el
+    campo como "Resolucion que Autoriza la Emision de Boletas". Resulto ser una
+    lectura equivocada: la resolucion del contribuyente es unica, y la fecha que
+    figura en "Consulta de contribuyentes autorizados" no es una resolucion sino
+    desde cuando quedo habilitado a emitir ese documento.
 
-      ambito='general'  -> resolucion_sii_*     · la del Sistema de Factura
-                           Electrónica. La usan los EnvioDTE: facturas, notas de
-                           crédito/débito, guías.
-      ambito='boleta'   -> resolucion_boleta_*  · la que autoriza la emisión de
-                           BOLETAS. La usan el EnvioBOLETA y el RCOF.
-
-    Si están mal, el SII recibe el envío, entrega track id... y al validarlo no
-    registra el documento. Es exactamente lo que pasaba con las boletas mientras
-    viajaban con la resolución de facturas.
-
-    GET  -> devuelve los dos pares tal como están hoy.
-    POST -> body JSON {fecha: 'YYYY-MM-DD', numero: int, ambito: 'general'|'boleta'}
-            `ambito` es opcional y por defecto 'general' (comportamiento previo).
+    GET  -> devuelve la resolución actual.
+    POST -> body JSON {fecha: 'YYYY-MM-DD', numero: int}
     """
     try:
         if not session.get("logged"):
@@ -26092,12 +26085,10 @@ def facturacion_actualizar_resolucion():
         from inventario import get_conn, release_conn
 
         def _leer():
-            """Devuelve los dos pares de resolución del tenant."""
             conn = get_conn()
             try:
                 with conn.cursor() as cur:
-                    cur.execute("""SELECT resolucion_sii_fecha, resolucion_sii_numero,
-                                          resolucion_boleta_fecha, resolucion_boleta_numero
+                    cur.execute("""SELECT resolucion_sii_fecha, resolucion_sii_numero
                                    FROM facturacion_config_tenant WHERE tenant_id=%s""",
                                 (tenant_id,))
                     r = cur.fetchone()
@@ -26105,69 +26096,47 @@ def facturacion_actualizar_resolucion():
                 release_conn(conn)
             if not r:
                 return None
-            return {
-                "general": {"fecha": str(r[0]) if r[0] else None, "numero": r[1],
-                            "usan": "facturas, notas de crédito/débito, guías (EnvioDTE)"},
-                "boleta": {"fecha": str(r[2]) if r[2] else None, "numero": r[3],
-                           "usan": "boletas 39/41 y el RCOF (EnvioBOLETA)"},
-            }
+            return {"fecha": str(r[0]) if r[0] else None, "numero": r[1]}
 
         if request.method == "GET":
             actual = _leer()
             if actual is None:
-                return jsonify({"ok": False, "error": "Este tenant no tiene configuración de facturación"}), 404
-            # Qué se está usando HOY para una boleta, contando el fallback
-            from facturacion.utils import resolucion_para
-            from facturacion.db import obtener_config_facturacion
-            cfg = obtener_config_facturacion(get_conn, release_conn, tenant_id) or {}
-            f_bol, n_bol = resolucion_para(cfg, 39)
-            return jsonify({"ok": True, "resoluciones": actual,
-                            "efectiva_boleta": {"fecha": f_bol, "numero": n_bol,
-                                                "heredada_de_general": not actual["boleta"]["fecha"]}})
+                return jsonify({"ok": False,
+                                "error": "Este tenant no tiene configuración de facturación"}), 404
+            return jsonify({"ok": True, "resolucion": actual,
+                            "usan": "todos los DTE: boletas, facturas, notas y guías"})
 
         data = request.get_json(silent=True) or {}
-        ambito = (data.get("ambito") or "general").strip().lower()
-        if ambito not in ("general", "boleta"):
-            return jsonify({"ok": False, "error": "ambito debe ser 'general' o 'boleta'"}), 400
         fecha = (data.get("fecha") or "").strip()
         numero = data.get("numero")
         if numero is None:
-            return jsonify({"ok": False, "error": "Indica el número de resolución (0 para certificación)"}), 400
+            return jsonify({"ok": False,
+                            "error": "Indica el número de resolución (0 para certificación)"}), 400
         try:
             numero = int(numero)
         except (TypeError, ValueError):
             return jsonify({"ok": False, "error": "El número de resolución debe ser un entero"}), 400
-        # Validar formato fecha YYYY-MM-DD
         import re as _re
         if fecha and not _re.match(r'^\d{4}-\d{2}-\d{2}$', fecha):
             return jsonify({"ok": False, "error": "La fecha debe ir en formato YYYY-MM-DD"}), 400
-
-        # Los nombres de columna salen de este mapeo, nunca del body.
-        col_fecha = "resolucion_boleta_fecha" if ambito == "boleta" else "resolucion_sii_fecha"
-        col_numero = "resolucion_boleta_numero" if ambito == "boleta" else "resolucion_sii_numero"
 
         anterior = _leer()
         conn = get_conn()
         try:
             with conn.cursor() as cur:
-                cur.execute("UPDATE facturacion_config_tenant"
-                            " SET " + col_fecha + "=%s, " + col_numero + "=%s,"
-                            "     fecha_actualizacion=NOW()"
-                            " WHERE tenant_id=%s",
+                cur.execute("""UPDATE facturacion_config_tenant
+                               SET resolucion_sii_fecha=%s, resolucion_sii_numero=%s,
+                                   fecha_actualizacion=NOW()
+                               WHERE tenant_id=%s""",
                             (fecha or None, numero, tenant_id))
                 conn.commit()
         finally:
             release_conn(conn)
 
-        afecta = ("boletas 39/41 y el RCOF" if ambito == "boleta"
-                  else "facturas, notas de crédito/débito y guías")
-        return jsonify({"ok": True,
-                        "ambito": ambito,
-                        "anterior": (anterior or {}).get(ambito),
+        return jsonify({"ok": True, "anterior": anterior,
                         "nuevo": {"fecha": fecha, "numero": numero},
-                        "resoluciones": _leer(),
-                        "mensaje": "Resolución de %s actualizada. El próximo envío de %s usará "
-                                   "FchResol=%s, NroResol=%s." % (ambito, afecta, fecha, numero)})
+                        "mensaje": "Resolución SII actualizada. El próximo envío usará "
+                                   "FchResol=%s, NroResol=%s." % (fecha, numero)})
     except Exception as e:
         import traceback
         return jsonify({"ok": False, "error": "Error interno: " + str(e)[:300],
@@ -27792,7 +27761,7 @@ h1{{margin:0 0 4px;font-size:22px;}}
     <div class="header">
         <div>
             <h1>📄 Facturación SII · {tenant['nombre']}</h1>
-            <div class="subtitle">Configuración de boletas, facturas y otros DTEs · RUT {tenant.get('rut') or '—'}</div>
+            <div class="subtitle">Configuración de boletas, facturas y otros DTEs · RUT <span id="hdrRut">{tenant.get('rut') or '—'}</span></div>
         </div>
         <div id="ambienteBadge" style="font-size:11px;padding:6px 12px;border-radius:8px;background:#FAEEDA;color:#854F0B;font-weight:500;">Cargando…</div>
     </div>
@@ -27822,14 +27791,9 @@ h1{{margin:0 0 4px;font-size:22px;}}
                 <div><label>Teléfono</label><input id="telefono"></div>
                 <div><label>Resolución SII (número)</label><input id="res_num" type="number" placeholder="80"></div>
                 <div><label>Resolución SII (fecha)</label><input id="res_fecha" type="date"></div>
-                <div><label>Resolución BOLETAS (número)</label><input id="res_bol_num" type="number" placeholder="0"></div>
-                <div><label>Resolución BOLETAS (fecha)</label><input id="res_bol_fecha" type="date"></div>
                 <div class="full-span" style="font-size:12px;color:#6b7280;line-height:1.5;">
-                    El SII autoriza las boletas con una resolución <strong>propia</strong>, distinta de la del
-                    Sistema de Factura Electrónica, y cada sobre declara la suya en la carátula.
-                    La fecha es la que aparece como autorización de BOLETA ELECTRÓNICA en
-                    <em>Consulta de contribuyentes autorizados</em> del SII. Si se deja en blanco,
-                    las boletas siguen usando la resolución general.
+                    Es la misma resolución para todos los documentos: boletas, facturas, notas y guías.
+                    Va en la carátula de cada envío al SII.
                 </div>
                 <div class="full-span" style="border-top:1px solid #e5e7eb;padding-top:12px;margin-top:4px;">
                     <label>Ambiente SII *</label>
@@ -27981,6 +27945,11 @@ async function cargarConfig(){{
         const set = (id,v) => {{ const e=document.getElementById(id); if(e) e.value=v||''; }};
         const setChk = (id,v) => {{ const e=document.getElementById(id); if(e) e.checked=!!v; }};
         set('rut_emisor', c.rut_emisor);
+        // La tabla tenants guarda un RUT de relleno ('76.XXX.XXX-X') que quedo de
+        // la semilla inicial. El RUT que importa en esta pantalla es el del
+        // emisor configurado, que es el que viaja al SII.
+        const _hdr = document.getElementById('hdrRut');
+        if(_hdr && c.rut_emisor) _hdr.textContent = c.rut_emisor;
         set('razon_social', c.razon_social);
         set('giro', c.giro);
         set('direccion', c.direccion);
@@ -27989,8 +27958,6 @@ async function cargarConfig(){{
         set('telefono', c.telefono);
         set('res_num', c.resolucion_sii_numero);
         set('res_fecha', c.resolucion_sii_fecha);
-        set('res_bol_num', c.resolucion_boleta_numero);
-        set('res_bol_fecha', c.resolucion_boleta_fecha);
         set('ambiente', c.ambiente || 'certificacion');
         setChk('em_boleta', c.emite_boleta !== false);
         setChk('em_boleta_exenta', c.emite_boleta_exenta);
@@ -28136,8 +28103,6 @@ async function guardarConfig(ev){{
         telefono: document.getElementById('telefono').value.trim(),
         resolucion_sii_numero: numOrNull('res_num'),
         resolucion_sii_fecha: document.getElementById('res_fecha').value || null,
-        resolucion_boleta_numero: numOrNull('res_bol_num'),
-        resolucion_boleta_fecha: document.getElementById('res_bol_fecha').value || null,
         ambiente: document.getElementById('ambiente').value,
         emite_boleta: document.getElementById('em_boleta').checked,
         emite_boleta_exenta: document.getElementById('em_boleta_exenta').checked,
