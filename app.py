@@ -29385,6 +29385,108 @@ def admin_lusync_sii_test_envio():
     return html
 
 
+@app.route("/admin/lusync/falabella/diagnostico-orden", methods=["GET"])
+@requiere_lusync_admin
+def admin_falabella_diagnostico_orden():
+    """Muestra todo lo que Falabella dice de una orden, sin interpretar.
+
+    SOLO LECTURA: no mueve stock ni marca nada.
+
+    Existe por un caso concreto: la orden 3252381231 se vendio por Full (FBF) y
+    al cancelarse el stock volvio a CENTRAL en vez de a FALABELLA_FBM. El bloque
+    de cancelaciones hace prod["stock"] += cantidad sin consultar nunca
+    detectar_fulfillment_falabella, asi que toda cancelacion aterriza en central.
+
+    Falta ademas distinguir si el cliente alcanzo a recibir el pedido o se
+    cancelo antes, porque la unidad no esta en el mismo lugar en los dos casos.
+    Para eso hay que ver que campos manda Falabella de verdad: por eso este
+    endpoint vuelca las claves crudas en vez de adivinar cual es la buena.
+
+    Uso: /admin/lusync/falabella/diagnostico-orden&order_id=3252381231
+    """
+    from falabella import obtener_orden_falabella, obtener_items_orden_falabella
+    from bodegas_logic import detectar_fulfillment_falabella
+    from inventario import obtener_sku_lusync_por_canal, get_stock_bodega, cargar_productos
+
+    order_id = (request.args.get("order_id") or "").strip()
+    if not order_id:
+        return jsonify({"ok": False, "error": "Indica ?order_id=..."}), 400
+
+    try:
+        orden = obtener_orden_falabella(order_id) or {}
+    except Exception as e:
+        return jsonify({"ok": False, "error": "No se pudo traer la orden: " + str(e)[:300]}), 502
+    if not orden:
+        return jsonify({"ok": False, "error": "Falabella no devolvio la orden " + order_id}), 404
+
+    try:
+        items = obtener_items_orden_falabella(order_id) or []
+    except Exception as e:
+        items = []
+        print("[diag FA] items: " + str(e)[:200])
+
+    es_fbf = detectar_fulfillment_falabella(orden)
+
+    # Campos que podrian marcar si el cliente lo recibio. Se listan todos los que
+    # existan, sin elegir uno: recien viendo la respuesta real se sabe cual sirve.
+    posibles_estado = {}
+    for k, v in orden.items():
+        kl = k.lower()
+        if any(t in kl for t in ("status", "estado", "deliver", "ship", "cancel",
+                                 "return", "fulfil", "date", "fecha")):
+            posibles_estado[k] = v if not isinstance(v, (dict, list)) else str(v)[:300]
+
+    productos = {p.get("sku") for p in cargar_productos() if p.get("sku")}
+
+    detalle = []
+    for it in items:
+        sku_fa = (it.get("SellerSku") or it.get("Sku") or it.get("sku") or "").strip()
+        if not sku_fa:
+            continue
+        try:
+            sku_lus = obtener_sku_lusync_por_canal("falabella", sku_fa) or sku_fa
+        except Exception:
+            sku_lus = sku_fa
+        existe = sku_lus in productos
+        detalle.append({
+            "sku_falabella": sku_fa,
+            "sku_lusync": sku_lus,
+            "existe_en_lusync": existe,
+            "cantidad": it.get("Quantity") or it.get("quantity") or 1,
+            "status_item": it.get("Status") or "",
+            "stock_central": get_stock_bodega(sku_lus, "CENTRAL") if existe else None,
+            "stock_falabella_full": get_stock_bodega(sku_lus, "FALABELLA_FBM") if existe else None,
+        })
+
+    lectura = []
+    lectura.append("ShippingType: %r · detectada como %s"
+                   % (orden.get("ShippingType"), "FBF (Full)" if es_fbf else "FBS (despacha el vendedor)"))
+    if es_fbf:
+        lectura.append("Al cancelarse, el stock DEBIO volver a FALABELLA_FBM. El codigo "
+                       "actual hace prod['stock'] += cantidad, que es CENTRAL, sin "
+                       "consultar el tipo de venta.")
+    else:
+        lectura.append("Si es FBS, volver a CENTRAL es lo correcto y no hay nada que corregir "
+                       "en esta orden.")
+    lectura.append("Revisa 'campos_de_la_orden' para ver que manda Falabella sobre entrega y "
+                   "cancelacion: ahi esta la pista de si el cliente lo recibio.")
+    if detalle:
+        lectura.append("Stock hoy: " + " · ".join(
+            "%s central=%s full=%s" % (d["sku_lusync"], d["stock_central"], d["stock_falabella_full"])
+            for d in detalle))
+
+    return jsonify({
+        "ok": True, "solo_lectura": True,
+        "order_id": order_id,
+        "lectura": lectura,
+        "es_fulfillment": es_fbf,
+        "shipping_type": orden.get("ShippingType"),
+        "campos_de_la_orden": posibles_estado,
+        "todas_las_claves": sorted(orden.keys()),
+        "items": detalle,
+    })
+
+
 @app.route("/admin/lusync/mapeos-huerfanos", methods=["GET"])
 @requiere_lusync_admin
 def admin_mapeos_huerfanos():
