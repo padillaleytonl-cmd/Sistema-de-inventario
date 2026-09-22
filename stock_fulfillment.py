@@ -321,13 +321,24 @@ def reconciliar_stock_full(canal):
     # Normalizar a {sku_lusync: cantidad_canal}
     canal_por_sku = {}
     for clave, val in data_canal.items():
-        sku_lusync = val.get("sku_canal")
-        if not sku_lusync and val.get("item_id"):
-            try:
-                sku_lusync = obtener_sku_lusync_por_canal(canal, sku_canal=None, item_id_canal=val.get("item_id"))
-            except Exception:
-                sku_lusync = None
-        sku_lusync = sku_lusync or clave
+        sku_canal = val.get("sku_canal")
+        # Traducir SIEMPRE. Antes se tomaba sku_canal como si ya fuera el SKU de
+        # Lusync, y solo se traducia cuando habia item_id (la forma de ML). Para
+        # Walmart no hay item_id, asi que se comparaba el SKU de Walmart contra
+        # los de Lusync: si no eran identicos, TODO salia como "solo en el canal"
+        # y la reconciliacion no servia para nada.
+        sku_lusync = None
+        try:
+            if sku_canal:
+                sku_lusync = obtener_sku_lusync_por_canal(canal, sku_canal=sku_canal)
+            if not sku_lusync and val.get("item_id"):
+                sku_lusync = obtener_sku_lusync_por_canal(canal, sku_canal=None,
+                                                          item_id_canal=val.get("item_id"))
+        except Exception:
+            sku_lusync = None
+        # Sin mapeo se asume que el SKU del canal es el mismo de Lusync, que es
+        # el comportamiento que habia y funciona cuando los SKU coinciden.
+        sku_lusync = sku_lusync or sku_canal or clave
         canal_por_sku[str(sku_lusync)] = canal_por_sku.get(str(sku_lusync), 0) + int(val.get("disponible", 0) or 0)
 
     # 2. Nombres de producto

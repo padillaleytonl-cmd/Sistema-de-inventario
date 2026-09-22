@@ -2814,42 +2814,12 @@ def sincronizar_stock_a_bodega_central(sku):
     cur.close(); conn.close()
 
 
-def detectar_fulfillment_walmart(orden_data):
-    """Detecta si una orden Walmart es WFS (Walmart Fulfillment Services) o Seller envía.
-    Walmart usa varios campos según versión del API:
-      - fulfillmentInfo.fulfillmentMethod = 'wfs' o 'WFS'
-      - shippingInfo.shipMethod
-      - purchaseOrderType
-    """
-    try:
-        # Path 1: fulfillmentInfo
-        fi = orden_data.get("fulfillmentInfo", {}) or orden_data.get("fulfillment_info", {})
-        method = (fi.get("fulfillmentMethod") or fi.get("fulfillment_method") or "").upper()
-        if "WFS" in method or "FULFILLED_BY_WALMART" in method:
-            return True
-
-        # Path 2: orderType o purchaseOrderType
-        order_type = (orden_data.get("orderType") or orden_data.get("purchaseOrderType") or "").upper()
-        if "WFS" in order_type or "FULFILLED" in order_type:
-            return True
-
-        # Path 3: shippingInfo / lines (a veces el shipNode tiene "WFS")
-        ship_info = orden_data.get("shippingInfo", {}) or orden_data.get("shipping_info", {})
-        ship_method = (ship_info.get("shipMethod") or ship_info.get("methodCode") or "").upper()
-        if "WFS" in ship_method:
-            return True
-
-        # Path 4: en orderLines hay fulfillment indicator
-        order_lines = orden_data.get("orderLines", {}).get("orderLine", [])
-        if isinstance(order_lines, dict):
-            order_lines = [order_lines]
-        for line in order_lines:
-            line_fi = line.get("fulfillment", {}) or {}
-            if (line_fi.get("fulfillmentOption") or "").upper() in ("WFS", "FULFILLED_BY_WALMART"):
-                return True
-
-        return False
-    except: return False
+# detectar_fulfillment_walmart() vivia aca duplicada. La version buena esta en
+# bodegas_logic.py y es la unica que usa todo el sistema (app.py y walmart.py la
+# importan de ahi). Esta copia no la llamaba nadie y ademas estaba peor: no
+# miraba shipNodeType, que es el campo oficial del API donde Walmart dice quien
+# despacha. Si alguien la hubiera importado por error, las ventas WFS se habrian
+# tomado como Seller y descontado de la bodega CENTRAL.
 
 
 def actualizar_nombres_bodegas():

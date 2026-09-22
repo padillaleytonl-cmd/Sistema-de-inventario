@@ -2409,6 +2409,119 @@ def _sync_full_meli_diario():
 scheduler.add_job(_sync_full_meli_diario, "interval", hours=24, id="full_meli_diario",
                   next_run_time=(datetime.now() + timedelta(hours=6)))
 
+
+# ════════════════════════════════════════════════════════════════════════════
+# SYNC DIARIO WALMART FULL (WFS)
+# ════════════════════════════════════════════════════════════════════════════
+# La bodega WALMART_FBM existía, las ventas WFS la descontaban y las cancelaciones
+# la reponían, pero NADA la llenaba nunca: no había un job que leyera el stock que
+# Walmart tiene en su fulfillment. Quedaba en cero para siempre, cada venta WFS
+# avisaba "sin stock suficiente" y descontaba 0, y Lusync nunca supo cuánto había
+# realmente allá. MercadoLibre tenía su equivalente desde el principio; Walmart no.
+# ════════════════════════════════════════════════════════════════════════════
+
+@con_tenant_default
+def _sync_full_walmart_diario():
+    """Lee el stock real de Walmart Fulfillment y ajusta la bodega WALMART_FBM.
+
+    Walmart es el dueño de esa bodega física, así que su número manda: si hay
+    diferencia, se corrige la de Lusync.
+
+    El decorador no es decorativo (misma razón que en el job de MELI): esto corre
+    en el scheduler, sin sesión Flask, y llama a get_stock_bodega/ajustar_stock_bodega,
+    que abren conexión sin tenant. Con RLS activo, sin el decorador la consulta
+    devuelve cero filas sin error y el job concluye que no hay nada que ajustar.
+
+    Solo toca los SKU que Walmart informa. Un SKU que Lusync cree tener en
+    WALMART_FBM y que Walmart no reporta NO se pone en cero: si la API paginara
+    mal o fallara a mitad de camino, estaríamos borrando stock real.
+    """
+    if "full_walmart" not in _sync_locks:
+        _sync_locks["full_walmart"] = {"running": False}
+    if _sync_locks["full_walmart"]["running"]:
+        print("[Scheduler Full Walmart] Ya hay un sync corriendo, salto")
+        return
+    _sync_locks["full_walmart"]["running"] = True
+    try:
+        print("[Scheduler Full Walmart] Iniciando verificación diaria contra API...")
+        from stock_fulfillment import leer_stock_wfs_walmart
+        from inventario import (get_stock_bodega, ajustar_stock_bodega,
+                                cargar_productos as _cp, crear_alerta,
+                                obtener_sku_lusync_por_canal)
+
+        stock_wfs = leer_stock_wfs_walmart()
+        if not stock_wfs:
+            print("[Scheduler Full Walmart] Walmart no reportó stock en fulfillment "
+                  "(o la consulta falló). No se ajusta nada.")
+            return {"ok": False, "leidos": 0, "ajustes": [], "sin_mapear": [],
+                    "error": "Walmart no reportó stock en fulfillment, o la consulta falló"}
+
+        productos_dict = {p["sku"]: p for p in _cp()}
+        ajustes, sin_mapear = [], []
+
+        for sku_walmart, datos in stock_wfs.items():
+            # El SKU de Walmart no tiene por qué ser el de Lusync: hay que traducirlo.
+            try:
+                sku_lusync = obtener_sku_lusync_por_canal("walmart", sku_walmart) or sku_walmart
+            except Exception:
+                sku_lusync = sku_walmart
+
+            if sku_lusync not in productos_dict:
+                sin_mapear.append(sku_walmart)
+                continue
+
+            disponible = int(datos.get("disponible", 0) or 0)
+            actual = get_stock_bodega(sku_lusync, "WALMART_FBM") or 0
+            diff = disponible - actual
+            if diff == 0:
+                continue
+            try:
+                ajustar_stock_bodega(sku_lusync, "WALMART_FBM", diff)
+                ajustes.append("%s: %d→%d (diff %+d)" % (sku_lusync, actual, disponible, diff))
+            except Exception as e:
+                print("[Scheduler Full Walmart] Error ajustando %s: %s" % (sku_lusync, e))
+
+        if sin_mapear:
+            print("[Scheduler Full Walmart] %d SKU de Walmart sin mapear en Lusync: %s"
+                  % (len(sin_mapear), ", ".join(sin_mapear[:10])))
+
+        if ajustes:
+            print("[Scheduler Full Walmart] %d ajustes aplicados:" % len(ajustes))
+            for a in ajustes[:20]:
+                print("  • " + a)
+            if len(ajustes) >= 3:
+                try:
+                    crear_alerta(
+                        tipo="full_resync",
+                        titulo="⚙️ Sync diario Walmart Full: %d ajustes" % len(ajustes),
+                        mensaje=("Se detectaron diferencias entre el stock real de Walmart "
+                                 "Fulfillment y el de Lusync.<br>Sistema ajustó automáticamente."
+                                 "<br><br>Primeros ajustes:<br>"
+                                 + "<br>".join("• " + a for a in ajustes[:5])),
+                        canal="walmart")
+                except Exception:
+                    pass
+        else:
+            print("[Scheduler Full Walmart] OK — Lusync coincide con Walmart "
+                  "(%d SKU verificados)" % len(stock_wfs))
+
+        return {"ok": True, "leidos": len(stock_wfs), "ajustes": ajustes,
+                "sin_mapear": sin_mapear}
+    except Exception as e:
+        import traceback
+        print("[Scheduler Full Walmart] Error general: %s" % e)
+        print(traceback.format_exc())
+        return {"ok": False, "error": str(e)[:300]}
+    finally:
+        _sync_locks["full_walmart"]["running"] = False
+
+
+# Mismo ritmo que el de MELI. Se desfasa una hora para no pedirle a las dos APIs
+# al mismo tiempo después de un despliegue.
+scheduler.add_job(_sync_full_walmart_diario, "interval", hours=24, id="full_walmart_diario",
+                  next_run_time=(datetime.now() + timedelta(hours=7)))
+
+
 # ── Jobs de facturación electrónica (blindaje profesional) ──
 # El registro del job _fact_job_consultar_estados se hace MÁS ABAJO, después de que
 # la función esté definida (no se puede registrar aquí porque se define luego).
@@ -29057,6 +29170,23 @@ def admin_lusync_sii_test_envio():
     </div>
     </body></html>"""
     return html
+
+
+@app.route("/admin/lusync/walmart/sync-full", methods=["GET", "POST"])
+@requiere_lusync_admin
+def admin_lusync_walmart_sync_full():
+    """Dispara a mano el sync de Walmart Full y devuelve lo que hizo.
+
+    El job corre cada 24 horas; esto sirve para la primera carga y para verificar
+    sin esperar. Es la misma funcion, no una copia.
+    """
+    res = _sync_full_walmart_diario()
+    if not isinstance(res, dict):
+        return jsonify({"ok": False,
+                        "error": "El sync no devolvio resumen (puede haber otro corriendo)"}), 409
+    res["bodega"] = "WALMART_FBM"
+    res["ajustados"] = len(res.get("ajustes") or [])
+    return jsonify(res)
 
 
 @app.route("/admin/lusync/sii/resync-estado", methods=["GET", "POST"])
