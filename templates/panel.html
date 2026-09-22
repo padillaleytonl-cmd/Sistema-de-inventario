@@ -1850,37 +1850,46 @@ tbody td {
 
     <!-- KPIs -->
     <div class="metrics-grid" data-modulo="kpis">
-      <div class="metric-card" style="border-top:3px solid #2563eb;">
+      <div class="metric-card" role="button" tabindex="0" style="border-top:3px solid #2563eb;cursor:pointer;"
+           onclick="abrirModalKpi('productos')"
+           onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();abrirModalKpi('productos');}">
         <div class="metric-label" style="color:#2563eb;">📦 Productos en inventario</div>
         <div class="metric-value" id="kpiProductos">—</div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
           <span style="font-size:11px;color:var(--muted);">Stock total: <b id="kpiStockTotal">—</b></span>
-          <button class="btn-ver-mas" onclick="abrirModalKpi('productos')">Ver más</button>
+          <button class="btn-ver-mas" onclick="event.stopPropagation();abrirModalKpi('productos')">Ver más</button>
         </div>
       </div>
-      <div class="metric-card" style="border-top:3px solid #059669;">
+      <div class="metric-card" role="button" tabindex="0" style="border-top:3px solid #059669;cursor:pointer;"
+           onclick="abrirModalKpi('ventas')"
+           onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();abrirModalKpi('ventas');}">
         <div class="metric-label" style="color:#059669;">💰 Ventas del período</div>
         <div class="metric-value" id="kpiIngreso" style="color:#059669;">$0</div>
         <div style="font-size:13px;color:var(--muted);margin-top:2px;"><b id="kpiVentas">—</b> unidades · <b id="kpiOrdenes">—</b> órdenes</div>
         <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;" id="kpiVentasCanalBadges"></div>
         <div style="display:flex;align-items:center;justify-content:flex-end;margin-top:8px;">
-          <button class="btn-ver-mas" onclick="abrirModalKpi('ventas')">Ver más</button>
+          <button class="btn-ver-mas" onclick="event.stopPropagation();abrirModalKpi('ventas')">Ver más</button>
         </div>
       </div>
-      <div class="metric-card" style="border-top:3px solid #f59e0b;">
+      <div class="metric-card" role="button" tabindex="0" style="border-top:3px solid #f59e0b;cursor:pointer;"
+           onclick="abrirModalKpi('stockbajo')"
+           onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();abrirModalKpi('stockbajo');}">
         <div class="metric-label" style="color:#f59e0b;">⚠ Stock bajo</div>
         <div class="metric-value" id="kpiStockBajo">—</div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
           <span style="font-size:11px;color:var(--muted);">Menos de 10 unidades</span>
-          <button class="btn-ver-mas" onclick="abrirModalKpi('stockbajo')">Ver más</button>
+          <button class="btn-ver-mas" onclick="event.stopPropagation();abrirModalKpi('stockbajo')">Ver más</button>
         </div>
       </div>
-      <div class="metric-card" style="border-top:3px solid #7c3aed;">
+      <div class="metric-card" role="button" tabindex="0" style="border-top:3px solid #7c3aed;cursor:pointer;"
+           onclick="abrirAlertas()"
+           onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();abrirAlertas();}">
         <div class="metric-label" style="color:#7c3aed;">🔔 Alertas no leídas</div>
         <div class="metric-value" id="kpiAlertas">—</div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
-          <span style="font-size:11px;color:var(--muted);cursor:pointer;" onclick="abrirAlertas()">Ver alertas →</span>
-          <button class="btn-ver-mas" onclick="abrirModalKpi('canales')">Canales</button>
+          <span style="font-size:11px;color:var(--muted);">Ver alertas →</span>
+          <button class="btn-ver-mas" title="Estado de los marketplaces conectados"
+                  onclick="event.stopPropagation();abrirModalKpi('canales')">Estado de canales</button>
         </div>
       </div>
     </div>
@@ -8700,8 +8709,8 @@ async function cargarKPIs() {
 
     // Ingresos $ y desglose por canal: necesitamos consultar productos para obtener precios
     const [resVentas, resProductos] = await Promise.all([
-      fetch(`/stats/ventas_por_canal?desde=${r.desde}&hasta=${r.hasta}`).then(x=>x.json()),
-      fetch('/productos').then(x=>x.json()).then(d => d.productos || d)
+      _dashJSON(`/stats/ventas_por_canal?desde=${r.desde}&hasta=${r.hasta}`),
+      _dashJSON('/productos').then(d => d.productos || d)
     ]);
 
     // Mapa SKU → precio (oferta si existe, si no normal)
@@ -8801,8 +8810,7 @@ async function cargarChartVentasCanal() {
   const r = dashRangoActual();
   document.getElementById('chartVentasCanalRange').textContent = `${_formatearFecha(r.desde)} – ${_formatearFecha(r.hasta)}`;
   try {
-    const res = await fetch(`/stats/ventas_por_canal?desde=${r.desde}&hasta=${r.hasta}`);
-    const data = await res.json();
+    const data = await _dashJSON(`/stats/ventas_por_canal?desde=${r.desde}&hasta=${r.hasta}`);
 
     // Generar lista de días del rango (incluyendo días sin ventas)
     const dias = [];
@@ -8864,6 +8872,9 @@ async function cargarChartTopProductos() {
 
     const labels = data.map(d => (d.nombre || d.sku).substring(0, 35));
     const valores = data.map(d => d.total);
+    // El SKU se guarda aparte para poder navegar: la etiqueta va recortada a 35
+    // caracteres y no sirve para identificar el producto.
+    const skus = data.map(d => d.sku);
 
     _destruirChart('chartTopProductos');
     const ctx = document.getElementById('chartTopProductos').getContext('2d');
@@ -8881,6 +8892,12 @@ async function cargarChartTopProductos() {
       options: {
         indexAxis: 'y',
         responsive: true, maintainAspectRatio: false,
+        onHover: (e, els) => { e.native.target.style.cursor = els.length ? 'pointer' : 'default'; },
+        onClick: (e, els) => {
+          if(!els.length) return;
+          const sku = skus[els[0].index];
+          if(sku) irAProducto(sku);
+        },
         plugins: { legend: { display: false } },
         scales: {
           x: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { font: { size: 10 } } },
@@ -8951,8 +8968,7 @@ async function cargarChartVentasPorCanalDonut() {
   }
 
   try {
-    const res = await fetch(`/stats/ventas_por_canal?desde=${desde}&hasta=${hasta}`);
-    const data = await res.json();
+    const data = await _dashJSON(`/stats/ventas_por_canal?desde=${desde}&hasta=${hasta}`);
 
     // Sumar por canal
     const totales = {};
@@ -8989,6 +9005,8 @@ async function cargarChartVentasPorCanalDonut() {
       data: { labels, datasets: [{ data: valores, backgroundColor: colores, borderWidth: 2, borderColor: '#fff' }] },
       options: {
         responsive: true, maintainAspectRatio: false, cutout: '60%',
+        onHover: (e, els) => { e.native.target.style.cursor = els.length ? 'pointer' : 'default'; },
+        onClick: (e, els) => { if(els.length) abrirModalKpi('ventas_canal_donut'); },
         plugins: {
           legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 }, padding: 8 } },
           tooltip: {
@@ -9022,6 +9040,8 @@ async function cargarChartDistribucion() {
       type: 'doughnut',
       data: { labels, datasets: [{ data: valores, backgroundColor: colores, borderWidth: 2, borderColor: '#fff' }] },
       options: {
+        onHover: (e, els) => { e.native.target.style.cursor = els.length ? 'pointer' : 'default'; },
+        onClick: (e, els) => { if(els.length) showSection('bodegas'); },
         responsive: true, maintainAspectRatio: false, cutout: '60%',
         plugins: {
           legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 }, padding: 8 } },
@@ -9043,8 +9063,7 @@ async function cargarChartDistribucion() {
 // ─── Stock crítico ─────────────────────────────────────────────
 async function cargarStockCritico() {
   try {
-    const res = await fetch('/productos');
-    const data = await res.json();
+    const data = await _dashJSON('/productos');
     const productos = data.productos || data;
     const criticos = productos.filter(p => (p.stock || 0) > 0 && (p.stock || 0) < 10).sort((a,b) => a.stock - b.stock);
     document.getElementById('countStockCritico').textContent = criticos.length + ' productos';
@@ -9057,7 +9076,12 @@ async function cargarStockCritico() {
     let html = '';
     criticos.slice(0, 20).forEach(p => {
       const color = p.stock < 3 ? '#dc2626' : (p.stock < 6 ? '#f59e0b' : '#fbbf24');
-      html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:0.5px solid var(--border);">
+      const _sk = String(p.sku || '').replace(/'/g, "\\'");
+      html += `<div role="button" tabindex="0" onclick="irAProducto('${_sk}')"
+        onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();irAProducto('${_sk}');}"
+        title="Ver ${p.sku} en Inventario"
+        style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:0.5px solid var(--border);cursor:pointer;"
+        onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background=''">
         <div style="flex:1;min-width:0;">
           <div style="font-size:12px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.nombre || p.sku}</div>
           <div style="font-size:10px;color:var(--muted);font-family:ui-monospace,monospace;">${p.sku}</div>
@@ -9275,7 +9299,28 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 
+// Caché de UNA corrida del dashboard. Varias tarjetas piden el mismo endpoint
+// y hasta ahora cada una abría su propia petición: /stats/ventas_por_canal se
+// pedía 3 veces y /productos —el inventario entero— 2 veces por carga.
+// Se vacía al empezar cada carga, así que nunca sirve datos viejos.
+let _dashCache = {};
+function _dashJSON(url){
+  if(!(url in _dashCache)) _dashCache[url] = fetch(url).then(r => r.json());
+  return _dashCache[url];
+}
+
+// Lleva al producto desde cualquier lista del dashboard: abre Inventario y deja
+// el buscador con el SKU puesto. Antes había que ir y tipearlo a mano.
+function irAProducto(sku){
+  showSection('inventario');
+  setTimeout(function(){
+    const b = document.getElementById('buscador');
+    if(b){ b.value = sku; if(typeof buscar === 'function') buscar(); b.focus(); }
+  }, 60);
+}
+
 async function cargarDashboardCompleto() {
+  _dashCache = {};
   await Promise.all([
     cargarKPIs(),
     cargarChartVentasCanal(),
