@@ -29860,6 +29860,152 @@ def admin_mapeos_huerfanos():
                     "huerfanos": huerfanos})
 
 
+@app.route("/admin/lusync/walmart/conciliacion", methods=["GET"])
+@requiere_lusync_admin
+def admin_walmart_conciliacion():
+    """Cruza las ordenes de Walmart contra los movimientos que realmente se
+    registraron en Lusync.
+
+    SOLO LECTURA: no descuenta, no marca, no escribe.
+
+    "Marcada como procesada" NO es lo mismo que "descontó stock". Si el SKU no
+    resuelve a un producto, el sync saltea la linea y marca la orden igual: la
+    venta queda invisible y el stock sobrevalorado, sin un solo error. Por eso
+    la unica verificacion que vale es buscar el movimiento.
+
+    Uso: /admin/lusync/walmart/conciliacion&dias=7
+    """
+    from walmart import obtener_ordenes_walmart
+    from bodegas_logic import detectar_fulfillment_walmart
+    from inventario import (get_conn, release_conn, orden_ya_procesada_texto,
+                            obtener_sku_lusync_por_canal, cargar_productos)
+
+    dias = max(1, min(int(request.args.get("dias", 7)), 60))
+
+    try:
+        ordenes = obtener_ordenes_walmart(dias=dias)
+    except Exception as e:
+        return jsonify({"ok": False, "error": "No se pudieron traer ordenes: " + str(e)[:300]}), 502
+
+    # Claves con las que el sync registra el movimiento
+    claves = []
+    for o in ordenes:
+        poid = str(o.get("purchaseOrderId") or "")
+        coid = str(o.get("customerOrderId") or poid)
+        if coid: claves.append(coid)
+        if poid: claves.append(poid)
+
+    # Una sola consulta para todos los movimientos del periodo
+    movs_por_orden = {}
+    if claves:
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT orden_id::text, numero_orden::text, sku, cantidad,
+                                      tipo, bodega_codigo, fecha
+                               FROM movimientos
+                               WHERE canal = 'Walmart'
+                                 AND fecha > NOW() - (%s || ' days')::interval
+                                 AND (orden_id::text = ANY(%s) OR numero_orden::text = ANY(%s))""",
+                            (str(dias + 3), claves, claves))
+                for (oid, num, sku, cant, tipo, bodega, fecha) in cur.fetchall():
+                    for k in (oid, num):
+                        if not k:
+                            continue
+                        movs_por_orden.setdefault(k, []).append({
+                            "sku": sku, "cantidad": cant, "tipo": tipo,
+                            "bodega": bodega,
+                            "fecha": fecha.isoformat() if fecha else None,
+                        })
+        finally:
+            release_conn(conn)
+
+    skus_lusync = {p.get("sku") for p in cargar_productos() if p.get("sku")}
+
+    wfs, seller = [], []
+    resumen = {"wfs_ok": 0, "wfs_sin_movimiento": 0, "wfs_bodega_incorrecta": 0,
+               "seller_ok": 0, "seller_sin_movimiento": 0, "no_procesadas": 0}
+
+    for o in ordenes:
+        poid = str(o.get("purchaseOrderId") or "")
+        coid = str(o.get("customerOrderId") or poid)
+        es_wfs = detectar_fulfillment_walmart(o)
+        try:
+            procesada = orden_ya_procesada_texto(coid)
+        except Exception:
+            procesada = None
+
+        movs = movs_por_orden.get(coid) or movs_por_orden.get(poid) or []
+        bodega_esperada = "WALMART_FBM" if es_wfs else "CENTRAL"
+        bodegas_usadas = sorted({m["bodega"] for m in movs if m["bodega"]})
+
+        # Que SKU traia la orden y si resuelve
+        skus = []
+        lineas = o.get("orderLines", {}).get("orderLine", [])
+        if isinstance(lineas, dict):
+            lineas = [lineas]
+        for ln in lineas:
+            sku_wm = (ln.get("item", {}) or {}).get("sku")
+            if not sku_wm:
+                continue
+            try:
+                res = obtener_sku_lusync_por_canal("walmart", sku_wm) or sku_wm
+            except Exception:
+                res = sku_wm
+            skus.append({"sku_walmart": sku_wm, "resuelve_a": res,
+                         "existe": res in skus_lusync})
+
+        if not procesada:
+            veredicto = "NO procesada todavía"
+            resumen["no_procesadas"] += 1
+        elif not movs:
+            veredicto = "marcada como procesada pero SIN movimiento — no descontó"
+            resumen["wfs_sin_movimiento" if es_wfs else "seller_sin_movimiento"] += 1
+        elif bodegas_usadas and bodega_esperada not in bodegas_usadas:
+            veredicto = ("descontó de %s cuando correspondía %s"
+                         % (", ".join(bodegas_usadas), bodega_esperada))
+            if es_wfs:
+                resumen["wfs_bodega_incorrecta"] += 1
+        else:
+            veredicto = "OK"
+            resumen["wfs_ok" if es_wfs else "seller_ok"] += 1
+
+        fila = {
+            "purchaseOrderId": poid, "customerOrderId": coid,
+            "tipo": "WFS" if es_wfs else "Seller",
+            "marcada_procesada": procesada,
+            "movimientos": len(movs),
+            "bodegas": bodegas_usadas,
+            "bodega_esperada": bodega_esperada,
+            "skus": skus,
+            "veredicto": veredicto,
+        }
+        (wfs if es_wfs else seller).append(fila)
+
+    lectura = []
+    lectura.append("%d ordenes de Walmart en los ultimos %d dias: %d WFS y %d Seller."
+                   % (len(ordenes), dias, len(wfs), len(seller)))
+    problemas = (resumen["wfs_sin_movimiento"] + resumen["seller_sin_movimiento"]
+                 + resumen["wfs_bodega_incorrecta"])
+    if not problemas:
+        lectura.append("Todas las procesadas tienen su movimiento en la bodega correcta.")
+    else:
+        if resumen["wfs_sin_movimiento"] or resumen["seller_sin_movimiento"]:
+            lectura.append("HAY %d ordenes marcadas como procesadas SIN ningun movimiento: "
+                           "esas ventas no descontaron stock y no se van a reintentar."
+                           % (resumen["wfs_sin_movimiento"] + resumen["seller_sin_movimiento"]))
+        if resumen["wfs_bodega_incorrecta"]:
+            lectura.append("HAY %d ordenes WFS que descontaron de la bodega equivocada."
+                           % resumen["wfs_bodega_incorrecta"])
+    if resumen["no_procesadas"]:
+        lectura.append("%d aun no procesadas: pueden ser muy recientes y entrar en el "
+                       "proximo ciclo, que corre cada 5 minutos." % resumen["no_procesadas"])
+
+    return jsonify({"ok": True, "solo_lectura": True, "dias": dias,
+                    "lectura": lectura, "resumen": resumen,
+                    "wfs": wfs, "seller": seller})
+
+
 @app.route("/admin/lusync/walmart/diagnostico-wfs", methods=["GET"])
 @requiere_lusync_admin
 def admin_walmart_diagnostico_wfs():
