@@ -29278,6 +29278,118 @@ def admin_lusync_sii_test_envio():
     return html
 
 
+@app.route("/admin/lusync/walmart/diagnostico-catalogo", methods=["GET"])
+@requiere_lusync_admin
+def admin_walmart_diagnostico_catalogo():
+    """Le pregunta a Walmart su catalogo con y sin filtro de estado.
+
+    SOLO LECTURA: no escribe nada, no toca walmart.py y no modifica ningun
+    mapeo. Solo consulta la API y reporta lo que contesta.
+
+    Existe por esto: obtener_productos_walmart() trae 50 publicaciones y las 50
+    vienen UNPUBLISHED con stock 0, mientras el sync de fulfillment ve 33 SKU
+    activos que en esa lista no aparecen nunca. O el catalogo se esta truncando,
+    o /v3/items sin filtro devuelve solo las despublicadas. La respuesta trae un
+    campo totalItems que hoy no se registra en ningun lado, y ese numero
+    distingue las dos cosas.
+
+    Uso: /admin/lusync/walmart/diagnostico-catalogo
+         &status=PUBLISHED,UNPUBLISHED   (variantes a probar; "" = sin filtro)
+         &paginas=5                      (cuantas paginas seguir por variante)
+    """
+    import requests as _req
+    from walmart import walmart_headers, WALMART_BASE_URL
+
+    variantes_str = request.args.get("status", ",PUBLISHED,UNPUBLISHED")
+    variantes = [v.strip() for v in variantes_str.split(",")]
+    max_paginas = max(1, min(int(request.args.get("paginas", 5)), 20))
+
+    resultados = {}
+    for estado in variantes:
+        etiqueta = estado or "(sin filtro)"
+        info = {"paginas": [], "skus": [], "por_status": {},
+                "total_declarado_por_walmart": None, "acumulado": 0}
+        cursor = None
+        try:
+            for n in range(1, max_paginas + 1):
+                params = {"limit": 50}
+                if estado:
+                    params["status"] = estado
+                if cursor and cursor != "*":
+                    params["nextCursor"] = cursor
+
+                r = _req.get(WALMART_BASE_URL + "/v3/items",
+                             headers=walmart_headers(), params=params, timeout=30)
+                pag = {"pagina": n, "http": r.status_code}
+                if r.status_code != 200:
+                    pag["error"] = (r.text or "")[:200]
+                    info["paginas"].append(pag)
+                    break
+
+                data = r.json() if r.content else {}
+                items = data.get("ItemResponse") or data.get("items") or []
+                if isinstance(items, dict):
+                    items = [items]
+
+                # totalItems es el dato que faltaba: distingue "tengo 50" de
+                # "hay mas y estoy leyendo solo la primera pagina".
+                total_decl = data.get("totalItems") or data.get("totalCount")
+                if total_decl is not None and info["total_declarado_por_walmart"] is None:
+                    info["total_declarado_por_walmart"] = total_decl
+
+                pag["items"] = len(items)
+                pag["claves_respuesta"] = sorted(data.keys()) if isinstance(data, dict) else None
+
+                for it in items:
+                    st = (it.get("publishedStatus") or it.get("status")
+                          or it.get("lifecycleStatus") or "?")
+                    info["por_status"][st] = info["por_status"].get(st, 0) + 1
+                    if len(info["skus"]) < 15:
+                        info["skus"].append({
+                            "sku": it.get("sku") or it.get("itemSku") or "",
+                            "status": st,
+                            "titulo": (it.get("productName") or it.get("name") or "")[:60],
+                        })
+
+                info["acumulado"] += len(items)
+                cursor = data.get("nextCursor") or data.get("cursor")
+                if not cursor:
+                    meta = data.get("meta") or data.get("metadata") or {}
+                    if isinstance(meta, dict):
+                        cursor = meta.get("nextCursor")
+                pag["hay_cursor"] = bool(cursor and cursor != "*")
+                info["paginas"].append(pag)
+
+                if not cursor or cursor == "*":
+                    break
+        except Exception as e:
+            info["error"] = str(e)[:300]
+
+        resultados[etiqueta] = info
+
+    # Lectura en una linea, para no tener que interpretar el JSON a mano
+    lectura = []
+    sin_filtro = resultados.get("(sin filtro)", {})
+    publicadas = resultados.get("PUBLISHED", {})
+    if publicadas.get("acumulado"):
+        lectura.append("Con status=PUBLISHED Walmart devuelve %d publicaciones. "
+                       "Sin filtro devuelve %d. Si son distintas, la lista que usa "
+                       "el comparador de precios esta mirando el catalogo equivocado."
+                       % (publicadas["acumulado"], sin_filtro.get("acumulado", 0)))
+    else:
+        lectura.append("Con status=PUBLISHED no vino ninguna publicacion: o no hay "
+                       "activas, o la API no acepta ese filtro asi.")
+    if sin_filtro.get("total_declarado_por_walmart") is not None:
+        lectura.append("Walmart declara %s items en total (campo totalItems)."
+                       % sin_filtro["total_declarado_por_walmart"])
+    else:
+        lectura.append("La respuesta no trae totalItems, asi que no se puede saber "
+                       "por ese camino si hay mas de lo que devuelve.")
+
+    return jsonify({"ok": True, "solo_lectura": True,
+                    "lectura": lectura, "resultados": resultados})
+
+
 @app.route("/admin/lusync/walmart/sync-full", methods=["GET", "POST"])
 @requiere_lusync_admin
 def admin_lusync_walmart_sync_full():
