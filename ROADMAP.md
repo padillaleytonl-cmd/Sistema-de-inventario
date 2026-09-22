@@ -138,9 +138,10 @@ investigación de las boletas:
   (`tenancy.py:255`). La pantalla de facturación ya no lo usa —toma el del
   emisor— pero la fila sigue mal y cualquier otra vista que lo lea lo va a
   mostrar así.
-- **`SDCEM001`** está publicado en el fulfillment de Walmart y Lusync no lo
-  reconoce. Mientras no esté mapeado, ese producto es invisible: no se le
-  sincroniza stock ni se le descuenta una venta.
+- **`SDCEM001` — resuelto, queda la corrección.** El producto SÍ existe en
+  Lusync y usa el mismo código en Walmart. Lo que estaba mal era el mapeo, que
+  apuntaba a `SDCEV001`, inexistente. Hay que reasignarlo en MercadoLibre,
+  Ripley y Walmart desde Mapeo de SKU. Ver el punto 1.
 
 ---
 
