@@ -29386,8 +29386,58 @@ def admin_walmart_diagnostico_catalogo():
         lectura.append("La respuesta no trae totalItems, asi que no se puede saber "
                        "por ese camino si hay mas de lo que devuelve.")
 
+    # ── Sondeo de paginacion ────────────────────────────────────────────
+    # La respuesta trae ItemResponse + totalItems y NINGUN campo de cursor, asi
+    # que la paginacion por nextCursor no aplica a esta API. Se prueban las
+    # formas habituales y se compara el primer SKU de cada lote contra el de la
+    # pagina 1: si cambia, ese parametro es el que pagina.
+    sondeo = {}
+    primer_sku_base = None
+    try:
+        r0 = _req.get(WALMART_BASE_URL + "/v3/items",
+                      headers=walmart_headers(), params={"limit": 50}, timeout=30)
+        if r0.status_code == 200:
+            base = (r0.json().get("ItemResponse") or [])
+            if base:
+                primer_sku_base = base[0].get("sku")
+            sondeo["base"] = {"http": 200, "items": len(base),
+                              "primer_sku": primer_sku_base}
+    except Exception as e:
+        sondeo["base"] = {"error": str(e)[:200]}
+
+    for nombre, params in (("offset=50",   {"limit": 50, "offset": 50}),
+                           ("page=2",      {"limit": 50, "page": 2}),
+                           ("nextCursor=*", {"limit": 50, "nextCursor": "*"})):
+        try:
+            r = _req.get(WALMART_BASE_URL + "/v3/items",
+                         headers=walmart_headers(), params=params, timeout=30)
+            fila = {"http": r.status_code}
+            if r.status_code == 200:
+                d = r.json() if r.content else {}
+                its = d.get("ItemResponse") or []
+                fila["items"] = len(its)
+                fila["primer_sku"] = its[0].get("sku") if its else None
+                fila["trae_datos_nuevos"] = bool(
+                    its and primer_sku_base and its[0].get("sku") != primer_sku_base)
+            else:
+                fila["error"] = (r.text or "")[:200]
+            sondeo[nombre] = fila
+        except Exception as e:
+            sondeo[nombre] = {"error": str(e)[:200]}
+
+    gana = [k for k, v in sondeo.items()
+            if isinstance(v, dict) and v.get("trae_datos_nuevos")]
+    if gana:
+        lectura.append("La paginacion funciona con: %s. Con ese parametro se puede "
+                       "leer el catalogo completo." % ", ".join(gana))
+    else:
+        lectura.append("Ninguna de las formas probadas (offset, page, nextCursor) "
+                       "trajo productos distintos a los de la primera pagina. Hay "
+                       "que revisar la documentacion de Walmart Chile para esta API.")
+
     return jsonify({"ok": True, "solo_lectura": True,
-                    "lectura": lectura, "resultados": resultados})
+                    "lectura": lectura, "resultados": resultados,
+                    "sondeo_paginacion": sondeo})
 
 
 @app.route("/admin/lusync/walmart/sync-full", methods=["GET", "POST"])
