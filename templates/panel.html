@@ -6999,12 +6999,8 @@ function borrarGrupoHuerfano(fantasma){
   const filas = _huerfanosPorFantasma[fantasma] || [];
   if(!filas.length) return;
   const canales = filas.map(f => f.canal).join(', ');
-  if(!confirm('¿Borrar las ' + filas.length + ' publicaciones que apuntan a ' + fantasma + '?
-
-' +
-              'Canales: ' + canales + '
-
-' +
+  if(!confirm('¿Borrar las ' + filas.length + ' publicaciones que apuntan a ' + fantasma + '?\n\n' +
+              'Canales: ' + canales + '\n\n' +
               'Ojo: esto NO baja las publicaciones del marketplace. Si el producto está ' +
               'descontinuado, también hay que despublicarlo en cada canal, o la venta va a ' +
               'seguir entrando.')) return;
