@@ -892,6 +892,7 @@ def sincronizar_stock_marketplaces(sku, stock=None, contexto="manual"):
 # actual incluso sin sesión Flask.
 
 import threading
+import time
 _thread_tenant = threading.local()
 
 def get_thread_tenant():
@@ -23219,6 +23220,57 @@ def ventas_graficos():
 # Devuelve filas listas para exportar a CSV/Excel
 # ════════════════════════════════════════════════════════════════════════════════
 
+# ════════════════════════════════════════════════════════════════════════════
+# CACHE DEL REPORTE DE VENTAS
+# ════════════════════════════════════════════════════════════════════════════
+# Armar el reporte significa recorrer las APIs de seis marketplaces y pedir el
+# detalle de cada orden. Es caro y lo piden TRES lugares distintos —la seccion
+# de ventas, el modal del tablero y la descarga del CSV— que hasta ahora
+# rastreaban todo de nuevo cada uno.
+#
+# El resultado se guarda unos minutos por (tenant, rango, canales). No es un
+# cache de stock: son ventas ya ocurridas en un rango cerrado, asi que dentro de
+# esa ventana el dato no cambia. Con &refrescar=1 se ignora lo guardado.
+_CACHE_VENTAS = {}
+_CACHE_VENTAS_LOCK = threading.Lock()
+_CACHE_VENTAS_TTL = 300        # segundos
+_CACHE_VENTAS_MAX = 12         # entradas; el rango suele repetirse poco
+
+
+def _filas_ventas(fecha_desde, fecha_hasta, canales_str, refrescar=False):
+    """Filas del reporte, reutilizando el ultimo rastreo si sigue fresco."""
+    try:
+        tid = get_thread_tenant()
+    except Exception:
+        tid = None
+    if tid is None:
+        try:
+            tid = session.get("tenant_id")
+        except Exception:
+            tid = None
+
+    clave = (tid, fecha_desde or "", fecha_hasta or "", canales_str or "")
+    ahora = time.time()
+
+    if not refrescar:
+        with _CACHE_VENTAS_LOCK:
+            guardado = _CACHE_VENTAS.get(clave)
+        if guardado and (ahora - guardado[0]) < _CACHE_VENTAS_TTL:
+            return guardado[1], True
+
+    filas = _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str)
+
+    with _CACHE_VENTAS_LOCK:
+        _CACHE_VENTAS[clave] = (ahora, filas)
+        # No dejar que crezca sin fin: se sueltan las entradas mas viejas
+        if len(_CACHE_VENTAS) > _CACHE_VENTAS_MAX:
+            viejas = sorted(_CACHE_VENTAS.items(), key=lambda kv: kv[1][0])
+            for k, _ in viejas[:len(_CACHE_VENTAS) - _CACHE_VENTAS_MAX]:
+                _CACHE_VENTAS.pop(k, None)
+
+    return filas, False
+
+
 @app.route("/ventas/reporte", methods=["GET"])
 def ventas_reporte():
     """Construye reporte de ventas consolidado por rango de fechas."""
@@ -23228,8 +23280,12 @@ def ventas_reporte():
         fecha_desde = request.args.get("fecha_desde") or ""
         fecha_hasta = request.args.get("fecha_hasta") or ""
         canales_str = request.args.get("canales") or ""
-        filas = _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str)
-        return jsonify({"ok": True, "filas": filas, "total": len(filas)})
+        refrescar = request.args.get("refrescar") == "1"
+        t0 = time.time()
+        filas, del_cache = _filas_ventas(fecha_desde, fecha_hasta, canales_str, refrescar)
+        return jsonify({"ok": True, "filas": filas, "total": len(filas),
+                        "desde_cache": del_cache,
+                        "segundos": round(time.time() - t0, 2)})
     except Exception as e:
         import traceback
         print(f"[ventas_reporte] ERROR: {e}\n{traceback.format_exc()}")
@@ -23261,6 +23317,203 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
             return max(1, min((_dha.utcnow() - d0).days + 2, 365))
         except Exception:
             return default
+
+    def _traer_en_paralelo(funcion, claves, hilos=8):
+        """Llama a 'funcion(clave)' para cada clave, en paralelo. Devuelve {clave: resultado}.
+
+        El reporte hace una peticion HTTP por orden para traer el detalle (items,
+        envio, cliente). En serie eso es esperar N veces el viaje completo y es la
+        razon por la que la consulta se siente eterna. Las peticiones no dependen
+        entre si, asi que se lanzan juntas.
+
+        Si una falla, esa clave queda en None y el resto del reporte sigue: un
+        detalle que no llega no puede tumbar el informe entero.
+        """
+        resultados = {}
+        if not claves:
+            return resultados
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=min(hilos, len(claves))) as pool:
+            futuros = {pool.submit(funcion, c): c for c in claves}
+            for fut in as_completed(futuros):
+                clave = futuros[fut]
+                try:
+                    resultados[clave] = fut.result()
+                except Exception as e:
+                    print(f"[Reporte ventas] detalle {clave} fallo: {str(e)[:120]}")
+                    resultados[clave] = None
+        return resultados
+
+    def _texto_estado(valor):
+        """Deja el estado como texto legible, venga como sea.
+
+        Falabella lo manda como lista de diccionarios y en el reporte aparecia
+        literalmente "{'Status': 'pending'}" en la celda.
+        """
+        if not valor:
+            return ""
+        if isinstance(valor, str):
+            return valor
+        if isinstance(valor, dict):
+            for k in ("Status", "status", "name", "Name", "value"):
+                if valor.get(k):
+                    return str(valor[k])
+            return ""
+        if isinstance(valor, (list, tuple)):
+            partes = [_texto_estado(v) for v in valor]
+            return ", ".join(p for p in partes if p)
+        return str(valor)
+
+    def _solo_nombre(nombre, apellido):
+        """Quita el apellido del campo nombre cuando el canal manda el nombre completo.
+
+        Paris y Falabella devuelven el nombre completo en el campo de nombre de
+        pila, asi que la fila mostraba "Catalina Morales" y "Morales" al lado.
+        """
+        n = (nombre or "").strip()
+        a = (apellido or "").strip()
+        if not n or not a:
+            return n
+        if n.lower() == a.lower():
+            return n
+        if n.lower().endswith(" " + a.lower()):
+            return n[: -(len(a) + 1)].strip() or n
+        if n.lower().startswith(a.lower() + " "):
+            return n[len(a) + 1:].strip() or n
+        return n
+
+    def _texto_plano(v):
+        """Un valor que puede venir como texto, numero o diccionario anidado."""
+        if v is None:
+            return ""
+        if isinstance(v, (str, int, float)):
+            return str(v)
+        if isinstance(v, dict):
+            for k in ("number", "value", "name", "id"):
+                if v.get(k):
+                    return str(v[k])
+        return ""
+
+    def _telefono_meli(buyer):
+        """Telefono del comprador, venga suelto o dentro de phone/alternative_phone."""
+        if not isinstance(buyer, dict):
+            return ""
+        for clave in ("phone", "alternative_phone"):
+            tel = buyer.get(clave)
+            if isinstance(tel, dict):
+                num = (tel.get("number") or "").strip()
+                if num:
+                    area = (tel.get("area_code") or "").strip()
+                    return (area + num) if area else num
+            elif isinstance(tel, str) and tel.strip():
+                return tel.strip()
+        return ""
+
+    def _datos_facturacion_meli(bd):
+        """Nombre, RUT, correo y telefono desde /orders/{id}/billing_info.
+
+        La respuesta cambia de forma segun la version: a veces los campos vienen
+        sueltos y a veces bajo buyer.billing_info. Y el nombre NO viene como
+        first_name: viene en additional_info, una lista de {type, value}. Leer
+        solo first_name era la razon por la que el reporte mostraba el apodo de
+        la cuenta ("SEPA5742141") en la columna Nombre.
+        """
+        datos = {"nombre": "", "apellido": "", "rut": "", "email": "", "telefono": ""}
+        if not isinstance(bd, dict):
+            return datos
+
+        base = bd
+        for camino in (("buyer", "billing_info"), ("billing_info",)):
+            cur = bd
+            for k in camino:
+                cur = cur.get(k) if isinstance(cur, dict) else None
+                if cur is None:
+                    break
+            if isinstance(cur, dict):
+                base = cur
+                break
+
+        datos["rut"] = _texto_plano(base.get("doc_number")) or _texto_plano(base.get("identification"))
+        datos["nombre"] = _texto_plano(base.get("first_name")) or _texto_plano(base.get("name"))
+        datos["apellido"] = _texto_plano(base.get("last_name"))
+        datos["email"] = _texto_plano(base.get("email"))
+        datos["telefono"] = _texto_plano(base.get("phone"))
+
+        for extra in (base.get("additional_info") or []):
+            if not isinstance(extra, dict):
+                continue
+            tipo = str(extra.get("type") or "").upper()
+            valor = _texto_plano(extra.get("value"))
+            if not valor:
+                continue
+            if tipo in ("FIRST_NAME", "NAME") and not datos["nombre"]:
+                datos["nombre"] = valor
+            elif tipo == "LAST_NAME" and not datos["apellido"]:
+                datos["apellido"] = valor
+            elif tipo in ("DOC_NUMBER", "DOCUMENT_NUMBER", "IDENTIFICATION") and not datos["rut"]:
+                datos["rut"] = valor
+            elif tipo == "EMAIL" and not datos["email"]:
+                datos["email"] = valor
+            elif tipo in ("PHONE", "PHONE_NUMBER") and not datos["telefono"]:
+                datos["telefono"] = valor
+        return datos
+
+    # Nombres legibles de los tipos de logistica de MercadoLibre. En el reporte
+    # salia el codigo crudo ("xd_drop_off") en la columna Metodo de envio.
+    _LOGISTICA_ML = {
+        "fulfillment": "Full (despacha MercadoLibre)",
+        "self_service": "Flex (despachas tu)",
+        "cross_docking": "Colecta (dejas en centro MELI)",
+        "drop_off": "Punto de despacho",
+        "xd_drop_off": "Punto de despacho",
+        "custom": "Acordado con el comprador",
+    }
+
+    def _datos_envio_meli(sd):
+        """Direccion, comuna, seguimiento y tipo de envio desde /shipments/{id}.
+
+        La direccion viene en receiver_address o en destination.shipping_address
+        segun la version de la API; antes se leia solo la segunda y las columnas
+        de direccion y comuna salian vacias en todas las filas.
+
+        Devuelve (direccion, comuna, tracking, metodo_envio, logistic_type).
+        """
+        if not isinstance(sd, dict):
+            return "", "", "", "", ""
+
+        addr = sd.get("receiver_address")
+        if not isinstance(addr, dict) or not addr:
+            dest = sd.get("destination") or {}
+            if isinstance(dest, dict):
+                addr = dest.get("shipping_address") or dest.get("receiver_address") or {}
+        if not isinstance(addr, dict):
+            addr = {}
+
+        calle = addr.get("street_name") or addr.get("address_line") or ""
+        numero = _texto_plano(addr.get("street_number"))
+        direccion = f"{calle}{' ' + numero if numero and numero not in calle else ''}".strip()
+
+        ciudad = addr.get("city")
+        comuna = _texto_plano(ciudad) or _texto_plano(addr.get("municipality")) or ""
+
+        tracking = sd.get("tracking_number") or ""
+        logistic = (sd.get("logistic_type") or
+                    ((sd.get("logistic") or {}).get("type") if isinstance(sd.get("logistic"), dict) else "") or "")
+        logistic = str(logistic).lower()
+        metodo = _LOGISTICA_ML.get(logistic, logistic or sd.get("shipping_mode") or "")
+        return direccion, comuna, tracking, metodo, logistic
+
+    def _envio_por_unidad(total, unidades):
+        """Reparte el envio de la orden entre sus unidades, en pesos enteros.
+
+        El peso chileno no tiene decimales: sin esto salian celdas como
+        "$ 663,333" de dividir 1990 en 3.
+        """
+        try:
+            u = max(1, int(unidades or 1))
+            return int(round(float(total or 0) / u))
+        except Exception:
+            return 0
 
     # El SKU interno se resuelve una sola vez por (canal, sku del canal): el
     # reporte repite mucho el mismo producto y cada consulta es un viaje a la BD.
@@ -23322,92 +23575,80 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
         try:
             from mercadolibre import obtener_todas_ordenes_meli_rango, meli_headers, MELI_API_URL
             import requests as _req
-            from bodegas_logic import detectar_fulfillment_meli as _ff_ml
             from datetime import datetime as _dt_ml, timedelta as _td_ml
+
             # Sin fecha_desde esto devolvia [] y MercadoLibre desaparecia del
             # reporte, mientras los demas canales caen a 30 dias.
             _desde_ml = fecha_desde or (_dt_ml.utcnow() - _td_ml(days=30)).strftime("%Y-%m-%d")
             df = f"{_desde_ml}T00:00:00.000-04:00"
             dt = f"{fecha_hasta}T23:59:59.000-04:00" if fecha_hasta else None
-            ordenes_meli = obtener_todas_ordenes_meli_rango(df, dt) or []
             hdrs = meli_headers()
 
-            for o in ordenes_meli:
+            ordenes_ml = {}
+            for o in (obtener_todas_ordenes_meli_rango(df, dt) or []):
                 if o.get("status") not in ("paid", "confirmed", "payment_required"):
                     continue
+                oid = str(o.get("id", ""))
+                if oid and oid not in ordenes_ml:
+                    ordenes_ml[oid] = o
 
-                order_id  = str(o.get("id", ""))
-                buyer     = o.get("buyer") or {}
-                buyer_id  = buyer.get("id")
-                payments  = o.get("payments") or [{}]
-                pago      = (payments[0].get("payment_method_id") or "") if payments else ""
-                envio_cost= float((payments[0].get("shipping_cost") or 0)) if payments else 0
-                shipping  = o.get("shipping") or {}
-                ship_id   = shipping.get("id")
+            def _pedir_json(url):
+                r = _req.get(url, headers=hdrs, timeout=10)
+                return r.json() if r.status_code == 200 else None
 
-                # Nombre real: intentar billing_info primero (tiene RUT y nombre completo)
-                nombre = apellido = rut = email = telefono = ""
-                try:
-                    bi = _req.get(f"{MELI_API_URL}/orders/{order_id}/billing_info",
-                                  headers=hdrs, timeout=8)
-                    if bi.status_code == 200:
-                        bd = bi.json()
-                        billing = bd.get("billing_info") or bd
-                        nombre   = billing.get("first_name") or ""
-                        apellido = billing.get("last_name") or ""
-                        # Ojo: esto era un ternario mal parentizado —
-                        # (A or B) if cond else "" — asi que cuando
-                        # "identification" no era un dict el RUT quedaba vacio
-                        # AUNQUE doc_number tuviera valor.
-                        rut = billing.get("doc_number") or ""
-                        if not rut and isinstance(billing.get("identification"), dict):
-                            rut = billing["identification"].get("number", "") or ""
-                        email    = billing.get("email") or buyer.get("email") or ""
-                        telefono = billing.get("phone") or ""
-                except Exception:
-                    pass
+            # Dos peticiones por orden: datos de facturacion y envio. Se lanzan en
+            # paralelo. Antes eran TRES en serie, porque detectar_fulfillment_meli
+            # volvia a pedir el mismo envio para saber si era Full.
+            facturacion = _traer_en_paralelo(
+                lambda oid: _pedir_json(f"{MELI_API_URL}/orders/{oid}/billing_info"),
+                list(ordenes_ml.keys()))
+            envios_id = {oid: ((o.get("shipping") or {}).get("id"))
+                         for oid, o in ordenes_ml.items()}
+            envios = _traer_en_paralelo(
+                lambda sid: _pedir_json(f"{MELI_API_URL}/shipments/{sid}"),
+                [sid for sid in envios_id.values() if sid])
 
-                # Fallback: campos del buyer en la orden
-                if not nombre:
+            for order_id, o in ordenes_ml.items():
+                buyer = o.get("buyer") or {}
+                payments = o.get("payments") or []
+                pago = (payments[0].get("payment_method_id") or "") if payments else ""
+                envio_cost = float((payments[0].get("shipping_cost") or 0)) if payments else 0
+
+                # billing_info trae el nombre dentro de additional_info, como lista
+                # de {type, value}. Leyendo solo first_name se perdia el nombre real
+                # y la fila terminaba mostrando el apodo de la cuenta.
+                datos = _datos_facturacion_meli(facturacion.get(order_id))
+                nombre   = datos.get("nombre") or ""
+                apellido = datos.get("apellido") or ""
+                rut      = datos.get("rut") or ""
+                email    = datos.get("email") or buyer.get("email") or ""
+                telefono = datos.get("telefono") or _telefono_meli(buyer)
+
+                if not nombre and not apellido:
                     nombre   = buyer.get("first_name") or ""
                     apellido = buyer.get("last_name") or ""
-                if not email:
-                    email = buyer.get("email") or ""
-                # Si aún no hay nombre, usar nickname pero marcado
                 if not nombre and not apellido:
-                    nombre = buyer.get("nickname") or ""
+                    # Ultimo recurso: el apodo. Se marca para no confundirlo con
+                    # el nombre real de la persona.
+                    apodo = buyer.get("nickname") or ""
+                    nombre = f"(apodo) {apodo}" if apodo else ""
 
-                # Datos de envío
-                direccion = comuna = tracking = metodo_envio = ""
-                if ship_id:
-                    try:
-                        sr = _req.get(f"{MELI_API_URL}/shipments/{ship_id}",
-                                      headers=hdrs, timeout=8)
-                        if sr.status_code == 200:
-                            sd = sr.json()
-                            tracking     = sd.get("tracking_number") or ""
-                            metodo_envio = sd.get("logistic_type") or sd.get("shipping_mode") or ""
-                            dest = sd.get("destination") or {}
-                            addr = dest.get("shipping_address") or {}
-                            num  = addr.get("street_number") or ""
-                            direccion = f"{addr.get('street_name','')}{' '+num if num else ''}".strip()
-                            city = addr.get("city") or {}
-                            comuna = city.get("name","") if isinstance(city, dict) else str(city or "")
-                    except Exception:
-                        pass
+                sd = envios.get(envios_id.get(order_id)) or {}
+                direccion, comuna, tracking, metodo_envio, logistic = _datos_envio_meli(sd)
 
-                items_ml = o.get("order_items") or []
-                # El envio es de la ORDEN. Repetirlo entero en cada fila hacia que
-                # sumar la columna diera de mas; se reparte entre las unidades.
-                unidades_ml = sum(int(i.get("quantity") or 1) for i in items_ml) or 1
-                envio_unit = float(envio_cost or 0) / unidades_ml
-                es_full_ml = None
-                try:
-                    es_full_ml = _ff_ml(o)
-                except Exception:
-                    es_full_ml = None
+                # El dato autoritativo de Full es el logistic_type del envio, que ya
+                # tenemos aca. detectar_fulfillment_meli ademas mira orden.fulfilled,
+                # que en MercadoLibre significa "orden completada" y NO "Full": por
+                # eso el reporte marcaba Full en envios self_service.
+                es_full_ml = (logistic == "fulfillment") if logistic else None
+
                 estado_ml = o.get("status") or ""
                 fecha_hora_ml = str(o.get("date_created") or "").replace("T", " ")[:16]
+                fecha = (o.get("date_created") or "")[:10]
+
+                items_ml = o.get("order_items") or []
+                unidades_ml = sum(int(i.get("quantity") or 1) for i in items_ml) or 1
+                envio_unit = _envio_por_unidad(envio_cost, unidades_ml)
 
                 for item in items_ml:
                     it    = item.get("item") or {}
@@ -23415,7 +23656,6 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                     prod  = it.get("title") or ""
                     qty   = int(item.get("quantity") or 1)
                     price = float(item.get("unit_price") or 0)
-                    fecha = (o.get("date_created") or "")[:10]
                     for _ in range(qty):
                         filas.append(fila("MercadoLibre", order_id, fecha,
                             nombre, apellido, rut, telefono, email,
@@ -23431,81 +23671,88 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
         try:
             from paris import obtener_ordenes_paris_todas, obtener_orden_paris
             from bodegas_logic import detectar_fulfillment_paris as _ff_pa
-            # Antes: dias = largo del rango. Un rango de enero pedia "31 dias hacia
-            # atras" contados desde hoy, y el filtro de abajo descartaba todo.
+
+            # La ventana era el largo del rango: un rango de enero pedia "31 dias
+            # hacia atras" contados desde hoy y el filtro de abajo descartaba todo.
             dias = _dias_hacia_atras(fecha_desde, 30)
+
+            # El listado repite la misma sub-orden, una vez por linea. Antes se
+            # pedia el detalle por cada repeticion y se expandian TODOS los items
+            # en cada vuelta: 6 repeticiones x 7 items = 42 filas para una orden
+            # de 7 unidades. Se procesa cada sub-orden UNA sola vez.
+            ordenes_pa = {}
             for o in obtener_ordenes_paris_todas(dias=dias):
+                oid = str(o.get("subOrderNumber") or o.get("orderNumber") or "")
+                if not oid or oid in ordenes_pa:
+                    continue
                 created = (o.get("createdAt") or o.get("originOrderDate") or "")[:10]
                 if fecha_desde and created < fecha_desde: continue
                 if fecha_hasta and created > fecha_hasta: continue
-                order_id = str(o.get("subOrderNumber") or o.get("orderNumber") or "")
+                ordenes_pa[oid] = o
 
-                # FIX: Paris en el listado NO trae items; hay que ir al detalle de cada sub-orden
-                detalle = None
-                if order_id:
-                    try:
-                        detalle = obtener_orden_paris(order_id)
-                    except Exception:
-                        detalle = None
-                # Combinar datos de listado + detalle
-                o_full = {**o, **(detalle or {})}
+            # El detalle es una llamada HTTP por sub-orden. En serie, 60 ordenes
+            # son 60 viajes encadenados; en paralelo el reporte deja de esperar.
+            detalles_pa = _traer_en_paralelo(obtener_orden_paris, list(ordenes_pa.keys()))
+
+            for order_id, o in ordenes_pa.items():
+                created = (o.get("createdAt") or o.get("originOrderDate") or "")[:10]
+                o_full = {**o, **(detalles_pa.get(order_id) or {})}
 
                 cust = o_full.get("customer") or {}
                 billing = o_full.get("billingAddress") or {}
                 addr = o_full.get("shippingAddress") or {}
-                nombre   = cust.get("firstName") or cust.get("name") or billing.get("firstName") or ""
                 apellido = cust.get("lastName") or billing.get("lastName") or ""
+                nombre   = (cust.get("firstName") or cust.get("name") or
+                            billing.get("firstName") or "")
+                # firstName de Paris suele traer el nombre COMPLETO, asi que la
+                # fila mostraba "Catalina Morales" y "Morales" al lado.
+                nombre = _solo_nombre(nombre, apellido)
                 email    = cust.get("email") or ""
                 telefono = cust.get("phone") or billing.get("phone") or ""
                 rut      = cust.get("documentNumber") or cust.get("rut") or ""
                 st_name  = addr.get("streetName") or addr.get("address1") or billing.get("address1") or ""
-                st_num   = addr.get("streetNumber") or ""
-                direccion= f"{st_name}{' '+st_num if st_num else ''}".strip()
+                st_num   = (addr.get("streetNumber") or addr.get("number") or
+                            billing.get("streetNumber") or "")
+                direccion= f"{st_name}{' '+str(st_num) if st_num else ''}".strip()
                 comuna   = addr.get("city") or addr.get("commune") or billing.get("city") or ""
 
-                # Items de Paris vienen dentro de shipments[].items o subOrders[].items o items directo
-                items_paris = []
-                # Opción 1: items directo
-                if o_full.get("items"):
-                    items_paris = o_full.get("items") or []
-                # Opción 2: dentro de shipments
+                # Los items vienen sueltos, dentro de shipments o dentro de subOrders
+                items_paris = list(o_full.get("items") or [])
                 if not items_paris:
                     for ship in (o_full.get("shipments") or []):
                         items_paris.extend(ship.get("items") or [])
-                # Opción 3: dentro de subOrders
                 if not items_paris:
                     for so in (o_full.get("subOrders") or []):
                         items_paris.extend(so.get("items") or [])
 
                 tracking = ""
-                m_envio = (o_full.get("deliveryOption") or {}).get("name") if isinstance(o_full.get("deliveryOption"), dict) else (o_full.get("logisticType") or o_full.get("shippingType") or "")
-                m_pago = o_full.get("paymentMethod") or o_full.get("originInvoiceType") or ""
-
-                # Buscar tracking en shipments
                 for ship in (o_full.get("shipments") or []):
                     tracking = ship.get("trackingNumber") or tracking
                     if tracking: break
 
+                m_envio = (o_full.get("deliveryOption") or {}).get("name") if isinstance(o_full.get("deliveryOption"), dict) else (o_full.get("logisticType") or o_full.get("shippingType") or "")
+                m_pago = o_full.get("paymentMethod") or o_full.get("originInvoiceType") or ""
+
                 envio_c = 0
-                # Costo de envío del primer shipment
                 for ship in (o_full.get("shipments") or []):
                     try:
                         envio_c = float(ship.get("cost") or 0)
                         if envio_c > 0: break
-                    except: pass
+                    except Exception:
+                        pass
 
                 es_full_pa = None
                 try:
                     es_full_pa = _ff_pa(o_full)
                 except Exception:
                     es_full_pa = None
-                estado_pa = (o_full.get("status") or o_full.get("statusName") or
-                             o_full.get("orderStatus") or "")
+                estado_pa = _texto_estado(o_full.get("status") or o_full.get("statusName") or
+                                          o_full.get("orderStatus") or o_full.get("statuses"))
                 fecha_hora_pa = str(o_full.get("createdAt") or
                                     o_full.get("originOrderDate") or "").replace("T", " ")[:16]
-                # El costo de envio es de la orden: se reparte entre sus unidades
-                # para que la suma de la columna no de de mas.
+
                 unidades_pa = sum(int(i.get("quantity") or 1) for i in items_paris) or 1
+                envio_unit = _envio_por_unidad(envio_c, unidades_pa)
 
                 if not items_paris:
                     filas.append(fila("Paris", order_id, created,
@@ -23521,7 +23768,7 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                              item.get("sku") or item.get("jda_sku") or item.get("jdaSku") or "")
                     prod  = item.get("name") or item.get("productName") or item.get("title") or ""
                     qty   = int(item.get("quantity") or 1)
-                    # Paris: priceAfterDiscounts = precio final pagado por el cliente
+                    # priceAfterDiscounts = lo que pago el cliente
                     price = float(item.get("priceAfterDiscounts") or
                                   item.get("price_after_discounts") or
                                   item.get("grossPrice") or
@@ -23533,7 +23780,7 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                     for _ in range(qty):
                         filas.append(fila("Paris", order_id, created,
                             nombre, apellido, rut, telefono, email,
-                            prod, sku_s, price, float(envio_c or 0) / unidades_pa,
+                            prod, sku_s, price, envio_unit,
                             direccion, comuna, m_pago, m_envio, tracking,
                             fulfillment=es_full_pa, estado=estado_pa,
                             fecha_hora=fecha_hora_pa))
@@ -23641,7 +23888,7 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                     for _ in range(qty):
                         filas.append(fila("Walmart", order_id, created,
                             nombre, apellido, "", telefono_wm, email_wm,
-                            prod, sku_s, precio, envio_wm / qty,
+                            prod, sku_s, precio, _envio_por_unidad(envio_wm, qty),
                             direccion, comuna, metodo_pago, metodo_envio, tracking,
                             fulfillment=es_full_wm, estado=estado_wm,
                             fecha_hora=fecha_hora_wm))
@@ -23653,61 +23900,71 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
         try:
             from falabella import obtener_ordenes_falabella, obtener_items_orden_falabella
             from bodegas_logic import detectar_fulfillment_falabella as _ff_fa
+
             # Mismo error que en Paris: la ventana era el largo del rango.
             dias_fa = _dias_hacia_atras(fecha_desde, 30)
             ordenes_fa = obtener_ordenes_falabella(dias=dias_fa) or []
-            print(f"[Reporte ventas] Falabella: {len(ordenes_fa)} órdenes brutas, filtrando por {fecha_desde}–{fecha_hasta}")
+
+            # Filtrar por fecha ANTES de pedir los items: cada orden fuera de rango
+            # era una peticion HTTP gastada en datos que despues se descartaban.
+            en_rango = {}
             for o in ordenes_fa:
+                created = (o.get("CreatedAt") or o.get("created_at") or "")[:10]
+                if fecha_desde and created < fecha_desde: continue
+                if fecha_hasta and created > fecha_hasta: continue
+                oid = str(o.get("OrderId") or o.get("order_id") or "")
+                if oid and oid not in en_rango:
+                    en_rango[oid] = o
+            print(f"[Reporte ventas] Falabella: {len(ordenes_fa)} ordenes brutas, "
+                  f"{len(en_rango)} en el rango {fecha_desde}–{fecha_hasta}")
+
+            items_por_orden = _traer_en_paralelo(obtener_items_orden_falabella,
+                                                 list(en_rango.keys()))
+
+            def _to_float(v):
+                if v is None: return 0.0
+                if isinstance(v, (int, float)): return float(v)
+                s_ = str(v).replace(",", "")
+                try: return float(s_)
+                except Exception: return 0.0
+
+            for order_id, o in en_rango.items():
                 try:
-                    created  = (o.get("CreatedAt") or o.get("created_at") or "")[:10]
-                    if fecha_desde and created < fecha_desde: continue
-                    if fecha_hasta and created > fecha_hasta: continue
-                    order_id = str(o.get("OrderId") or o.get("order_id") or "")
-                    # Datos de cliente en la orden de Falabella
-                    nombre   = o.get("CustomerFirstName") or o.get("BillingName") or ""
+                    created = (o.get("CreatedAt") or o.get("created_at") or "")[:10]
                     apellido = o.get("CustomerLastName") or ""
+                    nombre   = o.get("CustomerFirstName") or o.get("BillingName") or ""
                     if not nombre:
                         full = o.get("CustomerName") or o.get("AddressName") or ""
-                        if " " in full: nombre, apellido = full.split(" ", 1)
-                        else: nombre = full
+                        if " " in full:
+                            nombre, apellido = full.split(" ", 1)
+                        else:
+                            nombre = full
+                    # El apellido llegaba con el nombre completo adentro: la fila
+                    # mostraba "Javiera" y "Javiera Montenegro Zeballos" al lado.
+                    apellido = _solo_nombre(apellido, nombre) or apellido
                     email    = o.get("CustomerEmail") or ""
-                    telefono = o.get("CustomerPhone") or o.get("BillingPhone") or ""
+                    telefono = (o.get("CustomerPhone") or o.get("BillingPhone") or
+                                o.get("AddressPhone") or o.get("Phone") or "")
                     rut      = o.get("NationalRegistrationNumber") or o.get("CustomerRut") or ""
-                    # Dirección de envío
                     direccion = o.get("AddressLine1") or o.get("ShippingAddress") or ""
                     comuna    = o.get("City") or o.get("Ward") or o.get("ShippingCity") or ""
                     m_pago    = o.get("PaymentMethod") or ""
                     m_envio   = o.get("ShippingType") or o.get("DeliveryType") or ""
                     tracking  = o.get("TrackingCode") or ""
+
                     es_full_fa = None
                     try:
                         es_full_fa = _ff_fa(o)
                     except Exception:
                         es_full_fa = None
-                    _st_fa = o.get("Statuses") or o.get("OrderStatus") or o.get("Status") or ""
-                    if isinstance(_st_fa, dict):
-                        _st_fa = _st_fa.get("Status") or ""
-                    if isinstance(_st_fa, list):
-                        _st_fa = ", ".join(str(x) for x in _st_fa if x)
-                    estado_fa = str(_st_fa or "")
+                    # Falabella manda el estado como LISTA DE DICCIONARIOS: sin esto
+                    # la celda mostraba literalmente "{'Status': 'pending'}".
+                    estado_fa = _texto_estado(o.get("Statuses") or o.get("OrderStatus") or
+                                              o.get("Status"))
                     fecha_hora_fa = str(o.get("CreatedAt") or o.get("created_at") or "").replace("T", " ")[:16]
 
-                    # Items de la orden
-                    try:
-                        items_fa = obtener_items_orden_falabella(order_id) or []
-                    except Exception as e_items:
-                        print(f"[Reporte ventas] Falabella items error orden {order_id}: {e_items}")
-                        items_fa = []
+                    items_fa = items_por_orden.get(order_id) or []
 
-                    # Falabella devuelve strings ("42,780.00" o "42780.00"). Castear seguro.
-                    def _to_float(v):
-                        if v is None: return 0.0
-                        if isinstance(v, (int, float)): return float(v)
-                        s = str(v).replace(",", "")
-                        try: return float(s)
-                        except: return 0.0
-
-                    # Price = total con envío (Gran Total). Si no, usar GrandTotal o ProductTotal.
                     precio_total_orden = (_to_float(o.get("Price")) or
                                           _to_float(o.get("GrandTotal")) or
                                           _to_float(o.get("ProductTotal")))
@@ -23735,10 +23992,12 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                                  _to_float(item.get("Price")))
                         if price <= 0:
                             price = precio_unitario_default
-                        envio_c = (_to_float(item.get("ShippingFee")) or
+                        envio_i = (_to_float(item.get("ShippingFee")) or
                                    _to_float(item.get("ShippingAmount")))
-                        if envio_c <= 0:
-                            envio_c = shipping_total_orden / total_units if shipping_total_orden > 0 else 0
+                        if envio_i > 0:
+                            envio_c = _envio_por_unidad(envio_i, qty)
+                        else:
+                            envio_c = _envio_por_unidad(shipping_total_orden, total_units)
                         track_i = item.get("TrackingCode") or tracking
                         for _ in range(qty):
                             filas.append(fila("Falabella", order_id, created,
@@ -23834,7 +24093,7 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                     for _ in range(qty):
                         filas.append(fila("Web", order_id, created,
                             nombre, apellido, rut, telefono, email,
-                            prod, sku_s, precio_unit, envio_c / unidades_woo,
+                            prod, sku_s, precio_unit, _envio_por_unidad(envio_c, unidades_woo),
                             direccion, comuna, m_pago, m_envio, "",
                             fulfillment=False, estado=estado_woo,
                             fecha_hora=fecha_hora_woo))
@@ -23857,7 +24116,8 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                 if fecha_hasta and created and created > fecha_hasta: continue
 
                 order_id = str(o.get("order_id") or o.get("commercial_id") or "")
-                estado_rp = o.get("order_state") or o.get("order_state_reason_code") or ""
+                estado_rp = _texto_estado(o.get("order_state") or
+                                          o.get("order_state_reason_code"))
                 es_full_rp = None
                 try:
                     es_full_rp = _ff_rp(o)
@@ -23905,7 +24165,8 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                         envio_linea = float(ln.get("shipping_price") or 0)
                     except Exception:
                         envio_linea = 0.0
-                    envio_unit = (envio_linea / qty) if envio_linea else (envio_orden / unidades_rp)
+                    envio_unit = (_envio_por_unidad(envio_linea, qty) if envio_linea
+                                  else _envio_por_unidad(envio_orden, unidades_rp))
                     track_rp = ""
                     for sh in (o.get("shipments") or []):
                         track_rp = sh.get("tracking_number") or ""
@@ -23973,6 +24234,94 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
 
 
 
+@app.route("/ventas/diagnostico-orden", methods=["GET"])
+def ventas_diagnostico_orden():
+    """Devuelve lo que responde el canal para UNA orden, sin interpretar nada.
+
+    SOLO LECTURA. Sirve para arreglar las columnas que salen vacias sin adivinar
+    el nombre de los campos: cada marketplace cambia la forma de su respuesta
+    entre versiones y lo unico que zanja la discusion es el JSON tal cual llega.
+
+    Uso: /ventas/diagnostico-orden?canal=mercadolibre&orden=2000018594365786
+         canal: mercadolibre | paris | falabella | walmart | ripley
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    canal = (request.args.get("canal") or "").strip().lower()
+    orden = (request.args.get("orden") or "").strip()
+    if not canal or not orden:
+        return jsonify({"ok": False, "error": "faltan canal y orden"}), 400
+
+    bloques = {}
+    try:
+        if canal in ("mercadolibre", "meli", "ml"):
+            from mercadolibre import meli_headers, MELI_API_URL
+            import requests as _rq
+            h = meli_headers()
+            r_o = _rq.get(f"{MELI_API_URL}/orders/{orden}", headers=h, timeout=15)
+            bloques["orden"] = r_o.json() if r_o.status_code == 200 else r_o.text[:800]
+            r_b = _rq.get(f"{MELI_API_URL}/orders/{orden}/billing_info", headers=h, timeout=15)
+            bloques["billing_info"] = r_b.json() if r_b.status_code == 200 else r_b.text[:800]
+            ship_id = None
+            if isinstance(bloques.get("orden"), dict):
+                ship_id = (bloques["orden"].get("shipping") or {}).get("id")
+            if ship_id:
+                r_s = _rq.get(f"{MELI_API_URL}/shipments/{ship_id}", headers=h, timeout=15)
+                bloques["envio"] = r_s.json() if r_s.status_code == 200 else r_s.text[:800]
+
+        elif canal == "paris":
+            from paris import obtener_orden_paris
+            bloques["sub_orden"] = obtener_orden_paris(orden)
+
+        elif canal == "falabella":
+            from falabella import obtener_items_orden_falabella, obtener_ordenes_falabella
+            bloques["items"] = obtener_items_orden_falabella(orden)
+            # La cabecera solo existe en el listado, asi que se busca ahi
+            for o in (obtener_ordenes_falabella(dias=60) or []):
+                if str(o.get("OrderId") or o.get("order_id") or "") == orden:
+                    bloques["cabecera"] = o
+                    break
+
+        elif canal == "walmart":
+            from walmart import obtener_ordenes_walmart
+            for o in (obtener_ordenes_walmart(dias=60, max_paginas=20) or []):
+                if str(o.get("customerOrderId") or "") == orden or str(o.get("purchaseOrderId") or "") == orden:
+                    bloques["orden"] = o
+                    break
+
+        elif canal == "ripley":
+            from ripley import obtener_orden_ripley
+            bloques["orden"] = obtener_orden_ripley(orden)
+
+        else:
+            return jsonify({"ok": False, "error": f"canal '{canal}' no reconocido"}), 400
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e)[:300],
+                        "traza": traceback.format_exc()[-1200:]}), 502
+
+    def _claves(v, prefijo="", tope=400):
+        """Lista las rutas que tienen un valor, para ver de un vistazo que campos existen."""
+        salida = []
+        if isinstance(v, dict):
+            for k, sub in v.items():
+                salida.extend(_claves(sub, f"{prefijo}.{k}" if prefijo else str(k)))
+        elif isinstance(v, list):
+            if v:
+                salida.extend(_claves(v[0], f"{prefijo}[0]"))
+        elif v not in (None, "", [], {}):
+            salida.append(f"{prefijo} = {str(v)[:60]}")
+        return salida[:tope]
+
+    rutas = {}
+    for nombre, cuerpo in bloques.items():
+        rutas[nombre] = _claves(cuerpo)
+
+    return jsonify({"ok": True, "solo_lectura": True, "canal": canal, "orden": orden,
+                    "campos_con_valor": rutas, "crudo": bloques})
+
+
 @app.route("/ventas/export_csv", methods=["GET"])
 def ventas_export_csv():
     """Exporta el reporte de ventas como CSV descargable directamente."""
@@ -23986,9 +24335,10 @@ def ventas_export_csv():
     fecha_hasta = request.args.get("fecha_hasta") or ""
     canales_str = request.args.get("canales") or ""
 
-    # Llamar directamente a la función interna reutilizable
+    # Reutiliza el rastreo que acaba de hacer la pantalla: la descarga no tiene
+    # por que recorrer los seis marketplaces otra vez.
     try:
-        filas = _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str)
+        filas, _ = _filas_ventas(fecha_desde, fecha_hasta, canales_str)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
