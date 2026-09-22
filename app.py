@@ -969,10 +969,15 @@ def _sync_walmart_automatico():
         for _bloque_unico in [True]:
             ordenes = obtener_ordenes_walmart()
             for o in ordenes:
-                order_id = o.get("purchaseOrderId")
+                # La Global API de Chile NO manda purchaseOrderId en las ordenes WFS:
+                # viene vacio y solo llega customerOrderId. Exigirlo descartaba TODAS
+                # las ventas Full antes de evaluarlas, sin error y sin registro.
+                # Se usa el identificador que venga; customerOrderId es ademas la clave
+                # con la que el resto del flujo marca y busca la orden.
+                order_id = o.get("purchaseOrderId") or o.get("customerOrderId")
                 if not order_id:
                     continue
-                customer_order_id = str(o.get("customerOrderId", order_id))
+                customer_order_id = str(o.get("customerOrderId") or order_id)
                 if orden_ya_procesada_texto(customer_order_id):
                     continue
 
@@ -1067,10 +1072,15 @@ def _sync_walmart_automatico():
             canceladas = obtener_ordenes_walmart("Cancelled")
             reingresadas = 0
             for o in canceladas:
-                order_id = o.get("purchaseOrderId")
+                # La Global API de Chile NO manda purchaseOrderId en las ordenes WFS:
+                # viene vacio y solo llega customerOrderId. Exigirlo descartaba TODAS
+                # las ventas Full antes de evaluarlas, sin error y sin registro.
+                # Se usa el identificador que venga; customerOrderId es ademas la clave
+                # con la que el resto del flujo marca y busca la orden.
+                order_id = o.get("purchaseOrderId") or o.get("customerOrderId")
                 if not order_id:
                     continue
-                customer_order_id = str(o.get("customerOrderId", order_id))
+                customer_order_id = str(o.get("customerOrderId") or order_id)
                 cancel_key = f"CANCEL-{customer_order_id}"
 
                 # Solo procesar si la orden fue previamente descontada Y no se reingresó antes
@@ -2786,10 +2796,15 @@ def _sync_recuperacion():
         for _bloque_unico in [True]:
             ordenes = obtener_ordenes_walmart()
             for o in ordenes:
-                order_id = o.get("purchaseOrderId")
+                # La Global API de Chile NO manda purchaseOrderId en las ordenes WFS:
+                # viene vacio y solo llega customerOrderId. Exigirlo descartaba TODAS
+                # las ventas Full antes de evaluarlas, sin error y sin registro.
+                # Se usa el identificador que venga; customerOrderId es ademas la clave
+                # con la que el resto del flujo marca y busca la orden.
+                order_id = o.get("purchaseOrderId") or o.get("customerOrderId")
                 if not order_id:
                     continue
-                customer_order_id = str(o.get("customerOrderId", order_id))
+                customer_order_id = str(o.get("customerOrderId") or order_id)
                 if orden_ya_procesada_texto(customer_order_id):
                     continue
 
@@ -2836,10 +2851,15 @@ def _sync_recuperacion():
         try:
             canceladas = obtener_ordenes_walmart("Cancelled")
             for o in canceladas:
-                order_id = o.get("purchaseOrderId")
+                # La Global API de Chile NO manda purchaseOrderId en las ordenes WFS:
+                # viene vacio y solo llega customerOrderId. Exigirlo descartaba TODAS
+                # las ventas Full antes de evaluarlas, sin error y sin registro.
+                # Se usa el identificador que venga; customerOrderId es ademas la clave
+                # con la que el resto del flujo marca y busca la orden.
+                order_id = o.get("purchaseOrderId") or o.get("customerOrderId")
                 if not order_id:
                     continue
-                customer_order_id = str(o.get("customerOrderId", order_id))
+                customer_order_id = str(o.get("customerOrderId") or order_id)
                 cancel_key = f"CANCEL-{customer_order_id}"
                 if not orden_ya_procesada_texto(customer_order_id):
                     continue
@@ -3982,13 +4002,18 @@ def walmart_sync_debug():
         log.append(f"Estado {estado}: {len(ordenes)} ordenes")
 
         for o in ordenes:
-            order_id = o.get("purchaseOrderId")
+            # La Global API de Chile NO manda purchaseOrderId en las ordenes WFS:
+            # viene vacio y solo llega customerOrderId. Exigirlo descartaba TODAS
+            # las ventas Full antes de evaluarlas, sin error y sin registro.
+            # Se usa el identificador que venga; customerOrderId es ademas la clave
+            # con la que el resto del flujo marca y busca la orden.
+            order_id = o.get("purchaseOrderId") or o.get("customerOrderId")
             if not order_id:
                 log.append("Sin order_id, saltando")
                 continue
 
             # Bug ③ fix: usar customerOrderId consistente con el resto del sistema
-            customer_order_id = str(o.get("customerOrderId", order_id))
+            customer_order_id = str(o.get("customerOrderId") or order_id)
             ya = orden_ya_procesada_texto(customer_order_id)
             log.append(f"Orden {order_id} customerOrderId:{customer_order_id} ya_procesada:{ya}")
 
@@ -4042,10 +4067,15 @@ def walmart_sync_debug():
     try:
         canceladas = obtener_ordenes_walmart("Cancelled")
         for o in canceladas:
-            order_id = o.get("purchaseOrderId")
+            # La Global API de Chile NO manda purchaseOrderId en las ordenes WFS:
+            # viene vacio y solo llega customerOrderId. Exigirlo descartaba TODAS
+            # las ventas Full antes de evaluarlas, sin error y sin registro.
+            # Se usa el identificador que venga; customerOrderId es ademas la clave
+            # con la que el resto del flujo marca y busca la orden.
+            order_id = o.get("purchaseOrderId") or o.get("customerOrderId")
             if not order_id:
                 continue
-            customer_order_id = str(o.get("customerOrderId", order_id))
+            customer_order_id = str(o.get("customerOrderId") or order_id)
             cancel_key = f"CANCEL-{customer_order_id}"
             if not orden_ya_procesada_texto(customer_order_id):
                 continue
