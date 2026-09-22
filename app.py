@@ -1308,6 +1308,33 @@ def _sync_meli_automatico():
                         # [atomic] orden marcada al inicio — no remarcar
                         continue
 
+                    # ── Full o venta propia ──
+                    # Faltaba: el reintegro sumaba siempre a productos.stock sin
+                    # preguntar de que bodega habia salido la unidad. Una venta
+                    # Full cancelada devolvia stock a central, donde nunca estuvo,
+                    # y ademas re-publicaba ese numero a los seis canales.
+                    es_full_cancel = detectar_fulfillment_meli(o)
+
+                    # ¿Llego a manos del cliente? Cambia quien repone la unidad:
+                    #   - Cancelada antes de entregar: sigue en la bodega de MELI,
+                    #     se repone MELI_FULL.
+                    #   - Entregada y devuelta: la repone el webhook FBM
+                    #     (inbound_returns), que ya suma a MELI_FULL. Reponerla
+                    #     tambien aca la contaria dos veces.
+                    def _entregada_meli(orden_ml):
+                        marcas = [str(orden_ml.get("status") or ""),
+                                  str(orden_ml.get("status_detail") or "")]
+                        env = orden_ml.get("shipping") or {}
+                        if isinstance(env, dict):
+                            marcas.append(str(env.get("status") or ""))
+                            marcas.append(str(env.get("substatus") or ""))
+                        for t in (orden_ml.get("tags") or []):
+                            marcas.append(str(t))
+                        texto = " ".join(marcas).lower()
+                        return "delivered" in texto or "entregad" in texto
+
+                    entregada_ml = _entregada_meli(o)
+
                     items_reintegrados = []
                     for item in o.get("order_items", []):
                         item_data = item.get("item", {})
@@ -1328,20 +1355,62 @@ def _sync_meli_automatico():
 
                         productos = cargar_productos()
                         for p in productos:
-                            if p["sku"] == sku_lusync:
-                                p["stock"] += cantidad
-                                guardar_producto(p)
+                            if p["sku"] != sku_lusync:
+                                continue
+
+                            if es_full_cancel and entregada_ml:
+                                # Devolucion, no cancelacion. La repone el webhook
+                                # FBM cuando MELI recibe la unidad de vuelta.
                                 registrar_movimiento(
-                                    "entrada", p["sku"], p["nombre"], cantidad,
-                                    f"Cancelación MELI orden {order_id}",
+                                    "ajuste", p["sku"], p["nombre"], 0,
+                                    f"MELI Full orden {order_id} cancelada DESPUÉS de entregada — la repone el webhook de devoluciones",
                                     usuario="Sistema", canal="MercadoLibre", orden_id=order_id
                                 )
-                                sincronizar_stock_marketplaces(
-                                    p["sku"], p["stock"],
-                                    contexto="meli_cancelacion_bg"
-                                )
-                                items_reintegrados.append(f"{p['nombre']} (SKU: {sku_seller}→{sku_lusync}) x{cantidad}")
+                                try:
+                                    crear_alerta(
+                                        tipo="devolucion",
+                                        titulo=f"Devolución MELI Full: {order_id}",
+                                        mensaje=(f"La orden {order_id} se canceló <b>después de entregada</b>.<br>"
+                                                 f"{p['nombre']} (SKU {p['sku']}) x{cantidad}.<br><br>"
+                                                 "No se reintegró stock acá: cuando MELI reciba la unidad, el "
+                                                 "webhook de devoluciones la suma a MELI Full. Reponerla en los "
+                                                 "dos lados la contaría dos veces."),
+                                        sku=p["sku"]
+                                    )
+                                except Exception:
+                                    pass
+                                items_reintegrados.append(f"{p['nombre']} (SKU: {sku_seller}→{sku_lusync}) x{cantidad} — devolución, sin reintegrar")
                                 break
+
+                            if es_full_cancel:
+                                # Sigue en la bodega de MELI. No toca central ni
+                                # re-sincroniza: el stock Full no afecta la
+                                # disponibilidad propia.
+                                from inventario import ajustar_stock_bodega
+                                ajustar_stock_bodega(p["sku"], "MELI_FULL", cantidad)
+                                registrar_movimiento(
+                                    "entrada", p["sku"], p["nombre"], cantidad,
+                                    f"Cancelación MELI Full orden {order_id} (bodega MELI_FULL)",
+                                    usuario="Sistema", canal="MercadoLibre", orden_id=order_id
+                                )
+                                print(f"[Scheduler MELI] CANCELACIÓN FULL SKU:{p['sku']} +{cantidad} → MELI_FULL")
+                                items_reintegrados.append(f"{p['nombre']} (SKU: {sku_seller}→{sku_lusync}) x{cantidad} → MELI Full")
+                                break
+
+                            # Venta propia: vuelve a central, como siempre.
+                            p["stock"] += cantidad
+                            guardar_producto(p)
+                            registrar_movimiento(
+                                "entrada", p["sku"], p["nombre"], cantidad,
+                                f"Cancelación MELI orden {order_id}",
+                                usuario="Sistema", canal="MercadoLibre", orden_id=order_id
+                            )
+                            sincronizar_stock_marketplaces(
+                                p["sku"], p["stock"],
+                                contexto="meli_cancelacion_bg"
+                            )
+                            items_reintegrados.append(f"{p['nombre']} (SKU: {sku_seller}→{sku_lusync}) x{cantidad}")
+                            break
 
                     if items_reintegrados:
                         try:
