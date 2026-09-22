@@ -29410,6 +29410,20 @@ def admin_falabella_diagnostico_orden():
 
     from falabella import obtener_ordenes_falabella
 
+    def _fa_desenvolver(resp):
+        """SuccessResponse -> Body -> Orders -> Order, que es donde vive la orden."""
+        if not isinstance(resp, dict):
+            return {}
+        cuerpo = ((resp.get("SuccessResponse") or {}).get("Body") or {})
+        if not cuerpo:
+            return resp if "SuccessResponse" not in resp else {}
+        ordenes = cuerpo.get("Orders") or cuerpo.get("Order") or cuerpo
+        if isinstance(ordenes, dict) and "Order" in ordenes:
+            ordenes = ordenes["Order"]
+        if isinstance(ordenes, list):
+            ordenes = ordenes[0] if ordenes else {}
+        return ordenes if isinstance(ordenes, dict) else {}
+
     pedido = (request.args.get("order_id") or request.args.get("order_number") or "").strip()
     if not pedido:
         return jsonify({"ok": False, "error": "Indica ?order_id=... o ?order_number=..."}), 400
@@ -29421,7 +29435,7 @@ def admin_falabella_diagnostico_orden():
     como_se_encontro = "OrderId directo"
     order_id = pedido
     try:
-        orden = obtener_orden_falabella(order_id) or {}
+        orden = _fa_desenvolver(obtener_orden_falabella(order_id))
     except Exception:
         orden = {}
 
@@ -29450,12 +29464,16 @@ def admin_falabella_diagnostico_orden():
                         break
                 if orden:
                     break
-        # El listado trae menos campos que GetOrder: si se ubico el OrderId, se
-        # vuelve a pedir el detalle completo.
+        # GetOrder devuelve el sobre crudo de la API sin desenvolver
+        # (obtener_ordenes_falabella si lo hace; obtener_orden_falabella no).
+        # Si se le pasa tal cual a detectar_fulfillment_falabella, no encuentra
+        # ShippingType y toda orden parece FBS. Se desenvuelve y, si aun asi no
+        # trae datos utiles, se conserva la del listado en vez de pisarla.
         if orden and order_id and order_id != pedido:
             try:
-                completa = obtener_orden_falabella(order_id)
-                if completa:
+                completa = _fa_desenvolver(obtener_orden_falabella(order_id))
+                if completa and len(completa) > 1:
+                    completa.setdefault("ShippingType", orden.get("ShippingType"))
                     orden = completa
             except Exception:
                 pass
@@ -29484,7 +29502,12 @@ def admin_falabella_diagnostico_orden():
                                  "return", "fulfil", "date", "fecha")):
             posibles_estado[k] = v if not isinstance(v, (dict, list)) else str(v)[:300]
 
-    productos = {p.get("sku") for p in cargar_productos() if p.get("sku")}
+    # El scheduler de cancelaciones hace prod["stock"] += cantidad y
+    # guardar_producto(), que escribe en productos.stock — un almacen distinto
+    # del de las bodegas. Hay que mirar los dos para saber donde quedo la unidad.
+    _todos = cargar_productos()
+    productos = {p.get("sku") for p in _todos if p.get("sku")}
+    stock_global = {p.get("sku"): p.get("stock") for p in _todos}
 
     detalle = []
     for it in items:
@@ -29504,6 +29527,7 @@ def admin_falabella_diagnostico_orden():
             "status_item": it.get("Status") or "",
             "stock_central": get_stock_bodega(sku_lus, "CENTRAL") if existe else None,
             "stock_falabella_full": get_stock_bodega(sku_lus, "FALABELLA_FBM") if existe else None,
+            "productos_stock": stock_global.get(sku_lus) if existe else None,
         })
 
     lectura = []
@@ -29520,8 +29544,12 @@ def admin_falabella_diagnostico_orden():
                    "cancelacion: ahi esta la pista de si el cliente lo recibio.")
     if detalle:
         lectura.append("Stock hoy: " + " · ".join(
-            "%s central=%s full=%s" % (d["sku_lusync"], d["stock_central"], d["stock_falabella_full"])
+            "%s central=%s full=%s productos.stock=%s"
+            % (d["sku_lusync"], d["stock_central"], d["stock_falabella_full"], d["productos_stock"])
             for d in detalle))
+        lectura.append("Si productos.stock no coincide con la suma de las bodegas, el "
+                       "reintegro escribio en el campo global viejo y no entro al sistema "
+                       "de bodegas.")
 
     return jsonify({
         "ok": True, "solo_lectura": True,
