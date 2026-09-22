@@ -29922,6 +29922,155 @@ def admin_mapeos_huerfanos():
                     "huerfanos": huerfanos})
 
 
+@app.route("/admin/lusync/walmart/reparar-full-central", methods=["GET"])
+@requiere_lusync_admin
+def admin_walmart_reparar_full_central():
+    """Repara las ventas Full que el camino viejo descontó de CENTRAL.
+
+    _sync_recuperacion y /walmart/sync_debug descuentan de productos.stock sin
+    mirar el fulfillment, y registran el movimiento SIN bodega. Cuando una venta
+    Full pasó por ahí se restó stock nuestro que nunca salió de nuestra bodega, y
+    ese número equivocado se publicó a todos los marketplaces.
+
+    Se reconoce por la firma del movimiento: canal Walmart, tipo salida y
+    bodega_codigo NULL. Una venta registrada por el camino bueno SIEMPRE lleva
+    bodega (CENTRAL para Seller, WALMART_FBM para Full).
+
+    Por defecto SOLO INFORMA. Para aplicar hay que agregar &aplicar=1
+    Uso: /admin/lusync/walmart/reparar-full-central?dias=7
+    """
+    from walmart import obtener_ordenes_walmart
+    from bodegas_logic import detectar_fulfillment_walmart
+    from inventario import (get_conn, release_conn, cargar_productos,
+                            guardar_producto, get_stock_bodega,
+                            sincronizar_stock_a_bodega_central)
+
+    dias = max(1, min(int(request.args.get("dias", 7)), 60))
+    aplicar = request.args.get("aplicar") == "1"
+
+    try:
+        ordenes = obtener_ordenes_walmart(dias=dias)
+    except Exception as e:
+        return jsonify({"ok": False, "error": "No se pudieron traer ordenes: " + str(e)[:300]}), 502
+
+    # Que tipo es cada orden, segun la propia API de Walmart
+    tipo_por_orden = {}
+    for o in ordenes:
+        poid = str(o.get("purchaseOrderId") or "")
+        coid = str(o.get("customerOrderId") or poid)
+        es_wfs = detectar_fulfillment_walmart(o)
+        for k in (coid, poid):
+            if k:
+                tipo_por_orden[k] = es_wfs
+
+    # Movimientos con la firma del camino viejo: salida de Walmart sin bodega
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT id, orden_id::text, sku, cantidad, motivo, fecha
+                           FROM movimientos
+                           WHERE canal = 'Walmart' AND tipo = 'salida'
+                             AND bodega_codigo IS NULL
+                             AND fecha > NOW() - (%s || ' days')::interval
+                           ORDER BY fecha""", (str(dias + 3),))
+            sospechosos = cur.fetchall()
+    finally:
+        release_conn(conn)
+
+    productos = {p["sku"]: p for p in cargar_productos() if p.get("sku")}
+
+    a_corregir, seller_ok, sin_clasificar = [], [], []
+    for (mid, oid, sku, cant, motivo, fecha) in sospechosos:
+        fila = {"movimiento_id": mid, "orden": oid, "sku": sku,
+                "cantidad": int(cant or 0), "motivo": motivo,
+                "fecha": fecha.isoformat() if fecha else None}
+        es_wfs = tipo_por_orden.get(str(oid))
+        if es_wfs is None:
+            fila["nota"] = "la orden no vino en la ventana de %d dias: revisar a mano" % dias
+            sin_clasificar.append(fila)
+        elif es_wfs:
+            fila["stock_central_actual"] = (productos.get(sku) or {}).get("stock")
+            a_corregir.append(fila)
+        else:
+            fila["nota"] = "Seller: descontar central era lo correcto"
+            seller_ok.append(fila)
+
+    corregidos, errores, skus_tocados = [], [], set()
+    if aplicar:
+        conn = get_conn()
+        try:
+            for fila in a_corregir:
+                sku = fila["sku"]
+                cant = fila["cantidad"]
+                p = productos.get(sku)
+                if not p:
+                    errores.append("%s: no existe en inventario" % sku)
+                    continue
+                try:
+                    # 1. devolver a central lo que nunca debio salir de ahi
+                    p["stock"] = int(p.get("stock") or 0) + cant
+                    guardar_producto(p)
+                    sincronizar_stock_a_bodega_central(sku)
+
+                    # 2. dejar el movimiento como lo que de verdad fue: una venta
+                    #    Full, que se registra pero no mueve stock nuestro
+                    fbm = get_stock_bodega(sku, "WALMART_FBM")
+                    with conn.cursor() as cur:
+                        cur.execute("""UPDATE movimientos
+                                       SET bodega_codigo = 'WALMART_FBM',
+                                           motivo = 'Venta Walmart WFS (corregido: no descuenta)',
+                                           stock_antes = %s, stock_despues = %s
+                                       WHERE id = %s""",
+                                    (fbm, fbm, fila["movimiento_id"]))
+                    conn.commit()
+
+                    skus_tocados.add(sku)
+                    fila["stock_central_nuevo"] = p["stock"]
+                    corregidos.append(fila)
+                except Exception as e:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    errores.append("%s: %s" % (sku, str(e)[:200]))
+        finally:
+            release_conn(conn)
+
+        # 3. el numero equivocado ya se habia publicado: republicar el correcto
+        for sku in sorted(skus_tocados):
+            try:
+                sincronizar_stock_marketplaces(sku, int(productos[sku]["stock"]),
+                                               contexto="reparacion_full_central")
+            except Exception as e:
+                errores.append("sync %s: %s" % (sku, str(e)[:200]))
+
+    lectura = []
+    if not a_corregir:
+        lectura.append("No hay ventas Full descontadas de central en los ultimos %d dias." % dias)
+    elif not aplicar:
+        total = sum(f["cantidad"] for f in a_corregir)
+        lectura.append("%d movimientos de ventas Full descontaron de central %d unidades "
+                       "que nunca salieron de la bodega." % (len(a_corregir), total))
+        lectura.append("Esto NO se corrige solo. Revisa la lista y, si cuadra, repite la "
+                       "misma URL agregando &aplicar=1 para devolver el stock y "
+                       "republicar el numero correcto a los marketplaces.")
+    else:
+        lectura.append("Corregidos %d movimientos. Stock devuelto a central y republicado "
+                       "en %d SKU." % (len(corregidos), len(skus_tocados)))
+    if seller_ok:
+        lectura.append("%d movimientos son de ventas Seller: descontar central era lo "
+                       "correcto, no se tocan." % len(seller_ok))
+    if sin_clasificar:
+        lectura.append("%d movimientos no se pudieron clasificar porque la orden ya no "
+                       "viene en la ventana consultada." % len(sin_clasificar))
+
+    return jsonify({"ok": True, "aplicado": aplicar, "dias": dias,
+                    "lectura": lectura,
+                    "a_corregir": a_corregir, "corregidos": corregidos,
+                    "seller_correctos": seller_ok, "sin_clasificar": sin_clasificar,
+                    "errores": errores})
+
+
 @app.route("/admin/lusync/walmart/conciliacion", methods=["GET"])
 @requiere_lusync_admin
 def admin_walmart_conciliacion():
