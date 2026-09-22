@@ -2420,9 +2420,13 @@ scheduler.add_job(_sync_full_meli_diario, "interval", hours=24, id="full_meli_di
 # realmente allá. MercadoLibre tenía su equivalente desde el principio; Walmart no.
 # ════════════════════════════════════════════════════════════════════════════
 
-@con_tenant_default
-def _sync_full_walmart_diario():
+def _sync_full_walmart_core():
     """Lee el stock real de Walmart Fulfillment y ajusta la bodega WALMART_FBM.
+
+    Devuelve un resumen de lo que hizo. Corre para el tenant que ya esté puesto
+    en el thread: el scheduler lo llama a través de _sync_full_walmart_diario
+    (que lo repite por cada tenant activo) y el endpoint manual lo llama directo
+    fijando el tenant él mismo.
 
     Walmart es el dueño de esa bodega física, así que su número manda: si hay
     diferencia, se corrige la de Lusync.
@@ -2440,7 +2444,8 @@ def _sync_full_walmart_diario():
         _sync_locks["full_walmart"] = {"running": False}
     if _sync_locks["full_walmart"]["running"]:
         print("[Scheduler Full Walmart] Ya hay un sync corriendo, salto")
-        return
+        return {"ok": False, "error": "Ya hay un sync de Walmart Full corriendo",
+                "leidos": 0, "ajustes": [], "sin_mapear": []}
     _sync_locks["full_walmart"]["running"] = True
     try:
         print("[Scheduler Full Walmart] Iniciando verificación diaria contra API...")
@@ -2514,6 +2519,12 @@ def _sync_full_walmart_diario():
         return {"ok": False, "error": str(e)[:300]}
     finally:
         _sync_locks["full_walmart"]["running"] = False
+
+
+# Version para el scheduler: con_tenant_default la ejecuta una vez por cada tenant
+# activo. Ojo, ese decorador NO propaga el valor de retorno (y no podria: son
+# varias corridas), por eso quien necesite el resumen llama al core directamente.
+_sync_full_walmart_diario = con_tenant_default(_sync_full_walmart_core)
 
 
 # Mismo ritmo que el de MELI. Se desfasa una hora para no pedirle a las dos APIs
@@ -29180,10 +29191,19 @@ def admin_lusync_walmart_sync_full():
     El job corre cada 24 horas; esto sirve para la primera carga y para verificar
     sin esperar. Es la misma funcion, no una copia.
     """
-    res = _sync_full_walmart_diario()
+    tenant_id = request.args.get("tenant_id", default=1, type=int)
+    # Se llama al core, no a la version decorada: con_tenant_default corre una vez
+    # por tenant y descarta el retorno, asi que desde aca siempre llegaria None.
+    set_thread_tenant(tenant_id, is_admin=False)
+    try:
+        res = _sync_full_walmart_core()
+    finally:
+        clear_thread_tenant()
+
     if not isinstance(res, dict):
         return jsonify({"ok": False,
-                        "error": "El sync no devolvio resumen (puede haber otro corriendo)"}), 409
+                        "error": "El sync termino sin resumen; revisa los logs"}), 500
+    res["tenant_id"] = tenant_id
     res["bodega"] = "WALMART_FBM"
     res["ajustados"] = len(res.get("ajustes") or [])
     return jsonify(res)
