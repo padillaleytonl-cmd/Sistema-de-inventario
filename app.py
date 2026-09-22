@@ -29278,6 +29278,134 @@ def admin_lusync_sii_test_envio():
     return html
 
 
+@app.route("/admin/lusync/walmart/diagnostico-wfs", methods=["GET"])
+@requiere_lusync_admin
+def admin_walmart_diagnostico_wfs():
+    """Recorre la cadena completa de una venta de Walmart, paso por paso.
+
+    SOLO LECTURA: no descuenta stock, no marca ordenes, no escribe nada.
+
+    Una venta WFS tiene que pasar por seis puertas antes de quedar registrada en
+    la bodega correcta, y si falla cualquiera el sintoma es el mismo — "no se
+    marco en Lusync" — sin decir cual fue. Esto las muestra todas:
+
+      1. Walmart devuelve la orden
+      2. Viene con shipNodeType (Chile no lo manda dentro de la orden; lo
+         estampa obtener_ordenes_walmart segun el filtro con que la pidio)
+      3. detectar_fulfillment_walmart la reconoce como WFS
+      4. La orden no figura ya como procesada
+      5. El SKU de Walmart resuelve a un SKU de Lusync
+      6. Ese SKU existe como producto
+
+    Uso: /admin/lusync/walmart/diagnostico-wfs&dias=30&limite=25
+    """
+    from inventario import (obtener_sku_lusync_por_canal, orden_ya_procesada_texto,
+                            determinar_bodega_para_canal, get_stock_bodega,
+                            cargar_productos)
+    from bodegas_logic import detectar_fulfillment_walmart
+    from walmart import obtener_ordenes_walmart
+
+    dias = max(1, min(int(request.args.get("dias", 30)), 90))
+    limite = max(1, min(int(request.args.get("limite", 25)), 100))
+
+    try:
+        ordenes = obtener_ordenes_walmart(dias=dias)
+    except Exception as e:
+        return jsonify({"ok": False, "error": "No se pudieron traer ordenes: " + str(e)[:300]}), 502
+
+    skus_lusync = {p.get("sku") for p in cargar_productos()}
+
+    filas = []
+    conteo = {"wfs": 0, "seller": 0, "sin_shipnodetype": 0,
+              "ya_procesadas": 0, "sku_sin_mapeo": 0, "sku_inexistente": 0,
+              "listas_para_descontar": 0}
+
+    for o in ordenes[:limite]:
+        poid = str(o.get("purchaseOrderId", ""))
+        coid = str(o.get("customerOrderId", poid))
+        snt = o.get("shipNodeType")
+        es_wfs = detectar_fulfillment_walmart(o)
+        try:
+            procesada = orden_ya_procesada_texto(coid)
+        except Exception:
+            procesada = None
+
+        if not snt:
+            conteo["sin_shipnodetype"] += 1
+        conteo["wfs" if es_wfs else "seller"] += 1
+        if procesada:
+            conteo["ya_procesadas"] += 1
+
+        bodega = determinar_bodega_para_canal("Walmart", fulfillment=es_wfs)
+
+        lineas = o.get("orderLines", {}).get("orderLine", [])
+        if isinstance(lineas, dict):
+            lineas = [lineas]
+
+        detalle = []
+        for ln in lineas:
+            sku_wm = (ln.get("item", {}) or {}).get("sku")
+            if not sku_wm:
+                continue
+            try:
+                sku_lus = obtener_sku_lusync_por_canal("walmart", sku_wm)
+            except Exception:
+                sku_lus = None
+            resuelto = sku_lus or sku_wm
+            existe = resuelto in skus_lusync
+
+            if not sku_lus:
+                conteo["sku_sin_mapeo"] += 1
+            if not existe:
+                conteo["sku_inexistente"] += 1
+            if es_wfs and existe and not procesada:
+                conteo["listas_para_descontar"] += 1
+
+            detalle.append({
+                "sku_walmart": sku_wm,
+                "mapea_a": sku_lus,
+                "sku_usado": resuelto,
+                "existe_en_lusync": existe,
+                "stock_en_bodega": get_stock_bodega(resuelto, bodega) if existe else None,
+            })
+
+        filas.append({
+            "purchaseOrderId": poid,
+            "customerOrderId": coid,
+            "estado_orden": (o.get("orderLines", {}) and "ver lineas") or None,
+            "shipNodeType_recibido": snt,
+            "detectada_como": "WFS" if es_wfs else "Seller",
+            "ya_procesada": procesada,
+            "bodega_que_usaria": bodega,
+            "lineas": detalle,
+        })
+
+    # Lectura en palabras, para no interpretar el JSON a mano
+    lectura = []
+    lectura.append("Se revisaron %d ordenes de los ultimos %d dias (de %d traidas)."
+                   % (len(filas), dias, len(ordenes)))
+    lectura.append("WFS: %d · Seller: %d" % (conteo["wfs"], conteo["seller"]))
+    if conteo["sin_shipnodetype"]:
+        lectura.append("HAY %d ordenes SIN shipNodeType: obtener_ordenes_walmart no lo "
+                       "estampo, y sin ese campo toda venta WFS se toma como Seller y "
+                       "descuenta de CENTRAL." % conteo["sin_shipnodetype"])
+    if conteo["sku_sin_mapeo"]:
+        lectura.append("HAY %d lineas cuyo SKU de Walmart no tiene mapeo en Lusync."
+                       % conteo["sku_sin_mapeo"])
+    if conteo["sku_inexistente"]:
+        lectura.append("HAY %d lineas cuyo SKU no existe como producto: el sync las "
+                       "saltea sin descontar nada." % conteo["sku_inexistente"])
+    if conteo["ya_procesadas"] == len(filas) and filas:
+        lectura.append("TODAS las ordenes figuran como ya procesadas: si el stock no se "
+                       "movio, el descuento fallo en su momento y no se va a reintentar.")
+    if conteo["wfs"] == 0 and filas:
+        lectura.append("NINGUNA orden se detecto como WFS. O no hubo ventas Full en el "
+                       "periodo, o el shipNodeType no esta llegando.")
+
+    return jsonify({"ok": True, "solo_lectura": True,
+                    "lectura": lectura, "conteo": conteo, "ordenes": filas})
+
+
 @app.route("/admin/lusync/walmart/diagnostico-catalogo", methods=["GET"])
 @requiere_lusync_admin
 def admin_walmart_diagnostico_catalogo():
