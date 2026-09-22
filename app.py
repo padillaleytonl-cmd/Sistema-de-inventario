@@ -24234,6 +24234,164 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
 
 
 
+def _en_paralelo(funcion, claves, hilos=8):
+    """Llama a funcion(clave) para cada clave, en paralelo. Devuelve {clave: resultado}.
+
+    Version a nivel de modulo del mismo helper que usa el reporte: sirve para los
+    diagnosticos que tienen que pedir un detalle por orden y en serie tardarian
+    tanto que nadie los correria.
+    """
+    resultados = {}
+    if not claves:
+        return resultados
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    with ThreadPoolExecutor(max_workers=min(hilos, len(claves))) as pool:
+        futuros = {pool.submit(funcion, c): c for c in claves}
+        for fut in as_completed(futuros):
+            clave = futuros[fut]
+            try:
+                resultados[clave] = fut.result()
+            except Exception as e:
+                print(f"[Diagnostico] {clave} fallo: {str(e)[:120]}")
+                resultados[clave] = None
+    return resultados
+
+
+@app.route("/admin/lusync/meli/diagnostico-full", methods=["GET"])
+@requiere_lusync_admin
+def admin_meli_diagnostico_full():
+    """Compara, sobre las ventas reales de MercadoLibre, tres cosas:
+
+      1. que dice detectar_fulfillment_meli (el que usa el sync de stock),
+      2. que dice logistic_type del envio (el dato autoritativo de MELI),
+      3. de que bodega se descontó realmente.
+
+    SOLO LECTURA: no descuenta, no marca, no escribe.
+
+    El detector da Full si orden.fulfilled es true. En MercadoLibre ese campo
+    significa "orden completada", no "Full". Si el campo ya estaba en true cuando
+    el sync proceso la orden, una venta despachada por nosotros se habria tratado
+    como Full y NO habria descontado de central. Esto mide si eso paso de verdad
+    o si se queda en riesgo teorico.
+
+    Uso: /admin/lusync/meli/diagnostico-full?dias=7
+    """
+    from mercadolibre import obtener_todas_ordenes_meli_rango, meli_headers, MELI_API_URL
+    from bodegas_logic import detectar_fulfillment_meli
+    from inventario import get_conn, release_conn
+    import requests as _rq
+    from datetime import datetime as _dt, timedelta as _td
+
+    dias = max(1, min(int(request.args.get("dias", 7)), 60))
+    desde = (_dt.utcnow() - _td(days=dias)).strftime("%Y-%m-%d")
+
+    try:
+        ordenes = obtener_todas_ordenes_meli_rango(
+            f"{desde}T00:00:00.000-04:00", None) or []
+    except Exception as e:
+        return jsonify({"ok": False, "error": "No se pudieron traer ordenes: " + str(e)[:300]}), 502
+
+    ordenes = [o for o in ordenes if o.get("status") in ("paid", "confirmed")]
+    hdrs = meli_headers()
+
+    def _logistic(o):
+        """logistic_type del envio: lo que MELI considera autoritativo."""
+        sid = (o.get("shipping") or {}).get("id")
+        if not sid:
+            return ""
+        try:
+            r = _rq.get(f"{MELI_API_URL}/shipments/{sid}", headers=hdrs, timeout=10)
+            if r.status_code != 200:
+                return ""
+            return str(r.json().get("logistic_type") or "").lower()
+        except Exception:
+            return ""
+
+    claves = [str(o.get("id") or "") for o in ordenes]
+    por_id = {str(o.get("id") or ""): o for o in ordenes}
+    # Una peticion de envio por orden; en serie esto tarda tanto que no se usaria
+    logisticas = _en_paralelo(lambda oid: _logistic(por_id[oid]), claves)
+
+    # De que bodega salio cada venta, segun los movimientos
+    bodegas = {}
+    if claves:
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT orden_id::text, bodega_codigo
+                               FROM movimientos
+                               WHERE canal = 'MercadoLibre' AND tipo = 'salida'
+                                 AND orden_id::text = ANY(%s)""", (claves,))
+                for oid, bod in cur.fetchall():
+                    bodegas.setdefault(str(oid), set()).add(bod or "")
+        finally:
+            release_conn(conn)
+
+    filas, discrepancias = [], 0
+    resumen = {"ordenes": len(ordenes), "coinciden": 0, "discrepan": 0,
+               "sin_envio": 0, "descontaron_mal": 0}
+
+    for o in ordenes:
+        oid = str(o.get("id") or "")
+        logistic = logisticas.get(oid) or ""
+        if not logistic:
+            resumen["sin_envio"] += 1
+            continue
+
+        real_full = (logistic == "fulfillment")
+        try:
+            detector_full = bool(detectar_fulfillment_meli(o))
+        except Exception:
+            detector_full = None
+
+        bods = sorted(b for b in (bodegas.get(oid) or set()) if b)
+        bodega_esperada = "MELI_FULL" if real_full else "CENTRAL"
+        descuento_mal = bool(bods) and bodega_esperada not in bods
+
+        if detector_full == real_full:
+            resumen["coinciden"] += 1
+            if not descuento_mal:
+                continue
+        else:
+            resumen["discrepan"] += 1
+            discrepancias += 1
+        if descuento_mal:
+            resumen["descontaron_mal"] += 1
+
+        filas.append({
+            "orden": oid,
+            "fecha": str(o.get("date_created") or "")[:16].replace("T", " "),
+            "fulfilled": o.get("fulfilled"),
+            "logistic_type": logistic,
+            "es_full_de_verdad": real_full,
+            "dice_el_detector": detector_full,
+            "bodega_esperada": bodega_esperada,
+            "bodegas_usadas": bods,
+            "descontó_de_la_equivocada": descuento_mal,
+        })
+
+    lectura = []
+    lectura.append("%d ventas de MercadoLibre en los ultimos %d dias."
+                   % (resumen["ordenes"], dias))
+    if resumen["sin_envio"]:
+        lectura.append("%d sin envio consultable: no se pueden comparar."
+                       % resumen["sin_envio"])
+    if not discrepancias:
+        lectura.append("El detector coincide con logistic_type en TODAS las comparables. "
+                       "El campo 'fulfilled' no esta cambiando ninguna decision hoy: "
+                       "corregirlo es prevencion, no reparacion.")
+    else:
+        lectura.append("HAY %d ordenes donde el detector dice una cosa y el envio dice otra. "
+                       "Esas son las que el sync pudo haber mandado a la bodega equivocada."
+                       % discrepancias)
+    if resumen["descontaron_mal"]:
+        lectura.append("Y %d descontaron de una bodega que no corresponde."
+                       % resumen["descontaron_mal"])
+
+    return jsonify({"ok": True, "solo_lectura": True, "dias": dias,
+                    "lectura": lectura, "resumen": resumen, "casos": filas})
+
+
 @app.route("/ventas/diagnostico-orden", methods=["GET"])
 def ventas_diagnostico_orden():
     """Devuelve lo que responde el canal para UNA orden, sin interpretar nada.
