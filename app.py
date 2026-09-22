@@ -2463,6 +2463,11 @@ def _sync_full_walmart_core():
 
         productos_dict = {p["sku"]: p for p in _cp()}
         ajustes, sin_mapear = [], []
+        # "0 ajustes" es ambiguo: puede ser que todo coincidiera o que Walmart
+        # esté informando cero en todo. Se cuenta lo que Walmart reporta para
+        # poder distinguirlo sin abrir los logs.
+        unidades_walmart = 0
+        con_stock = []
 
         for sku_walmart, datos in stock_wfs.items():
             # El SKU de Walmart no tiene por qué ser el de Lusync: hay que traducirlo.
@@ -2476,6 +2481,9 @@ def _sync_full_walmart_core():
                 continue
 
             disponible = int(datos.get("disponible", 0) or 0)
+            unidades_walmart += disponible
+            if disponible > 0:
+                con_stock.append("%s: %d" % (sku_lusync, disponible))
             actual = get_stock_bodega(sku_lusync, "WALMART_FBM") or 0
             diff = disponible - actual
             if diff == 0:
@@ -2511,7 +2519,10 @@ def _sync_full_walmart_core():
                   "(%d SKU verificados)" % len(stock_wfs))
 
         return {"ok": True, "leidos": len(stock_wfs), "ajustes": ajustes,
-                "sin_mapear": sin_mapear}
+                "sin_mapear": sin_mapear,
+                "unidades_en_walmart": unidades_walmart,
+                "skus_con_stock": len(con_stock),
+                "detalle_con_stock": con_stock[:20]}
     except Exception as e:
         import traceback
         print("[Scheduler Full Walmart] Error general: %s" % e)
@@ -3351,18 +3362,28 @@ def walmart_sync_stock():
     error = 0
     errores_detalle = []
     print(f"[Sync Stock] Iniciando sync masivo — {len(productos)} productos a 6 marketplaces")
+    sin_publicaciones = 0
     for p in productos:
         if p.get("sku"):
             # Sync a TODOS los marketplaces (el helper es resiliente)
             syncs = sincronizar_stock_marketplaces(p["sku"], p["stock"], contexto="sync_masivo_manual")
-            # Cuenta como "ok" si al menos Walmart respondió bien (manteniendo lógica original)
-            if syncs.get("walmart") == "ok":
+            # OJO: sincronizar_stock_marketplaces NO devuelve "ok" pelado cuando
+            # funciona, devuelve "ok (exitosas/total)" — por ejemplo "ok (1/1)".
+            # La comparación con == "ok" casi nunca daba verdadero, asi que este
+            # endpoint informaba error en productos que se habían sincronizado
+            # bien y llenaba la lista de errores con SKUs sanos.
+            estado = str(syncs.get("walmart") or "")
+            if estado.startswith("ok"):
                 ok += 1
+            elif estado == "sin_publicaciones":
+                # No tiene publicación en Walmart: no es un fallo, no hay nada que actualizar.
+                sin_publicaciones += 1
             else:
                 error += 1
-                errores_detalle.append(p["sku"])
-    print(f"[Sync Stock] Completado — OK:{ok} Error:{error}")
-    return {"ok": ok, "error": error, "total": len(productos), "errores": errores_detalle[:5]}
+                errores_detalle.append(p["sku"] + " — " + estado[:80])
+    print(f"[Sync Stock] Completado — OK:{ok} Error:{error} Sin publicación:{sin_publicaciones}")
+    return {"ok": ok, "error": error, "sin_publicaciones": sin_publicaciones,
+            "total": len(productos), "errores": errores_detalle[:10]}
 
 @app.route("/walmart/sync_precios", methods=["POST"])
 def walmart_sync_precios():
@@ -6368,25 +6389,62 @@ def ruta_walmart_forzar_sync_sku():
 
 @app.route("/walmart/forzar_sync_todos", methods=["POST"])
 def ruta_walmart_forzar_sync_todos():
-    """Re-envía el stock de todos los SKUs mapeados a Walmart."""
+    """Re-envía a Walmart el stock de CENTRAL de todo lo que tenga publicación.
+
+    Antes leía listar_sku_mapeo(), que consulta la tabla `sku_mapeo`: UN solo SKU
+    por canal. El resto del sistema usa obtener_publicaciones_canal() sobre
+    `sku_mapeo_canal`, que admite varias publicaciones por producto — su propia
+    documentación dice que reemplaza a get_sku_canal(). Toda publicación
+    registrada solo en la tabla nueva quedaba afuera de este sync, en silencio.
+    Y es justo el endpoint que uno usa para asegurarse de que no falte nada.
+
+    Ahora resuelve por publicaciones y cae a la tabla vieja solo si no hay
+    ninguna, asi que cubre las dos.
+
+    Nota: se envía el stock de CENTRAL. En las publicaciones que despacha Walmart
+    desde su propia bodega (WFS) el stock lo administra Walmart, y ese lado se
+    lee con el sync de Walmart Full, no se empuja desde acá.
+    """
     if not session.get("logged"): return jsonify({"ok": False}), 401
     try:
-        from walmart import actualizar_stock_walmart
-        from inventario import listar_sku_mapeo, get_stock_bodega
+        from walmart import actualizar_stock_walmart_lusync
+        from inventario import (cargar_productos, obtener_publicaciones_canal,
+                                get_sku_canal, get_stock_bodega)
         enviados = 0
         fallidos = 0
-        for fila in listar_sku_mapeo():
-            sku_walmart = (fila.get("sku_walmart", "") or "").strip()
-            sku_lusync = fila.get("sku_lusync", "")
-            if not sku_walmart or not sku_lusync:
+        sin_publicacion = 0
+        errores = []
+        for prod in cargar_productos():
+            sku_lusync = (prod.get("sku") or "").strip()
+            if not sku_lusync:
                 continue
-            stock = get_stock_bodega(sku_lusync, "CENTRAL")
-            if actualizar_stock_walmart(sku_walmart, stock):
-                enviados += 1
-            else:
-                fallidos += 1
-        return jsonify({"ok": True, "enviados": enviados, "fallidos": fallidos})
+
+            # Solo se envía si hay un mapeo real. Sin este chequeo,
+            # actualizar_stock_walmart_lusync cae a usar el SKU de Lusync como si
+            # fuera el de Walmart, y un barrido completo dispararia cientos de
+            # llamadas invalidas contra la API.
+            tiene = bool(obtener_publicaciones_canal(sku_lusync, "walmart"))
+            if not tiene:
+                legacy = (get_sku_canal(sku_lusync, "walmart") or "").strip()
+                tiene = bool(legacy) and legacy != sku_lusync
+            if not tiene:
+                sin_publicacion += 1
+                continue
+
+            stock = get_stock_bodega(sku_lusync, "CENTRAL") or 0
+            res = actualizar_stock_walmart_lusync(sku_lusync, stock)
+            enviados += int(res.get("exitosas", 0) or 0)
+            f = int(res.get("fallidas", 0) or 0)
+            fallidos += f
+            if f:
+                errores.append(sku_lusync + ": " + " | ".join(res.get("log", [])[:2]))
+
+        return jsonify({"ok": True, "enviados": enviados, "fallidos": fallidos,
+                        "sin_publicacion": sin_publicacion,
+                        "errores": errores[:10]})
     except Exception as e:
+        import traceback
+        print("[Walmart forzar_sync_todos] " + traceback.format_exc()[:600])
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
