@@ -1283,6 +1283,31 @@ def marcar_orden_procesada_texto(order_id_texto):
         release_conn(conn)
 
 
+def desmarcar_orden_procesada_texto(order_id_texto):
+    """Suelta la marca de una orden para que vuelva a procesarse.
+
+    Se usa cuando la orden se marco de entrada (para que dos procesos no la
+    tomen a la vez) pero al final no se pudo registrar ninguna linea. Sin
+    esto, esa orden queda dada por hecha y su venta no se reintenta nunca.
+    """
+    if not order_id_texto:
+        return False
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM ordenes_procesadas WHERE order_id_texto = %s",
+                    (str(order_id_texto),))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"[Marcado] No se pudo soltar la marca {order_id_texto}: {e}")
+        conn.rollback()
+        return False
+    finally:
+        cur.close()
+        release_conn(conn)
+
+
 def intentar_marcar_orden_atomic(order_id_texto):
     """Marca una orden como procesada DE FORMA ATÓMICA usando INSERT ON CONFLICT.
 

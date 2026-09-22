@@ -17,7 +17,8 @@ from woo import actualizar_stock_woo
 from mercadolibre import actualizar_stock_meli
 from falabella import actualizar_stock_falabella_lusync as actualizar_stock_falabella
 from ripley import actualizar_stock_ripley_lusync as actualizar_stock_ripley
-from inventario import (cargar_productos, guardar_productos, guardar_producto,
+from inventario import (desmarcar_orden_procesada_texto,
+                        cargar_productos, guardar_productos, guardar_producto,
                         get_conn, release_conn,
                         registrar_movimiento, cargar_movimientos, cargar_movimientos_hoy,
                         init_db, orden_ya_procesada, marcar_orden_procesada, actualizar_precios,
@@ -2829,6 +2830,7 @@ def _sync_recuperacion():
                 if isinstance(lineas, dict):
                     lineas = [lineas]
 
+                items_recuperados = []
                 for linea in lineas:
                     try:
                         sku = linea.get("item", {}).get("sku")
@@ -2856,13 +2858,21 @@ def _sync_recuperacion():
                                     from inventario import sincronizar_stock_a_bodega_central
                                     sincronizar_stock_a_bodega_central(p["sku"])
                                 except: pass
+                                items_recuperados.append(sku)
                                 print(f"[Recuperación] SKU:{sku} Cant:{cantidad} OC:{customer_order_id}")
                     except Exception as e:
                         print(f"[Recuperación] Error linea: {e}")
 
-                # Registrar primero, marcar después.
-                intentar_marcar_orden_atomic(customer_order_id)
-                recuperadas += 1
+                # Registrar primero, marcar despues, y SOLO si se registro algo.
+                # Este camino compara el SKU crudo de Walmart contra el de Lusync,
+                # sin pasar por el mapeo: cuando no coincide no registra nada.
+                # Marcar igual daba la orden por hecha y su venta no se reintentaba
+                # nunca. Sin marca, el sync normal —que si usa el mapeo— la toma.
+                if items_recuperados:
+                    intentar_marcar_orden_atomic(customer_order_id)
+                    recuperadas += 1
+                else:
+                    print(f"[Recuperación] {customer_order_id}: ninguna linea registrada, queda sin marcar para el sync normal")
 
         # También recuperar cancelaciones
         try:
@@ -8061,9 +8071,13 @@ def ruta_meli_sync_ordenes():
                     if estado not in ("paid", "confirmed"):
                         continue
                     meli_key = f"MELI-{order_id}"
+                    # La marca se toma de entrada para que dos syncs en paralelo
+                    # no procesen la misma orden. Si al final no se registro nada
+                    # se suelta (ver el else): marcada y sin venta, la orden se
+                    # perdia para siempre, sin error y sin reintento.
                     if not intentar_marcar_orden_atomic(meli_key):
                         continue
-                    # [atomic] orden marcada al inicio — no remarcar
+                    items_registrados = []
 
                     # ── Extraer fecha real de compra del marketplace ────────
                     # MELI devuelve date_created en ISO con timezone (ej: 2026-05-03T18:32:15.000-04:00)
@@ -8161,6 +8175,8 @@ def ruta_meli_sync_ordenes():
                             origen_registro="sync_manual"
                         )
                         log.append(f"{order_id} {tipo_str}: {sku_lusync} -{qty} desde {resultado['bodega']}")
+                        if resultado.get("ok"):
+                            items_registrados.append(sku_lusync)
 
                         # Sync a otros canales SOLO si fue Seller (afectó Central)
                         if not es_full:
@@ -8169,7 +8185,11 @@ def ruta_meli_sync_ordenes():
                                 sincronizar_stock_a_marketplaces(sku_lusync, excepto=["mercadolibre"])
                             except Exception as e:
                                 log.append(f"  Sync cruzado falló: {e}")
-                    nuevas += 1
+                    if items_registrados:
+                        nuevas += 1
+                    else:
+                        desmarcar_orden_procesada_texto(meli_key)
+                        log.append(f"Orden {order_id}: no se registro ninguna linea; se suelta la marca para reintentarla")
 
                 # Liberar memoria entre páginas
                 del ordenes
@@ -13787,7 +13807,10 @@ def admin_rls_forzar_sync_woo():
                     ya_procesadas += 1
                     continue
 
-                # Marcar atómicamente
+                # Marcar atómicamente. Si al final no se registro ninguna linea
+                # se suelta la marca (ver el else de mas abajo): sin eso, una orden
+                # con el SKU sin mapear quedaba dada por hecha y su venta no se
+                # reintentaba nunca.
                 from inventario import intentar_marcar_orden_atomic
                 if not intentar_marcar_orden_atomic(woo_key):
                     log.append(f"   ↺ {woo_key}: no se pudo marcar atómicamente")
@@ -13829,6 +13852,9 @@ def admin_rls_forzar_sync_woo():
 
                 if items_descontados:
                     nuevas_procesadas += 1
+                else:
+                    desmarcar_orden_procesada_texto(woo_key)
+                    log.append(f"   ⚠ {woo_key}: no se registro ninguna linea; se suelta la marca para reintentarla")
             except Exception as e:
                 errores.append(f"Order {order_id}: {e}")
                 log.append(f"   ✗ {woo_key}: ERROR {e}")
