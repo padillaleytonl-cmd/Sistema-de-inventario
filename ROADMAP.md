@@ -155,3 +155,43 @@ primer uso real:
   dona de canales, en la distribución de stock y en las filas de stock crítico.
 - `/walmart/sync_stock` y `/walmart/forzar_sync_todos` después del arreglo del
   conteo y del mapeo.
+
+---
+
+## 8. Walmart paginado: la ventana ancha cubre menos que la angosta
+
+**Es una bomba de tiempo, no un problema de hoy.**
+
+`obtener_ordenes_walmart()` (en `walmart.py`) pide las órdenes de la más vieja a
+la más nueva y corta en `max_paginas`, que por defecto son **5** páginas de
+hasta 100. Como el corte se aplica al final de la lista, el extremo que se
+pierde es **el reciente**.
+
+Medido el 22-09-2026 contra la API real:
+
+| Ventana pedida | Órdenes WFS devueltas | Incluye las de los últimos 7 días |
+|---|---|---|
+| `dias=7` | 20 | sí |
+| `dias=30` | 93 | **no, ninguna** |
+
+O sea: pedir más días devuelve *menos* cobertura de lo reciente. Eso hizo que
+una reparación lanzada con `dias=30` desmarcara 3 órdenes antiguas en vez de las
+17 que estaban pendientes.
+
+**Hoy no rompe la operación.** Los schedulers usan el default (`dias=30`,
+5 páginas) y las ventas recientes sí se están registrando, así que con el
+volumen actual el corte todavía no alcanza el borde. Cuando el volumen suba, sí.
+
+**Qué falta:** subir el default de `max_paginas` en `walmart.py`, o mejor,
+seguir el cursor hasta agotarlo cuando la ventana es amplia. No se tocó porque
+`walmart.py` es módulo de integración y el cambio pedía autorización aparte. Los
+dos endpoints de diagnóstico ya pasan `max_paginas=20` desde el llamador
+(`&paginas=` lo regula), así que hay con qué comparar cuando se haga.
+
+**De la misma familia, sin verificar:** en la ventana de 30 días aparecieron
+órdenes de Sept 5 y 6 que se registraron en su momento como Seller y que hoy la
+API devuelve clasificadas como WFS (por ejemplo `4482644003186`, con 5 SKU). Una
+explicación posible es que el dedup de `obtener_ordenes_walmart` usa
+`purchaseOrderId`, que en WFS viene vacío, y la misma orden entre dos veces con
+estampados distintos. No se comprobó contra la API. Si algún día un histórico de
+Walmart cuadra mal, empezar por acá.
