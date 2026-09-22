@@ -9628,6 +9628,7 @@ def admin_auto_mapeo_skus():
     auto_guardados = 0
     necesitan_revision = 0
     sin_match = 0
+    ya_mapeados = 0
 
     for p in productos_lusync:
         fila_propuesta = {
@@ -9676,7 +9677,14 @@ def admin_auto_mapeo_skus():
                 "motivos":        motivos,
                 "titulo_mp":      titulo_mp,
                 "precio_mp":      precio_mp,
+                # Si el canal YA tiene un SKU mapeado, no se propone nada: el
+                # guardado automatico tampoco lo pisaria (solo escribe donde esta
+                # vacio), pero presentarlo como "revisar" invita a una persona a
+                # reemplazar un mapeo que funciona. Paso de verdad: el matcher
+                # propuso cambiar CDPPASN001 -> CPAN001 por 96% de similitud de
+                # nombre, cuando el SKU de Walmart ya era el mismo de Lusync.
                 "estado": (
+                    "ya_mapeado" if sku_actual else
                     "auto" if score >= umbral_auto else
                     "revisar" if score >= 50 else
                     "sin_match"
@@ -9686,10 +9694,16 @@ def admin_auto_mapeo_skus():
         # Contar resúmenes
         algun_auto = any(m["estado"] == "auto" for m in fila_propuesta["matches"].values())
         algun_revisar = any(m["estado"] == "revisar" for m in fila_propuesta["matches"].values())
+        # "ya mapeado" NO es "sin match": el producto tiene su publicacion
+        # registrada. Contarlo como sin_match infla ese numero y hace parecer que
+        # falta mapear medio catalogo cuando en realidad esta mapeado.
+        algun_ya = any(m["estado"] == "ya_mapeado" for m in fila_propuesta["matches"].values())
         if algun_auto:
             auto_guardados += 1
         elif algun_revisar:
             necesitan_revision += 1
+        elif algun_ya:
+            ya_mapeados += 1
         else:
             sin_match += 1
 
@@ -9735,6 +9749,7 @@ def admin_auto_mapeo_skus():
             "total_productos_lusync": len(productos_lusync),
             "con_matches_seguros": auto_guardados,
             "necesitan_revision": necesitan_revision,
+            "ya_mapeados": ya_mapeados,
             "sin_match": sin_match,
             "umbral_auto": umbral_auto
         },
