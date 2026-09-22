@@ -1804,6 +1804,29 @@ def _sync_paris_automatico():
                     if not orden_ya_procesada_texto(pa_key):
                         # [atomic] orden marcada al inicio — no remarcar
                         continue
+                    # ── Fulfillment (CD) o venta propia ──
+                    # Faltaba: el reintegro sumaba siempre a productos.stock sin
+                    # preguntar de que bodega habia salido la unidad, aunque el
+                    # descuento de la venta si lo pregunta. Una venta de
+                    # fulfillment cancelada devolvia stock a central, donde nunca
+                    # estuvo, y despues lo publicaba a los seis canales.
+                    # El detector se calcula aca porque en Paris el bloque de
+                    # cancelaciones corre ANTES de donde se define es_cd.
+                    es_cd_cancel = detectar_fulfillment_paris(o)
+
+                    # ¿Llego al cliente? En Paris el estado real del item vive en
+                    # shipments[].items[].itemStatus, no a nivel de orden.
+                    def _entregada_paris(orden_pa):
+                        marcas = [str(orden_pa.get("status") or "")]
+                        for sh in (orden_pa.get("shipments") or []):
+                            marcas.append(str(sh.get("status") or ""))
+                            for it in (sh.get("items") or []):
+                                marcas.append(str(it.get("itemStatus") or it.get("status") or ""))
+                        texto = " ".join(marcas).lower()
+                        return "delivered" in texto or "entregad" in texto
+
+                    entregada_pa = _entregada_paris(o)
+
                     # Reintegrar: recorrer shipments → items (estructura real de París)
                     items_reintegrados = []
                     ultimo_sku = None
@@ -1819,6 +1842,46 @@ def _sync_paris_automatico():
                             prod = next((p for p in productos if p["sku"] == sku_lusync), None)
                             if not prod:
                                 continue
+
+                            if es_cd_cancel and entregada_pa:
+                                # Entregada y despues cancelada: es una devolucion.
+                                # Donde queda la unidad depende de como la procese
+                                # Paris, asi que no se inventa stock.
+                                registrar_movimiento(
+                                    "ajuste", prod["sku"], prod["nombre"], 0,
+                                    f"París Fulfillment orden {sub_order} cancelada DESPUÉS de entregada — revisar dónde quedó la unidad",
+                                    usuario="Sistema", canal="París", orden_id=sub_order
+                                )
+                                try:
+                                    crear_alerta(
+                                        tipo="devolucion",
+                                        titulo=f"Devolución París Fulfillment: {sub_order}",
+                                        mensaje=(f"La orden {sub_order} se canceló <b>después de entregada</b>.<br>"
+                                                 f"{prod['nombre']} (SKU {prod['sku']}) x{cantidad}.<br><br>"
+                                                 "No se reintegró stock automáticamente: hay que confirmar si la "
+                                                 "unidad volvió al centro de distribución de París o al vendedor."),
+                                        sku=prod["sku"]
+                                    )
+                                except Exception:
+                                    pass
+                                items_reintegrados.append(f"{prod['nombre']} (SKU: {seller_sku}) x{cantidad} — devolución, sin reintegrar")
+                                continue
+
+                            if es_cd_cancel:
+                                # Sigue en el centro de distribución de París. No
+                                # toca central ni re-sincroniza.
+                                from inventario import ajustar_stock_bodega
+                                ajustar_stock_bodega(prod["sku"], "PARIS_CD", cantidad)
+                                registrar_movimiento(
+                                    "entrada", prod["sku"], prod["nombre"], cantidad,
+                                    f"Cancelación París Fulfillment orden {sub_order} (bodega PARIS_CD)",
+                                    usuario="Sistema", canal="París", orden_id=sub_order
+                                )
+                                print(f"[Scheduler Paris] CANCELACIÓN FULFILLMENT SKU:{prod['sku']} +{cantidad} → PARIS_CD")
+                                items_reintegrados.append(f"{prod['nombre']} (SKU: {seller_sku}) x{cantidad} → París CD")
+                                continue
+
+                            # Venta propia: vuelve a central, como siempre.
                             prod["stock"] += cantidad
                             guardar_producto(prod)
                             registrar_movimiento(
