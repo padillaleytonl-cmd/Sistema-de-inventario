@@ -2846,6 +2846,23 @@ tbody td {
       <span id="barraValidacionTexto" style="font-size:12px;color:var(--muted);white-space:nowrap;">0 / 0 validados</span>
     </div>
 
+    <!-- Mapeos que apuntan a un producto inexistente. Ocultos hasta que los hay:
+         no cuelgan de ningún producto, así que la tabla de abajo no los muestra. -->
+    <div id="cardHuerfanos" style="display:none;margin-bottom:14px;border:1px solid #E8C48A;background:#FEF9EE;border-radius:10px;overflow:hidden;">
+      <div style="padding:12px 16px;border-bottom:1px solid #F0DFC0;">
+        <div style="font-size:13px;font-weight:600;color:#854F0B;display:flex;align-items:center;gap:7px;">
+          <span style="font-size:15px;">⚠</span>
+          <span id="huerfanosTitulo">Mapeos rotos</span>
+        </div>
+        <div style="font-size:12px;color:#7A6340;margin-top:5px;line-height:1.5;">
+          Estas publicaciones apuntan a un código de producto que no existe en tu inventario.
+          La venta entra, no encuentra el producto y la orden queda marcada como procesada
+          <b>sin descontar stock</b>. No aparecen en la tabla de abajo porque no cuelgan de ningún producto.
+        </div>
+      </div>
+      <div id="listaHuerfanos"></div>
+    </div>
+
     <div class="card" style="padding:0;overflow:hidden;">
       <div style="overflow-x:auto;max-height:calc(100vh - 220px);">
         <table id="tablaSkuMapeo" style="width:100%;border-collapse:collapse;font-size:12px;">
@@ -6918,6 +6935,85 @@ let _mapeoCache = [];
 let _conteoPublicaciones = {};
 let _mapeoEditando = {};
 
+// ─────────────────────────────────────────────────────────────────────────
+// MAPEOS HUÉRFANOS — publicaciones que apuntan a un producto inexistente
+// ─────────────────────────────────────────────────────────────────────────
+
+function cargarMapeosHuerfanos(){
+  const card = document.getElementById('cardHuerfanos');
+  if(!card) return;
+  fetch('/sku_mapeo_canal/huerfanos').then(r=>r.json()).then(d=>{
+    const lista = (d && d.huerfanos) || [];
+    if(!lista.length){ card.style.display = 'none'; return; }
+
+    // Agrupados por el código fantasma: no son N errores sueltos, son unos
+    // pocos productos replicados en cada canal donde están publicados.
+    const porFantasma = {};
+    lista.forEach(h => { (porFantasma[h.apunta_a] = porFantasma[h.apunta_a] || []).push(h); });
+    const fantasmas = Object.keys(porFantasma).sort();
+
+    document.getElementById('huerfanosTitulo').textContent =
+      lista.length + ' mapeo' + (lista.length>1?'s':'') + ' roto' + (lista.length>1?'s':'') +
+      ' · ' + fantasmas.length + ' producto' + (fantasmas.length>1?'s':'');
+
+    const colores = {mercadolibre:'#FFF4E0', paris:'#E0F2FE', walmart:'#E1F5EE',
+                     falabella:'#E8F0E0', ripley:'#F8E1E5', web:'#E6F1FB', hites:'#FCE8DD'};
+    let html = '';
+    fantasmas.forEach(f => {
+      const filas = porFantasma[f];
+      const sug = filas.find(x => x.sugerencia);
+      html += `<div style="border-bottom:1px solid #F0DFC0;padding:11px 16px;">
+        <div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin-bottom:8px;">
+          <code style="font-family:'DM Mono',monospace;font-size:12px;font-weight:600;color:#A32D2D;">${f}</code>
+          <span style="font-size:11px;color:#7A6340;">no existe · ${filas.length} publicación${filas.length>1?'es':''}</span>
+          ${sug ? `<span style="font-size:11px;color:#1D9E75;">→ parece ser <b>${sug.sugerencia}</b>${sug.sugerencia_nombre?' ('+sug.sugerencia_nombre+')':''}</span>` : ''}
+        </div>`;
+      filas.forEach(h => {
+        const bg = colores[h.canal] || 'var(--bg2)';
+        html += `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 0;">
+          <span style="background:${bg};border-radius:5px;padding:2px 8px;font-size:10px;font-weight:600;color:#1F1E1B;min-width:74px;text-align:center;">${h.canal}</span>
+          <code style="font-family:'DM Mono',monospace;font-size:11px;color:var(--text);min-width:110px;">${h.sku_canal||'—'}</code>
+          <input id="huerf_${h.mapeo_id}" value="${h.sugerencia||''}" placeholder="SKU correcto de Lusync"
+                 style="flex:1;min-width:150px;padding:5px 9px;border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:'DM Mono',monospace;background:var(--card);color:var(--text);">
+          <button onclick="reasignarHuerfano(${h.mapeo_id})"
+                  style="padding:5px 11px;border:1px solid #1D9E75;background:#EAF3EE;color:#0F6E56;border-radius:6px;font-size:11px;cursor:pointer;font-weight:600;">Reasignar</button>
+          <button onclick="borrarHuerfano(${h.mapeo_id}, '${(h.sku_canal||'').replace(/'/g,"")}', '${h.canal}')"
+                  style="padding:5px 11px;border:1px solid #E24B4A;background:#FEF2F2;color:#A32D2D;border-radius:6px;font-size:11px;cursor:pointer;">Borrar</button>
+        </div>`;
+      });
+      html += '</div>';
+    });
+    document.getElementById('listaHuerfanos').innerHTML = html;
+    card.style.display = '';
+  }).catch(e => { console.error('[huerfanos]', e); });
+}
+
+function reasignarHuerfano(mapeoId){
+  const inp = document.getElementById('huerf_' + mapeoId);
+  const sku = (inp && inp.value || '').trim();
+  if(!sku){ toast('Escribí el SKU de Lusync al que debe apuntar'); inp && inp.focus(); return; }
+  fetch('/sku_mapeo_canal/reasignar', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({mapeo_id: mapeoId, sku_lusync: sku})
+  }).then(r=>r.json()).then(d=>{
+    if(d.ok){ toast(d.mensaje || 'Mapeo corregido'); cargarSkuMapeo(); }
+    else toast(d.error || 'No se pudo reasignar');
+  }).catch(e => toast('Error: ' + e.message));
+}
+
+function borrarHuerfano(mapeoId, skuCanal, canal){
+  if(!confirm('¿Borrar el mapeo de ' + skuCanal + ' en ' + canal + '?\n\n' +
+              'Ojo: esto NO baja la publicación del marketplace. Si el producto está ' +
+              'descontinuado, también hay que despublicarlo allá.')) return;
+  fetch('/sku_mapeo_canal/eliminar', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({mapeo_id: mapeoId})
+  }).then(r=>r.json()).then(d=>{
+    if(d.ok || d.eliminado){ toast('Mapeo borrado'); cargarSkuMapeo(); }
+    else toast(d.error || 'No se pudo borrar');
+  }).catch(e => toast('Error: ' + e.message));
+}
+
 function cargarSkuMapeo(){
   // Cargar mapeo legacy + conteo de publicaciones nuevas en paralelo
   Promise.all([
@@ -6938,6 +7034,7 @@ function cargarSkuMapeo(){
     }
     _conteoPublicaciones = c.datos || {};
     renderTablaSkuMapeo();
+    cargarMapeosHuerfanos();
   }).catch(err => {
     console.error('Error cargando mapeo:', err);
     const body = document.getElementById('bodySkuMapeo');

@@ -10485,6 +10485,113 @@ def ruta_sku_mapeo_canal_agregar():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/sku_mapeo_canal/huerfanos")
+def ruta_sku_mapeo_canal_huerfanos():
+    """Publicaciones mapeadas a un SKU de Lusync que no existe.
+
+    Son invisibles en el panel: la vista de publicaciones lista por producto y
+    estas filas no cuelgan de ninguno. Y no son inofensivas — la venta entra, el
+    sync resuelve el SKU del canal a un codigo fantasma, no encuentra el
+    producto, saltea la linea y marca la orden como procesada. El stock queda
+    sobrevalorado sin un solo error en el log.
+    """
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import get_conn, release_conn, cargar_productos
+        productos = cargar_productos()
+        skus_reales = {p.get("sku") for p in productos if p.get("sku")}
+        nombres = {p.get("sku"): p.get("nombre") for p in productos}
+
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                # activo = TRUE, igual que obtener_sku_lusync_por_canal: una fila
+                # dada de baja ya no resuelve nada, asi que no es un problema que
+                # haya que mostrar. Sin este filtro, ademas, el boton Borrar
+                # pareceria no hacer nada: el borrado es logico, no fisico.
+                cur.execute("""SELECT id, canal, sku_canal, item_id_canal, sku_lusync
+                               FROM sku_mapeo_canal
+                               WHERE activo = TRUE
+                               ORDER BY sku_lusync, canal""")
+                filas = cur.fetchall()
+        finally:
+            release_conn(conn)
+
+        huerfanos = []
+        for (mid, canal, sku_canal, item_id, sku_lus) in filas:
+            if sku_lus in skus_reales:
+                continue
+            huerfanos.append({
+                "mapeo_id": mid, "canal": canal, "sku_canal": sku_canal,
+                "item_id_canal": item_id, "apunta_a": sku_lus,
+                # Si el SKU que usa el canal si existe en Lusync, es el destino
+                # evidente. No se sugiere nada por parecido: en este catalogo
+                # MAD001 y MAD002 se diferencian en un caracter y son productos
+                # distintos.
+                "sugerencia": sku_canal if sku_canal in skus_reales else None,
+                "sugerencia_nombre": nombres.get(sku_canal) if sku_canal in skus_reales else None,
+            })
+
+        return jsonify({"ok": True, "total_revisados": len(filas),
+                        "huerfanos": huerfanos})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/sku_mapeo_canal/reasignar", methods=["POST"])
+def ruta_sku_mapeo_canal_reasignar():
+    """Apunta una publicacion existente a otro SKU de Lusync.
+
+    Body JSON: {mapeo_id, sku_lusync}
+
+    Se usa para arreglar un mapeo huerfano sin perder el item_id de la
+    publicacion, que es lo que pasaria borrando y volviendo a crear.
+    El SKU destino se valida contra productos ANTES de escribir: cambiar un
+    fantasma por otro no arregla nada.
+    """
+    if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    try:
+        from inventario import get_conn, release_conn, cargar_productos
+        data = request.get_json() or {}
+        mapeo_id = data.get("mapeo_id")
+        sku_destino = (data.get("sku_lusync") or "").strip()
+
+        if not mapeo_id or not sku_destino:
+            return jsonify({"ok": False, "error": "Faltan mapeo_id o sku_lusync"}), 400
+
+        skus_reales = {p.get("sku") for p in cargar_productos() if p.get("sku")}
+        if sku_destino not in skus_reales:
+            return jsonify({"ok": False,
+                            "error": "El SKU %s no existe en el inventario. "
+                                     "Revisa que este bien escrito." % sku_destino}), 400
+
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT canal, sku_canal, sku_lusync
+                               FROM sku_mapeo_canal WHERE id=%s""", (mapeo_id,))
+                fila = cur.fetchone()
+                if not fila:
+                    return jsonify({"ok": False, "error": "No existe ese mapeo"}), 404
+                canal, sku_canal, anterior = fila
+                cur.execute("""UPDATE sku_mapeo_canal SET sku_lusync=%s WHERE id=%s""",
+                            (sku_destino, mapeo_id))
+                conn.commit()
+        finally:
+            release_conn(conn)
+
+        registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
+                        "mapeo_reasignado",
+                        detalle="%s/%s: %s -> %s" % (canal, sku_canal, anterior, sku_destino))
+
+        return jsonify({"ok": True, "canal": canal, "sku_canal": sku_canal,
+                        "anterior": anterior, "nuevo": sku_destino,
+                        "mensaje": "La publicación %s de %s ahora apunta a %s."
+                                   % (sku_canal, canal, sku_destino)})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/sku_mapeo_canal/eliminar", methods=["POST"])
 def ruta_sku_mapeo_canal_eliminar():
     """Elimina (soft delete) una publicación de sku_mapeo_canal.
@@ -29311,11 +29418,12 @@ def admin_mapeos_huerfanos():
             if canal:
                 cur.execute("""SELECT id, canal, sku_canal, item_id_canal, sku_lusync
                                FROM sku_mapeo_canal
-                               WHERE LOWER(canal) = %s
+                               WHERE activo = TRUE AND LOWER(canal) = %s
                                ORDER BY canal, sku_canal""", (canal,))
             else:
                 cur.execute("""SELECT id, canal, sku_canal, item_id_canal, sku_lusync
                                FROM sku_mapeo_canal
+                               WHERE activo = TRUE
                                ORDER BY canal, sku_canal""")
             filas = cur.fetchall()
     finally:
