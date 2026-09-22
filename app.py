@@ -1532,6 +1532,39 @@ def _sync_falabella_automatico():
                         errores.append(f"FA items cancelada {order_id}: {e}")
                         items_orden = []
 
+                    # ── Full (FBF) o venta propia (FBS) ──
+                    # Esto faltaba: el reintegro sumaba siempre a productos.stock,
+                    # que es el stock central del modelo viejo, sin preguntar de
+                    # que bodega habia salido la unidad. Una venta Full cancelada
+                    # devolvia stock a central, donde nunca estuvo. Walmart ya lo
+                    # hacia bien; Falabella quedo afuera.
+                    es_fbf_cancel = detectar_fulfillment_falabella(o)
+
+                    # ¿Alcanzo a recibirlo el cliente? No es lo mismo:
+                    #   - Cancelada antes de entregar: la unidad no se movio de la
+                    #     bodega de Falabella, vuelve a FALABELLA_FBM.
+                    #   - Entregada y despues devuelta: es una devolucion, y donde
+                    #     queda la unidad depende de como la procese Falabella.
+                    #     Eso NO se adivina: se avisa y lo resuelve una persona.
+                    def _fue_entregada(orden_fa, items_fa):
+                        marcas = []
+                        sts = orden_fa.get("Statuses") or orden_fa.get("statuses") or []
+                        if isinstance(sts, dict):
+                            sts = [sts]
+                        for st in sts:
+                            if isinstance(st, dict):
+                                marcas.append(str(st.get("Status") or st.get("status") or ""))
+                            else:
+                                marcas.append(str(st))
+                        for it in (items_fa or []):
+                            marcas.append(str(it.get("Status") or it.get("status") or ""))
+                        marcas.append(str(orden_fa.get("DeliveryInfo") or ""))
+                        texto = " ".join(marcas).lower()
+                        return ("delivered" in texto or "entregad" in texto
+                                or "returned" in texto or "devuelt" in texto)
+
+                    entregada = _fue_entregada(o, items_orden)
+
                     items_reintegrados = []
                     ultimo_sku = None
                     for item in items_orden:
@@ -1548,9 +1581,6 @@ def _sync_falabella_automatico():
                         if not prod:
                             continue
 
-                        prod["stock"] += cantidad
-                        guardar_producto(prod)
-
                         # Parsear fecha real de compra de la orden cancelada
                         fecha_compra_fa_cancel = None
                         try:
@@ -1563,6 +1593,54 @@ def _sync_falabella_automatico():
                         except Exception:
                             pass
 
+                        if es_fbf_cancel and entregada:
+                            # El cliente la recibio: es una devolucion, no una
+                            # cancelacion. No se inventa stock; queda para revisar.
+                            registrar_movimiento(
+                                "ajuste", prod["sku"], prod["nombre"], 0,
+                                f"Falabella Full orden {order_number} cancelada DESPUÉS de entregada — revisar dónde quedó la unidad",
+                                usuario="Sistema", canal="Falabella", orden_id=order_id,
+                                numero_orden=order_number,
+                                fecha_compra_marketplace=fecha_compra_fa_cancel,
+                                origen_registro="scheduler"
+                            )
+                            try:
+                                crear_alerta(
+                                    tipo="devolucion",
+                                    titulo=f"Devolución Falabella Full: {order_number}",
+                                    mensaje=(f"La orden {order_number} se canceló <b>después de entregada</b>.<br>"
+                                             f"{prod['nombre']} (SKU {prod['sku']}) x{cantidad}.<br><br>"
+                                             "No se reintegró stock automáticamente: hay que confirmar si la "
+                                             "unidad volvió a la bodega de Falabella o al vendedor."),
+                                    sku=prod["sku"]
+                                )
+                            except Exception:
+                                pass
+                            items_reintegrados.append(f"{prod['nombre']} (SKU: {seller_sku}) x{cantidad} — devolución, sin reintegrar")
+                            continue
+
+                        if es_fbf_cancel:
+                            # Cancelada antes de entregar: la unidad sigue en la
+                            # bodega de Falabella. No toca central ni re-sincroniza,
+                            # porque el stock Full no afecta la disponibilidad propia.
+                            from inventario import ajustar_stock_bodega
+                            ajustar_stock_bodega(prod["sku"], "FALABELLA_FBM", cantidad)
+                            registrar_movimiento(
+                                "entrada", prod["sku"], prod["nombre"], cantidad,
+                                f"Cancelación Falabella Full orden {order_number} (bodega FBF)",
+                                usuario="Sistema", canal="Falabella", orden_id=order_id,
+                                numero_orden=order_number,
+                                fecha_compra_marketplace=fecha_compra_fa_cancel,
+                                origen_registro="scheduler"
+                            )
+                            _asegurar_fecha_compra("Falabella", order_id, fecha_compra_fa_cancel, sku=prod["sku"])
+                            print(f"[Scheduler Falabella] CANCELACIÓN FULL SKU:{prod['sku']} +{cantidad} → FALABELLA_FBM")
+                            items_reintegrados.append(f"{prod['nombre']} (SKU: {seller_sku}) x{cantidad} → Falabella Full")
+                            continue
+
+                        # Venta propia (FBS): la unidad vuelve a central, como siempre.
+                        prod["stock"] += cantidad
+                        guardar_producto(prod)
                         registrar_movimiento(
                             "entrada", prod["sku"], prod["nombre"], cantidad,
                             f"Cancelación Falabella orden {order_number}",
