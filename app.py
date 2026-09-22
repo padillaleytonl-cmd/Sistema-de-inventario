@@ -29278,6 +29278,90 @@ def admin_lusync_sii_test_envio():
     return html
 
 
+@app.route("/admin/lusync/mapeos-huerfanos", methods=["GET"])
+@requiere_lusync_admin
+def admin_mapeos_huerfanos():
+    """Busca publicaciones mapeadas a un SKU de Lusync que no existe.
+
+    SOLO LECTURA: no borra ni corrige nada.
+
+    Una fila de sku_mapeo_canal que apunta a un producto inexistente es de los
+    errores mas caros que puede tener el sistema, porque no se nota: la venta
+    llega, el sync resuelve el SKU del canal a ese codigo fantasma, no encuentra
+    el producto, saltea la linea, y marca la orden como procesada. El stock
+    queda sobrevalorado y la orden no se reintenta nunca.
+
+    Ademas son invisibles desde el panel: la vista de publicaciones lista por
+    producto, y estas filas no cuelgan de ninguno.
+
+    Caso real que motivo esto: el SKU SDCEM001 de Walmart mapeaba a SDCEV001,
+    que no existe. La orden P111807327 se proceso sin descontar.
+
+    Uso: /admin/lusync/mapeos-huerfanos&canal=walmart   (canal es opcional)
+    """
+    from inventario import get_conn, release_conn, cargar_productos
+
+    canal = (request.args.get("canal") or "").strip().lower()
+
+    skus_reales = {p.get("sku") for p in cargar_productos() if p.get("sku")}
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            if canal:
+                cur.execute("""SELECT id, canal, sku_canal, item_id_canal, sku_lusync
+                               FROM sku_mapeo_canal
+                               WHERE LOWER(canal) = %s
+                               ORDER BY canal, sku_canal""", (canal,))
+            else:
+                cur.execute("""SELECT id, canal, sku_canal, item_id_canal, sku_lusync
+                               FROM sku_mapeo_canal
+                               ORDER BY canal, sku_canal""")
+            filas = cur.fetchall()
+    finally:
+        release_conn(conn)
+
+    huerfanos = []
+    por_canal = {}
+    for (mid, can, sku_canal, item_id, sku_lus) in filas:
+        if sku_lus in skus_reales:
+            continue
+        # El SKU del canal puede ser el nombre correcto del producto: si existe,
+        # el mapeo se puede corregir apuntandolo ahi en vez de borrarlo.
+        sugerencia = sku_canal if sku_canal in skus_reales else None
+        huerfanos.append({
+            "mapeo_id": mid,
+            "canal": can,
+            "sku_canal": sku_canal,
+            "item_id_canal": item_id,
+            "apunta_a": sku_lus,
+            "ese_sku_existe": False,
+            "sugerencia": sugerencia,
+        })
+        por_canal[can] = por_canal.get(can, 0) + 1
+
+    lectura = []
+    lectura.append("Revisadas %d publicaciones%s." %
+                   (len(filas), " del canal " + canal if canal else " de todos los canales"))
+    if not huerfanos:
+        lectura.append("No hay mapeos huerfanos: todas apuntan a un producto que existe.")
+    else:
+        lectura.append("HAY %d mapeos apuntando a productos que no existen: %s."
+                       % (len(huerfanos),
+                          ", ".join("%s (%d)" % (c, n) for c, n in sorted(por_canal.items()))))
+        con_sug = [h for h in huerfanos if h["sugerencia"]]
+        if con_sug:
+            lectura.append("%d de ellos se pueden corregir apuntandolos al SKU que ya "
+                           "usa el canal, porque ese si existe en Lusync." % len(con_sug))
+        lectura.append("Cada uno de estos hace que la venta se marque como procesada "
+                       "sin descontar stock.")
+
+    return jsonify({"ok": True, "solo_lectura": True,
+                    "lectura": lectura,
+                    "total_revisados": len(filas),
+                    "huerfanos": huerfanos})
+
+
 @app.route("/admin/lusync/walmart/diagnostico-wfs", methods=["GET"])
 @requiere_lusync_admin
 def admin_walmart_diagnostico_wfs():
