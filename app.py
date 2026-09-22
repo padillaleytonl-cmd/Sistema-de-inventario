@@ -10145,15 +10145,37 @@ def admin_auto_mapeo_v2():
             sku_lusync_match = skus_norm[sku_canal_clean.upper()]
             razon = "sku_exacto"
 
-        # 2. Match parcial: SKU Lusync contenido en sku_canal o título
+        # 2. Match parcial: SKU Lusync contenido en el SKU del canal
+        #
+        # Dos cambios sobre la version anterior, los dos por el mismo motivo —
+        # un catalogo con familias de variantes (MAD001..MAD007,
+        # SDAS5A001/SDAS5B001/SDAS5C001) rompe las suposiciones que servian con
+        # SKUs sueltos:
+        #
+        #   a) Antes cortaba en el PRIMER SKU que coincidiera, recorriendo un
+        #      diccionario. Con varios candidatos posibles, cual ganaba dependia
+        #      del orden interno del dict: el mismo dato podia mapear distinto
+        #      entre dos corridas. Ahora se queda con el SKU MAS LARGO que
+        #      coincide, que es el mas especifico — entre MAD001 y MAD0012 gana
+        #      el segundo, que es el que de verdad esta en el codigo.
+        #
+        #   b) Antes tambien buscaba el SKU dentro del TITULO de la publicacion.
+        #      Un titulo es texto libre: encontrar "MAD001" ahi no prueba nada, y
+        #      es como se cuelan mapeos cruzados entre variantes. Se busca solo
+        #      en el campo SKU. Lo que quede sin match cae al paso 3 o se informa
+        #      como no mapeado, que es preferible a mapearlo mal: un mapeo
+        #      equivocado manda el stock de un producto a la publicacion de otro.
         if not sku_lusync_match and sku_canal_clean:
             sku_canal_upper = sku_canal_clean.upper()
-            titulo_upper = (titulo or "").upper()
-            for sku_norm, sku_real in skus_norm.items():
-                if len(sku_norm) >= 4 and (sku_norm in sku_canal_upper or sku_norm in titulo_upper):
-                    sku_lusync_match = sku_real
-                    razon = "sku_parcial" if sku_norm in sku_canal_upper else "sku_en_titulo"
-                    break
+            candidatos = [(sku_norm, sku_real) for sku_norm, sku_real in skus_norm.items()
+                          if len(sku_norm) >= 4 and sku_norm in sku_canal_upper]
+            if candidatos:
+                sku_norm, sku_real = max(candidatos, key=lambda c: len(c[0]))
+                sku_lusync_match = sku_real
+                razon = "sku_parcial"
+                if len(candidatos) > 1:
+                    otros = ", ".join(sorted(c[0] for c in candidatos if c[0] != sku_norm))
+                    razon += " (elegido el mas largo entre %d: descartados %s)" % (len(candidatos), otros)
 
         # 3. Match por nombre (similitud)
         if not sku_lusync_match and titulo:
