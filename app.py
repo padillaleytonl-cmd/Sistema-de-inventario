@@ -29984,13 +29984,18 @@ def admin_walmart_reparar_full_central():
     #   &aplicar=a  solo devolver el stock mal descontado
     #   &aplicar=b  solo desmarcar las que quedaron sin venta
     #   &aplicar=1  las dos
+    # obtener_ordenes_walmart pagina de la orden MAS VIEJA a la mas nueva y corta
+    # en max_paginas (5 por defecto). Con una ventana amplia el corte se come
+    # justamente las ordenes recientes: dias=30 llegaba a cubrir MENOS de lo
+    # reciente que dias=7. Se sube el tope y se deja regulable.
+    paginas = max(1, min(int(request.args.get("paginas", 20)), 60))
     _ap = (request.args.get("aplicar") or "").strip().lower()
     aplicar_a = _ap in ("1", "a")
     aplicar_b = _ap in ("1", "b")
     aplicar = aplicar_a or aplicar_b
 
     try:
-        ordenes = obtener_ordenes_walmart(dias=dias)
+        ordenes = obtener_ordenes_walmart(dias=dias, max_paginas=paginas)
     except Exception as e:
         return jsonify({"ok": False, "error": "No se pudieron traer ordenes: " + str(e)[:300]}), 502
 
@@ -30215,9 +30220,12 @@ def admin_walmart_conciliacion():
                             obtener_sku_lusync_por_canal, cargar_productos)
 
     dias = max(1, min(int(request.args.get("dias", 7)), 60))
+    # Ver la nota en reparar-full-central: sin subir el tope de paginas, una
+    # ventana amplia deja fuera las ordenes mas recientes.
+    paginas = max(1, min(int(request.args.get("paginas", 20)), 60))
 
     try:
-        ordenes = obtener_ordenes_walmart(dias=dias)
+        ordenes = obtener_ordenes_walmart(dias=dias, max_paginas=paginas)
     except Exception as e:
         return jsonify({"ok": False, "error": "No se pudieron traer ordenes: " + str(e)[:300]}), 502
 
