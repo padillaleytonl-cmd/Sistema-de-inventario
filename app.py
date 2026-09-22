@@ -30044,10 +30044,28 @@ def admin_walmart_reparar_full_central():
         finally:
             release_conn(conn)
 
+    # Las marcas se leen de una sola vez. Antes se consultaba orden por orden y
+    # el error se tragaba en un except: si la consulta fallaba, la orden se caia
+    # del informe como si no pasara nada, que es peor que reportar el fallo.
+    marcadas = set()
+    fallo_marcas = None
+    if claves:
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT order_id_texto FROM ordenes_procesadas
+                               WHERE order_id_texto = ANY(%s)""", (claves,))
+                marcadas = {str(r[0]) for r in cur.fetchall()}
+        except Exception as e:
+            fallo_marcas = str(e)[:300]
+        finally:
+            release_conn(conn)
+
     productos = {p["sku"]: p for p in cargar_productos() if p.get("sku")}
 
     descuentos_indebidos = []   # caso A
     marcadas_sin_venta = []     # caso B
+    sin_marca_sin_venta = []    # ni marcada ni registrada: pendiente de verdad
     ya_correctas = []
 
     for o in wfs:
@@ -30070,13 +30088,10 @@ def admin_walmart_reparar_full_central():
             ya_correctas.append(coid)
             continue
 
-        # Sin ningun movimiento: solo importa si ademas quedo marcada
-        try:
-            marcada = orden_ya_procesada_texto(coid)
-        except Exception:
-            marcada = None
-        if not marcada:
-            continue
+        # Sin ningun movimiento. Puede estar marcada (caso B) o no estarlo, y ese
+        # segundo caso tambien hay que mostrarlo: es una venta que todavia no se
+        # registro, y si el scheduler ya paso sin registrarla hay algo mas roto.
+        marcada = (coid in marcadas) or (poid and poid in marcadas)
 
         # Que SKU traia, y si el sync corregido va a poder resolverlo
         skus = []
@@ -30093,10 +30108,12 @@ def admin_walmart_reparar_full_central():
                 res = sku_wm
             skus.append({"sku_walmart": sku_wm, "resuelve_a": res,
                          "existe": res in productos})
-        marcadas_sin_venta.append({
-            "orden": coid, "skus": skus,
-            "resoluble": all(x["existe"] for x in skus) if skus else False,
-        })
+        fila = {"orden": coid, "skus": skus,
+                "resoluble": all(x["existe"] for x in skus) if skus else False}
+        if marcada:
+            marcadas_sin_venta.append(fila)
+        else:
+            sin_marca_sin_venta.append(fila)
 
     corregidos, desmarcadas, errores, skus_tocados = [], [], [], set()
 
@@ -30175,8 +30192,15 @@ def admin_walmart_reparar_full_central():
         lectura.append("B) %d ordenes Full quedaron marcadas como procesadas SIN venta "
                        "registrada: no existen en Lusync y no se van a reintentar solas."
                        % len(marcadas_sin_venta))
+    if sin_marca_sin_venta:
+        lectura.append("%d ordenes Full no estan marcadas NI registradas: el scheduler "
+                       "las tiene que tomar en el proximo ciclo. Si siguen aqui despues "
+                       "de 5 minutos, no las esta procesando." % len(sin_marca_sin_venta))
     if ya_correctas:
         lectura.append("%d ordenes Full ya estan bien registradas." % len(ya_correctas))
+    if fallo_marcas:
+        lectura.append("OJO: no se pudo leer la tabla de marcas (%s). El reparto entre "
+                       "marcadas y no marcadas de arriba NO es confiable." % fallo_marcas)
     if not descuentos_indebidos and not marcadas_sin_venta:
         lectura.append("No hay nada que reparar en esta ventana. Si faltan ordenes mas "
                        "viejas, repetir con un &dias mayor (hasta 60).")
@@ -30194,6 +30218,8 @@ def admin_walmart_reparar_full_central():
                     "lectura": lectura,
                     "descuentos_indebidos": descuentos_indebidos,
                     "marcadas_sin_venta": marcadas_sin_venta,
+                    "sin_marca_sin_venta": sin_marca_sin_venta,
+                    "fallo_al_leer_marcas": fallo_marcas,
                     "ya_correctas": ya_correctas,
                     "corregidos": corregidos, "desmarcadas": desmarcadas,
                     "errores": errores})
