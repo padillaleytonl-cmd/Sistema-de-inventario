@@ -1234,6 +1234,22 @@ tbody td {
   transition: background 0.15s;
 }
 .sidebar-link:hover { background: var(--bg2); }
+/* Subitem: cuelga del item de arriba, con una guia vertical que lo ata */
+.sidebar-link.sidebar-sub {
+  padding-left: 30px;
+  font-size: 12.5px;
+  color: var(--muted);
+  position: relative;
+}
+.sidebar-link.sidebar-sub::before {
+  content: "";
+  position: absolute;
+  left: 18px; top: 0; bottom: 0;
+  width: 1px;
+  background: var(--border);
+}
+.sidebar-link.sidebar-sub.active { color: #7c3aed; }
+[data-theme="dark"] .sidebar-link.sidebar-sub.active { color: #a78bfa; }
 .sidebar-link.active {
   background: rgba(124,58,237,0.12);
   color: #7c3aed;
@@ -1749,6 +1765,10 @@ tbody td {
       <button class="sidebar-link" data-section="movimientos" onclick="navSidebar('movimientos', this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4"/></svg>
         Movimientos
+      </button>
+      <button class="sidebar-link sidebar-sub" data-section="ventas" onclick="navSidebar('ventas', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-4"/></svg>
+        Reporte de ventas
       </button>
       <button class="sidebar-link" data-section="devoluciones" onclick="navSidebar('devoluciones', this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
@@ -2783,7 +2803,7 @@ tbody td {
         <div style="font-size:13px;color:var(--muted);margin-top:2px;font-family:'DM Mono',monospace;" id="relojMov"></div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;">
-        <button onclick="abrirModalVentas()" style="display:flex;align-items:center;gap:6px;padding:8px 16px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 2px 10px rgba(99,102,241,.3);">
+        <button onclick="irAVentas()" style="display:flex;align-items:center;gap:6px;padding:8px 16px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 2px 10px rgba(99,102,241,.3);">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
           Reporte de ventas
         </button>
@@ -4201,7 +4221,7 @@ function doLogout(){
 
 // ── NAVEGACIÓN
 function showSection(sec, btn){
-  ['dashboard','inventario','movimientos','devoluciones','audit','configuracion','skumapeo','canales','bodegas','pos','facturacion'].forEach(s => {
+  ['dashboard','inventario','movimientos','ventas','devoluciones','audit','configuracion','skumapeo','canales','bodegas','pos','facturacion'].forEach(s => {
     const el = document.getElementById('sec-' + s);
     if(el) el.style.display = s === sec ? '' : 'none';
   });
@@ -4210,6 +4230,7 @@ function showSection(sec, btn){
   if(gear) gear.classList.remove('active');
   if(btn) btn.classList.add('active');
   if(sec === 'movimientos') cargarMovimientosFull();
+  if(sec === 'ventas' && typeof vtaInit === 'function') vtaInit();
   if(sec === 'devoluciones') cargarDevoluciones('todas');
   if(sec === 'audit') cargarAudit();
   if(sec === 'skumapeo') cargarSkuMapeo();
@@ -13199,19 +13220,17 @@ async function posCargarMiniHistorial(){
     </div>
 
 <!-- ══════════════════════════════════════════════════════════════
-     MODAL REPORTE DE VENTAS — con gráficos
+     SECCIÓN REPORTE DE VENTAS — cuelga de Movimientos en el sidebar
 ════════════════════════════════════════════════════════════════ -->
-<div id="modalVentas" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9000;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto;">
-  <div style="background:var(--white);border-radius:16px;width:100%;max-width:1100px;margin:auto;box-shadow:0 20px 60px rgba(0,0,0,.2);">
-
-    <!-- HEADER -->
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:20px 24px;border-bottom:1px solid var(--border);">
-      <div>
-        <div style="font-size:17px;font-weight:700;color:var(--text);">📊 Reporte de Ventas</div>
-        <div style="font-size:12px;color:var(--muted);margin-top:2px;">Análisis de movimientos de salida por canal, producto y fecha</div>
-      </div>
-      <button onclick="cerrarModalVentas()" style="background:transparent;border:none;font-size:22px;color:var(--muted);cursor:pointer;line-height:1;padding:4px 8px;">×</button>
+<div id="sec-ventas" class="main" style="display:none;">
+  <!-- Encabezado fuera de la tarjeta, como el resto de las secciones -->
+  <div class="page-header">
+    <div>
+      <div class="page-title">Reporte de ventas</div>
+      <div class="page-date">Una fila por unidad vendida, con los datos del cliente y del despacho de cada canal</div>
     </div>
+  </div>
+  <div class="card" style="padding:0;overflow:hidden;">
 
     <!-- FILTROS -->
     <div style="padding:16px 24px;background:var(--bg);border-bottom:1px solid var(--border);">
@@ -13334,20 +13353,24 @@ async function posCargarMiniHistorial(){
         </button>
       </div>
       <div id="vta-tabla-wrap" style="display:none;margin-top:14px;border-radius:10px;border:1px solid var(--border);overflow:hidden;">
-        <div style="max-height:360px;overflow-y:auto;">
+        <div style="max-height:360px;overflow-y:auto;overflow-x:auto;">
           <table id="vta-tabla" style="width:100%;border-collapse:collapse;font-size:11px;">
             <thead>
               <tr style="background:var(--bg);position:sticky;top:0;">
                 <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);white-space:nowrap;">Canal</th>
                 <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);white-space:nowrap;">N° Orden</th>
+                <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);white-space:nowrap;">Estado</th>
+                <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);white-space:nowrap;">Despacho</th>
                 <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Fecha</th>
+                <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);white-space:nowrap;">Fecha y hora</th>
                 <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Nombre</th>
                 <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Apellido</th>
                 <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">RUT</th>
                 <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Teléfono</th>
                 <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Correo</th>
                 <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Producto</th>
-                <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">SKU Seller</th>
+                <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">SKU Lusync</th>
+                <th style="padding:8px 10px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">SKU Canal</th>
                 <th style="padding:8px 10px;text-align:right;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Cant.</th>
                 <th style="padding:8px 10px;text-align:right;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Precio</th>
                 <th style="padding:8px 10px;text-align:right;font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;border-bottom:1px solid var(--border);">Envío</th>
@@ -13403,18 +13426,16 @@ function _cargarChartJs(cb){
   s.onload = cb; document.head.appendChild(s);
 }
 
-function abrirModalVentas(){
-  const m = document.getElementById('modalVentas');
-  m.style.display = 'flex';
-  if(!document.getElementById('vta-desde').value) vtaAtajo(30);
+// Antes esto era un modal. Ahora es una seccion propia que cuelga de
+// Movimientos, asi que ya no hay overlay que cerrar ni tecla Escape.
+function vtaInit(){
+  const d = document.getElementById('vta-desde');
+  if(d && !d.value) vtaAtajo(30);   // vtaAtajo ademas dispara la carga
 }
-function cerrarModalVentas(){
-  document.getElementById('modalVentas').style.display = 'none';
+function irAVentas(){
+  const btn = document.querySelector('.sidebar-link[data-section="ventas"]');
+  if(typeof navSidebar === 'function') navSidebar('ventas', btn);
 }
-document.addEventListener('keydown', e=>{ if(e.key==='Escape') cerrarModalVentas(); });
-document.getElementById('modalVentas').addEventListener('click', e=>{
-  if(e.target===document.getElementById('modalVentas')) cerrarModalVentas();
-});
 
 // Atajo de fecha — cambia rango Y recarga automáticamente
 function vtaAtajo(dias){
@@ -13611,7 +13632,7 @@ function vtaRenderTablaDetalle(filas){
   const tbody = document.getElementById('vta-tbody');
   if(!tbody) return;
   if(!filas.length){
-    tbody.innerHTML='<tr><td colspan="18" style="padding:24px;text-align:center;color:var(--hint);">Sin datos de órdenes disponibles para este período</td></tr>';
+    tbody.innerHTML='<tr><td colspan="22" style="padding:24px;text-align:center;color:var(--hint);">Sin datos de órdenes disponibles para este período</td></tr>';
     return;
   }
   tbody.innerHTML = filas.map(f=>{
@@ -13620,13 +13641,17 @@ function vtaRenderTablaDetalle(filas){
     return `<tr>
       <td><span class="vb ${cls}">${f.canal||''}</span></td>
       <td style="font-family:'DM Mono',monospace;font-size:10px;">${f.orden||'—'}</td>
+      <td style="font-size:10px;">${f.estado||'—'}</td>
+      <td>${f.despacho ? `<span class="vb ${f.despacho==='Full'?'vb-pa':'vb-ot'}">${f.despacho}</span>` : '—'}</td>
       <td>${f.fecha||'—'}</td>
+      <td style="font-family:'DM Mono',monospace;font-size:10px;white-space:nowrap;">${f.fecha_hora||'—'}</td>
       <td>${f.nombre||'—'}</td>
       <td>${f.apellido||'—'}</td>
       <td style="font-family:'DM Mono',monospace;font-size:10px;">${f.rut||'—'}</td>
       <td>${f.telefono||'—'}</td>
       <td style="font-size:10px;">${f.email||'—'}</td>
       <td style="max-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${f.producto||''}">${f.producto||'—'}</td>
+      <td style="font-family:'DM Mono',monospace;font-size:10px;">${f.sku_lusync||'—'}</td>
       <td style="font-family:'DM Mono',monospace;font-size:10px;">${f.sku_seller||'—'}</td>
       <td style="text-align:right;">${f.cantidad||1}</td>
       <td style="text-align:right;font-family:'DM Mono',monospace;">$\u00a0${fmt(f.precio_pagado)}</td>
@@ -13655,21 +13680,27 @@ function vtaDescargarCSV(){
     return;
   }
   const COLS=[
-    ['canal','Canal'],['orden','N° Orden'],['fecha','Fecha'],
+    ['canal','Canal'],['orden','N° Orden'],['estado','Estado'],
+    ['despacho','Despacho'],
+    ['fecha','Fecha'],['fecha_hora','Fecha y hora'],
     ['nombre','Nombre'],['apellido','Apellido'],['rut','RUT'],
     ['telefono','Teléfono'],['email','Correo'],
-    ['producto','Producto'],['sku_seller','SKU Seller'],
+    ['producto','Producto'],
+    ['sku_lusync','SKU Lusync'],['sku_seller','SKU Canal'],
     ['cantidad','Cantidad'],['precio_pagado','Precio pagado'],
     ['valor_envio','Valor envío'],['direccion','Dirección'],
     ['comuna','Comuna'],['metodo_pago','Método de pago'],
     ['metodo_envio','Método de envío'],['tracking','N° Seguimiento'],
   ];
+  // Excel en español usa coma decimal. Con punto entra como texto y la
+  // columna no se puede sumar en la planilla.
+  const NUMERICAS = new Set(['precio_pagado','valor_envio']);
   // BOM + cabecera + filas
   let csv = '\ufeff' + COLS.map(c=>c[1]).join(';') + '\r\n';
   for(const f of _VTA.filas){
     csv += COLS.map(([k])=>{
-      const v = String(f[k]??'').replace(/;/g,',').replace(/\r?\n/g,' ');
-      return v;
+      if(NUMERICAS.has(k)) return (Number(f[k]||0)).toFixed(2).replace('.',',');
+      return String(f[k]??'').replace(/;/g,',').replace(/\r?\n/g,' ');
     }).join(';') + '\r\n';
   }
   const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
