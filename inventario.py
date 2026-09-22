@@ -2474,7 +2474,8 @@ def determinar_bodega_para_canal(canal, fulfillment=False):
 def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None,
                                  motivo=None, usuario="Sistema",
                                  fecha_compra_marketplace=None,
-                                 origen_registro="sync_manual"):
+                                 origen_registro="sync_manual",
+                                 ajustar_stock=True):
     """
     Función central que descuenta stock de la bodega correcta según el canal y tipo.
 
@@ -2493,6 +2494,10 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
         origen_registro: cómo entró el movimiento al sistema:
                          'sync_manual' (default), 'webhook', 'scheduler',
                          'manual', 'import_excel', 'devolucion', 'pos', 'sistema'.
+        ajustar_stock: True (default) descuenta de la bodega. False registra el
+                       movimiento con toda su trazabilidad pero NO toca el stock.
+                       Se usa cuando el conteo de esa bodega lo manda el
+                       marketplace y Lusync solo lo copia (Walmart Full).
 
     Returns:
         dict con: {ok, bodega_codigo, stock_bodega_antes, stock_bodega_despues, sku, cantidad}
@@ -2500,18 +2505,27 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
     bodega = determinar_bodega_para_canal(canal, fulfillment=fulfillment)
     stock_antes = get_stock_bodega(sku, bodega)
 
-    # Si la bodega no tiene stock suficiente, descontar lo que se pueda
-    # y registrar advertencia
-    descontar = min(cantidad, stock_antes)
-    advertencia = None
-    if stock_antes < cantidad:
-        advertencia = f"Bodega {bodega} sin stock suficiente: pedidas {cantidad}, había {stock_antes}"
-        print(f"[Bodegas] WARN {advertencia}")
+    if not ajustar_stock:
+        # Modo solo-registro: la venta queda anotada con su bodega, su orden y su
+        # fecha, pero el stock NO se toca. Es el caso de Walmart Full: el conteo
+        # de WALMART_FBM es el que reporta Walmart y el job diario lo copia tal
+        # cual, asi que descontar aqui lo restaria dos veces.
+        descontar = cantidad
+        advertencia = "solo_registro"
+        stock_despues = stock_antes
+    else:
+        # Si la bodega no tiene stock suficiente, descontar lo que se pueda
+        # y registrar advertencia
+        descontar = min(cantidad, stock_antes)
+        advertencia = None
+        if stock_antes < cantidad:
+            advertencia = f"Bodega {bodega} sin stock suficiente: pedidas {cantidad}, había {stock_antes}"
+            print(f"[Bodegas] WARN {advertencia}")
 
-    if descontar > 0:
-        ajustar_stock_bodega(sku, bodega, -descontar)
+        if descontar > 0:
+            ajustar_stock_bodega(sku, bodega, -descontar)
 
-    stock_despues = get_stock_bodega(sku, bodega)
+        stock_despues = get_stock_bodega(sku, bodega)
 
     # Normalizar fecha de compra del marketplace (si llegó con tz, pasar a Chile sin tz)
     fecha_compra_clean = None

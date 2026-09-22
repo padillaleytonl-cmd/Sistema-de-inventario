@@ -1034,6 +1034,10 @@ def _sync_walmart_automatico():
                             print(f"[Scheduler Walmart] no parsea fecha '{date_raw}': {_e_wm}")
                             fecha_compra_wm = None
 
+                        # WFS: la venta se REGISTRA pero no descuenta. El stock de
+                        # WALMART_FBM es el que reporta Walmart y el job diario lo
+                        # copia tal cual; descontar aqui lo restaria dos veces.
+                        # Seller si descuenta: esa mercaderia sale de nuestra bodega.
                         resultado = descontar_venta_inteligente(
                             sku=sku_lusync,
                             cantidad=cantidad,
@@ -1042,10 +1046,13 @@ def _sync_walmart_automatico():
                             orden_id=customer_order_id,
                             motivo=f"Venta Walmart {tipo_str}",
                             usuario="Sistema",
-                            fecha_compra_marketplace=fecha_compra_wm
+                            fecha_compra_marketplace=fecha_compra_wm,
+                            ajustar_stock=(not es_wfs)
                         )
                         _asegurar_fecha_compra("Walmart", customer_order_id, fecha_compra_wm, sku=sku_lusync)
-                        print(f"[Scheduler] {customer_order_id} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado['bodega']}")
+                        _efecto = ("registrada, sin tocar stock (lo cuenta Walmart)"
+                                   if es_wfs else f"-{cantidad} desde {resultado['bodega']}")
+                        print(f"[Scheduler] {customer_order_id} {tipo_str}: {sku_lusync} {_efecto}")
 
                         # Sync a otros canales SOLO si fue Seller (afectó Central)
                         if not es_wfs:
@@ -1119,16 +1126,16 @@ def _sync_walmart_automatico():
                         for p in productos:
                             if p["sku"] == sku:
                                 if cancel_es_wfs:
-                                    # Venta Full cancelada (no llegó al cliente):
-                                    # reponer la bodega Full. NO toca stock central
-                                    # ni re-sincroniza (Full no afecta central).
-                                    from inventario import ajustar_stock_bodega
-                                    ajustar_stock_bodega(sku, "WALMART_FBM", cantidad)
+                                    # Venta Full cancelada: se deja constancia, pero NO
+                                    # se repone la bodega. La venta tampoco descontó:
+                                    # en Full el stock de WALMART_FBM lo manda Walmart y
+                                    # el job diario lo copia. Sumar aquí lo inflaría
+                                    # hasta el próximo copiado.
                                     registrar_movimiento("entrada", p["sku"], p["nombre"],
-                                                        cantidad, "Cancelación Walmart Full (bodega FBM)",
+                                                        cantidad, "Cancelación Walmart Full (solo registro)",
                                                         usuario="Sistema", canal="Walmart",
                                                         orden_id=customer_order_id)
-                                    print(f"[Scheduler] CANCELACIÓN FULL SKU:{sku} +{cantidad} → WALMART_FBM")
+                                    print(f"[Scheduler] CANCELACIÓN FULL SKU:{sku} x{cantidad} (solo registro)")
                                 else:
                                     # Venta Seller cancelada: reponer central (como siempre)
                                     p["stock"] = p["stock"] + cantidad
@@ -1146,11 +1153,15 @@ def _sync_walmart_automatico():
                 # Crear alerta consolidada por orden cancelada
                 if items_cancelados:
                     try:
+                        _detalle_cancel = (
+                            "El stock Full lo cuenta Walmart: no se reintegró en Lusync."
+                            if cancel_es_wfs else
+                            "Stock reintegrado automáticamente:")
                         crear_alerta(
                             tipo="cancelacion",
                             canal="Walmart",
                             titulo=f"Orden cancelada en Walmart: {customer_order_id}",
-                            mensaje="El cliente canceló la orden. Stock reintegrado automáticamente:<br><br>" +
+                            mensaje="El cliente canceló la orden. " + _detalle_cancel + "<br><br>" +
                                     "<br>".join(f"• {it}" for it in items_cancelados),
                             orden_id=customer_order_id,
                             sku=items_cancelados[0].split("SKU: ")[1].split(")")[0] if items_cancelados else None
@@ -2790,6 +2801,7 @@ def _sync_recuperacion():
     """
     try:
         print("[Recuperación] Buscando órdenes no procesadas...")
+        from bodegas_logic import detectar_fulfillment_walmart
         productos = cargar_productos()
         recuperadas = 0
         # OPTIMIZACIÓN: traer todas las órdenes una vez (no 4 veces por estado).
@@ -2806,6 +2818,11 @@ def _sync_recuperacion():
                     continue
                 customer_order_id = str(o.get("customerOrderId") or order_id)
                 if orden_ya_procesada_texto(customer_order_id):
+                    continue
+                # Este camino viejo descuenta de CENTRAL sin mirar el fulfillment
+                # (y sin mapear el SKU). Una orden Full no toca central: se deja
+                # para el sync normal, que si la sabe tratar.
+                if detectar_fulfillment_walmart(o):
                     continue
 
                 lineas = o.get("orderLines", {}).get("orderLine", [])
@@ -2861,6 +2878,11 @@ def _sync_recuperacion():
                     continue
                 customer_order_id = str(o.get("customerOrderId") or order_id)
                 cancel_key = f"CANCEL-{customer_order_id}"
+                # Este camino viejo descuenta de CENTRAL sin mirar el fulfillment
+                # (y sin mapear el SKU). Una orden Full no toca central: se deja
+                # para el sync normal, que si la sabe tratar.
+                if detectar_fulfillment_walmart(o):
+                    continue
                 if not orden_ya_procesada_texto(customer_order_id):
                     continue
                 if not intentar_marcar_orden_atomic(cancel_key):
@@ -3993,6 +4015,7 @@ def walmart_sync_debug():
     if not session.get("logged"):
         return {"error": "no autorizado"}, 401
 
+    from bodegas_logic import detectar_fulfillment_walmart
     productos = cargar_productos()
     log = []
     nuevas = 0
@@ -4018,6 +4041,12 @@ def walmart_sync_debug():
             log.append(f"Orden {order_id} customerOrderId:{customer_order_id} ya_procesada:{ya}")
 
             if ya:
+                continue
+            # Este camino viejo descuenta de CENTRAL sin mirar el fulfillment
+            # (y sin mapear el SKU). Una orden Full no toca central: se deja
+            # para el sync normal, que si la sabe tratar.
+            if detectar_fulfillment_walmart(o):
+                log.append(f"{customer_order_id}: Full (WFS), la maneja el sync normal")
                 continue
 
             lineas = o.get("orderLines", {}).get("orderLine", [])
@@ -4077,6 +4106,9 @@ def walmart_sync_debug():
                 continue
             customer_order_id = str(o.get("customerOrderId") or order_id)
             cancel_key = f"CANCEL-{customer_order_id}"
+            # Mismo motivo: este camino repone CENTRAL sin mirar el fulfillment.
+            if detectar_fulfillment_walmart(o):
+                continue
             if not orden_ya_procesada_texto(customer_order_id):
                 continue
             if not intentar_marcar_orden_atomic(cancel_key):
@@ -29932,19 +29964,19 @@ def admin_walmart_conciliacion():
         try:
             with conn.cursor() as cur:
                 cur.execute("""SELECT orden_id::text, numero_orden::text, sku, cantidad,
-                                      tipo, bodega_codigo, fecha
+                                      tipo, bodega_codigo, fecha, motivo
                                FROM movimientos
                                WHERE canal = 'Walmart'
                                  AND fecha > NOW() - (%s || ' days')::interval
                                  AND (orden_id::text = ANY(%s) OR numero_orden::text = ANY(%s))""",
                             (str(dias + 3), claves, claves))
-                for (oid, num, sku, cant, tipo, bodega, fecha) in cur.fetchall():
+                for (oid, num, sku, cant, tipo, bodega, fecha, motivo) in cur.fetchall():
                     for k in (oid, num):
                         if not k:
                             continue
                         movs_por_orden.setdefault(k, []).append({
                             "sku": sku, "cantidad": cant, "tipo": tipo,
-                            "bodega": bodega,
+                            "bodega": bodega, "motivo": motivo,
                             "fecha": fecha.isoformat() if fecha else None,
                         })
         finally:
@@ -30005,6 +30037,7 @@ def admin_walmart_conciliacion():
             "tipo": "WFS" if es_wfs else "Seller",
             "marcada_procesada": procesada,
             "movimientos": len(movs),
+            "motivos": sorted({m["motivo"] for m in movs if m.get("motivo")}),
             "bodegas": bodegas_usadas,
             "bodega_esperada": bodega_esperada,
             "skus": skus,
