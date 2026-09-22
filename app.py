@@ -29976,17 +29976,31 @@ def admin_walmart_reparar_full_central():
         conn = get_conn()
         try:
             with conn.cursor() as cur:
-                cur.execute("""SELECT id, orden_id::text, sku, cantidad, motivo,
-                                      bodega_codigo, fecha
+                # Se miran las DOS columnas, igual que la conciliacion: si un
+                # movimiento quedo guardado solo en numero_orden y aqui no se
+                # viera, la orden pareceria "sin venta" y se desmarcaria, y el
+                # sync la registraria por segunda vez.
+                cur.execute("""SELECT id, orden_id::text, numero_orden::text, sku,
+                                      cantidad, motivo, bodega_codigo, fecha
                                FROM movimientos
                                WHERE canal = 'Walmart' AND tipo = 'salida'
-                                 AND orden_id::text = ANY(%s)""", (claves,))
-                for (mid, oid, sku, cant, motivo, bodega, fecha) in cur.fetchall():
-                    movs_por_orden.setdefault(str(oid), []).append({
-                        "id": mid, "sku": sku, "cantidad": int(cant or 0),
-                        "motivo": motivo, "bodega": bodega,
-                        "fecha": fecha.isoformat() if fecha else None,
-                    })
+                                 AND (orden_id::text = ANY(%s)
+                                      OR numero_orden::text = ANY(%s))""", (claves, claves))
+                for (mid, oid, num, sku, cant, motivo, bodega, fecha) in cur.fetchall():
+                    for _k in (oid, num):
+                        if not _k:
+                            continue
+                        lista = movs_por_orden.setdefault(str(_k), [])
+                        # oid y num pueden ser iguales: sin esto el mismo
+                        # movimiento entraria dos veces y en el caso A se
+                        # devolveria el doble de stock.
+                        if any(x["id"] == mid for x in lista):
+                            continue
+                        lista.append({
+                            "id": mid, "sku": sku, "cantidad": int(cant or 0),
+                            "motivo": motivo, "bodega": bodega,
+                            "fecha": fecha.isoformat() if fecha else None,
+                        })
         finally:
             release_conn(conn)
 
