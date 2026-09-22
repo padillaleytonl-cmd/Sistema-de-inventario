@@ -29408,16 +29408,64 @@ def admin_falabella_diagnostico_orden():
     from bodegas_logic import detectar_fulfillment_falabella
     from inventario import obtener_sku_lusync_por_canal, get_stock_bodega, cargar_productos
 
-    order_id = (request.args.get("order_id") or "").strip()
-    if not order_id:
-        return jsonify({"ok": False, "error": "Indica ?order_id=..."}), 400
+    from falabella import obtener_ordenes_falabella
 
+    pedido = (request.args.get("order_id") or request.args.get("order_number") or "").strip()
+    if not pedido:
+        return jsonify({"ok": False, "error": "Indica ?order_id=... o ?order_number=..."}), 400
+
+    # Falabella maneja DOS identificadores y no son intercambiables: OrderNumber
+    # es el largo que se ve en el panel (ej 3252381231) y OrderId es el interno
+    # que pide la API. GetOrder solo entiende el segundo. Se intenta directo y,
+    # si no aparece, se busca el OrderNumber entre las ordenes recientes.
+    como_se_encontro = "OrderId directo"
+    order_id = pedido
     try:
         orden = obtener_orden_falabella(order_id) or {}
-    except Exception as e:
-        return jsonify({"ok": False, "error": "No se pudo traer la orden: " + str(e)[:300]}), 502
+    except Exception:
+        orden = {}
+
     if not orden:
-        return jsonify({"ok": False, "error": "Falabella no devolvio la orden " + order_id}), 404
+        como_se_encontro = None
+        dias_busqueda = max(1, min(int(request.args.get("dias", 60)), 120))
+        for estado in ("canceled", None):
+            if orden:
+                break
+            for offset in (0, 50, 100, 150):
+                try:
+                    lote = obtener_ordenes_falabella(estado=estado, dias=dias_busqueda,
+                                                     limit=50, offset=offset) or []
+                except Exception:
+                    break
+                if not lote:
+                    break
+                for o in lote:
+                    num = str(o.get("OrderNumber") or o.get("orderNumber") or "")
+                    oid = str(o.get("OrderId") or o.get("orderId") or o.get("id") or "")
+                    if num == pedido or oid == pedido:
+                        order_id = oid or pedido
+                        orden = o
+                        como_se_encontro = ("OrderNumber %s -> OrderId %s (estado %s)"
+                                            % (pedido, order_id, estado or "todos"))
+                        break
+                if orden:
+                    break
+        # El listado trae menos campos que GetOrder: si se ubico el OrderId, se
+        # vuelve a pedir el detalle completo.
+        if orden and order_id and order_id != pedido:
+            try:
+                completa = obtener_orden_falabella(order_id)
+                if completa:
+                    orden = completa
+            except Exception:
+                pass
+
+    if not orden:
+        return jsonify({"ok": False,
+                        "error": ("No se encontro la orden %s. Se probo como OrderId y se "
+                                  "busco el OrderNumber entre las canceladas y las de todos "
+                                  "los estados de los ultimos dias. Puede estar fuera de ese "
+                                  "rango: agrega &dias=120." % pedido)}), 404
 
     try:
         items = obtener_items_orden_falabella(order_id) or []
@@ -29478,6 +29526,8 @@ def admin_falabella_diagnostico_orden():
     return jsonify({
         "ok": True, "solo_lectura": True,
         "order_id": order_id,
+        "buscado": pedido,
+        "como_se_encontro": como_se_encontro,
         "lectura": lectura,
         "es_fulfillment": es_fbf,
         "shipping_type": orden.get("ShippingType"),
