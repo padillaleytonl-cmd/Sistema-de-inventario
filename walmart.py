@@ -226,16 +226,25 @@ def obtener_productos_walmart(limit=50, max_paginas=20, debug=False):
     """
     try:
         todas = []
-        next_cursor = None
+        offset = 0
+        total_declarado = None
         pagina = 0
         debug_log = []
 
         while pagina < max_paginas:
             pagina += 1
             # IMPORTANTE: Walmart Chile máximo 50 por página
-            params = {"limit": min(limit, 50)}
-            if next_cursor and next_cursor != "*":
-                params["nextCursor"] = next_cursor
+            por_pagina = min(limit, 50)
+            params = {"limit": por_pagina}
+            # Walmart Chile pagina por OFFSET. Antes se avanzaba con nextCursor y
+            # el catálogo se leía truncado en los primeros 50: la respuesta de
+            # esta API trae solo {ItemResponse, totalItems} y ningún campo de
+            # cursor, así que el bucle cortaba en la página 1 sin error. Con 184
+            # productos declarados, veíamos 50 — y los 134 que faltaban incluían
+            # todas las publicaciones activas. Comprobado contra la API:
+            # offset=50 devuelve items distintos; page y nextCursor se ignoran.
+            if offset:
+                params["offset"] = offset
 
             res = requests.get(
                 f"{WALMART_BASE_URL}/v3/items",
@@ -253,6 +262,14 @@ def obtener_productos_walmart(limit=50, max_paginas=20, debug=False):
                 break
 
             data = res.json()
+
+            # totalItems dice cuántos hay en total. Es lo que permite saber si
+            # quedó algo sin leer en vez de suponerlo.
+            if total_declarado is None and isinstance(data, dict):
+                total_declarado = data.get("totalItems") or data.get("totalCount")
+                if total_declarado is not None:
+                    debug_log.append(f"Walmart declara {total_declarado} items en total")
+
             # ── Soportar MÚLTIPLES estructuras posibles de respuesta ──
             # Estructura A (Walmart Chile/MX modern):
             #   { "ItemResponse": [...], "totalItems": N, "nextCursor": "..." }
@@ -346,15 +363,24 @@ def obtener_productos_walmart(limit=50, max_paginas=20, debug=False):
 
             print(f"[Walmart Items] Total acumulado:{len(todas)}")
 
-            # Ver si hay siguiente página
-            if isinstance(data, dict):
-                next_cursor = data.get("nextCursor") or data.get("cursor")
-                # En algunas versiones el cursor está en metadata
-                if not next_cursor:
-                    meta = data.get("meta") or data.get("metadata") or {}
-                    if isinstance(meta, dict):
-                        next_cursor = meta.get("nextCursor")
-            if not next_cursor or next_cursor == "*":
+            # ── Siguiente página ──
+            # Tres cortes, y cualquiera alcanza: página vacía, ya se leyó todo lo
+            # que Walmart declara, o la página vino incompleta (última).
+            if not items:
+                debug_log.append("Página vacía: fin del catálogo")
+                break
+
+            offset += len(items)
+
+            try:
+                if total_declarado is not None and len(todas) >= int(total_declarado):
+                    debug_log.append(f"Leídos {len(todas)} de {total_declarado}: completo")
+                    break
+            except (TypeError, ValueError):
+                pass  # totalItems no numérico: se sigue por los otros cortes
+
+            if len(items) < por_pagina:
+                debug_log.append(f"Página incompleta ({len(items)} < {por_pagina}): fin")
                 break
 
         if debug:
