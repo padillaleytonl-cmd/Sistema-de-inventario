@@ -6950,6 +6950,7 @@ function cargarMapeosHuerfanos(){
     // pocos productos replicados en cada canal donde están publicados.
     const porFantasma = {};
     lista.forEach(h => { (porFantasma[h.apunta_a] = porFantasma[h.apunta_a] || []).push(h); });
+    _huerfanosPorFantasma = porFantasma;
     const fantasmas = Object.keys(porFantasma).sort();
 
     document.getElementById('huerfanosTitulo').textContent =
@@ -6967,6 +6968,10 @@ function cargarMapeosHuerfanos(){
           <code style="font-family:'DM Mono',monospace;font-size:12px;font-weight:600;color:#A32D2D;">${f}</code>
           <span style="font-size:11px;color:#7A6340;">no existe · ${filas.length} publicación${filas.length>1?'es':''}</span>
           ${sug ? `<span style="font-size:11px;color:#1D9E75;">→ parece ser <b>${sug.sugerencia}</b>${sug.sugerencia_nombre?' ('+sug.sugerencia_nombre+')':''}</span>` : ''}
+          <button onclick="borrarGrupoHuerfano('${f}')" title="Borra las ${filas.length} publicaciones que apuntan a ${f}"
+                  style="margin-left:auto;padding:4px 10px;border:1px solid #E24B4A;background:#FEF2F2;color:#A32D2D;border-radius:6px;font-size:11px;cursor:pointer;font-weight:600;">
+            Borrar ${filas.length === 1 ? 'el mapeo' : 'los ' + filas.length}
+          </button>
         </div>`;
       filas.forEach(h => {
         const bg = colores[h.canal] || 'var(--bg2)';
@@ -6986,6 +6991,42 @@ function cargarMapeosHuerfanos(){
     document.getElementById('listaHuerfanos').innerHTML = html;
     card.style.display = '';
   }).catch(e => { console.error('[huerfanos]', e); });
+}
+
+let _huerfanosPorFantasma = {};
+
+function borrarGrupoHuerfano(fantasma){
+  const filas = _huerfanosPorFantasma[fantasma] || [];
+  if(!filas.length) return;
+  const canales = filas.map(f => f.canal).join(', ');
+  if(!confirm('¿Borrar las ' + filas.length + ' publicaciones que apuntan a ' + fantasma + '?
+
+' +
+              'Canales: ' + canales + '
+
+' +
+              'Ojo: esto NO baja las publicaciones del marketplace. Si el producto está ' +
+              'descontinuado, también hay que despublicarlo en cada canal, o la venta va a ' +
+              'seguir entrando.')) return;
+
+  // Uno por uno a propósito: cada borrado deja su registro en la auditoría, y si
+  // alguno falla se sabe cuál en vez de perder el lote entero.
+  Promise.all(filas.map(f =>
+    fetch('/sku_mapeo_canal/eliminar', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({mapeo_id: f.mapeo_id})
+    }).then(r=>r.json()).then(d => ({sku: f.sku_canal, canal: f.canal, ok: !!d.ok}))
+      .catch(() => ({sku: f.sku_canal, canal: f.canal, ok: false}))
+  )).then(res => {
+    const fallaron = res.filter(r => !r.ok);
+    if(fallaron.length){
+      toast(fallaron.length + ' de ' + res.length + ' no se pudieron borrar: ' +
+            fallaron.map(r => r.canal).join(', '), 'error');
+    } else {
+      toast('Borrados ' + res.length + ' mapeos de ' + fantasma);
+    }
+    cargarSkuMapeo();
+  });
 }
 
 function reasignarHuerfano(mapeoId){
