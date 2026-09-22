@@ -29320,7 +29320,30 @@ def admin_walmart_diagnostico_wfs():
               "ya_procesadas": 0, "sku_sin_mapeo": 0, "sku_inexistente": 0,
               "listas_para_descontar": 0}
 
-    for o in ordenes[:limite]:
+    # obtener_ordenes_walmart recorre primero TODAS las SellerFulfilled y despues
+    # las WFSFulfilled, y las agrega en ese orden. Tomar las primeras N del arreglo
+    # devolvia puras Seller por construccion y hacia parecer que no habia ventas
+    # Full. El conteo va sobre TODAS, y el detalle prioriza las WFS, que son las
+    # que se estan revisando.
+    def _es_wfs(orden):
+        try:
+            return detectar_fulfillment_walmart(orden)
+        except Exception:
+            return False
+
+    wfs_primero = [o for o in ordenes if _es_wfs(o)]
+    resto = [o for o in ordenes if not _es_wfs(o)]
+    muestra = (wfs_primero + resto)[:limite]
+
+    for o in ordenes:
+        if _es_wfs(o):
+            conteo["wfs"] += 1
+        else:
+            conteo["seller"] += 1
+        if not o.get("shipNodeType"):
+            conteo["sin_shipnodetype"] += 1
+
+    for o in muestra:
         poid = str(o.get("purchaseOrderId", ""))
         coid = str(o.get("customerOrderId", poid))
         snt = o.get("shipNodeType")
@@ -29330,9 +29353,6 @@ def admin_walmart_diagnostico_wfs():
         except Exception:
             procesada = None
 
-        if not snt:
-            conteo["sin_shipnodetype"] += 1
-        conteo["wfs" if es_wfs else "seller"] += 1
         if procesada:
             conteo["ya_procesadas"] += 1
 
@@ -29382,8 +29402,9 @@ def admin_walmart_diagnostico_wfs():
 
     # Lectura en palabras, para no interpretar el JSON a mano
     lectura = []
-    lectura.append("Se revisaron %d ordenes de los ultimos %d dias (de %d traidas)."
-                   % (len(filas), dias, len(ordenes)))
+    lectura.append("Se trajeron %d ordenes de los ultimos %d dias. El conteo es sobre "
+                   "todas; el detalle muestra %d, priorizando las WFS."
+                   % (len(ordenes), dias, len(filas)))
     lectura.append("WFS: %d · Seller: %d" % (conteo["wfs"], conteo["seller"]))
     if conteo["sin_shipnodetype"]:
         lectura.append("HAY %d ordenes SIN shipNodeType: obtener_ordenes_walmart no lo "
@@ -29395,7 +29416,7 @@ def admin_walmart_diagnostico_wfs():
     if conteo["sku_inexistente"]:
         lectura.append("HAY %d lineas cuyo SKU no existe como producto: el sync las "
                        "saltea sin descontar nada." % conteo["sku_inexistente"])
-    if conteo["ya_procesadas"] == len(filas) and filas:
+    if conteo["ya_procesadas"] == len(filas) and filas and conteo["wfs"] == 0:
         lectura.append("TODAS las ordenes figuran como ya procesadas: si el stock no se "
                        "movio, el descuento fallo en su momento y no se va a reintentar.")
     if conteo["wfs"] == 0 and filas:
