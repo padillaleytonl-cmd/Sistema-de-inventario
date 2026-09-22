@@ -4,11 +4,45 @@ Lo que quedó pendiente a propósito, con el motivo. No es una lista de deseos:
 cada punto salió de algo que se encontró trabajando, y está acá para que no se
 pierda ni se rehaga desde cero.
 
-Última actualización: 21-09-2026
+Última actualización: 22-09-2026
 
 ---
 
-## 1. Precios de Walmart — hay que decidir antes de codificar
+## 1. Despublicar los productos descontinuados — cuesta plata cada día
+
+**Es lo único de esta lista que pierde dinero mientras no se haga.**
+
+Hay cinco productos descontinuados que siguen publicados y a la venta en los seis
+marketplaces. Borrar sus mapeos en Lusync limpia el dato, pero **no baja la
+publicación**: la orden sigue entrando y no hay con qué despacharla.
+
+| Producto (código en Lusync) | Publicado en |
+|---|---|
+| `SDCMCC001` | falabella, mercadolibre ×2, paris, ripley, walmart, web |
+| `SDCTUA001` | falabella, mercadolibre, paris, walmart, web |
+| `SDCTURS001` | falabella, paris, walmart, web |
+| `SDCTUNA001` | falabella, paris, walmart, web |
+| `CCBBN001` | falabella, mercadolibre, paris |
+
+Hay que despublicarlos en el panel de cada marketplace, uno por uno. No hay
+atajo desde Lusync: la API de stock permite mandar 0, pero una publicación en
+cero sigue visible y arrastra la reputación del vendedor.
+
+**Cómo se llegó acá:** estos mapeos apuntaban a códigos de producto que no
+existen en el inventario, probablemente por una recodificación vieja que no
+limpió las publicaciones. El síntoma era mudo — la venta entra, el sync no
+encuentra el producto, saltea la línea y marca la orden como procesada. Pasó de
+verdad con la orden P111807327 de Walmart.
+
+**Pendiente aparte, de la misma familia:** la Evolution en menta, gris,
+dinosaurios y rosado NO está descontinuada, y sus mapeos también están rotos
+(`SCPEG001`, `SCPED001`, `SCPEM001`, `SCPEV001`). Esos hay que reasignarlos al
+SKU correcto, no borrarlos. Y no encontré ninguna Evolution Menta en el
+inventario: si existe como producto en los canales, falta crearla en Lusync.
+
+---
+
+## 2. Precios de Walmart — hay que decidir antes de codificar
 
 **Estado hoy:** el precio solo se sincroniza si alguien aprieta el botón
 (`POST /walmart/sync_precios`). No hay job automático, a diferencia del stock,
@@ -35,7 +69,7 @@ una vez y aplicarlo parejo.
 
 ---
 
-## 2. Migrar los colores a tokens
+## 3. Migrar los colores a tokens
 
 **Estado hoy:** más de 2.200 colores escritos a mano.
 
@@ -48,11 +82,11 @@ Un `#6b7280` dentro de un `style=` no responde a ningún tema. Mientras esos
 2.200 sigan ahí, no se puede cambiar el aspecto ni ofrecer temas por tenant, y
 el HTML de `app.py` es el caso duro: 889 colores y 9 tokens.
 
-**Esto habilita el punto 3.** Es el trabajo aburrido que hay que hacer primero.
+**Esto habilita el punto 4.** Es el trabajo aburrido que hay que hacer primero.
 
 ---
 
-## 3. Rediseño del panel
+## 4. Rediseño del panel
 
 Propuesta visual hecha y aprobada para revisión, **pendiente de decisión**:
 cromo desaturado con la saturación reservada para los estados, filas regladas en
@@ -70,7 +104,7 @@ haga:
 
 ---
 
-## 4. Deuda de facturación que se dejó a propósito
+## 5. Deuda de facturación que se dejó a propósito
 
 Se encontró auditando el módulo DTE y no se tocó para no mezclar cambios con la
 investigación de las boletas:
@@ -91,7 +125,7 @@ investigación de las boletas:
 
 ---
 
-## 5. Operativos, no de código
+## 6. Operativos, no de código
 
 - **`LUSYNC_FERNET_KEY` en Render.** Sin ella los certificados `.pfx` no se
   pueden desencriptar. Guardar copia en el gestor de contraseñas.
@@ -110,7 +144,7 @@ investigación de las boletas:
 
 ---
 
-## 6. Probado a medias
+## 7. Probado a medias
 
 Cambios que se hicieron y no se pudieron verificar corriendo el sistema, porque
 esta máquina no tiene las dependencias instaladas. Conviene mirarlos en el
