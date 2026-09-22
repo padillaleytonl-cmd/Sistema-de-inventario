@@ -29952,7 +29952,16 @@ def admin_walmart_reparar_full_central():
                             sincronizar_stock_a_bodega_central)
 
     dias = max(1, min(int(request.args.get("dias", 7)), 60))
-    aplicar = request.args.get("aplicar") == "1"
+    # Los dos casos se aplican por separado a proposito: B (desmarcar para que la
+    # venta quede registrada) no toca ningun stock, asi que se puede correr sin
+    # haber decidido todavia que hacer con el stock de central.
+    #   &aplicar=a  solo devolver el stock mal descontado
+    #   &aplicar=b  solo desmarcar las que quedaron sin venta
+    #   &aplicar=1  las dos
+    _ap = (request.args.get("aplicar") or "").strip().lower()
+    aplicar_a = _ap in ("1", "a")
+    aplicar_b = _ap in ("1", "b")
+    aplicar = aplicar_a or aplicar_b
 
     try:
         ordenes = obtener_ordenes_walmart(dias=dias)
@@ -30064,7 +30073,7 @@ def admin_walmart_reparar_full_central():
         conn = get_conn()
         try:
             # ── A. devolver a central lo que nunca debio salir ──────────────
-            for fila in descuentos_indebidos:
+            for fila in (descuentos_indebidos if aplicar_a else []):
                 sku = fila["sku"]
                 p = productos.get(sku)
                 if not p:
@@ -30097,7 +30106,7 @@ def admin_walmart_reparar_full_central():
                     errores.append("%s: %s" % (sku, str(e)[:200]))
 
             # ── B. desmarcar para que el sync corregido las registre ────────
-            for fila in marcadas_sin_venta:
+            for fila in (marcadas_sin_venta if aplicar_b else []):
                 if not fila["resoluble"]:
                     errores.append("%s: no se desmarca, su SKU no resuelve "
                                    "(se reprocesaria y volveria a quedar vacia)" % fila["orden"])
@@ -30141,9 +30150,9 @@ def admin_walmart_reparar_full_central():
         lectura.append("No hay nada que reparar en esta ventana. Si faltan ordenes mas "
                        "viejas, repetir con un &dias mayor (hasta 60).")
     elif not aplicar:
-        lectura.append("Esto es solo el informe. Repetir la misma URL con &aplicar=1 "
-                       "para devolver el stock, republicarlo a los marketplaces y "
-                       "desmarcar las del caso B.")
+        lectura.append("Esto es solo el informe. &aplicar=a devuelve el stock y lo "
+                       "republica; &aplicar=b solo desmarca las del caso B, que no "
+                       "toca ningun stock; &aplicar=1 hace las dos.")
     else:
         lectura.append("Aplicado: %d movimientos corregidos, %d SKU republicados, "
                        "%d ordenes desmarcadas. Las desmarcadas entran en el proximo "
