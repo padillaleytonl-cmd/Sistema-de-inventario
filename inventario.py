@@ -2774,39 +2774,27 @@ def ajustar_stock_dev(sku, cantidad, dev_id, motivo_codigo="reintegro_buen_estad
 
 
 def detectar_fulfillment_meli(orden_data):
-    """Detecta si una orden MercadoLibre es Full o Seller envía.
-    AUTORITATIVO: consulta /shipments/{id} porque la orden no trae logistic_type."""
+    """Detecta si una orden MercadoLibre es Full o Seller envia.
+
+    Delega en bodegas_logic, que es la copia que se mantiene. Habia DOS versiones
+    de esta funcion con logica distinta, y la de aqui era la que usaban las
+    cancelaciones del scheduler: justo la decision mas delicada, porque elige a
+    que bodega vuelve el stock. Arreglar una sola dejaba el bug vivo en la otra.
+
+    El cambio concreto que se arrastraba aqui: esta version daba Full si
+    orden.fulfilled era true. En MercadoLibre ese campo significa "orden
+    completada", no "Fulfillment", y se pone en true unos dias despues de la
+    venta tambien en las Flex que despachamos nosotros. Al vender no molestaba
+    —viene vacio— pero al cancelar una venta vieja reponia MELI_FULL en vez de
+    central. Medido el 22-09-2026: 7 de 38 ventas de la semana tenian
+    fulfilled=true con logistic_type self_service o xd_drop_off.
+    """
     try:
-        # Path 1: campo directo (raro pero posible)
-        if orden_data.get("fulfilled") is True:
-            return True
-
-        shipping = orden_data.get("shipping", {}) or {}
-        logistic_type = (shipping.get("logistic_type") or "").lower()
-        if logistic_type == "fulfillment":
-            return True
-
-        # Path 2: tags
-        tags = orden_data.get("tags", []) or []
-        if "fulfillment" in tags or "fbm" in tags:
-            return True
-
-        # Path 3 (AUTORITATIVO): consultar /shipments/{id}
-        shipping_id = shipping.get("id")
-        if shipping_id:
-            try:
-                from mercadolibre import meli_headers, MELI_API_URL
-                import requests as _req
-                res = _req.get(f"{MELI_API_URL}/shipments/{shipping_id}",
-                               headers=meli_headers(), timeout=10)
-                if res.status_code == 200:
-                    ship = res.json()
-                    if (ship.get("logistic_type") or "").lower() == "fulfillment":
-                        return True
-            except Exception as e:
-                print(f"[inventario] No se pudo consultar shipment {shipping_id}: {e}")
+        from bodegas_logic import detectar_fulfillment_meli as _detectar
+    except Exception as e:
+        print(f"[inventario] No se pudo cargar el detector de Full: {e}")
         return False
-    except: return False
+    return _detectar(orden_data)
 
 
 def detectar_fulfillment_paris(orden_data):

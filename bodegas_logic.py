@@ -34,10 +34,20 @@ def detectar_fulfillment_meli(orden_data):
     Para saber si es Full, hay que consultar /shipments/{id}.
 
     Campos posibles donde puede venir 'fulfillment':
-      1. orden.fulfilled = true → Indicador directo (raro)
-      2. orden.shipping.logistic_type = 'fulfillment' (no aparece, viene null)
-      3. orden.tags incluye 'fulfillment' / 'fbm'
-      4. orden.shipping.id → consultar /shipments/{id}.logistic_type → AUTORITATIVO
+      1. orden.shipping.logistic_type = 'fulfillment' (no aparece, viene null)
+      2. orden.tags incluye 'fulfillment' / 'fbm'
+      3. orden.shipping.id → consultar /shipments/{id}.logistic_type → AUTORITATIVO
+
+    NO se usa orden.fulfilled. Es un falso amigo: en MercadoLibre significa
+    "orden completada", no "Fulfillment". Se pone en true unos dias despues de
+    la venta, tambien en ventas Flex que despachamos nosotros. Medido el
+    22-09-2026 sobre 38 ventas de 7 dias: 7 tenian fulfilled=true con
+    logistic_type self_service o xd_drop_off.
+
+    Al momento de la venta el campo viene vacio, asi que el sync normal decidia
+    bien. El daño estaba en todo lo que vuelve a mirar una orden VIEJA: las
+    cancelaciones, /mercadolibre/reclasificar_bodegas y los resync por rango.
+    Ahi una venta Flex cancelada reponia MELI_FULL en vez de central.
 
     Valores logistic_type:
       'fulfillment'    → Full (MELI guarda y despacha)
@@ -47,22 +57,18 @@ def detectar_fulfillment_meli(orden_data):
       'xd_drop_off'    → variantes
     """
     try:
-        # Path 1: campo fulfilled de la orden
-        if orden_data.get("fulfilled") is True:
-            return True
-
-        # Path 2: shipping a nivel de orden (suele venir null pero por si acaso)
+        # Path 1: shipping a nivel de orden (suele venir null pero por si acaso)
         shipping = orden_data.get("shipping", {}) or {}
         logistic_type = (shipping.get("logistic_type") or "").lower()
         if logistic_type == "fulfillment":
             return True
 
-        # Path 3: tags
+        # Path 2: tags
         tags = orden_data.get("tags", []) or []
         if "fulfillment" in tags or "fbm" in tags:
             return True
 
-        # Path 4 (AUTORITATIVO): consultar /shipments/{id}
+        # Path 3 (AUTORITATIVO): consultar /shipments/{id}
         shipping_id = shipping.get("id")
         if shipping_id:
             try:
