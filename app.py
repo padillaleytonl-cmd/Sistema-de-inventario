@@ -23418,7 +23418,8 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
         solo first_name era la razon por la que el reporte mostraba el apodo de
         la cuenta ("SEPA5742141") en la columna Nombre.
         """
-        datos = {"nombre": "", "apellido": "", "rut": "", "email": "", "telefono": ""}
+        datos = {"nombre": "", "apellido": "", "rut": "", "email": "", "telefono": "",
+                 "calle": "", "numero": "", "comuna": ""}
         if not isinstance(bd, dict):
             return datos
 
@@ -23456,6 +23457,14 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                 datos["email"] = valor
             elif tipo in ("PHONE", "PHONE_NUMBER") and not datos["telefono"]:
                 datos["telefono"] = valor
+            # La direccion de facturacion sirve de respaldo cuando el envio no
+            # trae una (retiro en punto, por ejemplo)
+            elif tipo == "STREET_NAME":
+                datos["calle"] = valor
+            elif tipo == "STREET_NUMBER":
+                datos["numero"] = valor
+            elif tipo == "CITY_NAME":
+                datos["comuna"] = valor
         return datos
 
     # Nombres legibles de los tipos de logistica de MercadoLibre. En el reporte
@@ -23476,10 +23485,10 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
         segun la version de la API; antes se leia solo la segunda y las columnas
         de direccion y comuna salian vacias en todas las filas.
 
-        Devuelve (direccion, comuna, tracking, metodo_envio, logistic_type).
+        Devuelve (direccion, comuna, tracking, metodo_envio, logistic_type, telefono).
         """
         if not isinstance(sd, dict):
-            return "", "", "", "", ""
+            return "", "", "", "", "", ""
 
         addr = sd.get("receiver_address")
         if not isinstance(addr, dict) or not addr:
@@ -23497,11 +23506,18 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
         comuna = _texto_plano(ciudad) or _texto_plano(addr.get("municipality")) or ""
 
         tracking = sd.get("tracking_number") or ""
+
+        # MercadoLibre a veces entrega el telefono del comprador y a veces lo
+        # enmascara con "XXXXXXX". Un dato enmascarado es peor que vacio: parece
+        # un telefono y no lo es.
+        telefono = str(addr.get("receiver_phone") or "").strip()
+        if telefono and set(telefono.upper()) <= {"X"}:
+            telefono = ""
         logistic = (sd.get("logistic_type") or
                     ((sd.get("logistic") or {}).get("type") if isinstance(sd.get("logistic"), dict) else "") or "")
         logistic = str(logistic).lower()
         metodo = _LOGISTICA_ML.get(logistic, logistic or sd.get("shipping_mode") or "")
-        return direccion, comuna, tracking, metodo, logistic
+        return direccion, comuna, tracking, metodo, logistic, telefono
 
     def _envio_por_unidad(total, unidades):
         """Reparte el envio de la orden entre sus unidades, en pesos enteros.
@@ -23634,7 +23650,13 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                     nombre = f"(apodo) {apodo}" if apodo else ""
 
                 sd = envios.get(envios_id.get(order_id)) or {}
-                direccion, comuna, tracking, metodo_envio, logistic = _datos_envio_meli(sd)
+                direccion, comuna, tracking, metodo_envio, logistic, tel_envio = _datos_envio_meli(sd)
+                telefono = telefono or tel_envio
+                if not direccion:
+                    _c, _n = datos.get("calle") or "", datos.get("numero") or ""
+                    direccion = f"{_c}{' ' + _n if _n else ''}".strip()
+                if not comuna:
+                    comuna = datos.get("comuna") or ""
 
                 # El dato autoritativo de Full es el logistic_type del envio, que ya
                 # tenemos aca. detectar_fulfillment_meli ademas mira orden.fulfilled,
