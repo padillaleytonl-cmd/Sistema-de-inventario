@@ -215,22 +215,48 @@ _CONTEO_FISICO_20260923 = {
     "SCPER001":   20,    # Silla de Comer Plegable Evolution · Rosado
     "S4MT3001":   50,    # Set 4 Tutos Franela · Diseno 3
     "MAD006":     50,    # Manta Frazada · Gris Claro
+
+    # Sin stock, esperando reposicion. Van en cero a proposito: lo que les
+    # faltaba era la FILA en stock_bodega, no el numero. Sin fila, cualquier
+    # recalculo los dejaba en cero igual, pero por accidente y sin registro.
+    "CBRMLRM001":  0,    # Coche Reversible Maleta LuxRide · Mickey
+    "CBRMLRN001":  0,    # Coche Reversible Maleta LuxRide · Negro
+    "CBRMSCG001":  0,    # Coche Reversible Maleta SunCover · Gris
+    "CBSNCPB001":  0,    # Coche Silla Nido Royal Kidilo · Beige
+    "CBSNCPN001":  0,    # Coche Silla Nido Royal Kidilo · Negro
+    "CDBRSNG001":  0,    # Coche Asiento Reversible · Marco Negro Toldo Gris
+    "CMB001":      0,    # Mordedor Juguete Sensorial Cangrejo
+    "D04":         0,    # Banera Plegable con Malla · Gris
+    "D05":         0,    # Banera Plegable con Malla · Rosa
+    "D06":         0,    # Banera Plegable con Malla · Celeste
+    "E10":         0,    # Banera Plegable c/Termometro · Amarillo-Azul
+    "E11":         0,    # Banera Plegable c/Termometro · Blanco-Rojo
+    "E12":         0,    # Banera Plegable c/Termometro · Blanco-Azul
+    "MDBP001":     0,    # Mordedor de Silicona Banana
+    "PSB001":      0,    # Pelota Sonajero Sensorial
+    "SCME001":     0,    # Set Sonajeros 2 Calcetines y 2 Munequeras
+    "STPCBB001":   0,    # Silla Terraza Capri · Blanco/Beige
+    "STPCNB001":   0,    # Silla Terraza Capri · Negro/Beige
 }
 
 
 @app.route("/admin/lusync/stock/fijar-conteo")
 def admin_stock_fijar_conteo():
-    """Deja el stock de cada SKU en el conteo fisico informado.
+    """Deja CENTRAL en el conteo fisico informado.
 
-    El total de un producto es la suma de sus bodegas, asi que para que de el
-    numero contado se ajusta CENTRAL:
+        CENTRAL = lo contado
 
-        CENTRAL = contado - (lo que haya en las demas bodegas)
+    Sin restarle nada. El numero contado es lo que hay en la bodega propia, y
+    CENTRAL es exactamente eso. Restarle lo que esta en las bodegas de
+    fulfillment seria un error de fondo: esas unidades estan en Walmart, en
+    MercadoLibre o en Paris, no en el galpon, y con ellas no se puede despachar
+    un pedido de dropshipping ni una venta propia.
 
-    Las bodegas de fulfillment NO se tocan: esas unidades estan fisicamente en
-    Walmart, MercadoLibre o Paris, y el conteo es de la bodega propia. Si las
-    otras bodegas ya suman mas que el total contado, no se inventa nada: esa
-    fila se reporta como conflicto y se deja sin tocar.
+    Por eso tampoco se tocan las bodegas de fulfillment: su numero lo pone el
+    marketplace, no el conteo.
+
+    El total del producto (productos.stock) queda en contado + fulfillment, que
+    es lo que de verdad hay entre todas las bodegas.
 
     Por defecto SOLO INFORMA. Para aplicar: &aplicar=1
     Para ademas publicar el stock nuevo a los marketplaces: &publicar=1
@@ -263,27 +289,21 @@ def admin_stock_fijar_conteo():
     finally:
         release_conn(conn)
 
-    plan, conflictos, aplicados, errores = [], [], [], []
+    plan, aplicados, errores = [], [], []
     for sku, contado in sorted(_CONTEO_FISICO_20260923.items()):
         en_otras = otras.get(sku, 0)
         central_actual = get_stock_bodega(sku, "CENTRAL") or 0
-        central_nuevo = contado - en_otras
-        fila = {
+        # El conteo ES central. No se le resta el fulfillment.
+        central_nuevo = contado
+        plan.append({
             "sku": sku, "nombre": nombres.get(sku, ""),
             "contado": contado,
-            "en_otras_bodegas": en_otras,
             "central_actual": central_actual,
             "central_nuevo": central_nuevo,
             "delta": central_nuevo - central_actual,
-        }
-        if central_nuevo < 0:
-            fila["problema"] = ("Las bodegas de fulfillment ya tienen %d unidades, "
-                                "mas que las %d contadas. No se toca: hay que revisar "
-                                "si esas unidades siguen en el marketplace."
-                                % (en_otras, contado))
-            conflictos.append(fila)
-            continue
-        plan.append(fila)
+            "en_fulfillment": en_otras,
+            "total_resultante": contado + en_otras,
+        })
 
     if aplicar:
         for fila in plan:
@@ -325,9 +345,10 @@ def admin_stock_fijar_conteo():
             "%s %+d" % (f["sku"], f["delta"]) for f in grandes))
     else:
         lectura.append("Ninguno cambia: el stock ya coincide con el conteo.")
-    if conflictos:
-        lectura.append("%d con conflicto: las bodegas de fulfillment solas ya superan "
-                       "el total contado. Esos no se tocan." % len(conflictos))
+    con_full = [f for f in plan if f["en_fulfillment"] > 0]
+    if con_full:
+        lectura.append("%d ademas tienen unidades en fulfillment; esas no se tocan y "
+                       "se suman aparte al total." % len(con_full))
     if not aplicar:
         lectura.append("Esto es solo el plan. Agregar &aplicar=1 para dejarlo escrito, "
                        "y &publicar=1 si ademas hay que mandar el numero nuevo a los "
@@ -339,7 +360,7 @@ def admin_stock_fijar_conteo():
             " NO se publico: los marketplaces siguen con el numero viejo."))
 
     return jsonify({"ok": True, "aplicado": aplicar, "publicado": publicar and aplicar,
-                    "lectura": lectura, "plan": plan, "conflictos": conflictos,
+                    "lectura": lectura, "plan": plan,
                     "aplicados": aplicados, "errores": errores})
 
 
