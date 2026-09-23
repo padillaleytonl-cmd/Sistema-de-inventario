@@ -186,6 +186,163 @@ def ver_sync_log():
     })
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# CONTEO FISICO — 23-09-2026
+# ════════════════════════════════════════════════════════════════════════════
+# Estos numeros no salieron de ningun sistema: los conto una persona en la
+# bodega. Van versionados a proposito, porque dentro de seis meses nadie va a
+# recordar por que un producto paso de 93 a 10 y el historial de movimientos
+# solo muestra el ajuste, no de donde vino la cifra.
+#
+# Los 18 productos sin fila en stock_bodega NO estan aca: quedaron pendientes
+# de contar. Mientras no tengan fila, el guard de _recalcular_stock_total los
+# protege de quedar en cero.
+_CONTEO_FISICO_20260923 = {
+    # Estaban en desacuerdo por el descuento de las ventas Web
+    "CBTSECN001": 10,    # Coche Travel System E-Crib Negro + Silla y Base
+    "CCJDG001":   30,    # Corral de Juegos 1.2 x 1.8 m Gris
+    "CDBRWA001":  80,    # Coche Maleta Reversible Walky · Animales
+    "CTSTN001":    0,    # Coche Silla Nido Royal Kidilo · Negro
+    "EDLM001":    10,    # Extractor de Leche Manual
+    "GPPDV001":  200,    # Gimnasio Pedal Piano Dinosaurio Verde
+    "MM3NB001":   20,    # Carrito Organizador Circular 3 Niveles Blanco
+    "SDAS4AA001": 20,    # Set Alimentacion Silicona 4 Pzs · Amarillo
+    "SDAS4AC001": 20,    # Set Alimentacion Silicona 4 Pzs · Celeste
+    "SMPBSG001":  70,    # Silla Mecedora Swing · Gris
+    "STCN001":    15,    # Soporte Tablet y Telefono en Auto
+    "TUVCBUN001":190,    # Toldo Coches de Bebe UV Universal Negro
+    # En desacuerdo por otras causas
+    "SCPER001":   20,    # Silla de Comer Plegable Evolution · Rosado
+    "S4MT3001":   50,    # Set 4 Tutos Franela · Diseno 3
+    "MAD006":     50,    # Manta Frazada · Gris Claro
+}
+
+
+@app.route("/admin/lusync/stock/fijar-conteo")
+def admin_stock_fijar_conteo():
+    """Deja el stock de cada SKU en el conteo fisico informado.
+
+    El total de un producto es la suma de sus bodegas, asi que para que de el
+    numero contado se ajusta CENTRAL:
+
+        CENTRAL = contado - (lo que haya en las demas bodegas)
+
+    Las bodegas de fulfillment NO se tocan: esas unidades estan fisicamente en
+    Walmart, MercadoLibre o Paris, y el conteo es de la bodega propia. Si las
+    otras bodegas ya suman mas que el total contado, no se inventa nada: esa
+    fila se reporta como conflicto y se deja sin tocar.
+
+    Por defecto SOLO INFORMA. Para aplicar: &aplicar=1
+    Para ademas publicar el stock nuevo a los marketplaces: &publicar=1
+
+    Uso: /admin/lusync/stock/fijar-conteo
+    """
+    if not (session.get("logged") or session.get("is_lusync_admin")):
+        return jsonify({"error": "no autorizado"}), 401
+
+    from inventario import (get_conn, release_conn, get_stock_bodega,
+                            set_stock_bodega, registrar_movimiento,
+                            cargar_productos)
+
+    aplicar = request.args.get("aplicar") == "1"
+    publicar = request.args.get("publicar") == "1"
+
+    nombres = {p["sku"]: p.get("nombre", "") for p in cargar_productos()}
+
+    # Cuanto hay en bodegas que NO son CENTRAL, por SKU
+    otras = {}
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT sku, COALESCE(SUM(cantidad), 0)
+                             FROM stock_bodega
+                            WHERE sku = ANY(%s) AND bodega_codigo <> 'CENTRAL'
+                            GROUP BY sku""",
+                        (list(_CONTEO_FISICO_20260923.keys()),))
+            otras = {r[0]: int(r[1] or 0) for r in cur.fetchall()}
+    finally:
+        release_conn(conn)
+
+    plan, conflictos, aplicados, errores = [], [], [], []
+    for sku, contado in sorted(_CONTEO_FISICO_20260923.items()):
+        en_otras = otras.get(sku, 0)
+        central_actual = get_stock_bodega(sku, "CENTRAL") or 0
+        central_nuevo = contado - en_otras
+        fila = {
+            "sku": sku, "nombre": nombres.get(sku, ""),
+            "contado": contado,
+            "en_otras_bodegas": en_otras,
+            "central_actual": central_actual,
+            "central_nuevo": central_nuevo,
+            "delta": central_nuevo - central_actual,
+        }
+        if central_nuevo < 0:
+            fila["problema"] = ("Las bodegas de fulfillment ya tienen %d unidades, "
+                                "mas que las %d contadas. No se toca: hay que revisar "
+                                "si esas unidades siguen en el marketplace."
+                                % (en_otras, contado))
+            conflictos.append(fila)
+            continue
+        plan.append(fila)
+
+    if aplicar:
+        for fila in plan:
+            if fila["delta"] == 0:
+                continue
+            try:
+                set_stock_bodega(fila["sku"], "CENTRAL", fila["central_nuevo"])
+                registrar_movimiento(
+                    "entrada" if fila["delta"] > 0 else "salida",
+                    fila["sku"], fila["nombre"] or fila["sku"],
+                    abs(fila["delta"]),
+                    "Conteo fisico 23-09-2026 | CENTRAL %d -> %d"
+                    % (fila["central_actual"], fila["central_nuevo"]),
+                    usuario=session.get("usuario", "Sistema"),
+                    canal="Manual",
+                )
+                aplicados.append(fila)
+            except Exception as e:
+                errores.append("%s: %s" % (fila["sku"], str(e)[:200]))
+
+        if publicar:
+            for fila in aplicados:
+                try:
+                    sincronizar_stock_marketplaces(
+                        fila["sku"], fila["contado"], contexto="conteo_fisico")
+                except Exception as e:
+                    errores.append("publicar %s: %s" % (fila["sku"], str(e)[:200]))
+
+    lectura = []
+    lectura.append("%d SKU en el conteo." % len(_CONTEO_FISICO_20260923))
+    cambian = [f for f in plan if f["delta"] != 0]
+    if cambian:
+        subidas = [f for f in cambian if f["delta"] > 0]
+        bajadas = [f for f in cambian if f["delta"] < 0]
+        lectura.append("%d cambian: %d suben, %d bajan."
+                       % (len(cambian), len(subidas), len(bajadas)))
+        grandes = sorted(cambian, key=lambda f: -abs(f["delta"]))[:5]
+        lectura.append("Los mayores: " + ", ".join(
+            "%s %+d" % (f["sku"], f["delta"]) for f in grandes))
+    else:
+        lectura.append("Ninguno cambia: el stock ya coincide con el conteo.")
+    if conflictos:
+        lectura.append("%d con conflicto: las bodegas de fulfillment solas ya superan "
+                       "el total contado. Esos no se tocan." % len(conflictos))
+    if not aplicar:
+        lectura.append("Esto es solo el plan. Agregar &aplicar=1 para dejarlo escrito, "
+                       "y &publicar=1 si ademas hay que mandar el numero nuevo a los "
+                       "marketplaces.")
+    else:
+        lectura.append("Aplicado a %d SKU.%s" % (
+            len(aplicados),
+            " Publicado a los marketplaces." if publicar else
+            " NO se publico: los marketplaces siguen con el numero viejo."))
+
+    return jsonify({"ok": True, "aplicado": aplicar, "publicado": publicar and aplicar,
+                    "lectura": lectura, "plan": plan, "conflictos": conflictos,
+                    "aplicados": aplicados, "errores": errores})
+
+
 @app.route("/admin/lusync/stock/en-cero")
 def admin_stock_en_cero():
     """Busca la huella del stock que se cae solo. SOLO LECTURA.
