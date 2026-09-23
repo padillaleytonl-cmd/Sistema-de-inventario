@@ -186,6 +186,113 @@ def ver_sync_log():
     })
 
 
+@app.route("/admin/lusync/stock/en-cero")
+def admin_stock_en_cero():
+    """Busca la huella del stock que se cae solo. SOLO LECTURA.
+
+    Lusync guarda el stock en dos lados: productos.stock (el total, legacy) y
+    stock_bodega (por bodega, el modelo actual). El primero deberia ser siempre
+    la suma del segundo. Cuando no lo es, alguien escribio de un lado sin mirar
+    el otro, y ahi es donde aparecen los ceros que nadie pidio.
+
+    Reporta tres cosas:
+      1. desacuerdos: productos.stock != SUM(stock_bodega)
+      2. en_cero_con_bodega: el producto dice 0 pero SI tiene unidades en bodega
+      3. sin_filas_de_bodega: no tiene ninguna fila en stock_bodega, asi que
+         cualquier recalculo lo habria dejado en 0 (es el caso "MICO001")
+
+    De los que estan en cero se trae ademas su ultimo movimiento, que es lo que
+    dice quien lo toco.
+
+    Uso: /admin/lusync/stock/en-cero
+    """
+    if not (session.get("logged") or session.get("is_lusync_admin")):
+        return jsonify({"error": "no autorizado"}), 401
+
+    from inventario import get_conn, release_conn
+
+    conn = get_conn()
+    salida = {"ok": True, "solo_lectura": True}
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT p.sku, p.nombre, COALESCE(p.stock, 0) AS total,
+                       COALESCE(b.suma, 0) AS suma_bodegas,
+                       COALESCE(b.filas, 0) AS filas_bodega
+                  FROM productos p
+                  LEFT JOIN (SELECT sku, SUM(cantidad) AS suma, COUNT(*) AS filas
+                               FROM stock_bodega GROUP BY sku) b ON b.sku = p.sku
+                 ORDER BY p.sku
+            """)
+            filas = cur.fetchall()
+
+            desacuerdos, en_cero_con_bodega, sin_filas = [], [], []
+            for sku, nombre, total, suma, nfilas in filas:
+                total, suma, nfilas = int(total or 0), int(suma or 0), int(nfilas or 0)
+                if nfilas == 0:
+                    sin_filas.append({"sku": sku, "nombre": nombre, "stock": total})
+                    continue
+                if total != suma:
+                    desacuerdos.append({"sku": sku, "nombre": nombre,
+                                        "productos_stock": total,
+                                        "suma_bodegas": suma,
+                                        "diferencia": total - suma})
+                if total == 0 and suma > 0:
+                    en_cero_con_bodega.append({"sku": sku, "nombre": nombre,
+                                               "suma_bodegas": suma})
+
+            # De los sospechosos, el ultimo movimiento dice quien los toco
+            sospechosos = ([d["sku"] for d in desacuerdos[:25]] +
+                           [d["sku"] for d in en_cero_con_bodega[:25]])
+            ultimos = {}
+            if sospechosos:
+                cur.execute("""
+                    SELECT DISTINCT ON (sku) sku, tipo, cantidad, motivo, canal,
+                           usuario, TO_CHAR(fecha, 'YYYY-MM-DD HH24:MI')
+                      FROM movimientos
+                     WHERE sku = ANY(%s)
+                     ORDER BY sku, fecha DESC
+                """, (sospechosos,))
+                for r in cur.fetchall():
+                    ultimos[r[0]] = {"tipo": r[1], "cantidad": r[2], "motivo": r[3],
+                                     "canal": r[4], "usuario": r[5], "fecha": r[6]}
+
+        salida["resumen"] = {
+            "productos": len(filas),
+            "desacuerdos": len(desacuerdos),
+            "en_cero_pero_con_bodega": len(en_cero_con_bodega),
+            "sin_filas_de_bodega": len(sin_filas),
+        }
+        salida["desacuerdos"] = desacuerdos[:40]
+        salida["en_cero_pero_con_bodega"] = en_cero_con_bodega[:40]
+        salida["sin_filas_de_bodega"] = sin_filas[:40]
+        salida["ultimo_movimiento"] = ultimos
+
+        lectura = []
+        lectura.append("%d productos revisados." % len(filas))
+        if desacuerdos:
+            lectura.append("%d con productos.stock distinto de la suma de sus bodegas: "
+                           "alguien escribio de un lado sin mirar el otro."
+                           % len(desacuerdos))
+        else:
+            lectura.append("Los dos almacenes de stock coinciden en todos.")
+        if en_cero_con_bodega:
+            lectura.append("%d dicen 0 pero TIENEN unidades en bodega. Esa es la huella "
+                           "exacta del stock que se cae solo." % len(en_cero_con_bodega))
+        if sin_filas:
+            lectura.append("%d no tienen ninguna fila en stock_bodega. A esos, cualquier "
+                           "recalculo los dejaba en 0 antes del guard (caso MICO001)."
+                           % len(sin_filas))
+        salida["lectura"] = lectura
+    except Exception as e:
+        import traceback
+        salida = {"ok": False, "error": str(e)[:300], "traza": traceback.format_exc()[-800:]}
+    finally:
+        release_conn(conn)
+
+    return jsonify(salida)
+
+
 @app.route("/admin/lusync/stock/trazar-ajuste")
 def trazar_ajuste_stock():
     """Simula un ajuste paso a paso mostrando el stock en cada etapa, SIN publicar.
