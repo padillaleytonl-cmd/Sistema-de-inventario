@@ -390,6 +390,23 @@ def health_check_stock_fix():
         cur.close(); cn.close()
     except Exception as e:
         info["error"] = str(e)
+
+    # Recalculos de stock que se omitieron por no ver ninguna bodega. Si esta
+    # lista tiene algo, hay lecturas quedando ciegas y ese es justamente el
+    # camino por el que un stock editado a mano se caia solo a cero.
+    try:
+        from inventario import _RECALCULOS_OMITIDOS
+        omitidos = list(_RECALCULOS_OMITIDOS)
+        info["recalculos_omitidos"] = omitidos[-20:][::-1]
+        info["recalculos_omitidos_total"] = len(omitidos)
+        info["nota_recalculo"] = (
+            "Vacio: ningun recalculo vio cero bodegas desde el ultimo reinicio."
+            if not omitidos else
+            "HAY %d recalculos que no vieron ninguna bodega. Sin el guard, esos "
+            "SKU habrian quedado en stock 0." % len(omitidos))
+    except Exception as e_r:
+        info["recalculos_omitidos"] = f"no disponible: {str(e_r)[:120]}"
+
     return jsonify(info)
 
 

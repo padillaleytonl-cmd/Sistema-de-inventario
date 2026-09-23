@@ -2357,6 +2357,9 @@ def get_stock_bodega(sku, bodega_codigo):
     return cant
 
 
+from collections import deque as _deque_recalc
+
+
 def set_stock_bodega(sku, bodega_codigo, cantidad):
     """Establece el stock de un SKU en una bodega (override)."""
     conn = get_conn(); cur = conn.cursor()
@@ -2417,13 +2420,46 @@ def ajustar_stock_bodega(sku, bodega_codigo, delta):
     return nuevo
 
 
+# Ultimos recalculos que se omitieron por no ver ninguna bodega. Se expone en
+# /admin/lusync/stock/health: si esta lista crece, hay lecturas quedando ciegas.
+_RECALCULOS_OMITIDOS = _deque_recalc(maxlen=50)
+
+
 def _recalcular_stock_total(sku):
-    """Sincroniza productos.stock = SUM(stock_bodega.cantidad) para un SKU."""
+    """Sincroniza productos.stock = SUM(stock_bodega.cantidad) para un SKU.
+
+    OJO con el caso que parece igual y no lo es: que las bodegas SUMEN cero no es
+    lo mismo que NO VER ninguna bodega. Antes esto era un solo UPDATE con
+    COALESCE(SUM(cantidad), 0), que devuelve 0 en los dos casos, asi que una
+    lectura ciega —RLS sin tenant en el hilo de un scheduler, por ejemplo— dejaba
+    el producto en 0 sin error y sin log.
+
+    Esa es la via por la que un stock editado a mano aguanta un rato y despues se
+    cae solo: la edicion escribe bien, y la siguiente venta o sync de ese SKU
+    llama aca desde otro hilo y lo pone en cero.
+
+    Ahora se cuenta primero. Sin filas visibles no se escribe nada: se deja el
+    valor que habia y se anota. Preservar un dato viejo es recuperable; pisarlo
+    con un cero no.
+    """
     conn = get_conn(); cur = conn.cursor()
     try:
-        cur.execute("""UPDATE productos SET stock = (
-            SELECT COALESCE(SUM(cantidad), 0) FROM stock_bodega WHERE sku=%s
-        ) WHERE sku=%s""", (sku, sku))
+        cur.execute("""SELECT COUNT(*), COALESCE(SUM(cantidad), 0)
+                       FROM stock_bodega WHERE sku=%s""", (sku,))
+        fila = cur.fetchone() or (0, 0)
+        filas_vistas = int(fila[0] or 0)
+        total = int(fila[1] or 0)
+
+        if filas_vistas == 0:
+            import datetime as _dt_rec
+            aviso = {"sku": sku,
+                     "cuando": _dt_rec.datetime.now().isoformat(timespec="seconds")}
+            _RECALCULOS_OMITIDOS.append(aviso)
+            print(f"[Bodegas] GUARD recalculo {sku}: no vi ninguna fila de bodega. "
+                  f"NO piso productos.stock (habria quedado en 0).")
+            return
+
+        cur.execute("UPDATE productos SET stock=%s WHERE sku=%s", (total, sku))
         conn.commit()
     except Exception as e:
         print(f"[Bodegas] _recalcular_stock_total: {e}"); conn.rollback()
