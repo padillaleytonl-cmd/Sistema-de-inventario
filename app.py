@@ -2415,21 +2415,36 @@ def _sync_woo_automatico():
                     productos = cargar_productos()
                     for p in productos:
                         if p["sku"] == sku:
-                            p["stock"] = max(0, p["stock"] - cantidad)
-                            guardar_producto(p)
-                            registrar_movimiento(
-                                "salida", p["sku"], p["nombre"], cantidad,
-                                f"Venta Web (Woo) orden {order_id}",
-                                usuario="Sistema", canal="Web", orden_id=order_id,
-                                fecha_override=fecha_compra_woo,
+                            # Este era el UNICO canal que descontaba escribiendo
+                            # productos.stock a mano, sin tocar stock_bodega. Cada
+                            # venta Web dejaba los dos almacenes en desacuerdo, y el
+                            # siguiente recalculo de ese SKU —cualquier venta de otro
+                            # canal o cualquier sync diario— pisaba productos.stock
+                            # con la suma de las bodegas: el descuento de la Web se
+                            # deshacia, y si el producto tenia sus unidades solo en
+                            # productos.stock, caia a cero.
+                            # Ahora descuenta como los otros cinco canales.
+                            from inventario import descontar_venta_inteligente as _desc_web
+                            resultado = _desc_web(
+                                sku=p["sku"],
+                                cantidad=cantidad,
+                                canal="Web",
+                                fulfillment=False,   # la Web despacha de bodega propia
+                                orden_id=order_id,
+                                motivo=f"Venta Web (Woo) orden {order_id}",
+                                usuario="Sistema",
                                 fecha_compra_marketplace=fecha_compra_woo,
                                 origen_registro="scheduler"
                             )
                             _asegurar_fecha_compra("Web", order_id, fecha_compra_woo, sku=p["sku"])
                             sincronizar_stock_marketplaces(
-                                p["sku"], p["stock"], contexto="woo_orden_bg"
+                                p["sku"], resultado.get("stock_despues", 0),
+                                contexto="woo_orden_bg"
                             )
-                            items_descontados.append(sku)
+                            # Solo se cuenta si el movimiento quedo registrado: si no,
+                            # la orden no se marca y el proximo ciclo la reintenta.
+                            if resultado.get("ok"):
+                                items_descontados.append(sku)
                             break
                 if items_descontados:
                     # Registrar primero, marcar después.
