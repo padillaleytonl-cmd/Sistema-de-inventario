@@ -23283,8 +23283,10 @@ def ventas_reporte():
         refrescar = request.args.get("refrescar") == "1"
         t0 = time.time()
         filas, del_cache = _filas_ventas(fecha_desde, fecha_hasta, canales_str, refrescar)
+        por_canal = getattr(_construir_filas_ventas, "ultimo_por_canal", None)
         return jsonify({"ok": True, "filas": filas, "total": len(filas),
                         "desde_cache": del_cache,
+                        "filas_por_canal": por_canal,
                         "segundos": round(time.time() - t0, 2)})
     except Exception as e:
         import traceback
@@ -23698,10 +23700,12 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
             # hacia atras" contados desde hoy y el filtro de abajo descartaba todo.
             dias = _dias_hacia_atras(fecha_desde, 30)
 
-            # El listado repite la misma sub-orden, una vez por linea. Antes se
-            # pedia el detalle por cada repeticion y se expandian TODOS los items
-            # en cada vuelta: 6 repeticiones x 7 items = 42 filas para una orden
-            # de 7 unidades. Se procesa cada sub-orden UNA sola vez.
+            # Se procesa cada sub-orden UNA sola vez. Es una guarda barata por si
+            # el listado repite una entrada, no el arreglo de un bug: se verifico
+            # contra la API que las ordenes grandes son reales. La 3141844410
+            # trae 40 items en shipments[0].items, cada uno con su propio id y sin
+            # campo quantity —son 40 unidades de 6 SKU distintos, una compra de
+            # revendedor—, asi que sus 40 filas en el reporte estan bien.
             ordenes_pa = {}
             for o in obtener_ordenes_paris_todas(dias=dias):
                 oid = str(o.get("subOrderNumber") or o.get("orderNumber") or "")
@@ -24252,6 +24256,17 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
 
     # Ordenar por fecha desc
     filas.sort(key=lambda x: x.get("fecha",""), reverse=True)
+
+    # Cada bloque atrapa sus propias excepciones y sigue, para que la caida de un
+    # marketplace no se lleve el reporte entero. El efecto colateral es que un
+    # canal que falla se ve igual que un canal sin ventas: cero filas y ni una
+    # senal. Se deja el conteo por canal a la vista de quien lo consulta.
+    por_canal = {}
+    for f in filas:
+        por_canal[f["canal"]] = por_canal.get(f["canal"], 0) + 1
+    print(f"[Reporte ventas] filas por canal: {por_canal}")
+    _construir_filas_ventas.ultimo_por_canal = por_canal
+
     return filas
 
 
