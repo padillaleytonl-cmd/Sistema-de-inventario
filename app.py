@@ -1539,26 +1539,12 @@ def _sync_walmart_automatico():
                             print(f"[Scheduler] SKU '{sku_lusync}' no encontrado en inventario")
                             continue
 
-                        # Parsear fecha real de compra (Walmart: orderDate puede ser epoch ms o ISO)
-                        fecha_compra_wm = None
-                        try:
-                            date_raw = (o.get("orderDate") or o.get("createdAt") or
-                                        o.get("orderPlacedTime") or o.get("orderTimestamp") or "")
-                            if date_raw:
-                                # Walmart suele devolver epoch en milisegundos (ej: 1714588800000)
-                                if isinstance(date_raw, (int, float)) or (isinstance(date_raw, str) and str(date_raw).isdigit()):
-                                    epoch_ms = int(date_raw)
-                                    fecha_compra_wm = datetime.fromtimestamp(
-                                        epoch_ms / 1000 if epoch_ms > 9999999999 else epoch_ms
-                                    )
-                                else:
-                                    # ISO string
-                                    fecha_compra_wm = datetime.fromisoformat(
-                                        str(date_raw).replace("Z", "+00:00")
-                                    )
-                        except Exception as _e_wm:
-                            print(f"[Scheduler Walmart] no parsea fecha '{date_raw}': {_e_wm}")
-                            fecha_compra_wm = None
+                        # Fecha real de compra. Walmart la manda como epoch en ms
+                        # desde servidores de EEUU; el helper la trae a hora de
+                        # Chile. Leerla sin zona la dejaba 3 horas adelantada.
+                        fecha_compra_wm = _fecha_compra_walmart(
+                            o.get("orderDate") or o.get("createdAt") or
+                            o.get("orderPlacedTime") or o.get("orderTimestamp"))
 
                         # WFS: la venta se REGISTRA pero no descuenta. El stock de
                         # WALMART_FBM es el que reporta Walmart y el job diario lo
@@ -12664,14 +12650,7 @@ def admin_rellenar_fechas_compra():
                         ds = (order_obj.get("orderDate") or order_obj.get("orderPlacedTime")
                               or order_obj.get("orderTimestamp"))
                         if ds:
-                            try:
-                                if isinstance(ds, (int, float)) or (isinstance(ds, str) and ds.isdigit()):
-                                    epoch_ms = int(ds)
-                                    fecha_compra = _dt.fromtimestamp(epoch_ms / 1000 if epoch_ms > 9999999999 else epoch_ms)
-                                else:
-                                    fecha_compra = _dt.fromisoformat(str(ds).replace("Z","+00:00"))
-                            except Exception as _e:
-                                print(f"[rellenar Walmart] no parsea fecha '{ds}': {_e}")
+                            fecha_compra = _fecha_compra_walmart(ds) or fecha_compra
                     elif r.status_code == 404:
                         # Orden archivada por Walmart (>30-90 días) — usar columna fecha como fallback
                         _c_wm = _gc(); _cur_wm = _c_wm.cursor()
@@ -24406,17 +24385,11 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                     order_id = str(o.get("customerOrderId") or o.get("purchaseOrderId") or "")
 
                     # orderDate puede venir como epoch en ms o como texto ISO
-                    raw_date = o.get("orderDate")
-                    fecha_hora_wm = ""
-                    if isinstance(raw_date, (int, float)) or (isinstance(raw_date, str) and str(raw_date).isdigit()):
-                        try:
-                            _ts = int(raw_date)
-                            _d = _dt_wm.fromtimestamp(_ts / 1000 if _ts > 9999999999 else _ts)
-                            fecha_hora_wm = _d.strftime("%Y-%m-%d %H:%M")
-                        except Exception:
-                            fecha_hora_wm = ""
-                    else:
-                        fecha_hora_wm = str(raw_date or "").replace("T", " ")[:16]
+                    # Misma correccion que en el scheduler: sin zona, el epoch de
+                    # Walmart se leia en UTC y el reporte mostraba la compra 3 horas
+                    # adelantada.
+                    _f_wm = _fecha_compra_walmart(o.get("orderDate"))
+                    fecha_hora_wm = _f_wm.strftime("%Y-%m-%d %H:%M") if _f_wm else ""
                     created = fecha_hora_wm[:10]
 
                     # La API filtra por fecha de inicio; el extremo de arriba se acota aqui
@@ -24888,6 +24861,57 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
 
     return filas
 
+
+
+def _fecha_compra_walmart(valor):
+    """La fecha de compra de una orden de Walmart, en hora de Chile.
+
+    Walmart corre en servidores de Estados Unidos y manda orderDate como epoch en
+    milisegundos: un instante absoluto, sin zona. El problema es como se leia:
+
+        datetime.fromtimestamp(epoch / 1000)
+
+    Sin zona, fromtimestamp() usa la del SERVIDOR. En Render eso es UTC, asi que
+    devolvia la hora UTC sin marca de zona, y aguas abajo se guardaba como si ya
+    fuera hora chilena. La compra quedaba 3 horas adelantada, al punto de figurar
+    comprada DESPUES de haber sido importada.
+
+    Devuelve un datetime CON zona horaria de Chile, o None si no se puede leer.
+    """
+    if valor in (None, ""):
+        return None
+    try:
+        from datetime import datetime as _d, timezone as _tzu
+        # La zona NO se toma de inventario: traer el modulo de la base de datos
+        # entero para leer una constante hacia que, si ese import fallaba por
+        # cualquier motivo, la fecha se perdiera en silencio.
+        #
+        # pytz primero porque trae su propia base de zonas horarias y no depende
+        # de que la imagen del servidor tenga tzdata instalado; zoneinfo, que es
+        # estandar, queda de respaldo.
+        try:
+            import pytz as _pz
+            TZ_CHILE = _pz.timezone("America/Santiago")
+        except ImportError:
+            from zoneinfo import ZoneInfo as _ZI
+            TZ_CHILE = _ZI("America/Santiago")
+
+        # epoch, en segundos o en milisegundos
+        if isinstance(valor, (int, float)) or (isinstance(valor, str) and str(valor).strip().isdigit()):
+            epoch = int(valor)
+            if epoch > 9999999999:      # viene en milisegundos
+                epoch = epoch / 1000
+            return _d.fromtimestamp(epoch, tz=_tzu.utc).astimezone(TZ_CHILE)
+
+        # texto ISO
+        fecha = _d.fromisoformat(str(valor).replace("Z", "+00:00"))
+        if fecha.tzinfo is None:
+            # Sin zona explicita, Walmart la manda en UTC
+            fecha = fecha.replace(tzinfo=_tzu.utc)
+        return fecha.astimezone(TZ_CHILE)
+    except Exception as e:
+        print(f"[Walmart] no pude leer la fecha '{valor}': {e}")
+        return None
 
 
 def _en_paralelo_valores(funcion, elementos, hilos=6):
