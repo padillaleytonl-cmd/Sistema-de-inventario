@@ -31448,6 +31448,12 @@ def admin_walmart_reparar_full_central():
     # justamente las ordenes recientes: dias=30 llegaba a cubrir MENOS de lo
     # reciente que dias=7. Se sube el tope y se deja regulable.
     paginas = max(1, min(int(request.args.get("paginas", 20)), 60))
+    # SKU a dejar fuera de la reparacion, separados por coma.
+    #
+    # Hace falta porque un conteo fisico POSTERIOR al descuento indebido ya
+    # refleja la realidad: devolverle la unidad lo dejaria una de mas. Paso con
+    # CTSECNSB001, descontado mal el 22-09 y contado a mano el 23-09.
+    excepto = {x.strip().upper() for x in (request.args.get("excepto") or "").split(",") if x.strip()}
     _ap = (request.args.get("aplicar") or "").strip().lower()
     aplicar_a = _ap in ("1", "a")
     aplicar_b = _ap in ("1", "b")
@@ -31581,6 +31587,10 @@ def admin_walmart_reparar_full_central():
         try:
             # ── A. devolver a central lo que nunca debio salir ──────────────
             for fila in (descuentos_indebidos if aplicar_a else []):
+                if fila["sku"].upper() in excepto:
+                    errores.append("%s: excluido a proposito (&excepto), no se toca"
+                                   % fila["sku"])
+                    continue
                 sku = fila["sku"]
                 p = productos.get(sku)
                 if not p:
@@ -31650,6 +31660,11 @@ def admin_walmart_reparar_full_central():
         total = sum(f["cantidad"] for f in descuentos_indebidos)
         lectura.append("A) %d movimientos Full descontaron %d unidades de una bodega "
                        "que no era WALMART_FBM." % (len(descuentos_indebidos), total))
+        if excepto:
+            lectura.append("Se excluyen a proposito: %s. Un conteo fisico posterior al "
+                           "descuento ya refleja la realidad, asi que devolverles la "
+                           "unidad los dejaria con una de mas."
+                           % ", ".join(sorted(excepto)))
     if marcadas_sin_venta:
         lectura.append("B) %d ordenes Full quedaron marcadas como procesadas SIN venta "
                        "registrada: no existen en Lusync y no se van a reintentar solas."
@@ -31677,6 +31692,7 @@ def admin_walmart_reparar_full_central():
                        % (len(corregidos), len(skus_tocados), len(desmarcadas)))
 
     return jsonify({"ok": True, "aplicado": aplicar, "dias": dias,
+                    "excluidos": sorted(excepto),
                     "lectura": lectura,
                     "descuentos_indebidos": descuentos_indebidos,
                     "marcadas_sin_venta": marcadas_sin_venta,
