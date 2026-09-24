@@ -31545,7 +31545,12 @@ def admin_walmart_reparar_full_central():
                     "orden": coid, "movimiento_id": m["id"], "sku": m["sku"],
                     "cantidad": m["cantidad"], "motivo": m["motivo"],
                     "bodega_usada": m["bodega"], "fecha": m["fecha"],
-                    "stock_central_actual": (productos.get(m["sku"]) or {}).get("stock"),
+                    # El nombre decia "central" pero el valor era el TOTAL del
+                    # producto, que es lo que guarda productos.stock. En un SKU
+                    # con unidades en fulfillment eso son dos numeros distintos,
+                    # y leer uno creyendo que es el otro ya costo confusiones hoy.
+                    "stock_total_actual": (productos.get(m["sku"]) or {}).get("stock"),
+                    "central_actual": get_stock_bodega(m["sku"], "CENTRAL"),
                 })
             continue
 
@@ -31616,7 +31621,8 @@ def admin_walmart_reparar_full_central():
                                     (fbm, fbm, fila["movimiento_id"]))
                     conn.commit()
                     skus_tocados.add(sku)
-                    fila["stock_central_nuevo"] = p["stock"]
+                    # Se relee la bodega despues de escribir, en vez de suponer
+                    fila["central_nuevo"] = get_stock_bodega(sku, "CENTRAL")
                     corregidos.append(fila)
                 except Exception as e:
                     try:
