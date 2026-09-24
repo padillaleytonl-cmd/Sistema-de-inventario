@@ -306,26 +306,36 @@ def admin_stock_fijar_conteo():
         })
 
     if aplicar:
+        # Se escribe SIEMPRE, incluso cuando el delta es cero. Dos motivos:
+        #
+        #  - Los 18 sin reposicion no tienen FILA en stock_bodega. Saltearlos por
+        #    delta cero los dejaba igual de fragiles que antes, que era justo lo
+        #    que habia que arreglar. set_stock_bodega hace upsert: crea la fila.
+        #  - Hay SKU con la bodega correcta pero productos.stock viejo (CCJDG001
+        #    30 en bodega y 28 en el total, MAD006 54 y 50). Escribir dispara
+        #    _recalcular_stock_total y los deja de acuerdo.
+        #
+        # El movimiento, en cambio, solo se registra si algo cambio de verdad:
+        # un asiento de cero unidades es ruido en el historial.
         for fila in plan:
-            if fila["delta"] == 0:
-                continue
             try:
                 set_stock_bodega(fila["sku"], "CENTRAL", fila["central_nuevo"])
-                registrar_movimiento(
-                    "entrada" if fila["delta"] > 0 else "salida",
-                    fila["sku"], fila["nombre"] or fila["sku"],
-                    abs(fila["delta"]),
-                    "Conteo fisico 23-09-2026 | CENTRAL %d -> %d"
-                    % (fila["central_actual"], fila["central_nuevo"]),
-                    usuario=session.get("usuario", "Sistema"),
-                    canal="Manual",
-                )
+                if fila["delta"] != 0:
+                    registrar_movimiento(
+                        "entrada" if fila["delta"] > 0 else "salida",
+                        fila["sku"], fila["nombre"] or fila["sku"],
+                        abs(fila["delta"]),
+                        "Conteo fisico 23-09-2026 | CENTRAL %d -> %d"
+                        % (fila["central_actual"], fila["central_nuevo"]),
+                        usuario=session.get("usuario", "Sistema"),
+                        canal="Manual",
+                    )
                 aplicados.append(fila)
             except Exception as e:
                 errores.append("%s: %s" % (fila["sku"], str(e)[:200]))
 
         if publicar:
-            for fila in aplicados:
+            for fila in [f for f in aplicados if f["delta"] != 0]:
                 try:
                     sincronizar_stock_marketplaces(
                         fila["sku"], fila["contado"], contexto="conteo_fisico")
