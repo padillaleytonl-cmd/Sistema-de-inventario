@@ -195,3 +195,42 @@ explicación posible es que el dedup de `obtener_ordenes_walmart` usa
 `purchaseOrderId`, que en WFS viene vacío, y la misma orden entre dos veces con
 estampados distintos. No se comprobó contra la API. Si algún día un histórico de
 Walmart cuadra mal, empezar por acá.
+
+---
+
+## 9. `stock_despues` significa dos cosas distintas
+
+**Es la razón por la que cuesta tanto auditar el stock.**
+
+La columna `movimientos.stock_despues` la escriben dos funciones, con
+significados incompatibles:
+
+| Quién escribe | Qué guarda |
+|---|---|
+| `descontar_venta_inteligente()` | el stock de **esa bodega** |
+| `registrar_movimiento()` | la **suma de todas las bodegas** |
+
+Nada en la tabla dice cuál de las dos lecturas aplica a cada fila. Hay que
+deducirlo del `motivo`, que es texto libre.
+
+**Qué costó ya:** el diagnóstico `/admin/lusync/stock/sin-movimiento` comparaba
+esa columna contra el stock de la bodega y reportaba como pérdida, en cada fila
+escrita por la segunda función, exactamente lo que el producto tenía en
+fulfillment. Sobre esa lectura equivocada se afirmó que dos productos estaban
+perdiendo stock en ese momento; no era cierto. El endpoint ahora descarta lo que
+cuadra con cualquiera de las dos lecturas, pero eso es un parche: sigue sin
+poder distinguir una pérdida real de una diferencia de interpretación cuando los
+números quedan cerca.
+
+**Qué falta:** decidir un único significado y migrar. La opción sana es guardar
+siempre el de la bodega —que es lo que el movimiento realmente afectó— y agregar
+una columna aparte para el total si hace falta para reportes. Requiere:
+
+1. unificar las dos funciones,
+2. una migración que reinterprete las filas viejas por `bodega_codigo`
+   (las que lo tienen en NULL son las de `registrar_movimiento`),
+3. revisar los diagnósticos que leen la columna.
+
+**Por qué no se hizo ahora:** toca datos históricos y el foco del día era frenar
+las pérdidas de stock, no reescribir el historial. Pero mientras siga así, todo
+diagnóstico sobre movimientos arrastra ruido.
