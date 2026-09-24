@@ -313,9 +313,14 @@ def admin_stock_fijar_conteo():
         _cn = get_conn()
         try:
             with _cn.cursor() as _c:
+                # El patron tiene que ser el del conteo QUE SE ESTA APLICANDO.
+                # Estaba fijo en el del 23-09, asi que bloqueaba tambien los
+                # conteos nuevos: el del 24 no se podia aplicar porque el del 23
+                # ya estaba hecho, que es otra cosa.
                 _c.execute("""SELECT TO_CHAR(MAX(fecha), 'YYYY-MM-DD HH24:MI')
                                 FROM movimientos
-                               WHERE motivo LIKE 'Conteo fisico 23-09-2026%%'""")
+                               WHERE motivo LIKE %s""",
+                           ("Conteo fisico " + conteo_fecha + "%",))
                 ya_aplicado = (_c.fetchone() or [None])[0]
         except Exception:
             ya_aplicado = None
@@ -328,15 +333,15 @@ def admin_stock_fijar_conteo():
             "bloqueado": True,
             "aplicado_antes": ya_aplicado,
             "lectura": [
-                "Este conteo ya se aplico el %s." % ya_aplicado,
+                "El conteo del %s ya se aplico el %s." % (conteo_fecha, ya_aplicado),
                 "No se vuelve a escribir. Un conteo es la foto de un momento: "
                 "reaplicarlo ahora devolveria al stock las ventas ocurridas desde "
                 "entonces, que es un error silencioso y dificil de notar.",
                 "Si solo hace falta mandar a los marketplaces lo que ya esta en "
                 "Lusync, usar &republicar=1 sin &aplicar=1 no alcanza; para eso "
                 "corre con &aplicar=1&republicar=1&forzar=1 sabiendo lo de arriba.",
-                "Para un conteo nuevo, lo correcto es cargar los numeros nuevos en "
-                "_CONTEO_FISICO con la fecha de hoy, no repetir este.",
+                "Para un conteo nuevo, lo correcto es agregar una entrada nueva a "
+                "_CONTEOS_FISICOS con la fecha de hoy, no repetir este.",
             ],
         }), 409
 
