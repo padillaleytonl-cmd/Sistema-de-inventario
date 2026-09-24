@@ -275,19 +275,25 @@ def admin_stock_fijar_conteo():
 
     nombres = {p["sku"]: p.get("nombre", "") for p in cargar_productos()}
 
-    # Cuanto hay en bodegas que NO son CENTRAL, por SKU
-    otras = {}
+    # Que hay en cada bodega que NO es CENTRAL. Se trae abierto por bodega y no
+    # como un total: son varias —MELI_FULL, PARIS_CD, WALMART_FBM, FALABELLA_FBM,
+    # RIPLEY_FBM, HITES_FBM, MELI_FULL_TRANSITO, WOO_DROP— y un numero agregado
+    # no deja comprobar que ninguna se este colando en el conteo de la propia.
+    detalle_otras = {}
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("""SELECT sku, COALESCE(SUM(cantidad), 0)
+            cur.execute("""SELECT sku, bodega_codigo, COALESCE(SUM(cantidad), 0)
                              FROM stock_bodega
                             WHERE sku = ANY(%s) AND bodega_codigo <> 'CENTRAL'
-                            GROUP BY sku""",
+                            GROUP BY sku, bodega_codigo
+                            HAVING COALESCE(SUM(cantidad), 0) <> 0""",
                         (list(_CONTEO_FISICO_20260923.keys()),))
-            otras = {r[0]: int(r[1] or 0) for r in cur.fetchall()}
+            for sku_r, bod, cant in cur.fetchall():
+                detalle_otras.setdefault(sku_r, {})[bod] = int(cant or 0)
     finally:
         release_conn(conn)
+    otras = {k: sum(v.values()) for k, v in detalle_otras.items()}
 
     plan, aplicados, errores = [], [], []
     for sku, contado in sorted(_CONTEO_FISICO_20260923.items()):
@@ -301,7 +307,9 @@ def admin_stock_fijar_conteo():
             "central_actual": central_actual,
             "central_nuevo": central_nuevo,
             "delta": central_nuevo - central_actual,
-            "en_fulfillment": en_otras,
+            # Ninguna de estas se toca ni entra en el conteo de la propia
+            "en_otras_bodegas": en_otras,
+            "detalle_otras_bodegas": detalle_otras.get(sku, {}),
             "total_resultante": contado + en_otras,
         })
 
@@ -355,10 +363,16 @@ def admin_stock_fijar_conteo():
             "%s %+d" % (f["sku"], f["delta"]) for f in grandes))
     else:
         lectura.append("Ninguno cambia: el stock ya coincide con el conteo.")
-    con_full = [f for f in plan if f["en_fulfillment"] > 0]
+    con_full = [f for f in plan if f["en_otras_bodegas"] > 0]
     if con_full:
-        lectura.append("%d ademas tienen unidades en fulfillment; esas no se tocan y "
-                       "se suman aparte al total." % len(con_full))
+        por_bodega = {}
+        for f in con_full:
+            for bod, cant in f["detalle_otras_bodegas"].items():
+                por_bodega[bod] = por_bodega.get(bod, 0) + cant
+        lectura.append("%d tienen unidades fuera de la bodega propia: %s. Ninguna se "
+                       "toca ni entra en el conteo de CENTRAL; se suman aparte al total."
+                       % (len(con_full),
+                          ", ".join("%s %d" % (b, c) for b, c in sorted(por_bodega.items()))))
     if not aplicar:
         lectura.append("Esto es solo el plan. Agregar &aplicar=1 para dejarlo escrito, "
                        "y &publicar=1 si ademas hay que mandar el numero nuevo a los "
