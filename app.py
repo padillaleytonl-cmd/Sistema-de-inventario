@@ -197,7 +197,9 @@ def ver_sync_log():
 # Los 18 productos sin fila en stock_bodega NO estan aca: quedaron pendientes
 # de contar. Mientras no tengan fila, el guard de _recalcular_stock_total los
 # protege de quedar en cero.
-_CONTEO_FISICO_20260923 = {
+_CONTEOS_FISICOS = {}
+
+_CONTEOS_FISICOS["2026-09-23"] = {
     # Estaban en desacuerdo por el descuento de las ventas Web
     "CBTSECN001": 10,    # Coche Travel System E-Crib Negro + Silla y Base
     "CCJDG001":   30,    # Corral de Juegos 1.2 x 1.8 m Gris
@@ -239,6 +241,18 @@ _CONTEO_FISICO_20260923 = {
     "STPCNB001":   0,    # Silla Terraza Capri · Negro/Beige
 }
 
+# Conteo del 24-09-2026. Los dos que el detector de stock sin movimiento dejo en
+# pie despues de descartar los falsos positivos: los dos con "Venta Walmart
+# Seller" como ultimo movimiento, que es de los que guardan el valor de LA
+# BODEGA, asi que la comparacion era valida. Confirmados por conteo fisico.
+#
+# Las unidades se perdieron en agosto, cuando sincronizar_stock_a_bodega_central()
+# todavia escribia CENTRAL sin registrar movimiento, en cada arranque.
+_CONTEOS_FISICOS["2026-09-24"] = {
+    "RHN001":   75,    # Coche de Paseo Reversible High Negro — estaba en 26
+    "SNEMG001":  4,    # Set 4 Sillas Nordicas Eames — estaba en 0
+}
+
 
 @app.route("/admin/lusync/stock/fijar-conteo")
 def admin_stock_fijar_conteo():
@@ -277,6 +291,16 @@ def admin_stock_fijar_conteo():
     # si aquella vez se aplico sin publicar. Con esto se republican todos.
     republicar = request.args.get("republicar") == "1"
     forzar = request.args.get("forzar") == "1"
+    # Cada conteo es una foto con fecha. Por defecto se aplica el MAS RECIENTE:
+    # reaplicar uno viejo devolveria al stock las ventas ocurridas desde
+    # entonces, que es un error silencioso y dificil de notar. Para repetir uno
+    # anterior hay que nombrarlo con &conteo=AAAA-MM-DD.
+    conteo_fecha = (request.args.get("conteo") or max(_CONTEOS_FISICOS)).strip()
+    conteo = _CONTEOS_FISICOS.get(conteo_fecha)
+    if conteo is None:
+        return jsonify({"ok": False,
+                        "error": "No existe el conteo '%s'." % conteo_fecha,
+                        "disponibles": sorted(_CONTEOS_FISICOS)}), 400
 
     nombres = {p["sku"]: p.get("nombre", "") for p in cargar_productos()}
 
@@ -329,7 +353,7 @@ def admin_stock_fijar_conteo():
                             WHERE sku = ANY(%s) AND bodega_codigo <> 'CENTRAL'
                             GROUP BY sku, bodega_codigo
                             HAVING COALESCE(SUM(cantidad), 0) <> 0""",
-                        (list(_CONTEO_FISICO_20260923.keys()),))
+                        (list(conteo.keys()),))
             for sku_r, bod, cant in cur.fetchall():
                 detalle_otras.setdefault(sku_r, {})[bod] = int(cant or 0)
     finally:
@@ -337,7 +361,7 @@ def admin_stock_fijar_conteo():
     otras = {k: sum(v.values()) for k, v in detalle_otras.items()}
 
     plan, aplicados, errores, publicados = [], [], [], []
-    for sku, contado in sorted(_CONTEO_FISICO_20260923.items()):
+    for sku, contado in sorted(conteo.items()):
         en_otras = otras.get(sku, 0)
         central_actual = get_stock_bodega(sku, "CENTRAL") or 0
         # El conteo ES central. No se le resta el fulfillment.
@@ -374,8 +398,8 @@ def admin_stock_fijar_conteo():
                         "entrada" if fila["delta"] > 0 else "salida",
                         fila["sku"], fila["nombre"] or fila["sku"],
                         abs(fila["delta"]),
-                        "Conteo fisico 23-09-2026 | CENTRAL %d -> %d"
-                        % (fila["central_actual"], fila["central_nuevo"]),
+                        "Conteo fisico %s | CENTRAL %d -> %d"
+                        % (conteo_fecha, fila["central_actual"], fila["central_nuevo"]),
                         usuario=session.get("usuario", "Sistema"),
                         canal="Manual",
                     )
@@ -395,7 +419,7 @@ def admin_stock_fijar_conteo():
                     errores.append("publicar %s: %s" % (fila["sku"], str(e)[:200]))
 
     lectura = []
-    lectura.append("%d SKU en el conteo." % len(_CONTEO_FISICO_20260923))
+    lectura.append("%d SKU en el conteo del %s." % (len(conteo), conteo_fecha))
     cambian = [f for f in plan if f["delta"] != 0]
     if cambian:
         subidas = [f for f in cambian if f["delta"] > 0]
@@ -432,7 +456,7 @@ def admin_stock_fijar_conteo():
             detalle_pub = " NO se publico: los marketplaces siguen con el numero viejo."
         lectura.append("Aplicado a %d SKU.%s" % (len(aplicados), detalle_pub))
 
-    return jsonify({"ok": True, "aplicado": aplicar,
+    return jsonify({"ok": True, "aplicado": aplicar, "conteo": conteo_fecha,
                     "publicados": publicados,
                     "lectura": lectura, "plan": plan,
                     "aplicados": aplicados, "errores": errores})
