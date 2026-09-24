@@ -2564,6 +2564,48 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
         dict con: {ok, bodega_codigo, stock_bodega_antes, stock_bodega_despues, sku, cantidad}
     """
     bodega = determinar_bodega_para_canal(canal, fulfillment=fulfillment)
+
+    # IDEMPOTENCIA, ANTES de tocar el stock.
+    #
+    # Esta comprobacion vivia DESPUES del descuento, con un comentario que decia
+    # que servia para "evitar el trabajo de descuento cuando la orden ya fue
+    # procesada". No lo evitaba: el stock ya se habia ido. La orden repetida se
+    # llevaba las unidades y la funcion devolvia cantidad_descontada: 0, asi que
+    # ni el que llamaba ni el historial de movimientos registraban nada.
+    #
+    # Cada reproceso de una orden ya registrada era stock perdido en silencio.
+    if orden_id:
+        _cn_idem = None
+        try:
+            _tid_idem = None
+            try:
+                from app import get_thread_tenant as _gtt
+                _tid_idem = _gtt()
+            except Exception:
+                _tid_idem = None
+            _cn_idem = (get_conn(tenant_id=_tid_idem, is_admin=True) if _tid_idem
+                        else get_conn(is_admin=True))
+            with _cn_idem.cursor() as _c_idem:
+                _c_idem.execute("""SELECT 1 FROM movimientos
+                                    WHERE orden_id = %s AND sku = %s
+                                      AND tipo IN ('salida','ajuste') LIMIT 1""",
+                                (str(orden_id), sku))
+                if _c_idem.fetchone():
+                    _actual = get_stock_bodega(sku, bodega)
+                    print(f"[Bodegas] {sku}/{orden_id} ya estaba registrada: "
+                          f"no se vuelve a descontar (bodega {bodega}={_actual})")
+                    return {"ok": True, "sku": sku, "cantidad_descontada": 0,
+                            "bodega": bodega, "stock_antes": _actual,
+                            "stock_despues": _actual, "advertencia": "ya_registrada"}
+        except Exception as e:
+            print(f"[Bodegas] no pude comprobar si {orden_id} ya estaba registrada: {e}")
+        finally:
+            if _cn_idem is not None:
+                try:
+                    release_conn(_cn_idem)
+                except Exception:
+                    pass
+
     stock_antes = get_stock_bodega(sku, bodega)
 
     if not ajustar_stock:
@@ -2631,8 +2673,10 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
 
         ahora_chile = now_chile().replace(tzinfo=None)
 
-        # IDEMPOTENCIA (capa 1, rápida): si ya existe el movimiento, no reinsertar.
-        # Evita el trabajo de descuento cuando la orden ya fue procesada.
+        # La comprobacion rapida de idempotencia se hace ahora al ENTRAR a la
+        # funcion, antes de tocar el stock. Esta segunda pasada se conserva
+        # porque entre aquella y este punto pudo registrarla otro proceso, y
+        # atraparlo aqui evita el INSERT.
         if orden_id:
             cur.execute("""SELECT 1 FROM movimientos
                            WHERE orden_id = %s AND sku = %s
@@ -2640,9 +2684,20 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
                         (str(orden_id), sku))
             if cur.fetchone():
                 cur.close(); release_conn(conn)
+                # Igual que en la capa de abajo: el descuento ya se hizo, hay que
+                # deshacerlo o las unidades quedan perdidas sin registro.
+                if ajustar_stock and descontar > 0:
+                    try:
+                        ajustar_stock_bodega(sku, bodega, descontar)
+                        print(f"[Bodegas] {sku}/{orden_id}: registrada entre medio; "
+                              f"se devuelven {descontar} a {bodega}")
+                    except Exception as e_dev2:
+                        print(f"[Bodegas] ALERTA {sku}/{orden_id}: no pude devolver "
+                              f"{descontar} a {bodega}: {e_dev2}")
                 return {"ok": True, "sku": sku, "cantidad_descontada": 0,
                         "bodega": bodega, "stock_antes": stock_antes,
-                        "stock_despues": stock_antes, "advertencia": "ya_registrada"}
+                        "stock_despues": get_stock_bodega(sku, bodega),
+                        "advertencia": "ya_registrada"}
 
         # IDEMPOTENCIA (capa 2, atómica): ON CONFLICT respaldado por el índice único
         # uniq_venta_orden_sku_tipo. Aunque dos procesos del scheduler corran en
@@ -2665,10 +2720,22 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
         cur.close(); release_conn(conn)
         registro_ok = True  # el INSERT se ejecutó sin excepción (RLS no bloqueó)
         if not inserto:
-            # El índice único bloqueó un duplicado: no se descontó nada realmente.
+            # El indice unico bloqueo un duplicado: otro proceso gano la carrera
+            # entre la comprobacion de arriba y este INSERT. El descuento YA se
+            # hizo, asi que hay que deshacerlo: si no, las unidades se pierden
+            # sin movimiento que las explique.
+            if ajustar_stock and descontar > 0:
+                try:
+                    ajustar_stock_bodega(sku, bodega, descontar)
+                    print(f"[Bodegas] {sku}/{orden_id}: otro proceso la registro "
+                          f"primero; se devuelven {descontar} a {bodega}")
+                except Exception as e_dev:
+                    print(f"[Bodegas] ALERTA {sku}/{orden_id}: duplicado detectado "
+                          f"pero NO pude devolver {descontar} a {bodega}: {e_dev}")
             return {"ok": True, "sku": sku, "cantidad_descontada": 0,
                     "bodega": bodega, "stock_antes": stock_antes,
-                    "stock_despues": stock_antes, "advertencia": "ya_registrada"}
+                    "stock_despues": get_stock_bodega(sku, bodega),
+                    "advertencia": "ya_registrada"}
     except Exception as e:
         print(f"[Bodegas] Error registrando movimiento: {e}")
 
