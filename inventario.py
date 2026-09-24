@@ -2852,8 +2852,22 @@ def detectar_fulfillment_paris(orden_data):
 
 
 def sincronizar_stock_a_bodega_central(sku):
-    """Helper: Si productos.stock cambió por código antiguo, sincroniza a bodega CENTRAL.
-    Útil para mantener consistencia mientras se migra todo el código a bodegas."""
+    """OBSOLETA — no usar. Sin llamadores desde el 23-09-2026.
+
+    Calcula CENTRAL = max(0, productos.stock - otras bodegas), o sea PISA la
+    bodega propia con una cuenta hecha sobre el campo legacy. Dos problemas:
+
+      - productos.stock suele venir de un snapshot de cargar_productos() leido
+        al principio de una funcion larga, asi que reemplaza el stock que se
+        haya editado a mano mientras tanto;
+      - el max(0, ...) lo manda directo a cero cuando las bodegas de fulfillment
+        suman mas que ese total, que es justo lo que pasa con los productos que
+        tienen unidades en Walmart o MercadoLibre Full.
+
+    La direccion correcta es la contraria: escribir stock_bodega y dejar que
+    _recalcular_stock_total() derive productos.stock desde ahi. Se conserva solo
+    por si algo externo la importa.
+    """
     conn = get_conn(); cur = conn.cursor()
     try:
         cur.execute("SELECT stock FROM productos WHERE sku=%s", (sku,))

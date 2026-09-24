@@ -276,8 +276,45 @@ def admin_stock_fijar_conteo():
     # publicar: pero los marketplaces pueden haber quedado con el numero viejo
     # si aquella vez se aplico sin publicar. Con esto se republican todos.
     republicar = request.args.get("republicar") == "1"
+    forzar = request.args.get("forzar") == "1"
 
     nombres = {p["sku"]: p.get("nombre", "") for p in cargar_productos()}
+
+    # Un conteo es la foto de un momento. Reaplicarlo mas tarde borra las ventas
+    # que ocurrieron despues: paso con EDLM001, que se vendio una unidad entre
+    # dos corridas y la segunda se la devolvio. Si ya se aplico, escribir queda
+    # bloqueado salvo que se pida expresamente con &forzar=1.
+    ya_aplicado = None
+    if aplicar:
+        _cn = get_conn()
+        try:
+            with _cn.cursor() as _c:
+                _c.execute("""SELECT TO_CHAR(MAX(fecha), 'YYYY-MM-DD HH24:MI')
+                                FROM movimientos
+                               WHERE motivo LIKE 'Conteo fisico 23-09-2026%%'""")
+                ya_aplicado = (_c.fetchone() or [None])[0]
+        except Exception:
+            ya_aplicado = None
+        finally:
+            release_conn(_cn)
+
+    if aplicar and ya_aplicado and not forzar:
+        return jsonify({
+            "ok": False,
+            "bloqueado": True,
+            "aplicado_antes": ya_aplicado,
+            "lectura": [
+                "Este conteo ya se aplico el %s." % ya_aplicado,
+                "No se vuelve a escribir. Un conteo es la foto de un momento: "
+                "reaplicarlo ahora devolveria al stock las ventas ocurridas desde "
+                "entonces, que es un error silencioso y dificil de notar.",
+                "Si solo hace falta mandar a los marketplaces lo que ya esta en "
+                "Lusync, usar &republicar=1 sin &aplicar=1 no alcanza; para eso "
+                "corre con &aplicar=1&republicar=1&forzar=1 sabiendo lo de arriba.",
+                "Para un conteo nuevo, lo correcto es cargar los numeros nuevos en "
+                "_CONTEO_FISICO con la fecha de hoy, no repetir este.",
+            ],
+        }), 409
 
     # Que hay en cada bodega que NO es CENTRAL. Se trae abierto por bodega y no
     # como un total: son varias —MELI_FULL, PARIS_CD, WALMART_FBM, FALABELLA_FBM,
@@ -3157,7 +3194,8 @@ def _sync_recuperacion():
     """
     try:
         print("[Recuperación] Buscando órdenes no procesadas...")
-        from bodegas_logic import detectar_fulfillment_walmart
+        from bodegas_logic import detectar_fulfillment_walmart, descontar_venta
+        from inventario import obtener_sku_lusync_por_canal
         productos = cargar_productos()
         recuperadas = 0
         # OPTIMIZACIÓN: traer todas las órdenes una vez (no 4 veces por estado).
@@ -3200,21 +3238,39 @@ def _sync_recuperacion():
                             if status_qty and status_qty.get("amount"):
                                 cantidad = int(float(status_qty.get("amount", 1)))
 
-                        for p in productos:
-                            if p["sku"] == sku:
-                                p["stock"] = max(0, p["stock"] - cantidad)
-                                guardar_producto(p)
-                                registrar_movimiento("salida", p["sku"], p["nombre"],
-                                                    cantidad, "Venta Walmart (recuperada)",
-                                                    usuario="Sistema", canal="Walmart",
-                                                    orden_id=customer_order_id)
-                                sincronizar_stock_marketplaces(p["sku"], p["stock"], contexto="auto_sync")
-                                try:
-                                    from inventario import sincronizar_stock_a_bodega_central
-                                    sincronizar_stock_a_bodega_central(p["sku"])
-                                except: pass
-                                items_recuperados.append(sku)
-                                print(f"[Recuperación] SKU:{sku} Cant:{cantidad} OC:{customer_order_id}")
+                        # Antes esto descontaba del campo legacy productos.stock y
+                        # despues llamaba a sincronizar_stock_a_bodega_central(), que
+                        # PISA la bodega propia con
+                        #     CENTRAL = max(0, productos.stock - otras bodegas)
+                        # El productos.stock usado sale de cargar_productos(), leido
+                        # UNA sola vez al principio de la funcion: un snapshot. Con el
+                        # se reemplazaba cualquier stock editado a mano despues, y el
+                        # max(0,...) lo mandaba a cero si las bodegas de fulfillment
+                        # sumaban mas que ese total.
+                        #
+                        # Esta funcion corre en CADA arranque, o sea en cada deploy.
+                        # Ahora descuenta como los otros cinco canales: stock_bodega
+                        # primero, total recalculado despues, y nadie deriva CENTRAL
+                        # hacia atras.
+                        sku_lusync_rec = obtener_sku_lusync_por_canal("walmart", sku) or sku
+                        if sku_lusync_rec not in {p["sku"] for p in productos}:
+                            print(f"[Recuperación] SKU '{sku_lusync_rec}' no está en inventario")
+                            continue
+                        _res_rec = descontar_venta(
+                            sku=sku_lusync_rec,
+                            cantidad=cantidad,
+                            canal="Walmart",
+                            fulfillment=False,   # las Full ya se saltearon mas arriba
+                            orden_id=customer_order_id,
+                            motivo="Venta Walmart (recuperada)",
+                            usuario="Sistema",
+                        )
+                        sincronizar_stock_marketplaces(
+                            sku_lusync_rec, _res_rec.get("stock_despues", 0),
+                            contexto="auto_sync")
+                        if _res_rec.get("ok"):
+                            items_recuperados.append(sku_lusync_rec)
+                        print(f"[Recuperación] SKU:{sku_lusync_rec} Cant:{cantidad} OC:{customer_order_id}")
                     except Exception as e:
                         print(f"[Recuperación] Error linea: {e}")
 
@@ -4380,7 +4436,8 @@ def walmart_sync_debug():
     if not session.get("logged"):
         return {"error": "no autorizado"}, 401
 
-    from bodegas_logic import detectar_fulfillment_walmart
+    from bodegas_logic import detectar_fulfillment_walmart, descontar_venta
+    from inventario import obtener_sku_lusync_por_canal
     productos = cargar_productos()
     log = []
     nuevas = 0
@@ -4433,26 +4490,28 @@ def walmart_sync_debug():
 
                 log.append(f"  SKU:{sku} Cantidad:{cantidad}")
 
-                encontrado = False
-                for p in productos:
-                    if p["sku"] == sku:
-                        encontrado = True
-                        stock_antes = p["stock"]
-                        p["stock"] = max(0, p["stock"] - cantidad)
-                        guardar_producto(p)
-                        registrar_movimiento("salida", p["sku"], p["nombre"],
-                                            cantidad, "Venta Walmart",
-                                            usuario="Sistema", canal="Walmart",
-                                            orden_id=customer_order_id)
-                        sincronizar_stock_marketplaces(p["sku"], p["stock"], contexto="auto_sync")
-                        try:
-                            from inventario import sincronizar_stock_a_bodega_central
-                            sincronizar_stock_a_bodega_central(p["sku"])
-                        except: pass
-                        log.append(f"  OK {p['nombre']} stock:{stock_antes}->{p['stock']}")
-
-                if not encontrado:
+                # Mismo cambio que en _sync_recuperacion: se descuenta de la
+                # bodega, no del campo legacy, y ya no se deriva CENTRAL hacia
+                # atras con sincronizar_stock_a_bodega_central().
+                sku_lusync_dbg = obtener_sku_lusync_por_canal("walmart", sku) or sku
+                if sku_lusync_dbg not in {p["sku"] for p in productos}:
                     log.append(f"  SKU {sku} no encontrado en Lusync")
+                else:
+                    _res_dbg = descontar_venta(
+                        sku=sku_lusync_dbg,
+                        cantidad=cantidad,
+                        canal="Walmart",
+                        fulfillment=False,   # las Full ya se saltearon mas arriba
+                        orden_id=customer_order_id,
+                        motivo="Venta Walmart",
+                        usuario="Sistema",
+                    )
+                    sincronizar_stock_marketplaces(
+                        sku_lusync_dbg, _res_dbg.get("stock_despues", 0),
+                        contexto="auto_sync")
+                    log.append("  OK %s %s -> %s" % (
+                        sku_lusync_dbg, _res_dbg.get("stock_antes"),
+                        _res_dbg.get("stock_despues")))
 
             # [atomic] orden marcada al inicio — no remarcar
             nuevas += 1
@@ -31203,7 +31262,7 @@ def admin_walmart_reparar_full_central():
                             guardar_producto, get_stock_bodega,
                             obtener_sku_lusync_por_canal,
                             orden_ya_procesada_texto,
-                            sincronizar_stock_a_bodega_central)
+                            ajustar_stock_bodega)
 
     dias = max(1, min(int(request.args.get("dias", 7)), 60))
     # Los dos casos se aplican por separado a proposito: B (desmarcar para que la
@@ -31356,9 +31415,12 @@ def admin_walmart_reparar_full_central():
                     errores.append("%s: no existe en inventario" % sku)
                     continue
                 try:
-                    p["stock"] = int(p.get("stock") or 0) + fila["cantidad"]
-                    guardar_producto(p)
-                    sincronizar_stock_a_bodega_central(sku)
+                    # Se repone en la bodega, no en el campo legacy. La version
+                    # anterior sumaba a productos.stock y despues derivaba CENTRAL
+                    # con sincronizar_stock_a_bodega_central(), que pisa la bodega
+                    # propia con una cuenta sobre ese campo y la manda a cero
+                    # cuando el fulfillment suma mas que el total.
+                    ajustar_stock_bodega(sku, "CENTRAL", fila["cantidad"])
 
                     # el movimiento se queda: es una venta real. Pasa a ser lo
                     # que de verdad fue, una venta Full que no mueve stock nuestro
