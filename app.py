@@ -454,6 +454,12 @@ def admin_stock_sin_movimiento():
     escribio sin dejar registro — y eso es exactamente lo que hace un stock
     editado a mano que al tiempo aparece en cero.
 
+    OJO con la columna stock_despues: no significa lo mismo en todos los
+    movimientos. descontar_venta_inteligente() guarda el valor de LA BODEGA y
+    registrar_movimiento() guarda la SUMA de todas. Comparar contra una sola de
+    las dos lecturas convierte en "perdida" todo lo que el producto tenga en
+    fulfillment, asi que solo se reporta lo que no cuadra con ninguna.
+
     Uso: /admin/lusync/stock/sin-movimiento
          &solo_bajadas=1  para ver unicamente lo que perdio unidades
     """
@@ -483,18 +489,30 @@ def admin_stock_sin_movimiento():
                        COALESCE(sb.cantidad, 0) AS ahora,
                        u.motivo, u.canal, u.usuario,
                        TO_CHAR(u.fecha, 'YYYY-MM-DD HH24:MI'),
-                       p.nombre
+                       p.nombre,
+                       COALESCE(tot.total, 0) AS total_ahora
                   FROM ultimo u
                   LEFT JOIN stock_bodega sb
                          ON sb.sku = u.sku AND sb.bodega_codigo = u.bodega_codigo
+                  LEFT JOIN (SELECT sku, SUM(cantidad) AS total
+                               FROM stock_bodega GROUP BY sku) tot
+                         ON tot.sku = u.sku
                   LEFT JOIN productos p ON p.sku = u.sku
+                 -- La columna stock_despues NO significa lo mismo en todos los
+                 -- movimientos: descontar_venta_inteligente() guarda el valor de
+                 -- LA BODEGA, y registrar_movimiento() guarda la SUMA de todas.
+                 -- Comparar contra una sola de las dos convierte en "perdida"
+                 -- todo lo que el producto tenga en fulfillment. Solo se reporta
+                 -- lo que no cuadra con NINGUNA de las dos lecturas.
                  WHERE COALESCE(sb.cantidad, 0) <> u.stock_despues
+                   AND COALESCE(tot.total, 0)   <> u.stock_despues
                  ORDER BY (COALESCE(sb.cantidad, 0) - u.stock_despues) ASC
             """)
             filas = cur.fetchall()
 
         casos = []
-        for sku, bod, esperado, ahora, motivo, canal, usuario, fecha, nombre in filas:
+        for (sku, bod, esperado, ahora, motivo, canal, usuario, fecha, nombre,
+             total_ahora) in filas:
             esperado, ahora = int(esperado or 0), int(ahora or 0)
             dif = ahora - esperado
             if solo_bajadas and dif >= 0:
@@ -502,6 +520,7 @@ def admin_stock_sin_movimiento():
             casos.append({
                 "sku": sku, "nombre": nombre or "", "bodega": bod,
                 "deberia_tener": esperado, "tiene_ahora": ahora, "diferencia": dif,
+                "total_del_sku_ahora": int(total_ahora or 0),
                 "ultimo_movimiento": {"motivo": motivo, "canal": canal,
                                       "usuario": usuario, "fecha": fecha},
             })
