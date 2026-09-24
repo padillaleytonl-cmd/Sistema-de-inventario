@@ -438,6 +438,106 @@ def admin_stock_fijar_conteo():
                     "aplicados": aplicados, "errores": errores})
 
 
+@app.route("/admin/lusync/stock/sin-movimiento")
+def admin_stock_sin_movimiento():
+    """Busca stock que cambio sin un movimiento que lo explique. SOLO LECTURA.
+
+    Por que hace falta otro diagnostico: /stock/en-cero compara productos.stock
+    contra la suma de las bodegas, asi que solo ve los DESACUERDOS entre los dos
+    almacenes. Si algo manda una bodega a cero y el total se recalcula detras,
+    los dos quedan de acuerdo en cero y ese diagnostico no encuentra nada. El
+    stock desaparecio igual.
+
+    Este mira otra cosa. Cada movimiento guarda stock_antes y stock_despues de
+    su bodega, asi que el ultimo movimiento de cada par (SKU, bodega) dice en
+    cuanto deberia haber quedado. Si hoy hay otro numero, entre medio alguien
+    escribio sin dejar registro — y eso es exactamente lo que hace un stock
+    editado a mano que al tiempo aparece en cero.
+
+    Uso: /admin/lusync/stock/sin-movimiento
+         &solo_bajadas=1  para ver unicamente lo que perdio unidades
+    """
+    if not (session.get("logged") or session.get("is_lusync_admin")):
+        return jsonify({"error": "no autorizado"}), 401
+
+    from inventario import get_conn, release_conn
+
+    solo_bajadas = request.args.get("solo_bajadas") == "1"
+    conn = get_conn()
+    salida = {"ok": True, "solo_lectura": True}
+    try:
+        with conn.cursor() as cur:
+            # Ultimo movimiento con stock_despues conocido, por SKU y bodega,
+            # contra lo que hay hoy en esa bodega.
+            cur.execute("""
+                WITH ultimo AS (
+                    SELECT DISTINCT ON (sku, bodega_codigo)
+                           sku, bodega_codigo, stock_despues, motivo, canal,
+                           usuario, fecha
+                      FROM movimientos
+                     WHERE bodega_codigo IS NOT NULL
+                       AND stock_despues IS NOT NULL
+                     ORDER BY sku, bodega_codigo, fecha DESC
+                )
+                SELECT u.sku, u.bodega_codigo, u.stock_despues,
+                       COALESCE(sb.cantidad, 0) AS ahora,
+                       u.motivo, u.canal, u.usuario,
+                       TO_CHAR(u.fecha, 'YYYY-MM-DD HH24:MI'),
+                       p.nombre
+                  FROM ultimo u
+                  LEFT JOIN stock_bodega sb
+                         ON sb.sku = u.sku AND sb.bodega_codigo = u.bodega_codigo
+                  LEFT JOIN productos p ON p.sku = u.sku
+                 WHERE COALESCE(sb.cantidad, 0) <> u.stock_despues
+                 ORDER BY (COALESCE(sb.cantidad, 0) - u.stock_despues) ASC
+            """)
+            filas = cur.fetchall()
+
+        casos = []
+        for sku, bod, esperado, ahora, motivo, canal, usuario, fecha, nombre in filas:
+            esperado, ahora = int(esperado or 0), int(ahora or 0)
+            dif = ahora - esperado
+            if solo_bajadas and dif >= 0:
+                continue
+            casos.append({
+                "sku": sku, "nombre": nombre or "", "bodega": bod,
+                "deberia_tener": esperado, "tiene_ahora": ahora, "diferencia": dif,
+                "ultimo_movimiento": {"motivo": motivo, "canal": canal,
+                                      "usuario": usuario, "fecha": fecha},
+            })
+
+        bajadas = [c for c in casos if c["diferencia"] < 0]
+        a_cero = [c for c in bajadas if c["tiene_ahora"] == 0]
+
+        lectura = []
+        if not casos:
+            lectura.append("Ningun stock cambio sin movimiento que lo explique. "
+                           "Todo lo que se movio dejo registro.")
+        else:
+            lectura.append("%d pares (SKU, bodega) tienen hoy un numero distinto "
+                           "del que dejo su ultimo movimiento." % len(casos))
+            if bajadas:
+                lectura.append("%d PERDIERON unidades sin registro; %d quedaron "
+                               "en cero." % (len(bajadas), len(a_cero)))
+            subidas = len(casos) - len(bajadas)
+            if subidas:
+                lectura.append("%d ganaron unidades sin registro (suelen ser los "
+                               "syncs diarios de Full, que copian el numero del "
+                               "marketplace sin registrar movimiento)." % subidas)
+
+        salida["lectura"] = lectura
+        salida["resumen"] = {"casos": len(casos), "perdieron": len(bajadas),
+                             "quedaron_en_cero": len(a_cero)}
+        salida["casos"] = casos[:60]
+    except Exception as e:
+        import traceback
+        salida = {"ok": False, "error": str(e)[:300], "traza": traceback.format_exc()[-800:]}
+    finally:
+        release_conn(conn)
+
+    return jsonify(salida)
+
+
 @app.route("/admin/lusync/stock/en-cero")
 def admin_stock_en_cero():
     """Busca la huella del stock que se cae solo. SOLO LECTURA.
