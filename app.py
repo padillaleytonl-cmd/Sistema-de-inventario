@@ -272,6 +272,10 @@ def admin_stock_fijar_conteo():
 
     aplicar = request.args.get("aplicar") == "1"
     publicar = request.args.get("publicar") == "1"
+    # Si el conteo ya se aplico antes, los deltas son cero y no hay nada que
+    # publicar: pero los marketplaces pueden haber quedado con el numero viejo
+    # si aquella vez se aplico sin publicar. Con esto se republican todos.
+    republicar = request.args.get("republicar") == "1"
 
     nombres = {p["sku"]: p.get("nombre", "") for p in cargar_productos()}
 
@@ -295,7 +299,7 @@ def admin_stock_fijar_conteo():
         release_conn(conn)
     otras = {k: sum(v.values()) for k, v in detalle_otras.items()}
 
-    plan, aplicados, errores = [], [], []
+    plan, aplicados, errores, publicados = [], [], [], []
     for sku, contado in sorted(_CONTEO_FISICO_20260923.items()):
         en_otras = otras.get(sku, 0)
         central_actual = get_stock_bodega(sku, "CENTRAL") or 0
@@ -342,11 +346,14 @@ def admin_stock_fijar_conteo():
             except Exception as e:
                 errores.append("%s: %s" % (fila["sku"], str(e)[:200]))
 
-        if publicar:
-            for fila in [f for f in aplicados if f["delta"] != 0]:
+        if publicar or republicar:
+            a_publicar = (aplicados if republicar
+                          else [f for f in aplicados if f["delta"] != 0])
+            for fila in a_publicar:
                 try:
                     sincronizar_stock_marketplaces(
                         fila["sku"], fila["contado"], contexto="conteo_fisico")
+                    publicados.append(fila["sku"])
                 except Exception as e:
                     errores.append("publicar %s: %s" % (fila["sku"], str(e)[:200]))
 
@@ -378,12 +385,18 @@ def admin_stock_fijar_conteo():
                        "y &publicar=1 si ademas hay que mandar el numero nuevo a los "
                        "marketplaces.")
     else:
-        lectura.append("Aplicado a %d SKU.%s" % (
-            len(aplicados),
-            " Publicado a los marketplaces." if publicar else
-            " NO se publico: los marketplaces siguen con el numero viejo."))
+        if publicados:
+            detalle_pub = " Publicados a los marketplaces: %d." % len(publicados)
+        elif publicar or republicar:
+            detalle_pub = (" NO se publico ninguno: no hubo cambios que publicar. "
+                           "Si los marketplaces quedaron con el numero viejo de una "
+                           "corrida anterior, usar &republicar=1.")
+        else:
+            detalle_pub = " NO se publico: los marketplaces siguen con el numero viejo."
+        lectura.append("Aplicado a %d SKU.%s" % (len(aplicados), detalle_pub))
 
-    return jsonify({"ok": True, "aplicado": aplicar, "publicado": publicar and aplicar,
+    return jsonify({"ok": True, "aplicado": aplicar,
+                    "publicados": publicados,
                     "lectura": lectura, "plan": plan,
                     "aplicados": aplicados, "errores": errores})
 
