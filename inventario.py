@@ -179,7 +179,7 @@ _PRESTAMOS_LOCK = threading.Lock()
 
 
 def _anotar_prestamo(conn):
-    """Guarda desde que linea del proyecto se pidio esta conexion."""
+    """Guarda quien pidio esta conexion: en que linea y en que hilo."""
     try:
         import traceback as _tb, time as _t
         pila = []
@@ -191,7 +191,10 @@ def _anotar_prestamo(conn):
                           "ripley.py", "falabella.py", "woo.py"):
                 pila.append("%s:%d %s" % (nombre, marco.lineno, marco.name))
         with _PRESTAMOS_LOCK:
-            _PRESTAMOS[id(conn)] = (_t.time(), pila[-6:])
+            # El hilo y la conexion se guardan para la red de seguridad de
+            # cerrar_conexiones_al_salir; la hora y la pila, para el diagnostico.
+            _PRESTAMOS[id(conn)] = (_t.time(), pila[-6:],
+                                    threading.get_ident(), conn)
     except Exception:
         pass
 
@@ -238,6 +241,54 @@ def errores_venta():
         return list(reversed(_ERRORES_VENTA))
 
 
+def cerrar_conexiones_al_salir(func):
+    """Devuelve al pool lo que func haya pedido en este hilo y no devuelto.
+
+    Pensado para las funciones de arranque que corren DDL. Si una sentencia
+    falla a mitad, la conexion queda con una transaccion abierta reteniendo
+    locks de tabla —ACCESS EXCLUSIVE, el que frena hasta los SELECT— y no se
+    sueltan hasta el proximo reinicio.
+
+    Solo reclama conexiones pedidas por el MISMO hilo durante la llamada. Una
+    de otro hilo puede estar en pleno uso, y soltarla desde afuera romperia esa
+    operacion; un hilo, en cambio, no puede estar en dos lugares a la vez, asi
+    que lo que pidio y no devolvio durante la llamada esta abandonado seguro.
+
+    Devolver la conexion es lo que suelta los locks: psycopg2 revierte sola
+    toda conexion que no este limpia antes de guardarla de vuelta en el pool.
+    """
+    from functools import wraps
+
+    @wraps(func)
+    def envoltura(*args, **kwargs):
+        hilo = threading.get_ident()
+        with _PRESTAMOS_LOCK:
+            antes = set(_PRESTAMOS.keys())
+        try:
+            return func(*args, **kwargs)
+        finally:
+            huerfanas = []
+            try:
+                with _PRESTAMOS_LOCK:
+                    for _id, datos in list(_PRESTAMOS.items()):
+                        if _id in antes or len(datos) < 4:
+                            continue
+                        if datos[2] != hilo:
+                            continue   # de otro hilo: no es nuestra
+                        huerfanas.append(datos[3])
+            except Exception:
+                huerfanas = []
+            for cn in huerfanas:
+                try:
+                    release_conn(cn)
+                    print(f"[Pool] {func.__name__} dejo una conexion sin devolver; "
+                          f"se devolvio y se soltaron sus locks")
+                except Exception:
+                    pass
+
+    return envoltura
+
+
 def prestamos_abiertos():
     """Las conexiones pedidas que todavia no se devolvieron, con su origen."""
     import time as _t
@@ -245,7 +296,8 @@ def prestamos_abiertos():
     with _PRESTAMOS_LOCK:
         datos = list(_PRESTAMOS.items())
     salida = []
-    for _id, (cuando, pila) in datos:
+    for _id, datos_prestamo in datos:
+        cuando, pila = datos_prestamo[0], datos_prestamo[1]
         salida.append({"hace_segundos": round(ahora - cuando, 1), "pedida_en": pila})
     return sorted(salida, key=lambda x: -x["hace_segundos"])
 
@@ -399,8 +451,53 @@ def release_conn(conn):
         except: pass
 
 def init_db():
+    """Crea tablas y columnas al arranque, garantizando que la conexion cierre.
+
+    El try/finally NO es decorativo: sin el, una sola ALTER TABLE que falle
+    dejaba la conexion con una transaccion abierta reteniendo locks de tabla
+    hasta el proximo reinicio. Ver _init_db_cuerpo.
+    """
     conn = get_conn()
-    cur  = conn.cursor()
+    try:
+        cur = conn.cursor()
+        try:
+            _init_db_cuerpo(conn, cur)
+        finally:
+            try:
+                cur.close()
+            except Exception:
+                pass
+    except Exception as e:
+        # El rollback es lo que SUELTA los locks. Sin el quedan tomados
+        # aunque la conexion vuelva al pool.
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        print(f"[init_db] fallo a mitad y se revirtio: {e}")
+    finally:
+        release_conn(conn)
+
+
+def _init_db_cuerpo(conn, cur):
+    """El contenido de init_db. Lo envuelve init_db para garantizar el cierre.
+
+    Por que importa: aca dentro hay 27 CREATE TABLE / ALTER TABLE, y antes esto
+    corria sin red. Si una fallaba a mitad —y una ALTER TABLE puede fallar por
+    mil motivos—, la excepcion se propagaba y la conexion quedaba con una
+    transaccion ABIERTA reteniendo los locks de cada tabla que alcanzo a tocar.
+
+    En Postgres los locks no se sueltan hasta COMMIT o ROLLBACK. Y un
+    ACCESS EXCLUSIVE, que es el que toma un ALTER TABLE, frena hasta los
+    SELECT. Como esa conexion nunca se devolvia al pool ni se revertia, los
+    locks quedaban tomados hasta que alguien reiniciara el servidor.
+
+    Se vio en produccion: conexiones esperando 21 MINUTOS para hacer un SELECT
+    sobre productos y sobre stock_bodega, el pool agotado y los syncs frenados,
+    sin un solo error a la vista.
+
+    La conexion y el cursor los pone init_db, que es quien garantiza el cierre.
+    """
     cur.execute("""
         CREATE TABLE IF NOT EXISTS productos (
             nombre TEXT,
@@ -612,8 +709,6 @@ def init_db():
 
 
     conn.commit()
-    cur.close()
-    release_conn(conn)
 
 
 # ── FUNCIONES DE TRAZABILIDAD POS ──────────────────────────────────────────────
@@ -1077,6 +1172,7 @@ def eliminar_producto(sku):
 
 # ── AUDIT LOG ──
 
+@cerrar_conexiones_al_salir
 def init_audit():
     conn = None
     try:
@@ -1189,6 +1285,7 @@ def limpiar_audit_antiguo(dias=90):
 
 # ── DEVOLUCIONES ──
 
+@cerrar_conexiones_al_salir
 def init_devoluciones():
     conn = get_conn()
     cur = conn.cursor()
@@ -1235,6 +1332,7 @@ def init_devoluciones():
     release_conn(conn)
 
 
+@cerrar_conexiones_al_salir
 def init_devoluciones_mkt():
     """Tabla de trazabilidad de devoluciones traídas automáticamente desde las
     APIs de cada marketplace (separada de 'devoluciones', que es el registro
@@ -1555,6 +1653,7 @@ def borrar_movimientos_marketplace(desde_fecha=None):
 CANAL_DISPLAY = {"web":"Web Propia","walmart":"Walmart","paris":"París",
     "falabella":"Falabella","ripley":"Ripley","mercadolibre":"Mercado Libre","hites":"Hites"}
 
+@cerrar_conexiones_al_salir
 def init_sku_mapeo():
     conn = get_conn(is_admin=True); cur = conn.cursor()
     cur.execute("""CREATE TABLE IF NOT EXISTS sku_mapeo (
@@ -1576,6 +1675,7 @@ def init_sku_mapeo():
 # Ambas se sincronizan al actualizar stock/precio.
 # ═══════════════════════════════════════════════════════════════════════════
 
+@cerrar_conexiones_al_salir
 def init_sku_mapeo_canal():
     """Crea la tabla nueva sku_mapeo_canal (multi-publicación por canal).
 
@@ -1949,6 +2049,7 @@ def listar_historial_mapeo(limite=10):
 
 # ── ALERTAS ────────────────────────────────────────────────────────────────
 
+@cerrar_conexiones_al_salir
 def init_alertas():
     """Crea tablas de alertas y configuración de notificaciones."""
     conn = get_conn(); cur = conn.cursor()
@@ -2142,6 +2243,7 @@ def set_alertas_config(data):
 
 # ── MERCADOLIBRE AUTH ──────────────────────────────────────────────────────
 
+@cerrar_conexiones_al_salir
 def init_meli_auth():
     """Crea tabla mercadolibre_auth para guardar tokens OAuth2."""
     conn = get_conn(); cur = conn.cursor()
@@ -2379,6 +2481,7 @@ BODEGAS_DEFAULT = [
 ]
 
 
+@cerrar_conexiones_al_salir
 def init_bodegas():
     """Crea tablas bodegas + stock_bodega y migra el stock actual a Bodega Central.
 
