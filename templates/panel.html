@@ -1562,6 +1562,105 @@ tbody td {
   }
 </style>
 <script>
+// ════════════════════════════════════════════════════════════════════
+//  Coordinador de peticiones
+//  Tiene que ir ANTES que todo lo demas: envuelve fetch() para que el
+//  resto del panel lo use sin enterarse.
+// ════════════════════════════════════════════════════════════════════
+(function(){
+  'use strict';
+  if (window.__colaFetch) return;
+
+  // Cuantos GET pueden estar en vuelo a la vez.
+  // Medido contra produccion: con 17 simultaneas la carga tardaba 29,5 s;
+  // las mismas llamadas de a 4 corren casi a su velocidad aislada.
+  var MAX_EN_VUELO = 4;
+
+  var fetchOriginal = window.fetch.bind(window);
+  var enVuelo = 0;
+  var cola = [];
+  var compartidas = Object.create(null);   // url -> promesa en curso
+
+  var stats = { pedidas: 0, ahorradas: 0, encoladas: 0, espera_max_ms: 0 };
+  window.__colaFetch = stats;
+
+  // Trabajos largos que se piden con GET: una sincronizacion puede tardar un
+  // minuto entero. Si entrara a la cola se quedaria con uno de los 4 turnos y
+  // dejaria al panel esperando detras de ella.
+  var NO_ENCOLAR = /\/(sync|sincroniz|forzar|importar|exportar|descargar|zip)/i;
+
+  function esGet(url, opciones){
+    if (opciones && opciones.method && String(opciones.method).toUpperCase() !== 'GET') return false;
+    if (typeof url !== 'string') return false;      // Request u objeto raro: derecho
+    // Con AbortController no se puede compartir: cancelar una cancelaria a la
+    // otra, porque las dos estarian colgadas de la MISMA peticion.
+    if (opciones && opciones.signal) return false;
+    if (NO_ENCOLAR.test(url)) return false;
+    // Solo lo nuestro. Una URL absoluta a otro dominio no pasa por la cola.
+    if (/^[a-z]+:\/\//i.test(url) && url.indexOf(location.origin) !== 0) return false;
+    return true;
+  }
+
+  function siguiente(){
+    while (enVuelo < MAX_EN_VUELO && cola.length) {
+      var t = cola.shift();
+      enVuelo++;
+      var esperado = Date.now() - t.encolada;
+      if (esperado > stats.espera_max_ms) stats.espera_max_ms = esperado;
+      t.arrancar();
+    }
+  }
+
+  function correr(url, opciones){
+    return new Promise(function(listo, falla){
+      var tarea = {
+        encolada: Date.now(),
+        arrancar: function(){
+          fetchOriginal(url, opciones).then(listo, falla);
+        }
+      };
+      if (enVuelo < MAX_EN_VUELO) {
+        enVuelo++;
+        tarea.arrancar();
+      } else {
+        stats.encoladas++;
+        cola.push(tarea);
+      }
+    }).then(function(r){
+      enVuelo--; siguiente(); return r;
+    }, function(e){
+      enVuelo--; siguiente(); throw e;
+    });
+  }
+
+  window.fetch = function(url, opciones){
+    stats.pedidas++;
+
+    if (!esGet(url, opciones)) return fetchOriginal(url, opciones);
+
+    // Si esa misma URL ya esta pedida, nos colgamos de la que ya va en camino.
+    var yaVa = compartidas[url];
+    if (yaVa) {
+      stats.ahorradas++;
+      // clone() y no la respuesta misma: el cuerpo de una Response se puede
+      // leer UNA sola vez, asi que cada quien necesita su propia copia.
+      return yaVa.then(function(r){ return r.clone(); });
+    }
+
+    var p = correr(url, opciones);
+    compartidas[url] = p;
+
+    // Se suelta apenas vuelve: esto junta a los que piden a la vez, no es
+    // una cache. La proxima carga de esa URL sale de la base igual que siempre.
+    var soltar = function(){ if (compartidas[url] === p) delete compartidas[url]; };
+    p.then(soltar, soltar);
+
+    return p.then(function(r){ return r.clone(); });
+  };
+})();
+</script>
+
+<script>
   // Tooltip global delegado para [data-tooltip]
   (function(){
     let tip;
