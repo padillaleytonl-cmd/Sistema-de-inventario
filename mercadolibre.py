@@ -936,30 +936,51 @@ def _procesar_orden_webhook(resource):
                             sku_lusync = sku_traducido
                     except: pass
 
-                # Reintegrar stock
+                # Reintegrar stock EN LA BODEGA QUE CORRESPONDE
+                #
+                # Una venta Full se descuenta de MELI_FULL, asi que su
+                # cancelacion tiene que volver ahi. La unidad nunca salio de la
+                # bodega de MercadoLibre: reponerla en Central suma una que no
+                # existe y deja Full corta.
+                #
+                # Antes esto hacia dos cosas mal. Si era Full no reponia en
+                # NINGUNA bodega —solo dejaba un movimiento que, por el default
+                # de registrar_movimiento, quedaba anotado contra CENTRAL, asi
+                # que el movimiento decia una cosa y el stock hacia otra—. Y si
+                # era Seller hacia "p['stock'] += qty; guardar_producto(p)", que
+                # escribe solo el total legacy sin tocar stock_bodega: como el
+                # total se recalcula sumando las bodegas, esa reposicion
+                # desaparecia en el siguiente recalculo del SKU.
+                #
+                # reintegrar_stock_bodega hace las dos cosas bien: ajusta la
+                # bodega y deja el movimiento con esa bodega.
+                bodega_destino = "MELI_FULL" if es_full else "CENTRAL"
                 productos = cargar_productos()
                 for p in productos:
                     if p["sku"] == sku_lusync:
-                        # Si es Full, el stock se reintegra en bodega FULL_MELI
-                        # Si es Seller, en CENTRAL (la "stock" del producto)
-                        # Por simplicidad usamos el campo stock principal (CENTRAL)
-                        if not es_full:
-                            p["stock"] += qty
-                            guardar_producto(p)
-                        registrar_movimiento(
-                            "entrada", p["sku"], p["nombre"], qty,
+                        from inventario import (reintegrar_stock_bodega,
+                                                get_stock_bodega)
+                        reintegrar_stock_bodega(
+                            sku_lusync, qty, bodega_destino,
                             f"Cancelación MELI orden {order_id}",
-                            usuario="Sistema", canal="MercadoLibre", orden_id=order_id
+                            canal="MercadoLibre", orden_id=order_id,
+                            usuario="Sistema"
                         )
                         ultimo_sku = sku_lusync
-                        items_reintegrados.append(f"{p['nombre']} (SKU: {sku_lusync}) x{qty}")
+                        items_reintegrados.append(
+                            f"{p['nombre']} (SKU: {sku_lusync}) x{qty} → {bodega_destino}")
 
-                        # Sync a los 6 marketplaces si fue Seller (Central cambió)
+                        # Sync a los 6 marketplaces solo si cambio lo vendible
+                        # por nosotros. Si volvio a Full, lo que se publica no
+                        # cambia: ese stock lo administra MercadoLibre.
                         if not es_full:
                             try:
                                 from app import sincronizar_stock_marketplaces
+                                # Se relee despues del ajuste: p["stock"] quedo
+                                # viejo y publicaria el numero de antes.
                                 sincronizar_stock_marketplaces(
-                                    sku_lusync, p["stock"],
+                                    sku_lusync,
+                                    get_stock_bodega(sku_lusync, "CENTRAL") or 0,
                                     contexto="meli_webhook_cancelacion"
                                 )
                             except Exception as e_sync:

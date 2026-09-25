@@ -2616,31 +2616,40 @@ def _sync_meli_automatico():
                                 items_reintegrados.append(f"{p['nombre']} (SKU: {sku_seller}→{sku_lusync}) x{cantidad} — devolución, sin reintegrar")
                                 break
 
+                            # reintegrar_stock_bodega y no ajustar_stock_bodega +
+                            # registrar_movimiento por separado: registrar_movimiento
+                            # no recibe bodega y usa CENTRAL por defecto, asi que el
+                            # stock iba a MELI_FULL y el movimiento quedaba anotado
+                            # contra CENTRAL. El registro decia una cosa y el stock
+                            # otra, que para auditar es peor que no tenerlo.
+                            from inventario import (reintegrar_stock_bodega,
+                                                    get_stock_bodega)
                             if es_full_cancel:
                                 # Sigue en la bodega de MELI. No toca central ni
                                 # re-sincroniza: el stock Full no afecta la
                                 # disponibilidad propia.
-                                from inventario import ajustar_stock_bodega
-                                ajustar_stock_bodega(p["sku"], "MELI_FULL", cantidad)
-                                registrar_movimiento(
-                                    "entrada", p["sku"], p["nombre"], cantidad,
-                                    f"Cancelación MELI Full orden {order_id} (bodega MELI_FULL)",
-                                    usuario="Sistema", canal="MercadoLibre", orden_id=order_id
-                                )
+                                reintegrar_stock_bodega(
+                                    p["sku"], cantidad, "MELI_FULL",
+                                    f"Cancelación MELI Full orden {order_id}",
+                                    canal="MercadoLibre", orden_id=order_id,
+                                    usuario="Sistema")
                                 print(f"[Scheduler MELI] CANCELACIÓN FULL SKU:{p['sku']} +{cantidad} → MELI_FULL")
                                 items_reintegrados.append(f"{p['nombre']} (SKU: {sku_seller}→{sku_lusync}) x{cantidad} → MELI Full")
                                 break
 
                             # Venta propia: vuelve a central, como siempre.
-                            p["stock"] += cantidad
-                            guardar_producto(p)
-                            registrar_movimiento(
-                                "entrada", p["sku"], p["nombre"], cantidad,
+                            #
+                            # Antes hacia "p['stock'] += cantidad; guardar_producto(p)",
+                            # que escribe solo el total legacy sin tocar stock_bodega.
+                            # Como el total se recalcula sumando las bodegas, la
+                            # reposicion desaparecia en el siguiente recalculo del SKU.
+                            reintegrar_stock_bodega(
+                                p["sku"], cantidad, "CENTRAL",
                                 f"Cancelación MELI orden {order_id}",
-                                usuario="Sistema", canal="MercadoLibre", orden_id=order_id
-                            )
+                                canal="MercadoLibre", orden_id=order_id,
+                                usuario="Sistema")
                             sincronizar_stock_marketplaces(
-                                p["sku"], p["stock"],
+                                p["sku"], get_stock_bodega(p["sku"], "CENTRAL") or 0,
                                 contexto="meli_cancelacion_bg"
                             )
                             items_reintegrados.append(f"{p['nombre']} (SKU: {sku_seller}→{sku_lusync}) x{cantidad}")
@@ -3863,10 +3872,21 @@ def _sync_full_meli_diario():
         _sync_locks["full_meli"]["running"] = False
 
 
-# Registrar scheduler diario (cada 24 horas, primera ejecución a las 6h después del arranque)
-# Tiempo elegido: 6h después de arrancar para no saturar el deploy inicial
+# Cada 24 horas, con la primera corrida 10 minutos despues de arrancar.
+#
+# Antes la primera corrida era a las 6 HORAS del arranque, y ahi estaba el
+# problema: next_run_time se recalcula en CADA arranque, asi que cada deploy o
+# reinicio volvia a poner el contador en seis horas. En la practica este job
+# casi nunca llegaba a correr, y el stock de MELI_FULL quedaba congelado en
+# Lusync mientras MercadoLibre seguia vendiendo y reponiendo.
+#
+# Eso tiene consecuencias que no se ven: con MELI_FULL desactualizado en cero,
+# descontar_venta_inteligente hace min(cantidad, 0) = 0 y la venta queda
+# registrada con CERO unidades. Medido: el 98% de las ventas de MercadoLibre.
+#
+# Diez minutos alcanza para no pelear con el arranque y garantiza que corra.
 scheduler.add_job(_sync_full_meli_diario, "interval", hours=24, id="full_meli_diario",
-                  next_run_time=(datetime.now() + timedelta(hours=6)))
+                  next_run_time=(datetime.now() + timedelta(minutes=10)))
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -3997,10 +4017,12 @@ def _sync_full_walmart_core():
 _sync_full_walmart_diario = con_tenant_default(_sync_full_walmart_core)
 
 
-# Mismo ritmo que el de MELI. Se desfasa una hora para no pedirle a las dos APIs
-# al mismo tiempo después de un despliegue.
+# Mismo ritmo que el de MELI, y por el mismo motivo baja de 7 horas a minutos:
+# con la primera corrida tan lejos, cada reinicio reiniciaba el contador y el
+# job no llegaba a ejecutarse nunca. Se desfasa de MELI para no pedirle a las
+# dos APIs al mismo tiempo.
 scheduler.add_job(_sync_full_walmart_diario, "interval", hours=24, id="full_walmart_diario",
-                  next_run_time=(datetime.now() + timedelta(hours=7)))
+                  next_run_time=(datetime.now() + timedelta(minutes=14)))
 
 
 # ── Jobs de facturación electrónica (blindaje profesional) ──
