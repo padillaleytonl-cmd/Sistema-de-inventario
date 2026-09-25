@@ -931,6 +931,34 @@ def admin_perf_tablas():
             conn.rollback()
             info["contador_alertas"] = {"error": str(e)[:200]}
 
+        # De donde salen las 422 mil alertas. crear_alerta() no deduplica, y los
+        # schedulers corren cada 5 o 10 minutos: si una condicion no se resuelve,
+        # cada vuelta escribe una alerta nueva.
+        try:
+            cur.execute("""SELECT tipo, canal, COUNT(*) AS n,
+                                  MIN(fecha) AS primera, MAX(fecha) AS ultima
+                           FROM alertas
+                           GROUP BY tipo, canal
+                           ORDER BY n DESC LIMIT 12""")
+            filas = []
+            for tipo, canal, n, primera, ultima in cur.fetchall():
+                filas.append({
+                    "tipo": tipo, "canal": canal, "cuantas": int(n),
+                    "primera": primera.isoformat() if primera else None,
+                    "ultima": ultima.isoformat() if ultima else None,
+                })
+            info["alertas_por_tipo"] = filas
+            if filas:
+                p = filas[0]
+                info["lectura"].append(
+                    "El grueso son '%s' (%d de %d). La primera es del %s y la "
+                    "ultima del %s." % (p["tipo"], p["cuantas"],
+                                        info["tablas"].get("alertas", {}).get("filas", 0),
+                                        (p["primera"] or "?")[:10], (p["ultima"] or "?")[:10]))
+        except Exception as e:
+            conn.rollback()
+            info["alertas_por_tipo"] = "no disponible: %s" % str(e)[:150]
+
         cur.close()
     except Exception as e:
         import traceback
