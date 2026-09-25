@@ -945,6 +945,41 @@ def _calcular_stock_antes(sku, tipo, cantidad):
     else:
         return actual
 
+def asegurar_indices_alertas():
+    """Crea, una sola vez al arranque, los indices que el panel necesita sobre
+    alertas.
+
+    La tabla tiene 422.002 filas —cien veces mas que movimientos— y no tenia
+    ningun indice util para las dos consultas que corren en CADA carga del
+    panel. Postgres las resolvia con un Seq Scan completo: 3027 ms el contador
+    y 5055 ms el banner de SKU sin mapeo.
+
+    Los indices son PARCIALES: solo cubren las filas no leidas, que son las
+    unicas que se consultan. Hoy no hay ninguna, asi que ocupan casi nada y la
+    consulta deja de tocar la tabla.
+    """
+    conn = get_conn(is_admin=True)
+    cur = conn.cursor()
+    try:
+        # El contador del campanita: COUNT(*) WHERE leida=FALSE (+ filtro RLS
+        # por tenant_id, por eso tenant_id va en el indice).
+        cur.execute("""CREATE INDEX IF NOT EXISTS idx_alertas_no_leidas
+                       ON alertas (tenant_id) WHERE leida = FALSE""")
+        # El banner de SKU sin mapeo: filtra por tipo y ordena por fecha DESC.
+        # El predicado usa "IS NOT TRUE" porque esa consulta acepta tambien las
+        # filas con leida en NULL.
+        cur.execute("""CREATE INDEX IF NOT EXISTS idx_alertas_sin_mapeo
+                       ON alertas (tenant_id, fecha DESC)
+                       WHERE tipo = 'sku_sin_mapeo' AND leida IS NOT TRUE""")
+        conn.commit()
+        print("[Perf] Indices de alertas verificados")
+    except Exception as e:
+        conn.rollback()
+        print(f"[Perf] asegurar_indices_alertas: {e}")
+    finally:
+        cur.close(); release_conn(conn)
+
+
 def asegurar_columnas_movimientos():
     """Crea (una sola vez, al arranque) las columnas e índices que la pantalla de
     Movimientos necesita. Antes esto se ejecutaba en CADA carga, lo que tomaba

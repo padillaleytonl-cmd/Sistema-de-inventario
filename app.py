@@ -79,8 +79,9 @@ try:
 except Exception as _e:
     print(f"[init_devoluciones_mkt] {_e}")
 try:
-    from inventario import asegurar_columnas_movimientos
+    from inventario import asegurar_columnas_movimientos, asegurar_indices_alertas
     asegurar_columnas_movimientos()
+    asegurar_indices_alertas()
 except Exception as _e:
     print(f"[asegurar_columnas_movimientos] {_e}")
 try:
