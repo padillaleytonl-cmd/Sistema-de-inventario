@@ -1152,11 +1152,10 @@ def admin_alertas_limpiar():
         info["total_antes"] = int(cur.fetchone()[0])
 
         if modo == "repetidas":
-            # Contar con COUNT(DISTINCT) y no con la ventana: sobre 423 mil
-            # filas, COUNT(*) sobre el ROW_NUMBER tardaba mas de 30 segundos
-            # porque obliga a ordenar toda la tabla. El agregado hash es
-            # mucho mas barato, y lo que se conserva es justamente una fila
-            # por grupo.
+            # Contar los GRUPOS, no las filas a borrar: lo que se conserva es
+            # exactamente una fila por grupo, asi que el resto sale por resta.
+            # Un COUNT sobre el ROW_NUMBER obligaria a ordenar las 423 mil
+            # filas y tardaba casi 30 segundos; el agregado es barato.
             cur.execute("SELECT COUNT(*) FROM (SELECT DISTINCT tipo, canal, sku "
                         "FROM alertas) g")
             info["se_conservan"] = int(cur.fetchone()[0])
@@ -1187,37 +1186,38 @@ def admin_alertas_limpiar():
             return jsonify(info)
 
         # ── Borrado por lotes, con tope de tiempo ────────────────────
-        # Que ids hay que borrar se calcula UNA sola vez, en una tabla
-        # temporal. Antes el subselect se recalculaba en cada lote: veinte
-        # lotes eran veinte recorridas completas de la tabla.
-        cur.execute("DROP TABLE IF EXISTS _alertas_a_borrar")
-        cur.execute("CREATE TEMP TABLE _alertas_a_borrar AS " + sql_objetivo,
-                    {"dias": str(dias)})
-        cur.execute("CREATE INDEX ON _alertas_a_borrar (id)")
+        # Los ids que se CONSERVAN se piden una sola vez y son poquisimos: uno
+        # por (tipo, canal, sku), o sea 184 en total. Con esa lista en la mano
+        # cada lote es un DELETE simple, sin recalcular nada.
+        #
+        # La version anterior armaba los ids a BORRAR con un ROW_NUMBER sobre
+        # las 423 mil filas. Esa sola consulta tardaba casi 30 segundos —igual
+        # que el conteo— asi que el tiempo se agotaba antes de borrar una sola
+        # fila. Un MAX(id) agrupado es un agregado hash: mucho mas barato que
+        # ordenar la tabla entera.
+        if modo == "repetidas":
+            cur.execute("SELECT MAX(id) FROM alertas GROUP BY tipo, canal, sku")
+            conservar = [r[0] for r in cur.fetchall()]
+            info["se_conservan"] = len(conservar)
+            sql_tanda = ("SELECT id FROM alertas WHERE id <> ALL(%(conservar)s) "
+                         "LIMIT %(lote)s")
+            params = {"conservar": conservar, "lote": lote}
+        else:
+            sql_tanda = sql_objetivo + " LIMIT %(lote)s"
+            params = {"dias": str(dias), "lote": lote}
         conn.commit()
 
         limite = _t.time() + segundos
         borradas, lotes = 0, 0
         while _t.time() < limite:
-            cur.execute(
-                "WITH tanda AS ("
-                "  DELETE FROM _alertas_a_borrar"
-                "   WHERE id IN (SELECT id FROM _alertas_a_borrar LIMIT %(lote)s)"
-                "  RETURNING id)"
-                " DELETE FROM alertas WHERE id IN (SELECT id FROM tanda)",
-                {"lote": lote})
+            cur.execute("DELETE FROM alertas WHERE id IN (" + sql_tanda + ")",
+                        params)
             n = cur.rowcount
             conn.commit()          # un commit por lote: nada queda a medias
             borradas += n
             lotes += 1
             if n == 0:
                 break
-
-        try:
-            cur.execute("DROP TABLE IF EXISTS _alertas_a_borrar")
-            conn.commit()
-        except Exception:
-            conn.rollback()
 
         info["borradas"] = borradas
         info["lotes"] = lotes
