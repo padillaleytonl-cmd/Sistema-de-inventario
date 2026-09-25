@@ -863,6 +863,75 @@ def auditoria_ordenes_limbo():
     return jsonify(resultado)
 
 
+@app.route("/admin/lusync/perf/pool")
+def admin_perf_pool():
+    """Estado del pool de conexiones. SOLO LECTURA.
+
+    Sirve para responder una pregunta concreta: las conexiones se devuelven o se
+    pierden. get_conn() saca del pool, y si alguien hace conn.close() en vez de
+    release_conn(), el pool sigue creyendo que esa conexion esta prestada y nunca
+    la recupera. Cuando se agotan las 12, get_conn() cae a abrir una conexion
+    NUEVA en cada request —cuesta cerca de un segundo— y el sistema funciona
+    igual, pero lento para siempre y sin un solo error.
+
+    'prestadas' cerca del maximo con el sistema en reposo es la senal de fuga.
+
+    Uso: /admin/lusync/perf/pool
+    """
+    if not (session.get("logged") or session.get("is_lusync_admin")):
+        return jsonify({"error": "no autorizado"}), 401
+
+    import time as _t
+    from inventario import _get_pool, get_conn, release_conn
+
+    info = {"ok": True, "solo_lectura": True}
+    try:
+        pool = _get_pool()
+        # _used y _pool son internos de psycopg2, pero son la unica forma de ver
+        # cuantas conexiones estan prestadas sin instrumentar el pool entero.
+        prestadas = len(getattr(pool, "_used", {}) or {})
+        libres = len(getattr(pool, "_pool", []) or [])
+        info["prestadas"] = prestadas
+        info["libres_en_el_pool"] = libres
+        info["maximo"] = getattr(pool, "maxconn", None)
+        info["cerrado"] = bool(getattr(pool, "closed", False))
+
+        # Cuanto cuesta pedir y devolver una conexion, que es lo que paga cada
+        # request antes de hacer siquiera su primera consulta
+        t0 = _t.time()
+        cn = get_conn()
+        ms_pedir = round((_t.time() - t0) * 1000)
+        t1 = _t.time()
+        with cn.cursor() as c:
+            c.execute("SELECT 1")
+            c.fetchone()
+        ms_consulta = round((_t.time() - t1) * 1000)
+        release_conn(cn)
+        info["ms_obtener_conexion"] = ms_pedir
+        info["ms_un_viaje_a_la_bd"] = ms_consulta
+
+        lectura = []
+        if info["maximo"] and prestadas >= info["maximo"]:
+            lectura.append("El pool esta AGOTADO: %d de %d prestadas. Cada request "
+                           "esta abriendo una conexion nueva, y eso es lo que lo "
+                           "vuelve lento." % (prestadas, info["maximo"]))
+        elif prestadas > (info["maximo"] or 12) / 2:
+            lectura.append("%d de %d conexiones prestadas con el sistema en reposo: "
+                           "hay fuga." % (prestadas, info["maximo"]))
+        else:
+            lectura.append("Pool sano: %d prestadas, %d libres de %s."
+                           % (prestadas, libres, info["maximo"]))
+        lectura.append("Pedir una conexion tomo %d ms; un viaje a la base, %d ms. "
+                       "Lo primero deberia ser casi cero si el pool funciona."
+                       % (ms_pedir, ms_consulta))
+        info["lectura"] = lectura
+    except Exception as e:
+        import traceback
+        info = {"ok": False, "error": str(e)[:300], "traza": traceback.format_exc()[-600:]}
+
+    return jsonify(info)
+
+
 @app.route("/admin/lusync/stock/health")
 def health_check_stock_fix():
     """Dice si el fix del bug de stock está activo, SIN modificar nada.
@@ -1181,7 +1250,7 @@ def _asegurar_fecha_compra(canal, orden_id, fecha_compra, sku=None):
                   AND (COALESCE(orden_id::text,'') = %s OR COALESCE(numero_orden,'') = %s)
                   AND tipo = 'salida' AND fecha_compra_marketplace IS NULL
             """, (fc, canal, str(orden_id), str(orden_id)))
-        conn.commit(); cur.close(); conn.close()
+        conn.commit(); cur.close(); release_conn(conn)
     except Exception as e:
         print(f"[_asegurar_fecha_compra] {canal} {orden_id}: {e}")
 
@@ -2974,7 +3043,7 @@ def _sync_autocorreccion():
         central_por_sku = {r[0]: int(r[1] or 0) for r in cur.fetchall()}
         cur.close()
         try: _get_pool().putconn(conn)
-        except Exception: conn.close()
+        except Exception: release_conn(conn)
 
         desvios = []  # (sku, canal, stock_canal, central)
 
@@ -4035,7 +4104,7 @@ def ver_productos():
                     "codigo": cod, "nombre": nom, "tipo": tipo,
                     "canal": canal, "cantidad": int(cant)
                 })
-            cur.close(); conn.close()
+            cur.close(); release_conn(conn)
             for p in productos:
                 bodegas = por_sku.get(p["sku"], [])
                 p["bodegas_detalle"] = bodegas
@@ -4274,7 +4343,7 @@ def fix_woo_limpiar_duplicados():
     borrados = cur.rowcount
     conn.commit()
     cur.close()
-    conn.close()
+    release_conn(conn)
 
     # 2. Volver a registrar desde WooCommerce con fecha real de compra
     res = requests.get(
@@ -4331,7 +4400,7 @@ def fix_woo_fechas():
     corregidos = cur.rowcount
     conn.commit()
     cur.close()
-    conn.close()
+    release_conn(conn)
     return {"ok": True, "corregidos": corregidos}
 
 @app.route("/fix_woo_movimientos")
@@ -4366,7 +4435,7 @@ def fix_woo_movimientos():
         )
         ya_tiene_movimiento = cur.fetchone() is not None
         cur.close()
-        conn.close()
+        release_conn(conn)
 
         if ya_tiene_movimiento:
             continue
@@ -4448,12 +4517,12 @@ def fix_db():
         cur.execute("ALTER TABLE ordenes_procesadas ADD COLUMN IF NOT EXISTS order_id_texto TEXT")
         conn.commit()
         cur.close()
-        conn.close()
+        release_conn(conn)
         return {"ok": True, "mensaje": "Columnas creadas correctamente"}
     except Exception as e:
         conn.rollback()
         cur.close()
-        conn.close()
+        release_conn(conn)
         return {"error": str(e)}
 
 @app.route("/walmart/reset_y_limpiar")
@@ -4481,7 +4550,7 @@ def walmart_reset_y_limpiar():
 
     conn.commit()
     cur.close()
-    conn.close()
+    release_conn(conn)
     return {
         "ok": True,
         "movimientos_borrados": movimientos_borrados,
@@ -4510,7 +4579,7 @@ def walmart_ver_fechas():
     """)
     rows = cur.fetchall()
     cur.close()
-    conn.close()
+    release_conn(conn)
     return {"movimientos": [
         {"utc":r[0],"santiago":r[1],"fecha_santiago":r[2],"motivo":r[3],"canal":r[4]}
         for r in rows
@@ -4534,7 +4603,7 @@ def walmart_ver_movimientos_db():
     """)
     rows = cur.fetchall()
     cur.close()
-    conn.close()
+    release_conn(conn)
     return {"movimientos": [
         {"tipo":r[0],"sku":r[1],"nombre":r[2][:30],"cantidad":r[3],
          "motivo":r[4],"canal":r[5],"usuario":r[6],"hora":r[7]}
@@ -4561,7 +4630,7 @@ def walmart_fix_canales():
     actualizados = cur.rowcount
     conn.commit()
     cur.close()
-    conn.close()
+    release_conn(conn)
     return {"ok": True, "movimientos_corregidos": actualizados}
 
 @app.route("/walmart/sync_debug")
@@ -5099,7 +5168,7 @@ def devoluciones_registrar_avanzado():
         """, (codigo, tipificacion, motivo_texto, responsable,
               deadline, ahora, orden_snapshot, dev_id))
         conn.commit()
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         # Aplicar impacto en stock según tipificación
         impacto = _aplicar_impacto_devolucion(tipificacion, sku, cantidad, dev_id)
@@ -5303,7 +5372,7 @@ def devoluciones_etiqueta_pdf(dev_id):
             conn = get_conn(); cur = conn.cursor()
             cur.execute("UPDATE devoluciones SET etiqueta_generada=TRUE WHERE id=%s", (dev_id,))
             conn.commit()
-            cur.close(); conn.close()
+            cur.close(); release_conn(conn)
         except: pass
 
         return send_file(pdf_buf, as_attachment=True,
@@ -5334,7 +5403,7 @@ def devoluciones_pendientes_revision():
             LIMIT 100
         """)
         rows = cur.fetchall()
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         items = []
         for r in rows:
@@ -6039,7 +6108,7 @@ def debug_estado_bd():
     ultimas_op = [{"orden_id": x[0], "texto": x[1], "fecha": x[2]}
                   for x in cur.fetchall()]
 
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return {
         "ordenes_procesadas_total": r[0],
         "con_order_id_texto": r[1],
@@ -6905,11 +6974,11 @@ def admin_revertir_duplicados(numero_orden):
         movs = [dict(zip(cols, r)) for r in cur.fetchall()]
 
         if not movs:
-            cur.close(); conn.close()
+            cur.close(); release_conn(conn)
             return jsonify({"error": f"No se encontraron movimientos de salida para la orden {numero_orden}"}), 404
 
         if len(movs) == 1:
-            cur.close(); conn.close()
+            cur.close(); release_conn(conn)
             return jsonify({"ok": True, "mensaje": "Solo hay 1 movimiento — no hay duplicados", "movimientos": movs})
 
         # Determinar cuál conservar
@@ -6954,7 +7023,7 @@ def admin_revertir_duplicados(numero_orden):
             stock_disp = int(cur.fetchone()[0] or 0)
             sincronizar_stock_marketplaces(sku, stock_disp, contexto="revertir_duplicados")
 
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         registrar_audit(
             session.get("usuario", "admin_token"), request.remote_addr,
@@ -7981,7 +8050,7 @@ def ruta_bodegas_matriz():
         stock_dict = {}
         for sku, bod, cant in cur.fetchall():
             stock_dict.setdefault(sku, {})[bod] = int(cant or 0)
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         # Construir matriz
         skus = []
@@ -8025,7 +8094,7 @@ def ruta_bodegas_descargar_plantilla():
         stock_dict = {}
         for sku, bod, cant in cur.fetchall():
             stock_dict.setdefault(sku, {})[bod] = int(cant or 0)
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         wb = Workbook()
         ws = wb.active
@@ -8360,7 +8429,7 @@ def ruta_stats_propia_vs_fulfillment():
             GROUP BY COALESCE(m.bodega_codigo, 'CENTRAL')
         """, (desde, hasta))
         rows = cur.fetchall()
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         # Mapear por bodega y enriquecer con metadata
         bodegas_meta = {b["codigo"]: b for b in listar_bodegas()}
@@ -8801,7 +8870,7 @@ def ruta_meli_reclasificar_bodegas():
                        ORDER BY id DESC
                        LIMIT %s""", (max_ordenes,))
         rows = cur.fetchall()
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
         log.append(f"Revisando {len(rows)} movimientos MELI")
 
         for orden_id, sku, cantidad, bodega_actual in rows:
@@ -9265,7 +9334,7 @@ def ruta_alertas_sin_mapeo_pendientes():
         """)
         cols = [d[0] for d in cur.description]
         rows = [dict(zip(cols, r)) for r in cur.fetchall()]
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
         for r in rows:
             if r.get("fecha") and hasattr(r["fecha"], "isoformat"):
                 r["fecha"] = r["fecha"].isoformat()
@@ -9286,7 +9355,7 @@ def ruta_alertas_leer_tipo(tipo):
             WHERE tipo = %s AND (leida IS NULL OR leida = FALSE)
         """, (tipo,))
         marcadas = cur.rowcount
-        conn.commit(); cur.close(); conn.close()
+        conn.commit(); cur.close(); release_conn(conn)
         return jsonify({"ok": True, "marcadas": marcadas})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -9396,7 +9465,7 @@ def debug_movimientos_trazabilidad():
                 "cantidad": r[12]
             })
 
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         # Diagnóstico automático
         diagnostico = []
@@ -9573,7 +9642,7 @@ def admin_reconstruir_fechas_compra():
         ORDER BY fecha DESC
     """, (dias,))
     pendientes = cur.fetchall()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
 
     log.append(f"Movimientos pendientes en BD: {len(pendientes)}")
 
@@ -9771,7 +9840,7 @@ def admin_reconstruir_fechas_compra():
             conn.rollback()
             log.append(f"COMMIT ERROR: {e}")
             errores_db += 1
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
 
     # ── 4) Verificar cuántos quedan pendientes después ──
     conn = get_conn(); cur = conn.cursor()
@@ -9782,7 +9851,7 @@ def admin_reconstruir_fechas_compra():
           AND fecha > NOW() - (%s || ' days')::INTERVAL
     """, (dias,))
     quedan_pendientes = cur.fetchone()[0]
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
 
     return jsonify({
         "ok": True,
@@ -9831,7 +9900,7 @@ def admin_estado_reconstruccion():
                 "desde": r[4],
                 "hasta": r[5]
             })
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         total_general = sum(r["total"] for r in resumen)
         total_con = sum(r["con_fecha_real"] for r in resumen)
@@ -10052,7 +10121,7 @@ def admin_reset_movimientos():
                 total_ord = cur.fetchone()[0]
             except:
                 total_ord = 0
-            cur.close(); conn.close()
+            cur.close(); release_conn(conn)
             return jsonify({
                 "ok": False,
                 "modo": "preview",
@@ -10133,7 +10202,7 @@ def admin_reset_movimientos():
         except Exception as e:
             log.append(f"  No se pudo registrar audit: {e}")
 
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         return jsonify({
             "ok": True,
@@ -10180,7 +10249,7 @@ def admin_listar_backups():
             except:
                 cnt = -1
             tablas.append({"tabla": nombre, "filas": cnt})
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
         return jsonify({"backups": tablas, "total": len(tablas)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -11681,7 +11750,7 @@ def admin_estado_tablas():
         except Exception as e:
             info["backups"] = {"error": str(e)}
 
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         # Diagnóstico automático
         diagnostico = []
@@ -11852,7 +11921,7 @@ def admin_limpiar_duplicados_mapeo():
         cur.execute("SELECT canal, COUNT(*) FROM sku_mapeo_canal WHERE activo = TRUE GROUP BY canal")
         por_canal_despues = {r[0]: r[1] for r in cur.fetchall()}
 
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         if not dry_run:
             registrar_audit(
@@ -12214,10 +12283,10 @@ def admin_reprocesar_ordenes():
         conn.commit()
     except Exception as e:
         conn.rollback()
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
         return jsonify({"error": f"Error general: {e}"}), 500
     
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
 
     # ── NO lanzar el scheduler automáticamente después de borrar marcas.
     # Razón: si el scheduler ya está corriendo en su ciclo normal, procesaría
@@ -12537,7 +12606,7 @@ def admin_movimientos_por_fecha():
         
         ids_por_canal_lista = {k: sorted(list(v)) for k, v in ids_por_canal.items()}
         
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
         
         return jsonify({
             "rango": {"desde": desde, "hasta": hasta, "canal": canal_filtro or "todos"},
@@ -12548,7 +12617,7 @@ def admin_movimientos_por_fecha():
             "movimientos": movimientos
         })
     except Exception as e:
-        try: cur.close(); conn.close()
+        try: cur.close(); release_conn(conn)
         except: pass
         return jsonify({"error": str(e)}), 500
 
@@ -12618,7 +12687,7 @@ def admin_rellenar_fechas_compra():
             ORDER BY fecha DESC LIMIT %s
         """, params + [limite])
         movs = cur.fetchall()
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         actualizados = []
         errores = []
@@ -12706,7 +12775,7 @@ def admin_rellenar_fechas_compra():
                                    (fecha_compra, mov_id))
                         actualizados.append({"id": mov_id, "canal": canal, "orden": orden, "sku": sku,
                                             "fecha_compra": fecha_compra.isoformat()})
-                    conn.commit(); cur.close(); conn.close()
+                    conn.commit(); cur.close(); release_conn(conn)
                 else:
                     errores.append({"canal": canal, "orden": orden, "razon": "no se obtuvo fecha"})
             except Exception as e:
@@ -12755,7 +12824,7 @@ def admin_diagnostico_mapeo():
         cur.execute(sql, params)
         rows = [{"id":r[0],"sku_lusync":r[1],"canal":r[2],"sku_canal":r[3],
                  "item_id_canal":r[4],"activo":r[5],"es_catalogo":r[6]} for r in cur.fetchall()]
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
         return jsonify({"mapeos": rows, "count": len(rows)})
     except Exception as e:
         import traceback
@@ -12856,7 +12925,7 @@ def admin_movimiento_detalle(orden):
                 if m.get(k) and hasattr(m[k], "isoformat"):
                     m[k] = m[k].isoformat()
 
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         return jsonify({
             "busqueda": orden,
@@ -12999,7 +13068,7 @@ def ruta_stats_devoluciones_estado():
             })
 
         conn.commit()
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         return jsonify({
             "por_estado": por_estado,
@@ -13079,7 +13148,7 @@ def ruta_stats_ingresos_periodo():
                 "porcentaje": round((m_canal / monto * 100), 1) if monto > 0 else 0
             })
 
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         return jsonify({
             "monto_total": monto,
@@ -13167,7 +13236,7 @@ def admin_tenancy_crear_super_admin():
         conn = get_conn(); cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM lusync_admins")
         existentes = cur.fetchone()[0]
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         # Si ya hay admins, requerir password fuerte adicional (admin existente)
         if existentes > 0:
@@ -17711,7 +17780,7 @@ def admin_diagnostico_dashboard():
         """, (desde, hasta))
         canales = [{"canal":r[0],"count":r[1]} for r in cur.fetchall()]
 
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         return jsonify({
             "periodo": f"{desde} a {hasta}",
@@ -17745,7 +17814,7 @@ def admin_diagnostico_bd():
         orden_test = request.args.get("orden","3104945440")
         cur.execute("SELECT orden_id,order_id_texto,fecha FROM ordenes_procesadas WHERE order_id_texto LIKE %s ORDER BY fecha DESC",(f"%{orden_test}%",))
         marcas = [{"orden_id":r[0],"key":r[1],"fecha":r[2].isoformat() if r[2] else None} for r in cur.fetchall()]
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
         return jsonify({
             "constraint_existe": constraint is not None,
             "duplicados": duplicados,
@@ -17781,7 +17850,7 @@ def admin_diagnostico_stock():
         cur.execute("SELECT sku, nombre, stock FROM productos WHERE UPPER(sku)=%s LIMIT 1", (sku,))
         r = cur.fetchone()
         if not r:
-            cur.close(); conn.close()
+            cur.close(); release_conn(conn)
             return jsonify({"error": f"SKU '{sku}' no existe en productos"}), 404
         
         sku_real, nombre, stock_legacy = r
@@ -17826,7 +17895,7 @@ def admin_diagnostico_stock():
                 "origen": m[10]
             })
         
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
         
         # ── 4. Análisis de consistencia ──
         consistente = (suma_bodegas == stock_legacy)
@@ -18142,7 +18211,7 @@ def admin_enriquecer_item_ids():
                 log.append(f"❌ Error aplicando updates de {canal}: {e}")
                 actualizados = 0
             finally:
-                cur.close(); conn.close()
+                cur.close(); release_conn(conn)
             return actualizados
 
         # ── Helper: obtener mapeos pendientes (sin item_id) por canal ──
@@ -18153,7 +18222,7 @@ def admin_enriquecer_item_ids():
                 WHERE canal = %s AND item_id_canal IS NULL AND activo = TRUE
             """, (canal,))
             rows = cur.fetchall()
-            cur.close(); conn.close()
+            cur.close(); release_conn(conn)
             # Diccionario: {sku_canal_upper: (sku_lusync, sku_canal_original)}
             return {r[1].upper(): (r[0], r[1]) for r in rows}
 
@@ -18282,7 +18351,7 @@ def admin_enriquecer_item_ids():
                                     conn.rollback()
                                     log.append(f"[MELI] Error insertando multi-pub: {e}")
                                 finally:
-                                    cur.close(); conn.close()
+                                    cur.close(); release_conn(conn)
                             elif len(pubs) > 1 and dry_run:
                                 nuevas_multipub += len(pubs) - 1
 
@@ -18730,7 +18799,7 @@ def admin_auto_mapeo_meli_seguro():
                 WHERE canal='mercadolibre' AND item_id_canal IS NOT NULL AND activo=TRUE
             """)
             item_ids_existentes = set(r[0] for r in cur.fetchall())
-            cur.close(); conn.close()
+            cur.close(); release_conn(conn)
 
             antes_filtro = len(publicaciones_a_insertar)
             publicaciones_a_insertar = [
@@ -18765,7 +18834,7 @@ def admin_auto_mapeo_meli_seguro():
                 )
                 publicaciones_creadas = cur.rowcount
                 conn.commit()
-                cur.close(); conn.close()
+                cur.close(); release_conn(conn)
                 log.append(f"✓ BULK INSERT: {publicaciones_creadas} filas en {(time.time()-t_ins)*1000:.0f}ms")
             except Exception as e:
                 log.append(f"❌ Error en bulk insert: {e}")
@@ -18829,7 +18898,7 @@ def admin_reset_sku_mapeo_canal():
             actuales = cur.fetchone()[0]
             cur.execute("SELECT COUNT(*) FROM sku_mapeo")
             mapeo_legacy = cur.fetchone()[0]
-            cur.close(); conn.close()
+            cur.close(); release_conn(conn)
             return jsonify({
                 "ok": False,
                 "modo": "preview",
@@ -18908,7 +18977,7 @@ def admin_reset_sku_mapeo_canal():
         log.append(f"Construidas {len(filas_para_insertar)} filas en {t_build:.2f}s")
 
         if dry_run:
-            cur.close(); conn.close()
+            cur.close(); release_conn(conn)
             log.append(f"[DRY RUN] No se ejecutó nada en BD")
             return jsonify({
                 "ok": True,
@@ -18936,7 +19005,7 @@ def admin_reset_sku_mapeo_canal():
             log.append(f"✓ Backup creado: {backup_tabla}")
         except Exception as e:
             conn.rollback()
-            cur.close(); conn.close()
+            cur.close(); release_conn(conn)
             return jsonify({"ok": False, "error": f"Backup falló: {e}", "log": log}), 500
 
         # 3b. HARD DELETE
@@ -18984,7 +19053,7 @@ def admin_reset_sku_mapeo_canal():
                         publicaciones_fallidas += 1
             except Exception as e:
                 conn.rollback()
-                cur.close(); conn.close()
+                cur.close(); release_conn(conn)
                 return jsonify({
                     "ok": False,
                     "error": f"Bulk insert falló: {e}",
@@ -19002,7 +19071,7 @@ def admin_reset_sku_mapeo_canal():
         total_despues = cur.fetchone()[0]
         log.append(f"Filas en sku_mapeo_canal después: {total_despues}")
 
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         t_total = time.time() - t_start
 
@@ -19177,7 +19246,7 @@ def admin_exportar_movimientos_excel():
             ORDER BY fecha DESC
         """)
         filas = cur.fetchall()
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         wb = openpyxl.Workbook()
         ws = wb.active
@@ -19316,7 +19385,7 @@ def admin_importar_movimientos_excel():
                 print(f"[Importar mov] fila error: {e}")
 
         conn.commit()
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         try:
             registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
@@ -19427,7 +19496,7 @@ def admin_normalizar_canales():
                 total_actualizados += n
 
         conn.commit()
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         return jsonify({
             "ok": True,
@@ -20242,7 +20311,7 @@ def admin_importar_excel_meli():
                 pass
 
             cur.close()
-            conn.close()
+            release_conn(conn)
         except Exception:
             pass
 
@@ -20360,7 +20429,7 @@ def admin_debug_skus_canal():
         cur.execute("SELECT sku_lusync, sku_canal FROM publicaciones_canal WHERE canal='mercadolibre' LIMIT 20")
         rows = cur.fetchall()
         cur.close()
-        conn.close()
+        release_conn(conn)
         return jsonify({"rows": [{"sku_lusync": r[0], "sku_canal": r[1]} for r in rows]})
     except Exception as e:
         return jsonify({"error": str(e)})
@@ -20404,7 +20473,7 @@ def admin_validar_meli():
         except Exception:
             pass
         cur.close()
-        conn.close()
+        release_conn(conn)
 
         # 4. Cruzar
         mapeadas        = []
@@ -20522,7 +20591,7 @@ def admin_importar_csv_walmart():
             except Exception:
                 pass
             cur.close()
-            conn.close()
+            release_conn(conn)
         except Exception:
             pass
 
@@ -20679,7 +20748,7 @@ def admin_importar_csv_ripley():
             except Exception:
                 pass
             cur.close()
-            conn.close()
+            release_conn(conn)
         except Exception:
             pass
 
@@ -20807,7 +20876,7 @@ def admin_importar_excel_falabella():
                 for (sl, sc) in cur.fetchall():
                     if sc: mapeados_existentes[sc.upper().strip()] = {"sku_lusync": sl}
             except Exception: pass
-            cur.close(); conn.close()
+            cur.close(); release_conn(conn)
         except Exception: pass
         automaticos=[]; requieren_alias=[]; no_en_lusync=[]; ya_mapeados=[]; skus_vistos=set()
         for row in rows[1:]:
@@ -20949,7 +21018,7 @@ def admin_importar_excel_paris():
                 for (sl, sc) in cur.fetchall():
                     if sc: mapeados_existentes[sc.upper().strip()] = {"sku_lusync": sl}
             except Exception: pass
-            cur.close(); conn.close()
+            cur.close(); release_conn(conn)
         except Exception: pass
 
         automaticos=[]; requieren_alias=[]; no_en_lusync=[]; ya_mapeados=[]; skus_vistos=set()
@@ -21076,7 +21145,7 @@ def config_tipificaciones_listar():
         conn.commit()
         cur.execute("SELECT id, tipo, nombre, descripcion, activo, es_sistema FROM tipificaciones_movimiento ORDER BY tipo, nombre")
         rows = cur.fetchall()
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
         return jsonify([{
             "id": r[0], "tipo": r[1], "nombre": r[2],
             "descripcion": r[3], "activo": r[4], "es_sistema": r[5]
@@ -21116,7 +21185,7 @@ def config_tipificaciones_guardar():
                 VALUES (%s, %s, %s, %s, FALSE) RETURNING id
             """, (tipo, nombre, desc, activo))
             tid = cur.fetchone()[0]
-        conn.commit(); cur.close(); conn.close()
+        conn.commit(); cur.close(); release_conn(conn)
         return jsonify({"ok": True, "id": tid})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -21133,7 +21202,7 @@ def config_tipificaciones_eliminar():
         conn = get_conn(); cur = conn.cursor()
         cur.execute("DELETE FROM tipificaciones_movimiento WHERE id=%s AND es_sistema=FALSE RETURNING id", (tid,))
         deleted = cur.fetchone()
-        conn.commit(); cur.close(); conn.close()
+        conn.commit(); cur.close(); release_conn(conn)
         if not deleted:
             return jsonify({"ok": False, "error": "No se puede eliminar tipificación del sistema"})
         return jsonify({"ok": True})
@@ -21181,7 +21250,7 @@ def admin_stock_autocorregir():
     central_por_sku = {r[0]: int(r[1] or 0) for r in cur.fetchall()}
     cur.close()
     try: _get_pool().putconn(conn)
-    except Exception: conn.close()
+    except Exception: release_conn(conn)
 
     desvios = []
     # Ripley
@@ -21275,7 +21344,7 @@ def admin_stock_sin_mapear():
         mapeos.setdefault(sku_l, set()).add(can)
     cur.close()
     try: _get_pool().putconn(conn)
-    except Exception: conn.close()
+    except Exception: release_conn(conn)
 
     # Para cada producto con stock, ver qué canales le faltan
     faltantes = []
@@ -21444,7 +21513,7 @@ def admin_stock_verificar_skus():
         })
     cur.close()
     try: _get_pool().putconn(conn)
-    except Exception: conn.close()
+    except Exception: release_conn(conn)
     return jsonify({"tenant_id": tenant_id, "skus": resultado})
 
 
@@ -21518,7 +21587,7 @@ def admin_stock_corregir_mapeo():
     if dry_run:
         cur.close()
         try: _get_pool().putconn(conn)
-        except Exception: conn.close()
+        except Exception: release_conn(conn)
         return jsonify({"dry_run": True, "sku_lusync": sku_lusync, "canal": canal,
                         "mapeos_actuales": actuales, "sku_canal_nuevo": sku_nuevo,
                         "nota": "Quita dry_run para aplicar el cambio."})
@@ -21529,7 +21598,7 @@ def admin_stock_corregir_mapeo():
     conn.commit()
     cur.close()
     try: _get_pool().putconn(conn)
-    except Exception: conn.close()
+    except Exception: release_conn(conn)
     return jsonify({"ok": True, "sku_lusync": sku_lusync, "canal": canal,
                     "mapeos_actualizados": filas,
                     "sku_canal_anterior": [m["sku_canal"] for m in actuales],
@@ -21573,7 +21642,7 @@ def admin_stock_reactivar_ripley():
     info = {r[0]: (r[1], int(r[2] or 0)) for r in cur.fetchall()}
     cur.close()
     try: _get_pool().putconn(conn)
-    except Exception: conn.close()
+    except Exception: release_conn(conn)
 
     # 3) Filtrar: inactivas CON stock > 0 (resolver sku_lusync)
     a_reactivar = []
@@ -21791,7 +21860,7 @@ def admin_stock_auditar_todos():
             "item_id_canal": item_id, "activo": activo})
     cur.close()
     try: _get_pool().putconn(conn)
-    except Exception: conn.close()
+    except Exception: release_conn(conn)
 
     SELLER = {"woocommerce","web","walmart","paris","falabella","ripley","hites","mercadolibre"}
     items = []; contadores = {}
@@ -21851,7 +21920,7 @@ def admin_stock_diagnostico_central():
     filas = cur.fetchall()
     cur.close()
     try: _get_pool().putconn(conn)
-    except Exception: conn.close()
+    except Exception: release_conn(conn)
 
     items = []; reparados = 0
     for sku, nombre, stock_prod, central, ff, total_bod in filas:
@@ -21910,7 +21979,7 @@ def admin_stock_auditar_sku():
         movs = [{"error_leyendo_movimientos": str(e)[:100]}]
     cur.close()
     try: _get_pool().putconn(conn)
-    except Exception: conn.close()
+    except Exception: release_conn(conn)
     total_bod = sum(b["cantidad"] for b in bodegas)
     return jsonify({"tenant_id": tenant_id, "sku": sku,
         "nombre": prow[0] if prow else None,
@@ -21973,7 +22042,7 @@ def admin_sync_masivo_todos():
     try:
         _get_pool().putconn(conn)
     except Exception:
-        conn.close()
+        release_conn(conn)
 
     # Filtrar y limitar
     objetivo = []
@@ -22070,7 +22139,7 @@ def admin_test_sync_sku():
             WHERE sku_lusync=%s AND activo=TRUE
         """, (sku,))
         mapeos = [{"canal": r[0], "sku_canal": r[1], "item_id": r[2]} for r in cur.fetchall()]
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
         # Ejecutar sync directamente (NO en background)
         resultado = sincronizar_stock_marketplaces(sku, stock, contexto="test_manual")
         # Detalle por canal (log con el body real de cada API) para diagnóstico fino
@@ -22149,7 +22218,7 @@ def admin_corregir_stock_bodega():
         cur.execute("SELECT cantidad FROM stock_bodega WHERE sku=%s AND bodega_codigo=%s", (sku, bodega))
         row = cur.fetchone()
         antes = int(row[0]) if row else 0
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         # Aplicar corrección
         set_stock_bodega(sku, bodega, cantidad)
@@ -22277,7 +22346,7 @@ def admin_auto_descubrir_variantes_meli():
         except Exception:
             pass
 
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         # 3. Obtener TODAS las publicaciones MELI (paginar)
         publicaciones = []
@@ -22443,7 +22512,7 @@ def admin_debug_mapeos_sku():
             legacy_rows = [{"canal": r[0], "sku_canal": r[1]} for r in cur.fetchall()]
         except Exception:
             pass
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
         return jsonify({
             "sku_lusync": sku,
             "mapeos_sku_mapeo_canal": canal_rows,
@@ -22614,7 +22683,7 @@ def admin_limpiar_mapeos_huerfanos():
                 eliminados.append(m["id"])
             conn.commit()
 
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         return jsonify({
             "dry_run": dry_run,
@@ -22712,7 +22781,7 @@ def admin_verificar_stock_todos_canales():
         cur.execute("SELECT stock FROM productos WHERE sku=%s", (sku,))
         row = cur.fetchone()
         prod_stock = int(row[0]) if row else 0
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
         resultado["canales"]["lusync"] = {
             "stock_disponible_propio": propio,
             "stock_full": full,
@@ -22733,7 +22802,7 @@ def admin_verificar_stock_todos_canales():
             WHERE canal='mercadolibre' AND sku_lusync=%s AND activo=TRUE AND item_id_canal IS NOT NULL
         """, (sku,))
         items_meli = [r[0] for r in cur.fetchall()]
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         meli_data = []
         for item_id in items_meli:
@@ -22930,7 +22999,7 @@ def admin_enriquecer_mapeos_paris():
 
         if not dry_run:
             conn.commit()
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         return jsonify({
             "dry_run": dry_run,
@@ -22968,7 +23037,7 @@ def admin_debug_paris_actualizar_raw():
             WHERE canal='paris' AND sku_lusync=%s AND activo=TRUE
         """, (sku,))
         mapeos = [{"id": r[0], "sku_canal": r[1], "item_id_canal": r[2], "notas": r[3]} for r in cur.fetchall()]
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         # Llamar directamente con request a la API
         import requests as _req
@@ -23735,7 +23804,7 @@ def ventas_graficos():
         canal_t = ventas_por_canal[0]["canal"] if ventas_por_canal else "—"
         prod_t  = top_productos[0]["nombre"]   if top_productos    else "—"
 
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
         return jsonify({
             "ok": True,

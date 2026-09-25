@@ -104,7 +104,7 @@ def init_feriados():
     finally:
         cur.close()
         try: release_conn(conn)
-        except: conn.close()
+        except: release_conn(conn)
 
 
 def es_dia_habil(fecha):
@@ -117,7 +117,7 @@ def es_dia_habil(fecha):
         es_feriado = cur.fetchone() is not None
         cur.close()
         try: release_conn(conn)
-        except: conn.close()
+        except: release_conn(conn)
         return not es_feriado
     except Exception:
         return True  # Si BD falla, asumir hábil
@@ -545,7 +545,7 @@ def crear_documento_compra(numero_doc, tipo_doc, proveedor, fecha_doc, moneda,
         print(f"[POS] crear_documento_compra error: {e}")
         raise
     finally:
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
 def registrar_linea_documento(documento_id, movimiento_id, sku, nombre,
                                cantidad, costo_unitario, bodega_destino, notas_linea):
@@ -567,7 +567,7 @@ def registrar_linea_documento(documento_id, movimiento_id, sku, nombre,
         print(f"[POS] registrar_linea_documento error: {e}")
         raise
     finally:
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
 def registrar_ajuste_inventario(sku, nombre, cantidad_antes, cantidad_ajuste,
                                  motivo_ajuste, notas, usuario, movimiento_id=None):
@@ -592,7 +592,7 @@ def registrar_ajuste_inventario(sku, nombre, cantidad_antes, cantidad_ajuste,
         print(f"[POS] registrar_ajuste error: {e}")
         raise
     finally:
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
 def get_historial_documento(numero_doc):
     """Retorna el documento y todas sus líneas para trazabilidad."""
@@ -619,7 +619,7 @@ def get_historial_documento(numero_doc):
         print(f"[POS] get_historial_documento error: {e}")
         return None
     finally:
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
 def listar_documentos_compra(limite=50, offset=0, tipo_doc=None):
     """Lista los últimos documentos con resumen de líneas."""
@@ -646,7 +646,7 @@ def listar_documentos_compra(limite=50, offset=0, tipo_doc=None):
         print(f"[POS] listar_documentos error: {e}")
         return []
     finally:
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
 def get_configuracion():
     conn = get_conn()
@@ -654,7 +654,7 @@ def get_configuracion():
     cur.execute("SELECT clave, valor FROM configuracion")
     rows = cur.fetchall()
     cur.close()
-    conn.close()
+    release_conn(conn)
     return {r[0]: r[1] for r in rows}
 
 def set_configuracion(data):
@@ -664,7 +664,7 @@ def set_configuracion(data):
         cur.execute("INSERT INTO configuracion (clave, valor) VALUES (%s, %s) ON CONFLICT (clave) DO UPDATE SET valor = EXCLUDED.valor", (clave, str(valor)))
     conn.commit()
     cur.close()
-    conn.close()
+    release_conn(conn)
 
 def set_lead_time(sku, dias):
     conn = get_conn()
@@ -672,7 +672,7 @@ def set_lead_time(sku, dias):
     cur.execute("UPDATE productos SET lead_time = %s WHERE sku = %s", (dias, sku))
     conn.commit()
     cur.close()
-    conn.close()
+    release_conn(conn)
 
 def cargar_productos():
     conn = get_conn()
@@ -680,7 +680,7 @@ def cargar_productos():
     cur.execute("SELECT sku, nombre, stock, precio_normal, precio_oferta FROM productos")
     rows = cur.fetchall()
     cur.close()
-    conn.close()
+    release_conn(conn)
     return [{"sku": r[0], "nombre": r[1], "stock": r[2],
              "precio_normal": float(r[3] or 0), "precio_oferta": float(r[4] or 0)} for r in rows]
 
@@ -698,7 +698,7 @@ def guardar_producto(p):
           p.get("precio_normal", 0), p.get("precio_oferta", 0)))
     conn.commit()
     cur.close()
-    conn.close()
+    release_conn(conn)
 
 def guardar_productos(lista):
     for p in lista:
@@ -712,7 +712,7 @@ def actualizar_precios(sku, precio_normal, precio_oferta):
     """, (precio_normal, precio_oferta, sku))
     conn.commit()
     cur.close()
-    conn.close()
+    release_conn(conn)
 
 def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistema",
                           canal="Sistema", orden_id=None, fecha_override=None,
@@ -895,7 +895,7 @@ def cargar_movimientos(limite=20):
         FROM movimientos ORDER BY fecha DESC LIMIT %s
     """, (limite,))
     rows = cur.fetchall()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return [{"tipo":r[0],"sku":r[1],"nombre":r[2],"cantidad":r[3],"motivo":r[4],
              "fecha":r[5],"hora":r[6],"usuario":r[7],"canal":r[8],
              "orden_id":r[9],"importado":r[10] or "",
@@ -920,7 +920,7 @@ def cargar_movimientos_hoy():
     """)
     rows = cur.fetchall()
     cur.close()
-    conn.close()
+    release_conn(conn)
     return [{"tipo": r[0], "sku": r[1], "nombre": r[2],
              "cantidad": r[3], "motivo": r[4], "hora": r[5], "canal": r[6]} for r in rows]
 
@@ -930,7 +930,7 @@ def eliminar_producto(sku):
     cur.execute("DELETE FROM productos WHERE sku = %s", (sku,))
     conn.commit()
     cur.close()
-    conn.close()
+    release_conn(conn)
 
 
 # ── AUDIT LOG ──
@@ -962,7 +962,7 @@ def init_audit():
                 pass
         conn.commit()
         cur.close()
-        conn.close()
+        release_conn(conn)
         print("[Audit] Tabla audit_log lista")
     except Exception as e:
         print(f"[Audit] Error init_audit: {e}")
@@ -987,7 +987,7 @@ def registrar_audit(usuario, ip, accion, entidad='', entidad_id='', detalle='', 
         ))
         conn.commit()
         cur.close()
-        conn.close()
+        release_conn(conn)
         print(f"[Audit] {accion} · {usuario} · {resultado}")
     except Exception as e:
         print(f"[Audit] ERROR registrando: {e}")
@@ -1019,7 +1019,7 @@ def listar_audit(limite=200, filtro_accion=None, filtro_usuario=None, filtro_res
         ORDER BY fecha DESC LIMIT %s
     """, vals)
     rows = cur.fetchall()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     cols = ['id','fecha','usuario','ip','accion','entidad','entidad_id','detalle','resultado','dato_antes','dato_despues']
     return [dict(zip(cols, r)) for r in rows]
 
@@ -1037,7 +1037,7 @@ def limpiar_audit_antiguo(dias=90):
         INSERT INTO audit_log_archivo SELECT * FROM moved
     """)
     conn.commit()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
 
 # ── DEVOLUCIONES ──
 
@@ -1084,7 +1084,7 @@ def init_devoluciones():
             print(f"[devoluciones] columna {nombre}: {e}")
     conn.commit()
     cur.close()
-    conn.close()
+    release_conn(conn)
 
 
 def init_devoluciones_mkt():
@@ -1140,7 +1140,7 @@ def init_devoluciones_mkt():
     cur.execute("ALTER TABLE devoluciones_marketplace ADD COLUMN IF NOT EXISTS url_gestion TEXT")
     conn.commit()
     cur.close()
-    conn.close()
+    release_conn(conn)
 
 
 def generar_codigo_dev():
@@ -1151,7 +1151,7 @@ def generar_codigo_dev():
     cur.execute("SELECT COUNT(*) FROM devoluciones WHERE codigo LIKE %s", (f'DEV-{hoy}-%',))
     count = cur.fetchone()[0] + 1
     cur.close()
-    conn.close()
+    release_conn(conn)
     return f"DEV-{hoy}-{str(count).zfill(4)}"
 
 def crear_devolucion(data):
@@ -1166,7 +1166,7 @@ def crear_devolucion(data):
     dev_id = cur.fetchone()[0]
     conn.commit()
     cur.close()
-    conn.close()
+    release_conn(conn)
     return dev_id
 
 def asignar_codigo_dev(dev_id, codigo):
@@ -1175,7 +1175,7 @@ def asignar_codigo_dev(dev_id, codigo):
     cur.execute("UPDATE devoluciones SET codigo = %s WHERE id = %s", (codigo, dev_id))
     conn.commit()
     cur.close()
-    conn.close()
+    release_conn(conn)
 
 def actualizar_devolucion(dev_id, data):
     conn = get_conn()
@@ -1199,7 +1199,7 @@ def actualizar_devolucion(dev_id, data):
     cur.execute(f"UPDATE devoluciones SET {', '.join(fields)} WHERE id = %s", vals)
     conn.commit()
     cur.close()
-    conn.close()
+    release_conn(conn)
 
 def listar_devoluciones(estado=None):
     conn = get_conn()
@@ -1226,7 +1226,7 @@ def listar_devoluciones(estado=None):
         """)
     rows = cur.fetchall()
     cur.close()
-    conn.close()
+    release_conn(conn)
     cols = ['id','codigo','oc_origen','canal','sku','nombre','cantidad','motivo_cliente',
             'estado_producto','resolucion','observaciones','responsable','estado',
             'fecha_solicitud','fecha_recepcion','fecha_resolucion','impacto_stock_reingresado']
@@ -1241,10 +1241,10 @@ def get_devolucion(dev_id=None, codigo=None):
         cur.execute("SELECT * FROM devoluciones WHERE id = %s", (dev_id,))
     row = cur.fetchone()
     if not row:
-        cur.close(); conn.close(); return None
+        cur.close(); release_conn(conn); return None
     cols = [d[0] for d in cur.description]
     cur.close()
-    conn.close()
+    release_conn(conn)
     d = dict(zip(cols, row))
     for k in ['fecha_solicitud','fecha_recepcion','fecha_resolucion']:
         if d.get(k):
@@ -1363,7 +1363,7 @@ def intentar_marcar_orden_atomic(order_id_texto):
     finally:
         try: cur.close()
         except: pass
-        try: conn.close()
+        try: release_conn(conn)
         except: pass
 
 
@@ -1373,7 +1373,7 @@ def orden_ya_procesada(orden_id):
     cur.execute("SELECT 1 FROM ordenes_procesadas WHERE orden_id = %s", (orden_id,))
     existe = cur.fetchone() is not None
     cur.close()
-    conn.close()
+    release_conn(conn)
     return existe
 
 def marcar_orden_procesada(orden_id):
@@ -1385,7 +1385,7 @@ def marcar_orden_procesada(orden_id):
     """, (orden_id,))
     conn.commit()
     cur.close()
-    conn.close()
+    release_conn(conn)
 
 
 def limpiar_movimientos_duplicados():
@@ -1394,7 +1394,7 @@ def limpiar_movimientos_duplicados():
         SELECT id FROM (SELECT id, ROW_NUMBER() OVER (
             PARTITION BY orden_id,sku,canal,tipo ORDER BY fecha ASC,id ASC
         ) AS rn FROM movimientos WHERE orden_id IS NOT NULL AND orden_id!=\'\') t WHERE rn>1)""")
-    n = cur.rowcount; conn.commit(); cur.close(); conn.close(); return n
+    n = cur.rowcount; conn.commit(); cur.close(); release_conn(conn); return n
 
 def borrar_movimientos_marketplace(desde_fecha=None):
     conn = get_conn(is_admin=True); cur = conn.cursor()
@@ -1402,7 +1402,7 @@ def borrar_movimientos_marketplace(desde_fecha=None):
     m = cur.rowcount
     cur.execute("DELETE FROM ordenes_procesadas")
     o = cur.rowcount
-    conn.commit(); cur.close(); conn.close(); return m, o
+    conn.commit(); cur.close(); release_conn(conn); return m, o
 
 CANAL_DISPLAY = {"web":"Web Propia","walmart":"Walmart","paris":"París",
     "falabella":"Falabella","ripley":"Ripley","mercadolibre":"Mercado Libre","hites":"Hites"}
@@ -1417,7 +1417,7 @@ def init_sku_mapeo():
         try: cur.execute(f"ALTER TABLE sku_mapeo ADD COLUMN IF NOT EXISTS {col} TEXT")
         except: pass
     cur.execute("INSERT INTO configuracion (clave,valor) VALUES ('plataforma_web','WooCommerce') ON CONFLICT (clave) DO NOTHING")
-    conn.commit(); cur.close(); conn.close()
+    conn.commit(); cur.close(); release_conn(conn)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1470,7 +1470,7 @@ def init_sku_mapeo_canal():
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_smc_lusync ON sku_mapeo_canal(sku_lusync, canal)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_smc_sku_canal ON sku_mapeo_canal(canal, sku_canal)")
-    conn.commit(); cur.close(); conn.close()
+    conn.commit(); cur.close(); release_conn(conn)
 
 
 def obtener_publicaciones_canal(sku_lusync, canal):
@@ -1497,7 +1497,7 @@ def obtener_publicaciones_canal(sku_lusync, canal):
         ORDER BY id
     """, (sku_lusync, canal))
     filas = cur.fetchall()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return [{
         "id": r[0],
         "sku_canal": r[1],
@@ -1538,7 +1538,7 @@ def obtener_sku_lusync_por_canal(canal, sku_canal=None, item_id_canal=None):
         """, (canal, str(item_id_canal), sku_canal))
         r = cur.fetchone()
         if r:
-            cur.close(); conn.close()
+            cur.close(); release_conn(conn)
             return r[0]
 
     # Prioridad 2: buscar por sku_canal (más específico — sku canal único globalmente)
@@ -1550,7 +1550,7 @@ def obtener_sku_lusync_por_canal(canal, sku_canal=None, item_id_canal=None):
         """, (canal, sku_canal))
         r = cur.fetchone()
         if r:
-            cur.close(); conn.close()
+            cur.close(); release_conn(conn)
             return r[0]
 
     # Prioridad 3: buscar por item_id_canal SOLO si tiene 1 sola variante
@@ -1564,13 +1564,13 @@ def obtener_sku_lusync_por_canal(canal, sku_canal=None, item_id_canal=None):
         r = cur.fetchone()
         if r and r[1] == 1:
             # Solo si hay exactamente 1 mapeo para ese item_id (sin variantes)
-            cur.close(); conn.close()
+            cur.close(); release_conn(conn)
             return r[0]
         elif r and r[1] > 1:
             # Hay múltiples variantes — NO devolver nada, debe venir sku_canal
             print(f"[obtener_sku_lusync] item_id {item_id_canal} tiene {r[1]} variantes — se requiere sku_canal específico")
 
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return None
 
 
@@ -1625,14 +1625,14 @@ def agregar_publicacion(sku_lusync, canal, sku_canal, item_id_canal=None,
             mapeo_id = cur.fetchone()[0]
 
         conn.commit()
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
         return mapeo_id
     except Exception as e:
         try: conn.rollback()
         except: pass
         try: cur.close()
         except: pass
-        try: conn.close()
+        try: release_conn(conn)
         except: pass
         print(f"[sku_mapeo_canal] Error agregando publicación: {e}")
         return None
@@ -1646,14 +1646,14 @@ def eliminar_publicacion(mapeo_id):
         cur.execute("UPDATE sku_mapeo_canal SET activo = FALSE, actualizado_at = NOW() WHERE id = %s",
                     (mapeo_id,))
         conn.commit()
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
         return True
     except Exception as e:
         try: conn.rollback()
         except: pass
         try: cur.close()
         except: pass
-        try: conn.close()
+        try: release_conn(conn)
         except: pass
         return False
 
@@ -1683,7 +1683,7 @@ def listar_mapeos_canal(canal=None, sku_lusync=None, solo_activos=True):
         ORDER BY sku_lusync, canal, id
     """, tuple(params))
     rows = cur.fetchall()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return [{
         "id": r[0], "sku_lusync": r[1], "canal": r[2],
         "sku_canal": r[3], "item_id_canal": r[4],
@@ -1706,7 +1706,7 @@ def contar_publicaciones_por_sku():
     resultado = {}
     for sku, canal, cnt in cur.fetchall():
         resultado.setdefault(sku, {})[canal] = cnt
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return resultado
 
 
@@ -1724,7 +1724,7 @@ def listar_sku_mapeo():
         COALESCE(m.sku_falabella,''), COALESCE(m.sku_ripley,''),
         COALESCE(m.sku_mercadolibre,''), COALESCE(m.sku_hites,'')
         FROM productos p LEFT JOIN sku_mapeo m ON m.sku_lusync=p.sku ORDER BY p.nombre""")
-    rows = cur.fetchall(); cur.close(); conn.close()
+    rows = cur.fetchall(); cur.close(); release_conn(conn)
     return [{"sku_lusync":r[0],"nombre":r[1],"sku_web":r[2],"sku_walmart":r[3],
              "sku_paris":r[4],"sku_falabella":r[5],"sku_ripley":r[6],
              "sku_mercadolibre":r[7],"sku_hites":r[8]} for r in rows]
@@ -1748,7 +1748,7 @@ def guardar_sku_mapeo_fila(sku_lusync, skus):
          (skus.get("ripley") or "").strip() or None,
          (skus.get("mercadolibre") or "").strip() or None,
          (skus.get("hites") or "").strip() or None))
-    conn.commit(); cur.close(); conn.close()
+    conn.commit(); cur.close(); release_conn(conn)
 
 def get_sku_canal(sku_lusync, canal):
     init_sku_mapeo()
@@ -1760,7 +1760,7 @@ def get_sku_canal(sku_lusync, canal):
     else: return sku_lusync
     conn = get_conn(); cur = conn.cursor()
     cur.execute(f"SELECT {col} FROM sku_mapeo WHERE sku_lusync=%s", (sku_lusync,))
-    row = cur.fetchone(); cur.close(); conn.close()
+    row = cur.fetchone(); cur.close(); release_conn(conn)
     return row[0].strip() if row and row[0] and row[0].strip() else sku_lusync
 
 def get_plataforma_web():
@@ -1782,7 +1782,7 @@ def registrar_importacion_mapeo(usuario, archivo, importados, errores):
         conn.commit()
     except Exception as e:
         print(f"[Historial mapeo] {e}"); conn.rollback()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
 
 def listar_historial_mapeo(limite=10):
     conn = get_conn(); cur = conn.cursor()
@@ -1795,7 +1795,7 @@ def listar_historial_mapeo(limite=10):
             FROM sku_mapeo_historial ORDER BY fecha DESC LIMIT %s""", (limite,))
         rows = cur.fetchall(); conn.commit()
     except: rows = []
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return [{"id":r[0],"fecha":r[1],"usuario":r[2],"archivo":r[3],
              "importados":r[4],"errores":r[5],"detalle":r[6]} for r in rows]
 
@@ -1837,7 +1837,7 @@ def init_alertas():
         conn.commit()
     except Exception as e:
         print(f"[Alertas] init error: {e}"); conn.rollback()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
 
 
 def crear_alerta(tipo, titulo, mensaje="", canal=None, orden_id=None, sku=None, enviar_email=True):
@@ -1850,7 +1850,7 @@ def crear_alerta(tipo, titulo, mensaje="", canal=None, orden_id=None, sku=None, 
         conn.commit()
     except Exception as e:
         print(f"[Alertas] crear error: {e}"); conn.rollback()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
 
     if enviar_email:
         try:
@@ -1934,7 +1934,7 @@ def listar_alertas(limite=50, solo_no_leidas=False):
         rows = cur.fetchall()
     except Exception as e:
         print(f"[Alertas] listar error: {e}"); rows = []
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return [{"id":r[0],"fecha":r[1],"tipo":r[2],"canal":r[3],"titulo":r[4],
              "mensaje":r[5],"orden_id":r[6],"sku":r[7],"leida":r[8]} for r in rows]
 
@@ -1945,7 +1945,7 @@ def contar_alertas_no_leidas():
         cur.execute("SELECT COUNT(*) FROM alertas WHERE leida=FALSE")
         n = cur.fetchone()[0]
     except: n = 0
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return n
 
 
@@ -1956,7 +1956,7 @@ def marcar_alerta_leida(alerta_id):
         conn.commit()
     except Exception as e:
         print(f"[Alertas] marcar leida: {e}"); conn.rollback()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
 
 
 def marcar_todas_leidas():
@@ -1966,7 +1966,7 @@ def marcar_todas_leidas():
         conn.commit()
     except Exception as e:
         print(f"[Alertas] marcar todas: {e}"); conn.rollback()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
 
 
 def get_alertas_config():
@@ -1975,7 +1975,7 @@ def get_alertas_config():
         cur.execute("SELECT clave, valor FROM alertas_config")
         rows = cur.fetchall()
     except: rows = []
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return {r[0]: (r[1] or "") for r in rows}
 
 
@@ -1989,7 +1989,7 @@ def set_alertas_config(data):
         conn.commit()
     except Exception as e:
         print(f"[Alertas] set config: {e}"); conn.rollback()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
 
 
 # ── MERCADOLIBRE AUTH ──────────────────────────────────────────────────────
@@ -2009,7 +2009,7 @@ def init_meli_auth():
         conn.commit()
     except Exception as e:
         print(f"[MELI] init_meli_auth error: {e}"); conn.rollback()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
 
 
 def get_meli_auth():
@@ -2025,7 +2025,7 @@ def get_meli_auth():
                     "refresh_token": row[2], "expires_at": row[3]}
     except Exception as e:
         print(f"[MELI] get_meli_auth error: {e}")
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return auth
 
 
@@ -2042,7 +2042,7 @@ def set_meli_auth(data):
         conn.commit()
     except Exception as e:
         print(f"[MELI] set_meli_auth error: {e}"); conn.rollback()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
 
 
 def borrar_meli_auth():
@@ -2053,7 +2053,7 @@ def borrar_meli_auth():
         conn.commit()
     except Exception as e:
         print(f"[MELI] borrar_meli_auth error: {e}"); conn.rollback()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
 
 
 # ── DASHBOARD STATS (para gráficos del dashboard) ───────────────────────────
@@ -2129,7 +2129,7 @@ def stats_movimientos_dia(fecha_desde, fecha_hasta):
         rows = cur.fetchall()
     except Exception as e:
         print(f"[Stats] movimientos_dia: {e}"); rows = []
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return [{"dia": r[0], "tipo": r[1], "total": int(r[2])} for r in rows]
 
 
@@ -2161,7 +2161,7 @@ def stats_distribucion_stock_canal():
             if r[8]: distribucion["Hites"]         += stock
     except Exception as e:
         print(f"[Stats] distribucion_stock: {e}")
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return [{"canal": k, "stock": v} for k, v in distribucion.items() if v > 0]
 
 
@@ -2209,7 +2209,7 @@ def stats_kpis_dashboard(fecha_desde, fecha_hasta):
         except: pass
     except Exception as e:
         print(f"[Stats] kpis: {e}")
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return kpis
 
 
@@ -2311,7 +2311,7 @@ def init_bodegas():
             print(f"[Bodegas] Migrados {migrados} productos a Bodega Central")
     except Exception as e:
         print(f"[Bodegas] init error: {e}"); conn.rollback()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
 
 
 def listar_bodegas(solo_activas=True):
@@ -2325,7 +2325,7 @@ def listar_bodegas(solo_activas=True):
         rows = cur.fetchall()
     except Exception as e:
         print(f"[Bodegas] listar error: {e}"); rows = []
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return [{"codigo":r[0],"nombre":r[1],"tipo":r[2],"canal":r[3],"activa":r[4]} for r in rows]
 
 
@@ -2338,7 +2338,7 @@ def stock_por_bodega(sku):
         result = {r[0]: int(r[1] or 0) for r in cur.fetchall()}
     except Exception as e:
         print(f"[Bodegas] stock_por_bodega error: {e}")
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return result
 
 
@@ -2353,7 +2353,7 @@ def get_stock_bodega(sku, bodega_codigo):
         if r: cant = int(r[0] or 0)
     except Exception as e:
         print(f"[Bodegas] get_stock_bodega: {e}")
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return cant
 
 
@@ -2374,7 +2374,7 @@ def set_stock_bodega(sku, bodega_codigo, cantidad):
         _recalcular_stock_total(sku)
     except Exception as e:
         print(f"[Bodegas] set_stock_bodega: {e}"); conn.rollback()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
 
 
 def ajustar_stock_bodega(sku, bodega_codigo, delta):
@@ -2416,7 +2416,7 @@ def ajustar_stock_bodega(sku, bodega_codigo, delta):
     except Exception as e:
         print(f"[Bodegas] ajustar_stock_bodega ERROR sku={sku} bodega={bodega_codigo} delta={delta}: {e}")
         conn.rollback()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return nuevo
 
 
@@ -2463,7 +2463,7 @@ def _recalcular_stock_total(sku):
         conn.commit()
     except Exception as e:
         print(f"[Bodegas] _recalcular_stock_total: {e}"); conn.rollback()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
 
 
 def listar_stock_completo():
@@ -2489,7 +2489,7 @@ def listar_stock_completo():
             })
     except Exception as e:
         print(f"[Bodegas] listar_stock_completo: {e}")
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return result
 
 
@@ -2509,7 +2509,7 @@ def stock_total_por_bodega():
             result[row[0]] = {"nombre": row[1], "tipo": row[2], "total": int(row[3] or 0)}
     except Exception as e:
         print(f"[Bodegas] stock_total_por_bodega: {e}")
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return result
 
 
@@ -2828,7 +2828,7 @@ def ajustar_stock_dev(sku, cantidad, dev_id, motivo_codigo="reintegro_buen_estad
         cur.execute("SELECT stock, nombre FROM productos WHERE sku=%s LIMIT 1", (sku,))
         r = cur.fetchone()
         if not r:
-            cur.close(); conn.close()
+            cur.close(); release_conn(conn)
             return {"ok": False, "error": f"SKU '{sku}' no encontrado"}
         
         stock_anterior = int(r[0] or 0)
@@ -2850,7 +2850,7 @@ def ajustar_stock_dev(sku, cantidad, dev_id, motivo_codigo="reintegro_buen_estad
             (sku, nombre, cantidad, motivo_texto, "Sistema (Devolución)", "Devolución", "CENTRAL"))
         
         conn.commit()
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
         
         # ── 4. Sincronizar a los 6 marketplaces (resiliente) ──
         # Importamos el helper desde app.py si está disponible
@@ -2871,7 +2871,7 @@ def ajustar_stock_dev(sku, cantidad, dev_id, motivo_codigo="reintegro_buen_estad
         import traceback
         print(f"[ajustar_stock_dev] Error: {e}")
         print(traceback.format_exc())
-        try: conn.rollback(); cur.close(); conn.close()
+        try: conn.rollback(); cur.close(); release_conn(conn)
         except: pass
         return {"ok": False, "error": str(e)}
 
@@ -2955,7 +2955,7 @@ def sincronizar_stock_a_bodega_central(sku):
             conn.commit()
     except Exception as e:
         print(f"[Bodegas] sincronizar_stock_a_bodega_central: {e}"); conn.rollback()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
 
 
 # detectar_fulfillment_walmart() vivia aca duplicada. La version buena esta en
@@ -2985,7 +2985,7 @@ def actualizar_nombres_bodegas():
         conn.commit()
     except Exception as e:
         print(f"[Bodegas] actualizar_nombres error: {e}"); conn.rollback()
-    cur.close(); conn.close()
+    cur.close(); release_conn(conn)
     return actualizadas
 
 
@@ -3006,7 +3006,7 @@ def crear_import_log(archivo, usuario, total_filas):
         print(f"[bodegas_imports] error: {e}"); conn.rollback()
         return None
     finally:
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
 
 def actualizar_import_log(import_id, procesados=None, advertencias=None,
@@ -3031,7 +3031,7 @@ def actualizar_import_log(import_id, procesados=None, advertencias=None,
     except Exception as e:
         print(f"[bodegas_imports] update error: {e}"); conn.rollback()
     finally:
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
 
 def listar_imports_recientes(limit=20):
@@ -3053,7 +3053,7 @@ def listar_imports_recientes(limit=20):
         print(f"[bodegas_imports] listar error: {e}")
         return []
     finally:
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
 
 
 def obtener_import_log(import_id):
@@ -3077,4 +3077,4 @@ def obtener_import_log(import_id):
         print(f"[bodegas_imports] detalle error: {e}")
         return None
     finally:
-        cur.close(); conn.close()
+        cur.close(); release_conn(conn)
