@@ -2602,7 +2602,12 @@ def _recalcular_stock_total(sku):
         conn.commit()
     except Exception as e:
         print(f"[Bodegas] _recalcular_stock_total: {e}"); conn.rollback()
-    cur.close(); release_conn(conn)
+    finally:
+        # El finally es por el "return" de arriba: el guard sale de la funcion
+        # sin pasar por el final, y la conexion se quedaba afuera del pool.
+        # Se vio en el registro de prestamos, una conexion de 79 segundos
+        # pedida justo aca.
+        cur.close(); release_conn(conn)
 
 
 def listar_stock_completo():
