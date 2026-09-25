@@ -1421,6 +1421,7 @@ def admin_perf_pool():
     # Cambia con cada arreglo del pool: si el numero no sube, el build todavia
     # no llego y no tiene sentido interpretar lo que sigue.
     info = {"ok": True, "solo_lectura": True, "version_arreglo": 3}
+    cn = None
     try:
         pool = _get_pool()
         # _used y _pool son internos de psycopg2, pero son la unica forma de ver
@@ -1526,6 +1527,8 @@ def admin_perf_pool():
     except Exception as e:
         import traceback
         info = {"ok": False, "error": str(e)[:300], "traza": traceback.format_exc()[-600:]}
+    finally:
+        release_conn(cn)
 
     return jsonify(info)
 
@@ -1547,6 +1550,7 @@ def health_check_stock_fix():
 
     from inventario import get_conn
     info = {"fix_activo": False, "version_fix": "2026-06-11-v10-lectura-blindada", "bodegas": [], "nota": ""}
+    cn = None
     try:
         cn = get_conn(); cur = cn.cursor()
         # Estado de las bodegas (CENTRAL debe ser 'propia')
@@ -1564,6 +1568,8 @@ def health_check_stock_fix():
         cur.close(); release_conn(cn)
     except Exception as e:
         info["error"] = str(e)
+    finally:
+        release_conn(cn)
 
     # Recalculos de stock que se omitieron por no ver ninguna bodega. Si esta
     # lista tiene algo, hay lecturas quedando ciegas y ese es justamente el
@@ -1628,6 +1634,7 @@ def recuperar_stock_lote():
     resultados = []
     for sku, cantidad in pares.items():
         r = {"sku": sku, "cantidad_fijada": cantidad}
+        cn = None
         try:
             set_stock_bodega(sku, "CENTRAL", cantidad)
             # cuánto se va a publicar (query corregida)
@@ -1646,6 +1653,8 @@ def recuperar_stock_lote():
         except Exception as e:
             r["ok"] = False
             r["error"] = str(e)
+        finally:
+            release_conn(cn)
         resultados.append(r)
 
     publicados_ok = sum(1 for r in resultados if r.get("ok") and r.get("stock_que_se_publica", 0) > 0)
@@ -1744,6 +1753,7 @@ def reparar_central_stock():
     #     Replica la query de sincronizar_stock_marketplaces para mostrarlo.
     stock_calculado = None
     diag_bodegas = {}
+    _cn = None
     try:
         from inventario import get_conn
         _cn = get_conn(); _cur = _cn.cursor()
@@ -1766,6 +1776,8 @@ def reparar_central_stock():
         _cur.close(); release_conn(_cn)
     except Exception as e:
         diag_bodegas = {"error": str(e)}
+    finally:
+        release_conn(_cn)
 
     # 2. Re-sincronizar a los marketplaces (lee CENTRAL fresco y publica).
     #    Capturamos el detalle por canal para ver exactamente qué se publicó.
@@ -1822,6 +1834,7 @@ def _asegurar_fecha_compra(canal, orden_id, fecha_compra, sku=None):
     escribir esa columna. Idempotente."""
     if not fecha_compra or not orden_id:
         return
+    conn = None
     try:
         from inventario import get_conn as _gc, TZ_CHILE
         fc = fecha_compra
@@ -1851,6 +1864,8 @@ def _asegurar_fecha_compra(canal, orden_id, fecha_compra, sku=None):
         conn.commit(); cur.close(); release_conn(conn)
     except Exception as e:
         print(f"[_asegurar_fecha_compra] {canal} {orden_id}: {e}")
+    finally:
+        release_conn(conn)
 
 
 # Registro en memoria de las últimas sincronizaciones de stock (diagnóstico).
@@ -1892,6 +1907,7 @@ def sincronizar_stock_marketplaces(sku, stock=None, contexto="manual"):
     """
     # Stock a publicar = SIEMPRE CENTRAL (bodegas propias), nunca el total.
     _trace = {"sku": sku, "contexto": contexto}
+    _cn = None
     try:
         from inventario import get_conn, _get_pool
         _cn = get_conn()
@@ -1991,6 +2007,8 @@ def sincronizar_stock_marketplaces(sku, stock=None, contexto="manual"):
         _trace["fallback_except"] = str(e)[:200]
         _trace["stock_recibido_usado"] = stock
         stock_publicar = int(stock) if stock is not None else 0
+    finally:
+        release_conn(_cn)
 
     stock_publicar = max(0, stock_publicar)
 
@@ -2108,6 +2126,7 @@ def con_tenant_default(func):
     from functools import wraps
     @wraps(func)
     def wrapper(*args, **kwargs):
+        conn = None
         try:
             from inventario import get_conn as _gc, release_conn as _rc
             conn = _gc(is_admin=True)  # admin para listar todos los tenants
@@ -2119,6 +2138,8 @@ def con_tenant_default(func):
         except Exception as e:
             print(f"[con_tenant_default] Error listando tenants: {e}, usando default=1")
             tenant_ids = [1]
+        finally:
+            release_conn(conn)
 
         for tid in tenant_ids:
             # Misma red que en las peticiones web: los sync tambien dejaban
@@ -4542,6 +4563,7 @@ def entrada():
                                 motivo_completo, usuario=session.get("usuario","Luis Padilla"),
                                 canal="Manual", documento_ref=documento)
             from inventario import get_conn
+            _c = None
             try:
                 _c = get_conn(); _cur = _c.cursor()
                 _cur.execute("""SELECT COALESCE(SUM(sb.cantidad),0) FROM stock_bodega sb
@@ -4552,6 +4574,8 @@ def entrada():
             except Exception as e:
                 stock_disponible = p["stock"]
                 print(f"[Entrada] error leyendo stock propio: {e}")
+            finally:
+                release_conn(_c)
             syncs = sincronizar_stock_marketplaces(p["sku"], stock_disponible, contexto="entrada_manual")
             return {"ok": True, "syncs": syncs, "stock_disponible_enviado": stock_disponible, "documento": documento}
     return {"error": "Producto no encontrado"}, 404
@@ -4562,6 +4586,7 @@ def _detectar_canal_por_oc(oc):
     oc = (oc or "").strip()
     if not oc:
         return None
+    _c = None
     try:
         from inventario import get_conn
         _c = get_conn(); _cur = _c.cursor()
@@ -4575,6 +4600,8 @@ def _detectar_canal_por_oc(oc):
             return row[0]
     except Exception as e:
         print(f"[detectar_canal_oc] error: {e}")
+    finally:
+        release_conn(_c)
     # 2. Heurística por formato
     import re
     if re.match(r'^MLC\d+', oc, re.I): return "MercadoLibre"
@@ -4627,6 +4654,7 @@ def salida():
                                 motivo_completo, usuario=session.get("usuario","Luis Padilla"),
                                 canal=canal_detectado, numero_orden=oc, documento_ref=oc)
             from inventario import get_conn
+            _c = None
             try:
                 _c = get_conn(); _cur = _c.cursor()
                 _cur.execute("""SELECT COALESCE(SUM(sb.cantidad),0) FROM stock_bodega sb
@@ -4637,6 +4665,8 @@ def salida():
             except Exception as e:
                 stock_disponible = p["stock"]
                 print(f"[Salida] error leyendo stock propio: {e}")
+            finally:
+                release_conn(_c)
             syncs = sincronizar_stock_marketplaces(p["sku"], stock_disponible, contexto="salida_manual")
             return {"ok": True, "syncs": syncs, "stock_disponible_enviado": stock_disponible, "oc": oc, "canal_detectado": canal_detectado}
     return {"error": "Producto no encontrado"}, 404
@@ -4699,6 +4729,7 @@ def ver_productos():
     try:
         productos = cargar_productos()
         # Enriquecer con desglose por bodega: stock_disponible (propio) y stock_full (fulfillment)
+        conn = None
         try:
             from inventario import get_conn
             conn = get_conn(); cur = conn.cursor()
@@ -4727,6 +4758,8 @@ def ver_productos():
                 p.setdefault("bodegas_detalle", [])
                 p.setdefault("stock_disponible", p.get("stock", 0))
                 p.setdefault("stock_full", 0)
+        finally:
+            release_conn(conn)
         return {"productos": productos}
     except Exception as e:
         print(f"[/productos] Error: {e}")
@@ -5711,6 +5744,7 @@ def devoluciones_registrar_avanzado():
     if not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
 
+    conn = None
     try:
         from inventario import (crear_devolucion, generar_codigo_dev,
                                 ajustar_stock_dev, registrar_audit, get_conn)
@@ -5809,6 +5843,8 @@ def devoluciones_registrar_avanzado():
     except Exception as e:
         import traceback
         return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 def _estado_segun_tipificacion(tipif):
@@ -5985,6 +6021,7 @@ def devoluciones_etiqueta_pdf(dev_id):
         except: pass
 
         # Marcar etiqueta como generada
+        conn = None
         try:
             from inventario import get_conn
             conn = get_conn(); cur = conn.cursor()
@@ -5992,6 +6029,8 @@ def devoluciones_etiqueta_pdf(dev_id):
             conn.commit()
             cur.close(); release_conn(conn)
         except: pass
+        finally:
+            release_conn(conn)
 
         return send_file(pdf_buf, as_attachment=True,
                          download_name=f"etiqueta_{codigo}.pdf",
@@ -6006,6 +6045,7 @@ def devoluciones_pendientes_revision():
     """Lista devoluciones que están pendientes de revisión, con info de deadline."""
     if not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
+    conn = None
     try:
         from inventario import get_conn
         from feriados import descripcion_tiempo_restante, color_urgencia
@@ -6045,6 +6085,8 @@ def devoluciones_pendientes_revision():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/devoluciones/<int:dev_id>/actualizar", methods=["POST"])
@@ -6473,6 +6515,7 @@ def _sync_devoluciones_automatico():
     try:
         from returns import sincronizar_devoluciones
         from inventario import get_conn as _gc, release_conn as _rc
+        conn = None
         try:
             conn = _gc(is_admin=True)
             cur = conn.cursor()
@@ -6481,6 +6524,8 @@ def _sync_devoluciones_automatico():
             cur.close(); _rc(conn)
         except Exception:
             tenant_ids = [1]
+        finally:
+            release_conn(conn)
         for tid in tenant_ids:
             try:
                 set_thread_tenant(tid, is_admin=False)
@@ -6990,6 +7035,7 @@ def ruta_importar_excel():
                             # ── BLINDAJE: verificar si ya existe ANTES de insertar ──
                             # Esto evita los duplicados que se crean cuando se re-importa
                             # el Excel sobre un dataset que ya fue procesado por auto_mapeo_v2
+                            conn_check = None
                             try:
                                 from inventario import get_conn
                                 conn_check = get_conn(); cur_check = conn_check.cursor()
@@ -7005,6 +7051,8 @@ def ruta_importar_excel():
                             except Exception as e_check:
                                 ya_existe = False
                                 log.append(f"Fila {i} {sku_lusync}/{canal}: error chequeando existencia: {e_check}")
+                            finally:
+                                release_conn(conn_check)
 
                             if ya_existe:
                                 log.append(f"Fila {i} {sku_lusync} → {canal}:{sku_canal_val}: ya existe, skip (blindaje anti-duplicado)")
@@ -7388,6 +7436,7 @@ def paris_forzar_orden(sub_order_number):
     """
     if not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
+    _c = None
     try:
         from paris import obtener_orden_paris, obtener_ordenes_paris_todas
         from inventario import (orden_ya_procesada_texto, marcar_orden_procesada_texto,
@@ -7559,6 +7608,8 @@ def paris_forzar_orden(sub_order_number):
     except Exception as e:
         import traceback
         return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(_c)
 
 
 @app.route("/admin/revertir_duplicados/<numero_orden>", methods=["GET"])
@@ -7575,6 +7626,7 @@ def admin_revertir_duplicados(numero_orden):
 
     keep = request.args.get("keep", "last")  # last = conservar el más reciente
 
+    conn = None
     try:
         from inventario import get_conn as _gc, ajustar_stock_bodega
         conn = _gc(); cur = conn.cursor()
@@ -7663,6 +7715,8 @@ def admin_revertir_duplicados(numero_orden):
     except Exception as e:
         import traceback
         return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 # /paris/forzar_sync_todos movido a paris.py (Blueprint)
@@ -8653,6 +8707,7 @@ def ruta_bodegas_matriz():
     Returns: {bodegas: [...], skus: [{sku, nombre, stocks: {bodega: cantidad}, total}]}
     """
     if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    conn = None
     try:
         from inventario import get_conn, listar_bodegas
         bodegas = listar_bodegas()
@@ -8690,12 +8745,15 @@ def ruta_bodegas_matriz():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/bodegas/descargar_plantilla")
 def ruta_bodegas_descargar_plantilla():
     """Genera Excel con todos los SKUs y columnas por bodega para llenar."""
     if not session.get("logged"): return redirect("/")
+    conn = None
     try:
         from inventario import get_conn, listar_bodegas
         from openpyxl import Workbook
@@ -8761,6 +8819,8 @@ def ruta_bodegas_descargar_plantilla():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/bodegas/importar_excel", methods=["POST"])
@@ -9028,6 +9088,7 @@ def ruta_stats_propia_vs_fulfillment():
     Devuelve montos, unidades y % por cada bodega individual."""
     if not session.get("logged"): return jsonify({}), 401
     desde, hasta = _parse_rango_fechas()
+    conn = None
     try:
         from inventario import get_conn, listar_bodegas, CANALES_VENTA_ACTIVOS
         conn = get_conn(); cur = conn.cursor()
@@ -9102,6 +9163,8 @@ def ruta_stats_propia_vs_fulfillment():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 # ── MERCADOLIBRE ─────────────────────────────────────────────────────────────
@@ -9455,6 +9518,7 @@ def ruta_meli_reclasificar_bodegas():
 
     Útil para corregir descuentos hechos con el detector viejo que no consultaba shipments."""
     if not session.get("logged"): return jsonify({"ok": False}), 401
+    conn = None
     try:
         from mercadolibre import obtener_orden_meli
         from inventario import (get_conn, ajustar_stock_bodega, get_stock_bodega,
@@ -9492,6 +9556,7 @@ def ruta_meli_reclasificar_bodegas():
         log.append(f"Revisando {len(rows)} movimientos MELI")
 
         for orden_id, sku, cantidad, bodega_actual in rows:
+            conn2 = None
             try:
                 orden = obtener_orden_meli(orden_id)
                 if not orden:
@@ -9526,6 +9591,8 @@ def ruta_meli_reclasificar_bodegas():
                 movidas += 1
             except Exception as e:
                 errores.append(f"{orden_id}: {str(e)}")
+            finally:
+                release_conn(conn2)
 
         return jsonify({
             "ok": True,
@@ -9540,6 +9607,8 @@ def ruta_meli_reclasificar_bodegas():
     except Exception as e:
         import traceback
         return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/mercadolibre/forzar_sync_todos", methods=["POST"])
@@ -9940,6 +10009,7 @@ def ruta_alertas_leer_todas():
 def ruta_alertas_sin_mapeo_pendientes():
     """Devuelve alertas de SKU sin mapeo no leídas — para el banner al abrir el sistema."""
     if not session.get("logged"): return jsonify({"pendientes": []})
+    conn = None
     try:
         from inventario import get_conn as _gc
         conn = _gc(); cur = conn.cursor()
@@ -9959,12 +10029,15 @@ def ruta_alertas_sin_mapeo_pendientes():
         return jsonify({"pendientes": rows})
     except Exception as e:
         return jsonify({"pendientes": [], "error": str(e)})
+    finally:
+        release_conn(conn)
 
 
 @app.route("/alertas/leer_tipo/<tipo>", methods=["POST"])
 def ruta_alertas_leer_tipo(tipo):
     """Marca como leídas todas las alertas de un tipo específico."""
     if not session.get("logged"): return jsonify({"ok": False}), 401
+    conn = None
     try:
         from inventario import get_conn as _gc
         conn = _gc(); cur = conn.cursor()
@@ -9977,6 +10050,8 @@ def ruta_alertas_leer_tipo(tipo):
         return jsonify({"ok": True, "marcadas": marcadas})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/alertas/config", methods=["GET", "POST"])
@@ -10023,6 +10098,7 @@ def debug_movimientos_trazabilidad():
     """
     if not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
+    conn = None
     try:
         from inventario import get_conn
         conn = get_conn(); cur = conn.cursor()
@@ -10111,6 +10187,8 @@ def debug_movimientos_trazabilidad():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/debug/payload_orden_meli/<order_id>")
@@ -10491,6 +10569,7 @@ def admin_estado_reconstruccion():
     /admin/reconstruir_fechas_compra."""
     if not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
+    conn = None
     try:
         from inventario import get_conn
         conn = get_conn(); cur = conn.cursor()
@@ -10532,6 +10611,8 @@ def admin_estado_reconstruccion():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -10729,6 +10810,7 @@ def admin_reset_movimientos():
     confirmar = request.args.get("confirmar", "")
     if confirmar != "SI_BORRAR_TODO":
         # Mostrar info de qué se va a borrar antes de ejecutar
+        conn = None
         try:
             from inventario import get_conn
             conn = get_conn(); cur = conn.cursor()
@@ -10757,6 +10839,8 @@ def admin_reset_movimientos():
             })
         except Exception as e:
             return jsonify({"error": str(e)}), 500
+        finally:
+            release_conn(conn)
 
     # Ejecutar reset con backup
     try:
@@ -10849,6 +10933,7 @@ def admin_listar_backups():
     """Lista todas las tablas de backup creadas por reset_movimientos.
     Útil si necesitas recuperar datos o limpiar backups antiguos."""
     if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    conn = None
     try:
         from inventario import get_conn
         conn = get_conn(); cur = conn.cursor()
@@ -10871,6 +10956,8 @@ def admin_listar_backups():
         return jsonify({"backups": tablas, "total": len(tablas)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        release_conn(conn)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -12023,6 +12110,7 @@ def ruta_sku_mapeo_canal_huerfanos():
     sobrevalorado sin un solo error en el log.
     """
     if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    conn = None
     try:
         from inventario import get_conn, release_conn, cargar_productos
         productos = cargar_productos()
@@ -12063,6 +12151,8 @@ def ruta_sku_mapeo_canal_huerfanos():
                         "huerfanos": huerfanos})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/sku_mapeo_canal/reasignar", methods=["POST"])
@@ -12077,6 +12167,7 @@ def ruta_sku_mapeo_canal_reasignar():
     fantasma por otro no arregla nada.
     """
     if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    conn = None
     try:
         from inventario import get_conn, release_conn, cargar_productos
         data = request.get_json() or {}
@@ -12117,6 +12208,8 @@ def ruta_sku_mapeo_canal_reasignar():
                                    % (sku_canal, canal, sku_destino)})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/sku_mapeo_canal/eliminar", methods=["POST"])
@@ -12209,6 +12302,7 @@ def admin_migrar_sku_mapeo_a_canal():
 
                 # ── BLINDAJE: verificar si ya existe ANTES de insertar ──
                 if not dry_run:
+                    conn_check = None
                     try:
                         from inventario import get_conn
                         conn_check = get_conn(); cur_check = conn_check.cursor()
@@ -12223,6 +12317,8 @@ def admin_migrar_sku_mapeo_a_canal():
                         cur_check.close(); release_conn(conn_check)
                     except:
                         ya_existe = False
+                    finally:
+                        release_conn(conn_check)
                     if ya_existe:
                         log.append(f"⏭ {sku_lusync} → {canal}:{sku_canal_val}: ya existe, skip")
                         continue
@@ -12279,6 +12375,7 @@ def admin_estado_tablas():
     si las publicaciones existen, etc.
     """
     if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    conn = None
     try:
         from inventario import get_conn
         conn = get_conn(); cur = conn.cursor()
@@ -12396,6 +12493,8 @@ def admin_estado_tablas():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -12425,6 +12524,7 @@ def admin_limpiar_duplicados_mapeo():
     dry_run = request.args.get("dry_run", "0") == "1"
     incluir_web = request.args.get("incluir_web", "1") == "1"
 
+    conn = None
     try:
         from inventario import get_conn
 
@@ -12566,6 +12666,8 @@ def admin_limpiar_duplicados_mapeo():
     except Exception as e:
         import traceback
         return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -13277,6 +13379,7 @@ def admin_rellenar_fechas_compra():
     canal_pedido = (request.args.get("canal") or "todos").lower()
     limite       = int(request.args.get("limite", 100))
 
+    conn = None
     try:
         from inventario import get_conn as _gc, TZ_CHILE
         from datetime import datetime as _dt
@@ -13411,6 +13514,8 @@ def admin_rellenar_fechas_compra():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/diagnostico_mapeo", methods=["GET"])
@@ -13422,6 +13527,7 @@ def admin_diagnostico_mapeo():
     canal = (request.args.get("canal") or "").lower().strip()
     item_id = request.args.get("item_id", "").strip()
     sku_canal = request.args.get("sku_canal", "").strip()
+    conn = None
     try:
         from inventario import get_conn as _gc
         conn = _gc(); cur = conn.cursor()
@@ -13447,6 +13553,8 @@ def admin_diagnostico_mapeo():
     except Exception as e:
         import traceback
         return jsonify({"error":str(e),"trace":traceback.format_exc()}),500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/falabella_orden_raw/<order_id>", methods=["GET"])
@@ -13488,6 +13596,7 @@ def admin_movimiento_detalle(orden):
     fecha_nueva  = request.args.get("fecha_compra", "")
     numero_nuevo = request.args.get("numero_orden", "")
 
+    conn = None
     try:
         from inventario import get_conn as _gc, TZ_CHILE
         from datetime import datetime as _dt
@@ -13553,6 +13662,8 @@ def admin_movimiento_detalle(orden):
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/paris_test_stock", methods=["GET"])
@@ -13623,6 +13734,7 @@ def ruta_stats_devoluciones_estado():
     por canal y lista de las más próximas a vencer.
     """
     if not session.get("logged"): return jsonify({}), 401
+    conn = None
     try:
         from inventario import get_conn as _gc, horas_habiles_restantes, calcular_deadline_72h_habiles
         conn = _gc(); cur = conn.cursor()
@@ -13698,6 +13810,8 @@ def ruta_stats_devoluciones_estado():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/stats/ultimos_movimientos")
@@ -13718,6 +13832,7 @@ def ruta_stats_ingresos_periodo():
     """Ingresos financieros del período (monto, unidades, órdenes, ticket promedio + desglose por canal)."""
     if not session.get("logged"): return jsonify({}), 401
     desde, hasta = _parse_rango_fechas()
+    conn = None
     try:
         from inventario import get_conn as _gc, CANALES_VENTA_ACTIVOS
         conn = _gc(); cur = conn.cursor()
@@ -13779,6 +13894,8 @@ def ruta_stats_ingresos_periodo():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -13848,6 +13965,7 @@ def admin_tenancy_crear_super_admin():
     if len(password) < 8:
         return jsonify({"error": "password mínimo 8 caracteres"}), 400
 
+    conn = None
     try:
         from tenancy import crear_lusync_admin, get_conn
         # Verificar si ya hay admins
@@ -13865,6 +13983,8 @@ def admin_tenancy_crear_super_admin():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/rls/estado", methods=["GET"])
@@ -14438,6 +14558,7 @@ def admin_lusync_tenant_eliminar(tenant_id):
 @requiere_lusync_admin
 def admin_lusync_dashboard():
     """Panel master super-admin Lusync."""
+    conn = None
     try:
         from tenancy import listar_tenants
         from inventario import get_conn, release_conn
@@ -14680,6 +14801,8 @@ def admin_lusync_dashboard():
     except Exception as e:
         import traceback
         return f"<pre>Error: {e}\n\n{traceback.format_exc()}</pre>", 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/lusync/tenant/<int:tenant_id>/conectar_marketplace", methods=["GET", "POST"])
@@ -14883,6 +15006,7 @@ def admin_rls_normalizar_canales_historicos():
     bypass_token = _admin_bypass_token()
     if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
+    conn = None
     try:
         from inventario import get_conn, release_conn
         conn = get_conn(is_admin=True); cur = conn.cursor()
@@ -14942,6 +15066,8 @@ def admin_rls_normalizar_canales_historicos():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()[:500]}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/rls/listar_canales", methods=["GET"])
@@ -14950,6 +15076,7 @@ def admin_rls_listar_canales():
     bypass_token = _admin_bypass_token()
     if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
+    conn = None
     try:
         from inventario import get_conn, release_conn
         conn = get_conn(is_admin=True); cur = conn.cursor()
@@ -14971,6 +15098,8 @@ def admin_rls_listar_canales():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()[:500]}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/rls/forzar_sync_woo", methods=["GET"])
@@ -15019,6 +15148,7 @@ def admin_rls_forzar_sync_woo():
             return jsonify({"error": f"Error consultando Woo: {e}"})
 
         for o in ordenes_nuevas:
+            conn = None
             try:
                 order_id = str(o.get("id", ""))
                 woo_key = f"WOO-{order_id}"
@@ -15086,6 +15216,8 @@ def admin_rls_forzar_sync_woo():
             except Exception as e:
                 errores.append(f"Order {order_id}: {e}")
                 log.append(f"   ✗ {woo_key}: ERROR {e}")
+            finally:
+                release_conn(conn)
 
         # ─── 2. ÓRDENES CANCELADAS ───
         log.append(f"=== Consultando órdenes cancelled,refunded...")
@@ -15189,6 +15321,7 @@ def admin_rls_debug_woo_completadas():
     if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
 
+    conn = None
     try:
         dias = int(request.args.get("dias", "14"))
         from datetime import timezone as _tz
@@ -15272,6 +15405,8 @@ def admin_rls_debug_woo_completadas():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()[:600]}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/rls/debug_woo_canceladas", methods=["GET"])
@@ -15282,6 +15417,7 @@ def admin_rls_debug_woo_canceladas():
     if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
 
+    conn = None
     try:
         from datetime import timezone as _tz
         fecha_corte = (datetime.now(_tz.utc) - timedelta(days=7)).isoformat()
@@ -15368,6 +15504,8 @@ def admin_rls_debug_woo_canceladas():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()[:600]}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/rls/debug_meli_orden", methods=["GET"])
@@ -15783,6 +15921,7 @@ def admin_rls_debug_ventas_dia():
 
     fecha = request.args.get("fecha", "")  # YYYY-MM-DD; vacío = hoy
 
+    conn = None
     try:
         from inventario import get_conn, release_conn
         conn = get_conn(is_admin=True); cur = conn.cursor()
@@ -15842,6 +15981,8 @@ def admin_rls_debug_ventas_dia():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()[:500]}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/rls/comparar_movimientos", methods=["GET"])
@@ -15852,6 +15993,8 @@ def admin_rls_comparar_movimientos():
     bypass_token = _admin_bypass_token()
     if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
+    conn_a = None
+    conn_t = None
     try:
         from inventario import get_conn, release_conn
         from datetime import datetime, timedelta
@@ -15924,6 +16067,9 @@ def admin_rls_comparar_movimientos():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()[:500]}), 500
+    finally:
+        release_conn(conn_a)
+        release_conn(conn_t)
 
 
 @app.route("/admin/rls/comparar_ordenes", methods=["GET"])
@@ -15932,6 +16078,8 @@ def admin_rls_comparar_ordenes():
     bypass_token = _admin_bypass_token()
     if not session.get("logged") and not session.get("is_lusync_admin") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
+    conn_a = None
+    conn_t = None
     try:
         from inventario import get_conn, release_conn
 
@@ -15971,6 +16119,9 @@ def admin_rls_comparar_ordenes():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        release_conn(conn_a)
+        release_conn(conn_t)
 
 
 @app.route("/admin/rls/comparar_movimientos", methods=["POST"])
@@ -15982,6 +16133,7 @@ def admin_rls_comparar_movimientos_post():
 @requiere_lusync_admin
 def admin_lusync_facturacion():
     """Vista de facturación: facturas existentes + botón generar período actual."""
+    conn = None
     try:
         from inventario import get_conn, release_conn
         from datetime import datetime
@@ -16156,6 +16308,8 @@ def admin_lusync_facturacion():
     except Exception as e:
         import traceback
         return f"<pre>{e}\n\n{traceback.format_exc()}</pre>", 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/lusync/facturacion/generar", methods=["POST"])
@@ -16164,6 +16318,7 @@ def admin_lusync_facturacion_generar():
     """Genera facturas del período actual para todos los tenants activos.
     Idempotente: si ya existe factura para ese tenant + período, no la duplica.
     """
+    conn = None
     try:
         from inventario import get_conn, release_conn
         from datetime import datetime, timedelta
@@ -16231,12 +16386,15 @@ def admin_lusync_facturacion_generar():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()[:500]}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/lusync/facturacion/<int:fact_id>/marcar_pagada", methods=["POST"])
 @requiere_lusync_admin
 def admin_lusync_facturacion_marcar_pagada(fact_id):
     """Marca una factura como pagada."""
+    conn = None
     try:
         folio = (request.json or {}).get("folio") or None
         from inventario import get_conn, release_conn
@@ -16251,12 +16409,15 @@ def admin_lusync_facturacion_marcar_pagada(fact_id):
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/lusync/uso", methods=["GET"])
 @requiere_lusync_admin
 def admin_lusync_uso():
     """Métricas de uso comparativas por cliente."""
+    conn = None
     try:
         from inventario import get_conn, release_conn
         from tenancy import listar_tenants
@@ -16323,6 +16484,7 @@ def admin_lusync_uso():
             # Calcular % de cuota usada según plan
             max_ordenes = None
             # Acá necesitamos query directa para obtener max_ordenes_mes del plan
+            conn2 = None
             try:
                 conn2 = get_conn(is_admin=True); cur2 = conn2.cursor()
                 cur2.execute("""
@@ -16332,6 +16494,8 @@ def admin_lusync_uso():
                 max_ordenes = rr[0] if rr else None
                 cur2.close(); release_conn(conn2)
             except: pass
+            finally:
+                release_conn(conn2)
 
             uso_pct = (ordenes / max_ordenes * 100) if max_ordenes and max_ordenes > 0 else 0
             uso_color = "#10b981" if uso_pct < 70 else "#f59e0b" if uso_pct < 95 else "#ef4444"
@@ -16431,12 +16595,15 @@ def admin_lusync_uso():
     except Exception as e:
         import traceback
         return f"<pre>{e}\n\n{traceback.format_exc()}</pre>", 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/lusync/planes", methods=["GET"])
 @requiere_lusync_admin
 def admin_lusync_planes():
     """Gestión de planes: precios UF y límites."""
+    conn = None
     try:
         from inventario import get_conn, release_conn
         conn = get_conn(is_admin=True); cur = conn.cursor()
@@ -16556,12 +16723,15 @@ def admin_lusync_planes():
     except Exception as e:
         import traceback
         return f"<pre>{e}\n\n{traceback.format_exc()}</pre>", 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/lusync/plan/<int:plan_id>/precio", methods=["POST"])
 @requiere_lusync_admin
 def admin_lusync_plan_precio(plan_id):
     """Edita el precio UF de un plan."""
+    conn = None
     try:
         precio = (request.json or {}).get("precio_uf")
         if precio is None:
@@ -16574,12 +16744,15 @@ def admin_lusync_plan_precio(plan_id):
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/lusync/marketplaces", methods=["GET"])
 @requiere_lusync_admin
 def admin_lusync_marketplaces():
     """Gestión del catálogo de marketplaces soportados."""
+    conn = None
     try:
         from inventario import get_conn, release_conn
         conn = get_conn(is_admin=True); cur = conn.cursor()
@@ -16700,6 +16873,8 @@ def admin_lusync_marketplaces():
     except Exception as e:
         import traceback
         return f"<pre>{e}\n\n{traceback.format_exc()}</pre>", 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/lusync/marketplace/<int:mkt_id>/<accion>", methods=["POST"])
@@ -16708,6 +16883,7 @@ def admin_lusync_marketplace_toggle(mkt_id, accion):
     """Activa/desactiva un marketplace del catálogo."""
     if accion not in ("activar", "desactivar"):
         return jsonify({"error": "Acción inválida"}), 400
+    conn = None
     try:
         from inventario import get_conn, release_conn
         conn = get_conn(is_admin=True); cur = conn.cursor()
@@ -16718,12 +16894,15 @@ def admin_lusync_marketplace_toggle(mkt_id, accion):
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/lusync/marketplace/<int:mkt_id>/comision", methods=["POST"])
 @requiere_lusync_admin
 def admin_lusync_marketplace_comision(mkt_id):
     """Edita la comisión base de un marketplace."""
+    conn = None
     try:
         com = (request.json or {}).get("comision")
         if com is None:
@@ -16736,6 +16915,8 @@ def admin_lusync_marketplace_comision(mkt_id):
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/lusync/nuevo_cliente", methods=["GET", "POST"])
@@ -16892,6 +17073,7 @@ def admin_lusync_nuevo_cliente():
         """
 
     # POST: crear el cliente
+    conn = None
     try:
         data = request.json or {}
         nombre = (data.get("nombre") or "").strip()
@@ -16943,6 +17125,8 @@ def admin_lusync_nuevo_cliente():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()[:500]}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/lusync/fernet_key", methods=["GET"])
@@ -17016,6 +17200,7 @@ def admin_lusync_fernet_key():
 @requiere_lusync_admin
 def admin_lusync_tenant_detalle(tenant_id):
     """Vista detalle de un tenant — info completa + acciones."""
+    conn = None
     try:
         from tenancy import listar_tenants
         from inventario import get_conn, release_conn
@@ -17426,12 +17611,15 @@ def admin_lusync_tenant_detalle(tenant_id):
     except Exception as e:
         import traceback
         return f"<pre>{e}\n\n{traceback.format_exc()}</pre>", 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/lusync/tenant/<int:tenant_id>/suspender", methods=["POST"])
 @requiere_lusync_admin
 def admin_lusync_tenant_suspender(tenant_id):
     """Suspende un tenant (no podrá hacer login)."""
+    conn = None
     try:
         from inventario import get_conn, release_conn
         conn = get_conn(is_admin=True); cur = conn.cursor()
@@ -17441,12 +17629,15 @@ def admin_lusync_tenant_suspender(tenant_id):
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/lusync/tenant/<int:tenant_id>/reactivar", methods=["POST"])
 @requiere_lusync_admin
 def admin_lusync_tenant_reactivar(tenant_id):
     """Reactiva un tenant suspendido."""
+    conn = None
     try:
         from inventario import get_conn, release_conn
         conn = get_conn(is_admin=True); cur = conn.cursor()
@@ -17456,12 +17647,15 @@ def admin_lusync_tenant_reactivar(tenant_id):
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/lusync/tenant/<int:tenant_id>/cambiar_plan", methods=["POST"])
 @requiere_lusync_admin
 def admin_lusync_tenant_cambiar_plan(tenant_id):
     """Cambia el plan de un tenant."""
+    conn = None
     try:
         plan_codigo = (request.json or {}).get("plan_codigo", "").strip().lower()
         if plan_codigo not in ("trial", "starter", "pro", "enterprise"):
@@ -17479,6 +17673,8 @@ def admin_lusync_tenant_cambiar_plan(tenant_id):
         return jsonify({"ok": True, "plan_codigo": plan_codigo})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/lusync/impersonate/<int:tenant_id>", methods=["GET"])
@@ -17598,6 +17794,7 @@ def admin_tenancy_form_crear_usuario_babymine():
     if len(password) < 8:
         return "<h2>❌ Contraseña muy corta (mín 8)</h2><a href='javascript:history.back()'>Volver</a>", 400
 
+    conn = None
     try:
         from tenancy import crear_usuario
         from inventario import get_conn, release_conn
@@ -17653,6 +17850,8 @@ def admin_tenancy_form_crear_usuario_babymine():
     except Exception as e:
         import traceback
         return f"<pre style='color:red;'>{e}\n\n{traceback.format_exc()}</pre>", 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/tenancy/form_crear_super_admin", methods=["GET"])
@@ -17663,6 +17862,7 @@ def admin_tenancy_form_crear_super_admin():
         return "<h1>No autorizado</h1>", 401
 
     # Verificar si ya hay admins (auto-bloqueo)
+    conn = None
     try:
         from inventario import get_conn, release_conn
         conn = get_conn(is_admin=True); cur = conn.cursor()
@@ -17679,6 +17879,8 @@ def admin_tenancy_form_crear_super_admin():
             """, 403
     except Exception as e:
         pass
+    finally:
+        release_conn(conn)
 
     return f"""
     <!DOCTYPE html>
@@ -17782,6 +17984,8 @@ def admin_rls_test_marcar_orden():
     bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
+    conn1 = None
+    conn2 = None
     try:
         from inventario import get_conn, release_conn, intentar_marcar_orden_atomic
 
@@ -17823,6 +18027,9 @@ def admin_rls_test_marcar_orden():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn1)
+        release_conn(conn2)
 
 
 @app.route("/admin/rls/listar_todas_policies", methods=["GET"])
@@ -17831,6 +18038,7 @@ def admin_rls_listar_todas_policies():
     bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
+    conn = None
     try:
         from inventario import get_conn, release_conn
         conn = get_conn(is_admin=True); cur = conn.cursor()
@@ -17882,6 +18090,8 @@ def admin_rls_listar_todas_policies():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/rls/test_scheduler_manual", methods=["GET"])
@@ -17971,6 +18181,7 @@ def admin_rls_health_check():
     # ─────────────────────────────────────────────────────────────
     # 1. Tablas globales existen y tienen datos
     # ─────────────────────────────────────────────────────────────
+    conn = None
     try:
         conn = get_conn(is_admin=True); cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM tenants")
@@ -17987,6 +18198,8 @@ def admin_rls_health_check():
             check("tablas_globales", "warning", f"Faltan: tenants={n_tenants}, planes={n_planes}, mkts={n_mkts}")
     except Exception as e:
         check("tablas_globales", "fail", str(e))
+    finally:
+        release_conn(conn)
 
     # ─────────────────────────────────────────────────────────────
     # 2. RLS habilitado en todas las tablas
@@ -18007,6 +18220,8 @@ def admin_rls_health_check():
     # ─────────────────────────────────────────────────────────────
     # 3. Aislamiento real: tenant=1 ve datos, tenant=99 ve vacío
     # ─────────────────────────────────────────────────────────────
+    conn1 = None
+    conn99 = None
     try:
         conn1 = get_conn(tenant_id=1); cur1 = conn1.cursor()
         cur1.execute("SELECT COUNT(*) FROM productos")
@@ -18024,10 +18239,14 @@ def admin_rls_health_check():
             check("aislamiento_funciona", "fail", f"INCORRECTO: t1={n_prod_t1}, t99={n_prod_t99}")
     except Exception as e:
         check("aislamiento_funciona", "fail", str(e))
+    finally:
+        release_conn(conn1)
+        release_conn(conn99)
 
     # ─────────────────────────────────────────────────────────────
     # 4. Bypass admin funciona
     # ─────────────────────────────────────────────────────────────
+    conn_a = None
     try:
         conn_a = get_conn(is_admin=True); cur_a = conn_a.cursor()
         cur_a.execute("SELECT COUNT(*) FROM productos")
@@ -18040,6 +18259,8 @@ def admin_rls_health_check():
             check("bypass_admin_funciona", "fail", "Admin no ve nada")
     except Exception as e:
         check("bypass_admin_funciona", "fail", str(e))
+    finally:
+        release_conn(conn_a)
 
     # ─────────────────────────────────────────────────────────────
     # 5. Movimientos recientes (últimas 24h) — actividad de schedulers
@@ -18114,6 +18335,7 @@ def admin_rls_inspeccionar_policy(tabla):
     bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
+    conn = None
     try:
         from inventario import get_conn, release_conn
         conn = get_conn(is_admin=True)
@@ -18141,6 +18363,8 @@ def admin_rls_inspeccionar_policy(tabla):
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/rls/diagnostico_owner", methods=["GET"])
@@ -18151,6 +18375,7 @@ def admin_rls_diagnostico_owner():
     bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
+    conn = None
     try:
         from inventario import get_conn, release_conn
         conn = get_conn(tenant_id=99)  # forzamos tenant=99
@@ -18216,6 +18441,8 @@ def admin_rls_diagnostico_owner():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/rls/recrear_policies", methods=["POST", "GET"])
@@ -18240,6 +18467,9 @@ def admin_rls_verificar_context():
     bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error": "no autorizado"}), 401
+    conn1 = None
+    conn2 = None
+    conn3 = None
     try:
         from inventario import get_conn, release_conn
 
@@ -18304,6 +18534,10 @@ def admin_rls_verificar_context():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn1)
+        release_conn(conn2)
+        release_conn(conn3)
 
 
 @app.route("/admin/rls/forzar_tenant_sesion", methods=["GET"])
@@ -18349,6 +18583,7 @@ def admin_diagnostico_dashboard():
     if not desde or not hasta:
         return jsonify({"error":"Falta ?desde=YYYY-MM-DD&hasta=YYYY-MM-DD"}),400
 
+    conn = None
     try:
         from inventario import get_conn as _gc
         conn = _gc(); cur = conn.cursor()
@@ -18412,6 +18647,8 @@ def admin_diagnostico_dashboard():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/diagnostico_bd", methods=["GET"])
@@ -18420,6 +18657,7 @@ def admin_diagnostico_bd():
     bypass_token = _admin_bypass_token()
     if not session.get("logged") and request.args.get("token") != bypass_token:
         return jsonify({"error":"no autorizado"}),401
+    conn = None
     try:
         from inventario import get_conn as _gc
         conn = _gc(); cur = conn.cursor()
@@ -18443,6 +18681,8 @@ def admin_diagnostico_bd():
     except Exception as e:
         import traceback
         return jsonify({"error":str(e),"trace":traceback.format_exc()}),500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/diagnostico_stock", methods=["GET"])
@@ -18459,6 +18699,7 @@ def admin_diagnostico_stock():
     if not sku:
         return jsonify({"error": "Falta parámetro ?sku=XXX"}), 400
     
+    conn = None
     try:
         from inventario import get_conn, listar_bodegas, get_stock_bodega
         
@@ -18540,6 +18781,8 @@ def admin_diagnostico_stock():
             "error": str(e),
             "trace": traceback.format_exc()
         }), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/importar_stock_full_meli", methods=["GET", "POST"])
@@ -19291,6 +19534,7 @@ def admin_auto_mapeo_meli_seguro():
 
     dry_run = request.args.get("dry_run", "0") == "1"
 
+    conn = None
     try:
         from inventario import get_conn, cargar_productos, get_meli_auth
         from mercadolibre import get_meli_token
@@ -19487,6 +19731,8 @@ def admin_auto_mapeo_meli_seguro():
     except Exception as e:
         import traceback
         return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/reset_sku_mapeo_canal", methods=["GET", "POST"])
@@ -19509,6 +19755,7 @@ def admin_reset_sku_mapeo_canal():
 
     # Sin confirmación, solo preview
     if confirmar != "SI" and not dry_run:
+        conn = None
         try:
             from inventario import get_conn
             conn = get_conn(); cur = conn.cursor()
@@ -19529,6 +19776,8 @@ def admin_reset_sku_mapeo_canal():
             })
         except Exception as e:
             return jsonify({"error": str(e)}), 500
+        finally:
+            release_conn(conn)
 
     try:
         from inventario import get_conn, listar_sku_mapeo
@@ -19845,6 +20094,7 @@ def admin_exportar_movimientos_excel():
     """
     if not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
+    conn = None
     try:
         import io, openpyxl
         from openpyxl.styles import Font, PatternFill, Alignment
@@ -19902,6 +20152,8 @@ def admin_exportar_movimientos_excel():
     except Exception as e:
         import traceback
         return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/importar_movimientos_excel", methods=["POST"])
@@ -19913,6 +20165,7 @@ def admin_importar_movimientos_excel():
     """
     if not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
+    conn = None
     try:
         import io, openpyxl
         from inventario import get_conn
@@ -20021,6 +20274,8 @@ def admin_importar_movimientos_excel():
     except Exception as e:
         import traceback
         return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/debug_falabella_items")
@@ -20064,6 +20319,7 @@ def admin_normalizar_canales():
     bypass_token = _admin_bypass_token()
     if request.args.get("token") != bypass_token and not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
+    conn = None
     try:
         from inventario import get_conn
         conn = get_conn(); cur = conn.cursor()
@@ -20125,6 +20381,8 @@ def admin_normalizar_canales():
     except Exception as e:
         import traceback
         return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 
@@ -20901,6 +21159,7 @@ def admin_importar_excel_meli():
         # ── Cargar mapeos ya existentes en MELI ──
         # Consulta sku_mapeo_canal (tabla principal multi-pub) + sku_mapeo (alias legacy)
         mapeados_existentes = {}  # sku_canal.upper → {sku_lusync, item_id}
+        conn = None
         try:
             conn = get_conn()
             cur = conn.cursor()
@@ -20932,6 +21191,8 @@ def admin_importar_excel_meli():
             release_conn(conn)
         except Exception:
             pass
+        finally:
+            release_conn(conn)
 
         # ── Procesar Excel ──
         data_rows = df.iloc[5:].copy()
@@ -21040,6 +21301,7 @@ def admin_importar_excel_meli():
 def admin_debug_skus_canal():
     if not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
+    conn = None
     try:
         from inventario import get_conn
         conn = get_conn()
@@ -21051,6 +21313,8 @@ def admin_debug_skus_canal():
         return jsonify({"rows": [{"sku_lusync": r[0], "sku_canal": r[1]} for r in rows]})
     except Exception as e:
         return jsonify({"error": str(e)})
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/validar_meli")
@@ -21061,6 +21325,7 @@ def admin_validar_meli():
     """
     if not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
+    conn = None
     try:
         from inventario import get_conn, cargar_productos
         from mercadolibre import obtener_publicaciones_meli
@@ -21157,6 +21422,8 @@ def admin_validar_meli():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/importar_csv_walmart", methods=["POST"])
@@ -21191,6 +21458,7 @@ def admin_importar_csv_walmart():
 
         # Cargar mapeos ya existentes en Walmart
         mapeados_existentes = {}
+        conn = None
         try:
             conn = get_conn()
             cur = conn.cursor()
@@ -21212,6 +21480,8 @@ def admin_importar_csv_walmart():
             release_conn(conn)
         except Exception:
             pass
+        finally:
+            release_conn(conn)
 
         automaticos    = []
         requieren_alias = []
@@ -21349,6 +21619,7 @@ def admin_importar_csv_ripley():
 
         # Mapeos existentes Ripley
         mapeados_existentes = {}
+        conn = None
         try:
             conn = get_conn()
             cur = conn.cursor()
@@ -21369,6 +21640,8 @@ def admin_importar_csv_ripley():
             release_conn(conn)
         except Exception:
             pass
+        finally:
+            release_conn(conn)
 
         automaticos     = []
         requieren_alias = []
@@ -21483,6 +21756,7 @@ def admin_importar_excel_falabella():
         sku_real = {p["sku"].upper().strip(): p["sku"] for p in productos}
         lista_skus_lusync = sorted(sku_real.values())
         mapeados_existentes = {}
+        conn = None
         try:
             conn = get_conn(); cur = conn.cursor()
             cur.execute("SELECT sku_canal, sku_lusync, item_id_canal FROM sku_mapeo_canal WHERE canal='falabella' AND activo=TRUE")
@@ -21496,6 +21770,8 @@ def admin_importar_excel_falabella():
             except Exception: pass
             cur.close(); release_conn(conn)
         except Exception: pass
+        finally:
+            release_conn(conn)
         automaticos=[]; requieren_alias=[]; no_en_lusync=[]; ya_mapeados=[]; skus_vistos=set()
         for row in rows[1:]:
             sku_fal = str(row[idx_sku] or "").strip() if idx_sku is not None else ""
@@ -21625,6 +21901,7 @@ def admin_importar_excel_paris():
         lista_skus_lusync = sorted(sku_real.values())
 
         mapeados_existentes = {}
+        conn = None
         try:
             conn = get_conn(); cur = conn.cursor()
             cur.execute("SELECT sku_canal, sku_lusync, item_id_canal FROM sku_mapeo_canal WHERE canal='paris' AND activo=TRUE")
@@ -21638,6 +21915,8 @@ def admin_importar_excel_paris():
             except Exception: pass
             cur.close(); release_conn(conn)
         except Exception: pass
+        finally:
+            release_conn(conn)
 
         automaticos=[]; requieren_alias=[]; no_en_lusync=[]; ya_mapeados=[]; skus_vistos=set()
 
@@ -21726,6 +22005,7 @@ def admin_debug_paris_ordenes():
 def config_tipificaciones_listar():
     """Lista todas las tipificaciones de entrada y salida."""
     if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
+    conn = None
     try:
         from inventario import get_conn
         conn = get_conn(); cur = conn.cursor()
@@ -21771,6 +22051,8 @@ def config_tipificaciones_listar():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/config/tipificaciones/guardar", methods=["POST"])
@@ -21785,6 +22067,7 @@ def config_tipificaciones_guardar():
     activo = data.get("activo", True)
     if tipo not in ("entrada", "salida") or not nombre:
         return jsonify({"ok": False, "error": "tipo y nombre son requeridos"}), 400
+    conn = None
     try:
         from inventario import get_conn
         conn = get_conn(); cur = conn.cursor()
@@ -21807,6 +22090,8 @@ def config_tipificaciones_guardar():
         return jsonify({"ok": True, "id": tid})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/config/tipificaciones/eliminar", methods=["POST"])
@@ -21815,6 +22100,7 @@ def config_tipificaciones_eliminar():
     if not session.get("logged"): return jsonify({"error": "no autorizado"}), 401
     tid = (request.json or {}).get("id")
     if not tid: return jsonify({"ok": False, "error": "id requerido"}), 400
+    conn = None
     try:
         from inventario import get_conn
         conn = get_conn(); cur = conn.cursor()
@@ -21826,6 +22112,8 @@ def config_tipificaciones_eliminar():
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+    finally:
+        release_conn(conn)
 
 
 def _resumen_stock(items, key_stock="stock"):
@@ -22730,6 +23018,7 @@ def admin_test_sync_sku():
     sku = request.args.get("sku", "").strip()
     if not sku:
         return jsonify({"error": "Pasa ?sku=XXX"}), 400
+    conn = None
     try:
         from inventario import get_conn
         # Stock total
@@ -22804,6 +23093,8 @@ def admin_test_sync_sku():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/corregir_stock_bodega", methods=["POST", "GET"])
@@ -22817,6 +23108,7 @@ def admin_corregir_stock_bodega():
         bypass_token = _admin_bypass_token()
         if request.args.get("token") != bypass_token:
             return jsonify({"error": "no autorizado"}), 401
+    conn = None
     try:
         from inventario import get_conn, set_stock_bodega
         if request.method == "POST":
@@ -22845,6 +23137,8 @@ def admin_corregir_stock_bodega():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/test_canal_directo")
@@ -22923,6 +23217,7 @@ def admin_auto_descubrir_variantes_meli():
 
     dry_run = request.args.get("dry_run", "1") == "1"
 
+    conn = None
     try:
         import requests as _req
         from mercadolibre import meli_headers, MELI_API_URL, obtener_publicaciones_meli
@@ -23097,6 +23392,8 @@ def admin_auto_descubrir_variantes_meli():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/debug_mapeos_sku")
@@ -23108,6 +23405,7 @@ def admin_debug_mapeos_sku():
     sku = request.args.get("sku", "").strip()
     if not sku:
         return jsonify({"error": "Pasa ?sku=XXX"}), 400
+    conn = None
     try:
         from inventario import get_conn
         conn = get_conn(); cur = conn.cursor()
@@ -23141,6 +23439,8 @@ def admin_debug_mapeos_sku():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/debug_meli_stock_locations")
@@ -23260,6 +23560,7 @@ def admin_limpiar_mapeos_huerfanos():
     dry_run = request.args.get("dry_run", "1") == "1"
     canal_filter = request.args.get("canal", "").strip().lower()
 
+    conn = None
     try:
         from inventario import get_conn
         conn = get_conn(); cur = conn.cursor()
@@ -23312,6 +23613,8 @@ def admin_limpiar_mapeos_huerfanos():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/debug_paris_stock_sku")
@@ -23384,6 +23687,7 @@ def admin_verificar_stock_todos_canales():
     resultado = {"sku": sku, "canales": {}}
 
     # 1. Lusync
+    conn = None
     try:
         from inventario import get_conn
         conn = get_conn(); cur = conn.cursor()
@@ -23408,6 +23712,8 @@ def admin_verificar_stock_todos_canales():
         }
     except Exception as e:
         resultado["canales"]["lusync"] = {"error": str(e)}
+    finally:
+        release_conn(conn)
 
     # 2. MELI - todas sus publicaciones
     try:
@@ -23546,6 +23852,7 @@ def admin_enriquecer_mapeos_paris():
         return jsonify({"error": "no autorizado"}), 401
     dry_run = request.args.get("dry_run", "1") == "1"
 
+    conn = None
     try:
         from paris import obtener_stock_paris
         from inventario import get_conn
@@ -23629,6 +23936,8 @@ def admin_enriquecer_mapeos_paris():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/debug_paris_actualizar_raw")
@@ -23646,6 +23955,7 @@ def admin_debug_paris_actualizar_raw():
     if not sku:
         return jsonify({"error": "Pasa ?sku=XXX&cantidad=N"}), 400
 
+    conn = None
     try:
         from inventario import get_conn
         conn = get_conn(); cur = conn.cursor()
@@ -23703,6 +24013,8 @@ def admin_debug_paris_actualizar_raw():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/debug_paris_funcion_codigo")
@@ -24012,11 +24324,14 @@ def pos_entrada_lote():
         )
 
         # 2d. Linkear movimiento al documento de compra
+        _c = None
         try:
             _c = _get_conn(); _cur = _c.cursor()
             _cur.execute("UPDATE movimientos SET documento_compra_id=%s WHERE id=%s", (doc_id, mov_id))
             _c.commit(); _cur.close(); release_conn(_c)
         except Exception: pass
+        finally:
+            release_conn(_c)
 
         # 2e. Registrar línea en movimientos_documento (trazabilidad de costeo)
         try:
@@ -24129,6 +24444,7 @@ def pos_salida_lote():
             origen_registro="pos"
         )
 
+        _c = None
         try:
             _c = _get_conn(); _cur = _c.cursor()
             _cur.execute("""SELECT COALESCE(SUM(sb.cantidad),0) FROM stock_bodega sb
@@ -24138,6 +24454,8 @@ def pos_salida_lote():
             _cur.close(); release_conn(_c)
         except Exception:
             stock_disp = p["stock"]
+        finally:
+            release_conn(_c)
 
         syncs = sincronizar_stock_marketplaces(sku, stock_disp, contexto="pos_salida")
         resultados.append({"sku": sku, "nombre": p["nombre"], "cantidad": cantidad,
@@ -24243,6 +24561,7 @@ def pos_ajuste():
     except Exception as e:
         print(f"[POS ajuste] error registrando ajuste tabla: {e}")
 
+    _c = None
     try:
         _c = _get_conn(); _cur = _c.cursor()
         _cur.execute("""SELECT COALESCE(SUM(sb.cantidad),0) FROM stock_bodega sb
@@ -24252,6 +24571,8 @@ def pos_ajuste():
         _cur.close(); release_conn(_c)
     except Exception:
         stock_disp = p["stock"]
+    finally:
+        release_conn(_c)
 
     syncs = sincronizar_stock_marketplaces(sku, stock_disp, contexto="pos_ajuste")
 
@@ -24316,6 +24637,7 @@ def pos_ajustes_historial():
     """Historial de ajustes de inventario para auditoría."""
     from inventario import get_conn as _get_conn
     limite = int(request.args.get("limite", 50))
+    _c = None
     try:
         _c = _get_conn(); _cur = _c.cursor()
         _cur.execute("""
@@ -24333,6 +24655,8 @@ def pos_ajustes_historial():
         return jsonify({"ok": True, "ajustes": rows})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        release_conn(_c)
 
 
 # ── ENDPOINT CONSOLIDADO PARA GRÁFICOS DEL MODAL DE VENTAS ──────────────────
@@ -24350,6 +24674,7 @@ def ventas_graficos():
     desde = request.args.get("desde") or request.args.get("fecha_desde") or ""
     hasta = request.args.get("hasta") or request.args.get("fecha_hasta") or ""
 
+    conn = None
     try:
         from inventario import get_conn as _gc
         conn = _gc(); cur = conn.cursor()
@@ -24440,6 +24765,8 @@ def ventas_graficos():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+    finally:
+        release_conn(conn)
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -26115,6 +26442,7 @@ def facturacion_nota_credito_emitir():
     nc_id = None
     total = 0
 
+    conn = None
     try:
         from facturacion.dtes.caf_parser import parsear_caf_xml
         from facturacion.dtes.nota_credito import generar_nota_credito_xml
@@ -26240,6 +26568,7 @@ def facturacion_nota_credito_emitir():
         # y vincularlo a esta NC. Deja rastro legal y operativo: la boleta queda
         # "Anulada con NC N°<folio>" y no se considera vigente.
         if cod_ref == 1:
+            _conn = None
             try:
                 from inventario import get_conn as _gc, release_conn as _rc
                 _conn = _gc()
@@ -26265,6 +26594,8 @@ def facturacion_nota_credito_emitir():
                 # No bloquea: la NC ya se emitió. Solo se registra el aviso.
                 print("[Facturación] NC %s emitida pero no se pudo marcar el "
                       "documento original como anulado: %s" % (folio, _e))
+            finally:
+                release_conn(_conn)
 
     except Exception as e:
         import traceback
@@ -26276,6 +26607,8 @@ def facturacion_nota_credito_emitir():
             # Murió antes de registrar el documento: el folio no se usó, vuelve al pool
             _fact_devolver_folio(tenant_id, folio_res, folio)
         return jsonify({"ok": False, "error": str(e)[:300], "folio": folio, "nc_id": nc_id, "pasos": pasos}), 500
+    finally:
+        release_conn(conn)
 
     return jsonify({
         "ok": True, "folio": folio, "tipo_dte": 61, "track_id": track_id,
@@ -26495,6 +26828,7 @@ def facturacion_nota_debito_emitir():
     nc_id = None
     total = 0
 
+    conn = None
     try:
         from facturacion.dtes.caf_parser import parsear_caf_xml
         from facturacion.dtes.nota_debito import generar_nota_debito_xml
@@ -26617,6 +26951,7 @@ def facturacion_nota_debito_emitir():
         # y vincularlo a esta NC. Deja rastro legal y operativo: la boleta queda
         # "Anulada con NC N°<folio>" y no se considera vigente.
         if cod_ref == 1:
+            _conn = None
             try:
                 from inventario import get_conn as _gc, release_conn as _rc
                 _conn = _gc()
@@ -26642,6 +26977,8 @@ def facturacion_nota_debito_emitir():
                 # No bloquea: la NC ya se emitió. Solo se registra el aviso.
                 print("[Facturación] NC %s emitida pero no se pudo marcar el "
                       "documento original como anulado: %s" % (folio, _e))
+            finally:
+                release_conn(_conn)
 
     except Exception as e:
         import traceback
@@ -26653,6 +26990,8 @@ def facturacion_nota_debito_emitir():
             # Murió antes de registrar el documento: el folio no se usó, vuelve al pool
             _fact_devolver_folio(tenant_id, folio_res, folio)
         return jsonify({"ok": False, "error": str(e)[:300], "folio": folio, "nc_id": nc_id, "pasos": pasos}), 500
+    finally:
+        release_conn(conn)
 
     return jsonify({
         "ok": True, "folio": folio, "tipo_dte": 56, "track_id": track_id,
@@ -27130,6 +27469,7 @@ def consultadte_verificar():
         return jsonify({"ok": False,
                         "error": "Demasiadas consultas seguidas. Espera un minuto."}), 429
 
+    conn = None
     try:
         data = request.get_json(silent=True) or {}
         try:
@@ -27198,6 +27538,8 @@ def consultadte_verificar():
         })
     except Exception as e:
         return jsonify({"ok": False, "error": "Error interno: " + str(e)[:200]}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/facturacion/boleta/<int:boleta_id>/xml", methods=["GET"])
@@ -27231,6 +27573,7 @@ def facturacion_boleta_envio_sii(boleta_id):
     al portal del SII: https://maullin.sii.cl/cgi_dte/UPL/DTEauth?1 (certificación)
     o https://palena.sii.cl/cgi_dte/UPL/DTEauth?1 (producción).
     """
+    conn = None
     try:
         if not session.get("logged"):
             return jsonify({"ok": False, "error": "no autenticado"}), 401
@@ -27337,6 +27680,8 @@ def facturacion_boleta_envio_sii(boleta_id):
         import traceback
         return jsonify({"ok": False, "error": "No se pudo reconstruir el sobre: " + str(e)[:300],
                         "trace": traceback.format_exc()[:600]}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/facturacion/boleta/<int:boleta_id>/xml-receptor", methods=["GET"])
@@ -27954,6 +28299,7 @@ def facturacion_factura_emitir():
     fac_id = None
     total = 0
 
+    conn = None
     try:
         from facturacion.dtes.caf_parser import parsear_caf_xml
         from facturacion.dtes.factura import generar_factura_xml
@@ -28074,6 +28420,8 @@ def facturacion_factura_emitir():
             # Murió antes de registrar el documento: el folio no se usó, vuelve al pool
             _fact_devolver_folio(tenant_id, folio_res, folio)
         return jsonify({"ok": False, "error": str(e)[:300], "folio": folio, "fac_id": fac_id, "pasos": pasos}), 500
+    finally:
+        release_conn(conn)
 
     return jsonify({
         "ok": True, "folio": folio, "tipo_dte": _tipo_factura, "track_id": track_id,
@@ -28196,6 +28544,7 @@ def facturacion_guia_emitir():
     guia_id = None
     total = 0
 
+    conn = None
     try:
         from facturacion.dtes.caf_parser import parsear_caf_xml
         from facturacion.dtes.guia_despacho import generar_guia_despacho_xml
@@ -28315,6 +28664,8 @@ def facturacion_guia_emitir():
             # Murió antes de registrar el documento: el folio no se usó, vuelve al pool
             _fact_devolver_folio(tenant_id, folio_res, folio)
         return jsonify({"ok": False, "error": str(e)[:300], "folio": folio, "guia_id": guia_id, "pasos": pasos}), 500
+    finally:
+        release_conn(conn)
 
     return jsonify({
         "ok": True, "folio": folio, "tipo_dte": 52, "track_id": track_id,
@@ -28846,6 +29197,7 @@ def facturacion_actualizar_resolucion():
     GET  -> devuelve la resolución actual.
     POST -> body JSON {fecha: 'YYYY-MM-DD', numero: int}
     """
+    conn = None
     try:
         if not session.get("logged"):
             return jsonify({"ok": False, "error": "no autenticado"}), 401
@@ -28911,6 +29263,8 @@ def facturacion_actualizar_resolucion():
         import traceback
         return jsonify({"ok": False, "error": "Error interno: " + str(e)[:300],
                         "trace": traceback.format_exc()[:500]}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/facturacion/caf/ajustar-folio", methods=["POST"])
@@ -28919,6 +29273,7 @@ def facturacion_ajustar_folio():
     Útil cuando hay folios quemados (ej: tras certificación, saltar a folio 21).
     Body JSON: {tipo_dte, ambiente, nuevo_folio}.
     """
+    conn = None
     try:
         if not session.get("logged"):
             return jsonify({"ok": False, "error": "no autenticado"}), 401
@@ -28964,6 +29319,8 @@ def facturacion_ajustar_folio():
         import traceback
         return jsonify({"ok": False, "error": "Error interno: " + str(e)[:300],
                         "trace": traceback.format_exc()[:500]}), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/facturacion/diagnostico-sii", methods=["GET"])
@@ -29413,6 +29770,7 @@ def _fact_job_consultar_estados():
 
     import re as _re_job
 
+    conn = None
     try:
         # Contexto admin: este job corre en el scheduler, sin sesion Flask, y
         # barre los DTE de TODOS los tenants. Con RLS activo, un get_conn() pelado
@@ -29654,6 +30012,8 @@ def _fact_job_consultar_estados():
                 print("[Estado SII] Error DTE %s: %s" % (bid, str(e)[:120]))
     except Exception as e:
         print("[Estado SII] Error general: %s" % str(e)[:200])
+    finally:
+        release_conn(conn)
 
 
 def _fact_job_rcof_diario():
@@ -29671,6 +30031,7 @@ def _fact_job_rcof_diario():
     from facturacion.dtes.firma import firmar_envio_completo
     from datetime import datetime, timedelta
 
+    conn = None
     try:
         ayer = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
         # Agrupar boletas del día anterior por tenant.
@@ -29742,6 +30103,8 @@ def _fact_job_rcof_diario():
                 print("[RCOF] Error tenant %s: %s" % (tid, str(e)[:150]))
     except Exception as e:
         print("[RCOF] Error general: %s" % str(e)[:200])
+    finally:
+        release_conn(conn)
 
 
 # ── Registro del job de consulta de estados (la función ya está definida arriba) ──
@@ -30147,6 +30510,7 @@ def facturacion_debug():
         return jsonify(diagnostico)
 
     # Step 2: conexión BD
+    conn = None
     try:
         conn = get_conn()
         cur = conn.cursor()
@@ -30159,6 +30523,8 @@ def facturacion_debug():
         import traceback
         diagnostico["steps"].append({"step": "bd_conn", "ok": False, "error": str(e), "trace": traceback.format_exc()[:500]})
         return jsonify(diagnostico)
+    finally:
+        release_conn(conn)
 
     # Step 3: tabla facturacion_config_tenant existe + columnas
     try:
@@ -30414,6 +30780,7 @@ def admin_lusync_limpiar_dtes_no_autorizados(tenant_id):
     
     desactivados = []
     
+    conn = None
     try:
         conn = get_conn(is_admin=True)
         cur = conn.cursor()
@@ -30477,6 +30844,8 @@ def admin_lusync_limpiar_dtes_no_autorizados(tenant_id):
             "error": str(e),
             "trace": traceback.format_exc()[:500]
         }), 500
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/lusync/sii/tenant/<int:tenant_id>", methods=["GET"])
@@ -31300,6 +31669,7 @@ def admin_lusync_sii_test_firma():
         pasos.append({"nombre": nombre, "ok": ok, "detalle": detalle})
 
     error_fatal = None
+    conn = None
     try:
         # ─── PASO 1: Leer certificado .pfx desde BD ───
         cert = obtener_certificado(get_conn, release_conn, tenant_id)
@@ -31428,6 +31798,8 @@ def admin_lusync_sii_test_firma():
         import traceback
         error_fatal = f"Error inesperado: {str(e)[:200]}"
         paso("Error general", False, traceback.format_exc()[:400])
+    finally:
+        release_conn(conn)
 
     # ─── Construir reporte HTML ───
     todo_ok = all(p["ok"] for p in pasos) and not error_fatal
@@ -31665,6 +32037,7 @@ def admin_lusync_sii_test_envio():
 
     error_fatal = False
     track_id = None
+    conn = None
     try:
         # ─── 1. Certificado ───
         cert = obtener_certificado(get_conn, release_conn, tenant_id)
@@ -31782,6 +32155,8 @@ def admin_lusync_sii_test_envio():
         import traceback, html as _html
         paso("Error", False, _html.escape(traceback.format_exc()[:500]))
         error_fatal = True
+    finally:
+        release_conn(conn)
 
     todo_ok = all(p["ok"] for p in pasos) and track_id is not None
     color = "#10b981" if todo_ok else "#dc2626"
@@ -33418,6 +33793,7 @@ def admin_lusync_sii_test_set_basico():
     track_id = None
     import html as _html
     detalles_casos = []
+    conn = None
     try:
         # ─── 1. Certificado ───
         cert = obtener_certificado(get_conn, release_conn, tenant_id)
@@ -33739,6 +34115,8 @@ def admin_lusync_sii_test_set_basico():
         import traceback
         paso("Error", False, _html.escape(traceback.format_exc()[:600]))
         error_fatal = True
+    finally:
+        release_conn(conn)
 
     todo_ok = all(p["ok"] for p in pasos) and (track_id is not None or confirmar != "si")
     color = "#10b981" if todo_ok else "#dc2626"
@@ -33871,6 +34249,7 @@ def admin_lusync_sii_test_set_guias():
     detalles_casos = []
     documentos_sin_firma = []
     documento_ids = []
+    conn = None
     try:
         # 1. Certificado
         cert = obtener_certificado(get_conn, release_conn, tenant_id)
@@ -34044,6 +34423,8 @@ def admin_lusync_sii_test_set_guias():
     except Exception as e:
         import traceback
         paso("ERROR", False, f"{e}<br><pre style='font-size:10px;'>{traceback.format_exc()[:1000]}</pre>")
+    finally:
+        release_conn(conn)
 
     # HTML resultado
     filas = ''
@@ -34166,6 +34547,7 @@ def admin_lusync_sii_test_set_fact_exenta():
     documentos_sin_firma = []
     documento_ids = []
     SET = "4897586"
+    conn = None
     try:
         # 1. Certificado
         cert = obtener_certificado(get_conn, release_conn, tenant_id)
@@ -34415,6 +34797,8 @@ def admin_lusync_sii_test_set_fact_exenta():
     except Exception as e:
         import traceback
         paso("ERROR", False, f"{e}<br><pre style='font-size:10px;'>{traceback.format_exc()[:1000]}</pre>")
+    finally:
+        release_conn(conn)
 
     filas = ''
     for p in pasos:
@@ -35159,6 +35543,7 @@ def admin_lusync_sii_test_set_fact_compra():
     detalles_casos = []
     documentos_sin_firma = []
     documento_ids = []
+    conn = None
     try:
         cert = obtener_certificado(get_conn, release_conn, tenant_id)
         if not cert.get("ok"):
@@ -35340,6 +35725,8 @@ def admin_lusync_sii_test_set_fact_compra():
     except Exception as e:
         import traceback
         paso("ERROR", False, f"{e}<br><pre style='font-size:10px;'>{traceback.format_exc()[:1000]}</pre>")
+    finally:
+        release_conn(conn)
 
     filas = ''
     for p in pasos:
@@ -35426,6 +35813,7 @@ def admin_lusync_sii_test_set_exportacion():
         </div></body></html>"""
 
     error_fatal = False
+    conn = None
     try:
         cert = obtener_certificado(get_conn, release_conn, tenant_id)
         if not cert.get("ok"):
@@ -35583,6 +35971,8 @@ def admin_lusync_sii_test_set_exportacion():
     except Exception as e:
         import traceback
         paso("ERROR", False, f"{e}<br><pre style='font-size:10px;'>{traceback.format_exc()[:1200]}</pre>")
+    finally:
+        release_conn(conn)
 
     filas = ''
     for p in pasos:
@@ -35674,6 +36064,7 @@ def admin_lusync_sii_test_set_exportacion2():
         </div></body></html>"""
 
     error_fatal = False
+    conn = None
     try:
         cert = obtener_certificado(get_conn, release_conn, tenant_id)
         if not cert.get("ok"):
@@ -35860,6 +36251,8 @@ def admin_lusync_sii_test_set_exportacion2():
     except Exception as e:
         import traceback
         paso("ERROR", False, f"{e}<br><pre style='font-size:10px;'>{traceback.format_exc()[:1200]}</pre>")
+    finally:
+        release_conn(conn)
 
     filas = ''
     for p in pasos:
@@ -35932,6 +36325,7 @@ def admin_lusync_sii_test_set_boletas():
     track_id = None
     import html as _html
     detalles_casos = []
+    conn = None
     try:
         # ─── 1. Certificado ───
         cert = obtener_certificado(get_conn, release_conn, tenant_id)
@@ -36062,6 +36456,8 @@ def admin_lusync_sii_test_set_boletas():
         import traceback
         paso("Error", False, _html.escape(traceback.format_exc()[:500]))
         error_fatal = True
+    finally:
+        release_conn(conn)
 
     todo_ok = all(p["ok"] for p in pasos) and track_id is not None
     color = "#10b981" if todo_ok else "#dc2626"
@@ -36154,6 +36550,7 @@ def admin_lusync_sii_test_pdf_boleta():
     _fd = request.args.get("folio_desde", "").strip()
     folio = int(_fd) if _fd.isdigit() else 16
 
+    conn = None
     try:
         config = obtener_config_facturacion(get_conn, release_conn, tenant_id) or {}
         # CAF de boletas tipo 39
@@ -36201,6 +36598,8 @@ def admin_lusync_sii_test_pdf_boleta():
         import traceback
         return Response(f"Error generando PDF: {e}\n\n{traceback.format_exc()}",
                         status=500, mimetype="text/plain")
+    finally:
+        release_conn(conn)
 
 
 @app.route("/admin/lusync/sii/test-rcof", methods=["GET"])
