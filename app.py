@@ -864,6 +864,128 @@ def auditoria_ordenes_limbo():
     return jsonify(resultado)
 
 
+@app.route("/admin/lusync/perf/bloqueos")
+def admin_perf_bloqueos():
+    """Quien esta bloqueando a quien en la base. SOLO LECTURA.
+
+    Un SELECT que espera minutos no espera por un lock de fila —en Postgres
+    las filas no bloquean lecturas—, espera por un ACCESS EXCLUSIVE, o sea por
+    DDL: un ALTER TABLE o un CREATE INDEX que quedo dentro de una transaccion
+    que nunca cerro.
+
+    Los locks se sueltan con COMMIT o ROLLBACK, no antes. Una conexion que
+    quedo "idle in transaction" los retiene para siempre y bloquea a todos.
+
+    Uso: /admin/lusync/perf/bloqueos
+    """
+    if not (session.get("logged") or session.get("is_lusync_admin")):
+        return jsonify({"error": "no autorizado"}), 401
+
+    from inventario import get_conn, release_conn
+
+    info = {"ok": True, "solo_lectura": True, "lectura": []}
+    conn = None
+    try:
+        conn = get_conn(is_admin=True)
+        cur = conn.cursor()
+
+        # Conexiones abiertas: que estan haciendo y hace cuanto
+        cur.execute("""
+            SELECT pid, state,
+                   EXTRACT(EPOCH FROM (NOW() - state_change))::int AS seg_en_ese_estado,
+                   EXTRACT(EPOCH FROM (NOW() - xact_start))::int   AS seg_transaccion,
+                   wait_event_type, wait_event,
+                   LEFT(COALESCE(query, ''), 160) AS consulta
+            FROM pg_stat_activity
+            WHERE datname = current_database() AND pid <> pg_backend_pid()
+            ORDER BY COALESCE(xact_start, state_change) ASC
+            LIMIT 40""")
+        conexiones = []
+        for pid, estado, seg_est, seg_tx, wtipo, wev, q in cur.fetchall():
+            conexiones.append({
+                "pid": pid, "estado": estado,
+                "segundos_en_ese_estado": seg_est,
+                "segundos_de_transaccion": seg_tx,
+                "esperando": ("%s/%s" % (wtipo, wev)) if wtipo else None,
+                "consulta": q,
+            })
+        info["conexiones"] = conexiones
+
+        # Las que estan "idle in transaction": no hacen nada pero retienen locks
+        zombis = [c for c in conexiones
+                  if (c["estado"] or "").startswith("idle in transaction")]
+        info["idle_in_transaction"] = zombis
+        if zombis:
+            peor = max(zombis, key=lambda c: c["segundos_de_transaccion"] or 0)
+            info["lectura"].append(
+                "Hay %d conexiones 'idle in transaction'. No estan haciendo "
+                "nada, pero retienen todos sus locks hasta que cierren. La mas "
+                "vieja lleva %s segundos. Su ultima consulta fue: %s"
+                % (len(zombis), peor["segundos_de_transaccion"], peor["consulta"]))
+
+        # Quien bloquea a quien, directo desde Postgres
+        cur.execute("""
+            SELECT bloqueada.pid, LEFT(COALESCE(bloqueada.query,''), 120),
+                   bloqueante.pid, bloqueante.state,
+                   LEFT(COALESCE(bloqueante.query,''), 120),
+                   EXTRACT(EPOCH FROM (NOW() - bloqueada.state_change))::int
+            FROM pg_stat_activity AS bloqueada
+            JOIN LATERAL unnest(pg_blocking_pids(bloqueada.pid)) AS bpid ON TRUE
+            JOIN pg_stat_activity AS bloqueante ON bloqueante.pid = bpid
+            WHERE cardinality(pg_blocking_pids(bloqueada.pid)) > 0
+            LIMIT 25""")
+        cadena = []
+        for p_b, q_b, p_x, e_x, q_x, seg in cur.fetchall():
+            cadena.append({
+                "pid_bloqueado": p_b, "esperando_hace_segundos": seg,
+                "su_consulta": q_b,
+                "pid_que_bloquea": p_x, "estado_del_que_bloquea": e_x,
+                "consulta_del_que_bloquea": q_x,
+            })
+        info["cadena_de_bloqueos"] = cadena
+        if cadena:
+            info["lectura"].append(
+                "%d consultas estan FRENADAS esperando a otra. La columna "
+                "'consulta_del_que_bloquea' dice quien tiene el lock."
+                % len(cadena))
+        else:
+            info["lectura"].append("Ahora mismo no hay ninguna consulta bloqueada.")
+
+        # Locks de tabla fuertes: los que frenan hasta los SELECT
+        cur.execute("""
+            SELECT l.pid, c.relname, l.mode, l.granted,
+                   EXTRACT(EPOCH FROM (NOW() - a.xact_start))::int
+            FROM pg_locks l
+            JOIN pg_class c ON c.oid = l.relation
+            JOIN pg_stat_activity a ON a.pid = l.pid
+            WHERE l.locktype = 'relation'
+              AND l.mode IN ('AccessExclusiveLock','ExclusiveLock','ShareRowExclusiveLock')
+              AND c.relnamespace = 'public'::regnamespace
+            ORDER BY 5 DESC NULLS LAST LIMIT 25""")
+        fuertes = [{"pid": p, "tabla": t, "modo": m, "otorgado": g,
+                    "segundos_de_transaccion": seg}
+                   for p, t, m, g, seg in cur.fetchall()]
+        info["locks_fuertes"] = fuertes
+        if fuertes:
+            info["lectura"].append(
+                "Hay %d locks fuertes de tabla tomados. Un AccessExclusiveLock "
+                "frena hasta los SELECT sobre esa tabla." % len(fuertes))
+
+        cur.close()
+    except Exception as e:
+        import traceback
+        try:
+            if conn:
+                conn.rollback()
+        except Exception:
+            pass
+        info = {"ok": False, "error": str(e)[:300], "traza": traceback.format_exc()[-500:]}
+    finally:
+        release_conn(conn)
+
+    return jsonify(info)
+
+
 @app.route("/admin/lusync/perf/tablas")
 def admin_perf_tablas():
     """Tamano de las tablas calientes y sus indices. SOLO LECTURA.
@@ -934,20 +1056,32 @@ def admin_perf_tablas():
         # De donde salen las 422 mil alertas. crear_alerta() no deduplica, y los
         # schedulers corren cada 5 o 10 minutos: si una condicion no se resuelve,
         # cada vuelta escribe una alerta nueva.
+        # La primera version de esto devolvia una lista vacia aunque la tabla
+        # tiene 422 mil filas, y no quedo claro por que. Ahora se piden las
+        # cosas de a una, con su propio informe, para que el resultado diga
+        # que paso en vez de callarse.
         try:
-            cur.execute("""SELECT tipo, canal, COUNT(*) AS n,
-                                  MIN(fecha) AS primera, MAX(fecha) AS ultima
-                           FROM alertas
-                           GROUP BY tipo, canal
-                           ORDER BY n DESC LIMIT 12""")
-            filas = []
-            for tipo, canal, n, primera, ultima in cur.fetchall():
-                filas.append({
-                    "tipo": tipo, "canal": canal, "cuantas": int(n),
-                    "primera": primera.isoformat() if primera else None,
-                    "ultima": ultima.isoformat() if ultima else None,
-                })
+            cur.execute("SELECT COUNT(*) FROM alertas")
+            info["alertas_visibles_para_mi"] = int(cur.fetchone()[0])
+
+            cur.execute("""SELECT tipo, COUNT(*) AS n
+                           FROM alertas GROUP BY tipo ORDER BY n DESC LIMIT 12""")
+            filas = [{"tipo": t, "cuantas": int(n)} for t, n in cur.fetchall()]
             info["alertas_por_tipo"] = filas
+
+            cur.execute("""SELECT COUNT(*) FILTER (WHERE leida IS TRUE),
+                                  COUNT(*) FILTER (WHERE leida IS FALSE),
+                                  COUNT(*) FILTER (WHERE leida IS NULL),
+                                  MIN(fecha), MAX(fecha)
+                           FROM alertas""")
+            leidas, no_leidas, nulas, prim, ult = cur.fetchone()
+            info["alertas_estado"] = {
+                "leidas": int(leidas or 0),
+                "no_leidas": int(no_leidas or 0),
+                "sin_marcar": int(nulas or 0),
+                "primera": prim.isoformat() if prim else None,
+                "ultima": ult.isoformat() if ult else None,
+            }
             if filas:
                 p = filas[0]
                 info["lectura"].append(
