@@ -3038,16 +3038,20 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
         print(f"[Bodegas] Error registrando movimiento: {e}")
         # Que contexto RLS tenia la conexion al fallar. Es el dato que dice si
         # la causa es la de arriba o es otra.
-        contexto = {}
+        # Que tenant traia el hilo. Se anota LO QUE SE PIDIO, no lo que la
+        # conexion tenga ahora.
+        #
+        # El primer intento fue leer current_setting() de la conexion despues
+        # del error, y daba siempre null. Era un artefacto de la medicion: para
+        # consultar hay que hacer rollback —la transaccion viene abortada— y en
+        # Postgres set_config(..., false) es transaccional, asi que el rollback
+        # borra el contexto justo antes de leerlo. Se estaba midiendo el efecto
+        # de medir.
+        contexto = {"tenant_del_hilo": _tid,
+                    "se_pidio_admin": True,
+                    "ruta": "explicita" if _tid else "sin_tenant"}
         try:
-            # El rollback va PRIMERO: la excepcion dejo la transaccion abortada
-            # y cualquier consulta sobre ella falla sin siquiera ejecutarse.
             conn.rollback()
-            with conn.cursor() as _c_ctx:
-                _c_ctx.execute("SELECT current_setting('app.tenant_id', true), "
-                               "current_setting('app.is_admin', true)")
-                _t_ctx, _a_ctx = _c_ctx.fetchone()
-                contexto = {"tenant_id": _t_ctx, "is_admin": _a_ctx}
         except Exception:
             pass
         anotar_error_venta(sku, orden_id, canal_normalizado, e, contexto=contexto)
