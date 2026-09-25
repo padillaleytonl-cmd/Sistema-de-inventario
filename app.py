@@ -36769,4 +36769,17 @@ def admin_lusync_sii_test_rcof():
 
 
 if __name__ == "__main__":
+    # Solo para desarrollo local. En produccion arranca gunicorn, que importa
+    # "app:app" y nunca ejecuta este bloque (ver Procfile).
+    #
+    # Por eso el Procfile usa --workers 1 --threads 8 y no varios workers:
+    # scheduler.start() corre a nivel de modulo, asi que cada worker arrancaria
+    # SU PROPIO scheduler y todos los sync correrian repetidos. Es el mismo
+    # problema que causaba tener app.py cargado dos veces. Los hilos dan
+    # concurrencia sin duplicar el scheduler.
+    #
+    # El --timeout 180 tampoco es decorativo: el default de gunicorn son 30
+    # segundos y hay endpoints que tardan mas —el reporte de ventas recorre los
+    # seis marketplaces— asi que con el default gunicorn mataria al worker a
+    # mitad de camino.
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

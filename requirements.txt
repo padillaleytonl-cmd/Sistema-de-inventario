@@ -1,4 +1,5 @@
 flask
+gunicorn>=23.0.0
 requests
 python-dotenv
 psycopg2-binary
