@@ -1238,6 +1238,35 @@ def admin_perf_pool():
         except Exception as e_v:
             info["ventas_no_registradas"] = "no disponible: %s" % str(e_v)[:120]
 
+        # El Procfile arranca con "python app.py", asi que este archivo corre
+        # como __main__. Si algun modulo hace "from app import ...", Python NO
+        # encuentra 'app' en sys.modules —esta como '__main__'— y vuelve a
+        # importar el archivo ENTERO como un modulo aparte. Quedan dos copias,
+        # cada una con su propio threading.local, y el tenant que setea el
+        # scheduler en una no se ve desde la otra.
+        #
+        # Esto lo comprueba o lo descarta.
+        try:
+            import sys as _sys
+            m_main = _sys.modules.get("__main__")
+            m_app = _sys.modules.get("app")
+            info["modulos"] = {
+                "__main__": getattr(m_main, "__file__", None),
+                "app": getattr(m_app, "__file__", None),
+                "son_el_mismo_objeto": (m_main is m_app),
+                "hay_dos_copias": (m_app is not None and m_main is not None
+                                   and m_main is not m_app
+                                   and str(getattr(m_main, "__file__", "")).endswith("app.py")),
+            }
+            if info["modulos"]["hay_dos_copias"]:
+                lectura.append(
+                    "app.py esta cargado DOS VECES (como __main__ y como 'app'). "
+                    "Cada copia tiene su propio threading.local, asi que el tenant "
+                    "que setea el scheduler en una no se ve desde la otra. Eso "
+                    "explica que get_thread_tenant() devuelva None en los syncs.")
+        except Exception as e_m:
+            info["modulos"] = "no disponible: %s" % str(e_m)[:120]
+
         info["lectura"] = lectura
     except Exception as e:
         import traceback
