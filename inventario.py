@@ -216,7 +216,7 @@ _ERRORES_VENTA = []
 _ERRORES_VENTA_LOCK = threading.Lock()
 
 
-def anotar_error_venta(sku, orden_id, canal, error):
+def anotar_error_venta(sku, orden_id, canal, error, contexto=None):
     try:
         import time as _t
         with _ERRORES_VENTA_LOCK:
@@ -225,6 +225,8 @@ def anotar_error_venta(sku, orden_id, canal, error):
                 "sku": sku, "orden_id": str(orden_id or ""), "canal": canal,
                 "error": str(error)[:300],
                 "tipo": type(error).__name__,
+                # Que tenant y que is_admin tenia la conexion al fallar
+                "contexto_rls": contexto or {},
             })
             del _ERRORES_VENTA[:-30]   # solo los ultimos 30
     except Exception:
@@ -334,6 +336,13 @@ def get_conn(tenant_id=None, is_admin=False):
                             adm_thread = False
                         _set_rls_context(conn, int(tid_thread), adm_thread)
                     # Si tampoco hay thread tenant, no seteamos nada (legacy)
+                    #
+                    # OJO: aca get_conn(is_admin=True) queda IGNORADO. Se probo
+                    # respetarlo y se dio marcha atras: sin tenant no hay a
+                    # quien atribuir la fila, asi que el INSERT pasaria pero
+                    # escribiria el movimiento bajo el tenant equivocado. Eso
+                    # cambia un error visible por uno silencioso, que es peor.
+                    # Primero hay que averiguar POR QUE llega sin tenant.
                 except Exception:
                     # app.py todavía no importable (circular) - ignorar
                     pass
@@ -2869,8 +2878,12 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
              fecha_compra_clean, origen_registro, stock_antes, stock_despues))
         inserto = (cur.rowcount > 0)  # 0 si el índice bloqueó un duplicado
         conn.commit()
+        # Se marca JUSTO despues del commit, no despues de soltar la conexion.
+        # Si se marcara mas tarde, un fallo al cerrar el cursor dejaria
+        # registro_ok en False y el paso de abajo devolveria stock de una venta
+        # que SI quedo registrada.
+        registro_ok = True
         cur.close(); release_conn(conn)
-        registro_ok = True  # el INSERT se ejecutó sin excepción (RLS no bloqueó)
         if not inserto:
             # El indice unico bloqueo un duplicado: otro proceso gano la carrera
             # entre la comprobacion de arriba y este INSERT. El descuento YA se
@@ -2890,7 +2903,21 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
                     "advertencia": "ya_registrada"}
     except Exception as e:
         print(f"[Bodegas] Error registrando movimiento: {e}")
-        anotar_error_venta(sku, orden_id, canal_normalizado, e)
+        # Que contexto RLS tenia la conexion al fallar. Es el dato que dice si
+        # la causa es la de arriba o es otra.
+        contexto = {}
+        try:
+            # El rollback va PRIMERO: la excepcion dejo la transaccion abortada
+            # y cualquier consulta sobre ella falla sin siquiera ejecutarse.
+            conn.rollback()
+            with conn.cursor() as _c_ctx:
+                _c_ctx.execute("SELECT current_setting('app.tenant_id', true), "
+                               "current_setting('app.is_admin', true)")
+                _t_ctx, _a_ctx = _c_ctx.fetchone()
+                contexto = {"tenant_id": _t_ctx, "is_admin": _a_ctx}
+        except Exception:
+            pass
+        anotar_error_venta(sku, orden_id, canal_normalizado, e, contexto=contexto)
     finally:
         # Siempre, salga por donde salga. release_conn tolera que el camino
         # feliz ya la haya devuelto.
@@ -2899,6 +2926,23 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
     # Si el INSERT del movimiento falló (ej. RLS), NO reportar ok:True, para que
     # el sync no marque la orden como procesada y la reintente en el próximo ciclo.
     if not registro_ok:
+        # Y DEVOLVER lo descontado. Sin esto, el reintento de dentro de 5
+        # minutos no encuentra movimiento —porque no se pudo escribir—, pasa la
+        # comprobacion de idempotencia y descuenta otra vez. Cada 5 minutos,
+        # para siempre, hasta dejar la bodega en cero, y sin un solo movimiento
+        # que lo explique.
+        #
+        # Devolviendolo, el reintento parte del mismo lugar: puede fallar mil
+        # veces sin costar una sola unidad.
+        if ajustar_stock and descontar > 0:
+            try:
+                ajustar_stock_bodega(sku, bodega, descontar)
+                stock_antes = get_stock_bodega(sku, bodega)
+                print(f"[Bodegas] {sku}/{orden_id}: no se pudo registrar el "
+                      f"movimiento; se devuelven {descontar} a {bodega}")
+            except Exception as e_dev3:
+                print(f"[Bodegas] ALERTA {sku}/{orden_id}: no se registro Y "
+                      f"tampoco pude devolver {descontar} a {bodega}: {e_dev3}")
         return {
             "ok": False,
             "sku": sku,
@@ -2908,7 +2952,8 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
             "stock_antes": stock_antes,
             "stock_despues": stock_antes,
             "advertencia": "no_registrado",
-            "error": "El movimiento no se pudo registrar (posible RLS)."
+            "error": "El movimiento no se pudo registrar (posible RLS). "
+                     "El stock descontado se devolvio."
         }
 
     return {
