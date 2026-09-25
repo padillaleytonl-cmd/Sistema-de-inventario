@@ -3267,7 +3267,7 @@ tbody td {
            salio de un fulfillment, el cliente le devuelve AL MARKETPLACE, que la
            revisa en su propio centro y esa unidad nunca pasa por aca. -->
       <div id="devBodegaBox" style="display:none;margin-bottom:14px;">
-        <div style="font-size:10px;color:var(--muted);margin-bottom:6px;">Vuelve a la bodega</div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:6px;">¿La unidad pasó por tu bodega?</div>
         <select id="devBodegaSelect"
                 style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg2);color:var(--text);font-size:12px;font-family:inherit;">
         </select>
@@ -6967,18 +6967,22 @@ function prepararBodegaDevolucion(item){
   const esMkt = !!DEV_BODEGAS_MKT[origen];
 
   // Opciones: siempre CENTRAL, y la del marketplace cuando la venta salio de ahi
+  // La pregunta real es una sola: la unidad paso fisicamente por nuestra
+  // bodega o no. Central es SOLO para lo que pasa por aca y se revisa; lo que
+  // el marketplace acepta y se queda, vuelve a su propia bodega.
   const opciones = [];
-  if(esMkt) opciones.push({v:origen, t:DEV_BODEGAS_MKT[origen] + ' — el marketplace la revisa'});
-  opciones.push({v:'CENTRAL', t:'Bodega Central — llego fisicamente a nosotros'});
+  if(esMkt) opciones.push({v:origen, t:'No llego — la acepto y reviso ' + DEV_BODEGAS_MKT[origen]});
+  opciones.push({v:'CENTRAL', t:'Si llego a mi bodega y la revise yo → Central'});
 
   sel.innerHTML = opciones.map(o=>'<option value="'+o.v+'">'+o.t+'</option>').join('');
   // El default es el origen cuando es de marketplace: es lo que pasa casi siempre
   sel.value = esMkt ? origen : 'CENTRAL';
 
   motivo.textContent = esMkt
-    ? ('La venta salio de ' + DEV_BODEGAS_MKT[origen] + '. Si el producto no llego a tu bodega, '
-       + 'dejalo asi: el stock vuelve alla, no a Central.')
-    : 'La venta salio de bodega propia, asi que vuelve a Central.';
+    ? ('La venta salio de ' + DEV_BODEGAS_MKT[origen] + '. Si la unidad no llego a tu bodega '
+       + '—porque el marketplace la acepto y la reviso alla— dejalo asi: el stock vuelve a esa '
+       + 'bodega, no a Central. Central es solo para lo que pasa por la tuya.')
+    : 'La venta salio de bodega propia, asi que la unidad vuelve a Central despues de tu revision.';
 
   box.style.display = '';
 }
