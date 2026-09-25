@@ -1054,6 +1054,155 @@ def admin_perf_bloqueos():
     return jsonify(info)
 
 
+@app.route("/admin/lusync/alertas/limpiar")
+def admin_alertas_limpiar():
+    """Borra alertas viejas YA LEIDAS. SIMULA salvo que pases &aplicar=1.
+
+    Por que hace falta: la tabla tiene 422 mil filas contra 4.238 movimientos
+    del negocio, y el panel la consulta dos veces en cada carga. Los indices
+    parciales ayudaron a medias —el contador bajo de 4427 ms a 1730 ms— pero no
+    alcanzan: el filtro de RLS usa current_setting(), que Postgres no puede
+    resolver por indice, asi que recorre el indice entero igual.
+
+    Lo que arregla esto de verdad es que la tabla no tenga 422 mil filas.
+
+    Que NO toca, nunca:
+      - alertas sin leer, sea cual sea su antiguedad
+      - alertas mas recientes que 'dias'
+      - alertas de otros tenants: la consulta corre con el tenant de tu sesion,
+        asi que RLS solo deja ver y borrar las tuyas
+
+    Borra de a lotes y no todo de una: 422 mil filas en un solo DELETE es una
+    transaccion larga, que retiene locks y genera mucho WAL de golpe. Por lote
+    se puede parar a mitad sin dejar nada raro.
+
+    Uso:
+      /admin/lusync/alertas/limpiar                    simula, 30 dias
+      /admin/lusync/alertas/limpiar?dias=90            simula, 90 dias
+      /admin/lusync/alertas/limpiar?dias=30&aplicar=1  BORRA
+      ...&aplicar=1&maximo=50000                       tope de filas por llamada
+    """
+    if not (session.get("logged") or session.get("is_lusync_admin")):
+        return jsonify({"error": "no autorizado"}), 401
+
+    from inventario import get_conn, release_conn
+
+    def _entero(nombre, por_defecto, minimo, maximo):
+        try:
+            v = int(request.args.get(nombre, str(por_defecto)))
+        except ValueError:
+            v = por_defecto
+        return max(minimo, min(maximo, v))
+
+    dias = _entero("dias", 30, 1, 3650)
+    tope = _entero("maximo", 200000, 1000, 1000000)
+    lote = _entero("lote", 20000, 1000, 50000)
+    aplicar = request.args.get("aplicar") == "1"
+
+    info = {"ok": True, "dias": dias, "aplicado": aplicar, "lectura": []}
+    conn = None
+    try:
+        # Sin is_admin: corre con el tenant de tu sesion, asi RLS garantiza que
+        # solo se vean y se borren TUS alertas.
+        conn = get_conn()
+        cur = conn.cursor()
+
+        CONDICION = "leida IS TRUE AND fecha < NOW() - (%s || ' days')::interval"
+
+        cur.execute("SELECT COUNT(*) FROM alertas")
+        info["total_antes"] = int(cur.fetchone()[0])
+
+        cur.execute("SELECT COUNT(*) FROM alertas WHERE " + CONDICION, (str(dias),))
+        info["candidatas"] = int(cur.fetchone()[0])
+
+        cur.execute("SELECT COUNT(*) FROM alertas WHERE leida IS NOT TRUE")
+        info["sin_leer_se_conservan"] = int(cur.fetchone()[0])
+
+        cur.execute("SELECT COUNT(*) FROM alertas WHERE leida IS TRUE AND NOT ("
+                    + CONDICION + ")", (str(dias),))
+        info["recientes_se_conservan"] = int(cur.fetchone()[0])
+
+        if not aplicar:
+            conn.rollback()
+            info["borradas"] = 0
+            info["lectura"].append(
+                "SIMULACION: no se borro nada. Se borrarian %d de %d filas. "
+                "Se conservan %d sin leer y %d recientes. Agrega &aplicar=1 "
+                "para hacerlo de verdad."
+                % (min(info["candidatas"], tope), info["total_antes"],
+                   info["sin_leer_se_conservan"], info["recientes_se_conservan"]))
+            cur.close()
+            return jsonify(info)
+
+        # ── Borrado por lotes ────────────────────────────────────────
+        borradas = 0
+        lotes = 0
+        while borradas < tope:
+            cur.execute(
+                "DELETE FROM alertas WHERE id IN ("
+                "  SELECT id FROM alertas WHERE " + CONDICION + " LIMIT %s)",
+                (str(dias), min(lote, tope - borradas)))
+            n = cur.rowcount
+            conn.commit()          # un commit por lote: nada queda a medias
+            borradas += n
+            lotes += 1
+            if n == 0:
+                break
+
+        info["borradas"] = borradas
+        info["lotes"] = lotes
+
+        cur.execute("SELECT COUNT(*) FROM alertas")
+        info["total_despues"] = int(cur.fetchone()[0])
+        conn.commit()
+
+        # ANALYZE para que Postgres deje de usar el plan viejo. No se hace
+        # VACUUM FULL: ese si bloquea la tabla entera.
+        nivel_previo = None
+        try:
+            conn.commit()
+            nivel_previo = conn.isolation_level
+            conn.set_isolation_level(0)   # autocommit: VACUUM no va en transaccion
+            cur.execute("VACUUM ANALYZE alertas")
+            info["vacuum"] = "ok"
+        except Exception as e_v:
+            info["vacuum"] = "no se pudo: %s" % str(e_v)[:150]
+        finally:
+            # Restaurarlo SIEMPRE. Si el VACUUM falla y la conexion vuelve al
+            # pool en autocommit, el siguiente que la tome pierde sus
+            # transacciones sin enterarse.
+            if nivel_previo is not None:
+                try:
+                    conn.set_isolation_level(nivel_previo)
+                except Exception:
+                    pass
+
+        info["lectura"].append(
+            "Borradas %d filas en %d lote(s). La tabla paso de %d a %d. "
+            "Se conservaron %d sin leer y %d recientes."
+            % (borradas, lotes, info["total_antes"], info["total_despues"],
+               info["sin_leer_se_conservan"], info["recientes_se_conservan"]))
+        if info["candidatas"] > borradas:
+            info["lectura"].append(
+                "Quedaron %d candidatas fuera por el tope de esta llamada. "
+                "Volve a ejecutarla para seguir."
+                % (info["candidatas"] - borradas))
+
+        cur.close()
+    except Exception as e:
+        import traceback
+        try:
+            if conn:
+                conn.rollback()
+        except Exception:
+            pass
+        info = {"ok": False, "error": str(e)[:300], "traza": traceback.format_exc()[-500:]}
+    finally:
+        release_conn(conn)
+
+    return jsonify(info)
+
+
 @app.route("/admin/lusync/perf/tablas")
 def admin_perf_tablas():
     """Tamano de las tablas calientes y sus indices. SOLO LECTURA.
