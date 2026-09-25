@@ -1,3 +1,37 @@
+# ════════════════════════════════════════════════════════════════════
+#  Una sola copia de este modulo
+# ════════════════════════════════════════════════════════════════════
+# Tiene que ir ANTES de cualquier import del proyecto. No es una
+# precaucion teorica: estaba pasando en produccion.
+#
+# El Procfile arranca con "python app.py", asi que este archivo corre como
+# __main__ y queda en sys.modules con ESE nombre, no como 'app'. Cuando
+# inventario.py hace "from app import get_thread_tenant", Python no encuentra
+# 'app' y vuelve a importar el archivo ENTERO como un modulo aparte. Quedan
+# dos copias vivas, con estado separado. Comprobado:
+#
+#     __main__            -> /opt/render/project/src/app.py
+#     app                 -> /opt/render/project/src/app.py
+#     son_el_mismo_objeto -> false
+#
+# Lo que rompia:
+#
+#   1. El tenant se perdia. set_thread_tenant() escribia en el
+#      threading.local de una copia y get_thread_tenant() leia el de la otra.
+#      Durante el sync de MercadoLibre el tenant llegaba en None, la fila
+#      entraba con tenant_id nulo, y la politica tenant_insert_ok de la base
+#      —que exige "tenant_id IS NOT NULL"— rechazaba el INSERT. Esas ventas
+#      no se registraban.
+#
+#   2. Habia DOS schedulers. scheduler.start() esta a nivel de modulo, asi que
+#      cada copia arrancaba el suyo y cada sync corria dos veces. Y _sync_locks,
+#      el candado anti-solapamiento, tambien es por copia: las dos tandas no se
+#      veian entre si y trabajaban en paralelo sobre las mismas ordenes.
+import sys as _sys
+
+if __name__ == "__main__":
+    _sys.modules.setdefault("app", _sys.modules["__main__"])
+
 from flask import Flask, request, render_template, session, redirect, jsonify, send_file, g
 import requests
 import os
