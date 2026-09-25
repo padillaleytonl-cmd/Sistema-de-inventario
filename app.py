@@ -884,7 +884,9 @@ def admin_perf_pool():
     import time as _t
     from inventario import _get_pool, get_conn, release_conn
 
-    info = {"ok": True, "solo_lectura": True}
+    # Cambia con cada arreglo del pool: si el numero no sube, el build todavia
+    # no llego y no tiene sentido interpretar lo que sigue.
+    info = {"ok": True, "solo_lectura": True, "version_arreglo": 3}
     try:
         pool = _get_pool()
         # _used y _pool son internos de psycopg2, pero son la unica forma de ver
@@ -924,6 +926,23 @@ def admin_perf_pool():
         lectura.append("Pedir una conexion tomo %d ms; un viaje a la base, %d ms. "
                        "Lo primero deberia ser casi cero si el pool funciona."
                        % (ms_pedir, ms_consulta))
+
+        # De donde salieron las que no volvieron. Es lo unico que convierte
+        # "hay una fuga" en "la fuga esta en esta linea".
+        try:
+            from inventario import prestamos_abiertos
+            abiertos = prestamos_abiertos()
+            info["sin_devolver"] = abiertos[:15]
+            info["sin_devolver_total"] = len(abiertos)
+            if abiertos:
+                viejas = [a for a in abiertos if a["hace_segundos"] > 60]
+                if viejas:
+                    lectura.append("%d conexiones llevan mas de un minuto sin volver. "
+                                   "Mirar 'sin_devolver': la ultima linea de cada pila "
+                                   "es quien la pidio." % len(viejas))
+        except Exception as e_p:
+            info["sin_devolver"] = "no disponible: %s" % str(e_p)[:120]
+
         info["lectura"] = lectura
     except Exception as e:
         import traceback

@@ -1,4 +1,5 @@
 import os
+import threading
 import psycopg2
 from psycopg2 import pool as psycopg2_pool
 from datetime import datetime, timezone, timedelta
@@ -169,6 +170,51 @@ def horas_habiles_restantes(deadline):
 # Pool de conexiones — máximo 5 conexiones simultáneas (Render free tier tiene límite bajo)
 _pool = None
 
+# Quien pidio cada conexion que todavia no volvio: {id(conn): (cuando, desde donde)}.
+# Sirve para encontrar la fuga que agota el pool. Cuesta una linea por prestamo y
+# se limpia sola al devolver, asi que puede quedarse encendido.
+_PRESTAMOS = {}
+_PRESTAMOS_LOCK = threading.Lock()
+
+
+def _anotar_prestamo(conn):
+    """Guarda desde que linea del proyecto se pidio esta conexion."""
+    try:
+        import traceback as _tb, time as _t
+        pila = []
+        for marco in _tb.extract_stack()[:-1]:
+            nombre = (marco.filename or "").replace("\\", "/").split("/")[-1]
+            # Solo los archivos del proyecto: el resto es ruido de librerias
+            if nombre in ("app.py", "inventario.py", "bodegas_logic.py",
+                          "walmart.py", "mercadolibre.py", "paris.py",
+                          "ripley.py", "falabella.py", "woo.py"):
+                pila.append("%s:%d %s" % (nombre, marco.lineno, marco.name))
+        with _PRESTAMOS_LOCK:
+            _PRESTAMOS[id(conn)] = (_t.time(), pila[-6:])
+    except Exception:
+        pass
+
+
+def _olvidar_prestamo(conn):
+    try:
+        with _PRESTAMOS_LOCK:
+            _PRESTAMOS.pop(id(conn), None)
+    except Exception:
+        pass
+
+
+def prestamos_abiertos():
+    """Las conexiones pedidas que todavia no se devolvieron, con su origen."""
+    import time as _t
+    ahora = _t.time()
+    with _PRESTAMOS_LOCK:
+        datos = list(_PRESTAMOS.items())
+    salida = []
+    for _id, (cuando, pila) in datos:
+        salida.append({"hace_segundos": round(ahora - cuando, 1), "pedida_en": pila})
+    return sorted(salida, key=lambda x: -x["hace_segundos"])
+
+
 def _get_pool():
     global _pool
     if _pool is None or _pool.closed:
@@ -213,6 +259,7 @@ def get_conn(tenant_id=None, is_admin=False):
         conn = _get_pool().getconn()
     except Exception:
         conn = psycopg2.connect(os.environ.get("DATABASE_URL"))
+    _anotar_prestamo(conn)
 
     try:
         # Prioridad 1: argumento explícito
@@ -290,6 +337,7 @@ def _set_rls_context(conn, tenant_id, is_admin=False):
 
 def release_conn(conn):
     """Devuelve la conexión al pool."""
+    _olvidar_prestamo(conn)
     try:
         if conn and not conn.closed:
             _get_pool().putconn(conn)
