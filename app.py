@@ -1125,9 +1125,12 @@ def admin_alertas_limpiar():
         SELECT id FROM (
             SELECT id, ROW_NUMBER() OVER (
                        PARTITION BY tipo, canal, sku
-                       ORDER BY fecha DESC, id DESC) AS puesto
+                       ORDER BY id DESC) AS puesto
               FROM alertas
         ) t WHERE t.puesto > 1"""
+    # Se ordena por id y no por fecha: los id son seriales, asi que el id mas
+    # alto del grupo ES el mas reciente, y ordenar por un entero indexado sale
+    # mucho mas barato que por timestamp.
     SQL_VIEJAS = """
         SELECT id FROM alertas
          WHERE leida IS TRUE
@@ -1148,9 +1151,21 @@ def admin_alertas_limpiar():
         cur.execute("SELECT COUNT(*) FROM alertas")
         info["total_antes"] = int(cur.fetchone()[0])
 
-        cur.execute("SELECT COUNT(*) FROM (" + sql_objetivo + ") x", {"dias": str(dias)})
-        info["a_borrar"] = int(cur.fetchone()[0])
-        info["se_conservan"] = info["total_antes"] - info["a_borrar"]
+        if modo == "repetidas":
+            # Contar con COUNT(DISTINCT) y no con la ventana: sobre 423 mil
+            # filas, COUNT(*) sobre el ROW_NUMBER tardaba mas de 30 segundos
+            # porque obliga a ordenar toda la tabla. El agregado hash es
+            # mucho mas barato, y lo que se conserva es justamente una fila
+            # por grupo.
+            cur.execute("SELECT COUNT(*) FROM (SELECT DISTINCT tipo, canal, sku "
+                        "FROM alertas) g")
+            info["se_conservan"] = int(cur.fetchone()[0])
+            info["a_borrar"] = info["total_antes"] - info["se_conservan"]
+        else:
+            cur.execute("SELECT COUNT(*) FROM (" + sql_objetivo + ") x",
+                        {"dias": str(dias)})
+            info["a_borrar"] = int(cur.fetchone()[0])
+            info["se_conservan"] = info["total_antes"] - info["a_borrar"]
 
         cur.execute("SELECT COUNT(*) FROM alertas WHERE leida IS NOT TRUE")
         info["sin_leer_hoy"] = int(cur.fetchone()[0])
@@ -1172,19 +1187,37 @@ def admin_alertas_limpiar():
             return jsonify(info)
 
         # ── Borrado por lotes, con tope de tiempo ────────────────────
+        # Que ids hay que borrar se calcula UNA sola vez, en una tabla
+        # temporal. Antes el subselect se recalculaba en cada lote: veinte
+        # lotes eran veinte recorridas completas de la tabla.
+        cur.execute("DROP TABLE IF EXISTS _alertas_a_borrar")
+        cur.execute("CREATE TEMP TABLE _alertas_a_borrar AS " + sql_objetivo,
+                    {"dias": str(dias)})
+        cur.execute("CREATE INDEX ON _alertas_a_borrar (id)")
+        conn.commit()
+
         limite = _t.time() + segundos
         borradas, lotes = 0, 0
         while _t.time() < limite:
             cur.execute(
-                "DELETE FROM alertas WHERE id IN ("
-                + sql_objetivo + " LIMIT %(lote)s)",
-                {"dias": str(dias), "lote": lote})
+                "WITH tanda AS ("
+                "  DELETE FROM _alertas_a_borrar"
+                "   WHERE id IN (SELECT id FROM _alertas_a_borrar LIMIT %(lote)s)"
+                "  RETURNING id)"
+                " DELETE FROM alertas WHERE id IN (SELECT id FROM tanda)",
+                {"lote": lote})
             n = cur.rowcount
             conn.commit()          # un commit por lote: nada queda a medias
             borradas += n
             lotes += 1
             if n == 0:
                 break
+
+        try:
+            cur.execute("DROP TABLE IF EXISTS _alertas_a_borrar")
+            conn.commit()
+        except Exception:
+            conn.rollback()
 
         info["borradas"] = borradas
         info["lotes"] = lotes
