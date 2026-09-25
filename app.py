@@ -5811,8 +5811,10 @@ def devoluciones_registrar_avanzado():
                 if cupo["vendido"] == 0:
                     detalle = (f"No encuentro ninguna venta de {sku} en la orden {oc}, "
                                f"asi que no hay nada que devolver.")
-                sugerencia = ("Si la devolucion anterior fue un error, anulala primero "
-                              "y volve a registrarla.")
+                sugerencia = (("Si la devolucion anterior fue un error, anulala primero "
+                               "y volve a registrarla.")
+                              if cupo["ya_devuelto"] else
+                              "Revisa el numero de orden y el SKU.")
             else:
                 detalle = (f"De {sku} se vendieron {cupo['vendido']} unidad(es) en esta "
                            f"orden y ya hay {cupo['ya_devuelto']} devuelta(s): "
@@ -5948,7 +5950,15 @@ def _cupo_devolucion(orden_id, sku):
     conn = None
     try:
         from inventario import get_conn, release_conn
-        conn = get_conn()
+        # MISMO acceso que devoluciones_buscar_orden, y no es un detalle: si el
+        # cupo ve menos movimientos que el formulario, cuenta vendido=0 y
+        # bloquea devoluciones legitimas. Probado: con el acceso normal esta
+        # consulta devolvia 0 para una orden que buscar_orden SI encuentra,
+        # porque la fila no pasa el filtro de RLS con el tenant de la sesion.
+        #
+        # El cupo tiene que contar exactamente las ventas que el usuario ve en
+        # el formulario; si miran cosas distintas, el tope no significa nada.
+        conn = get_conn(tenant_id=1, is_admin=True)
         cur = conn.cursor()
         cur.execute("""SELECT COALESCE(SUM(ABS(cantidad)), 0) FROM movimientos
                         WHERE orden_id = %s AND sku = %s AND tipo = 'salida'""",
@@ -5989,7 +5999,10 @@ def _bodega_para_reintegro(orden_id, sku):
     conn = None
     try:
         from inventario import get_conn, release_conn
-        conn = get_conn()
+        # Mismo acceso que buscar_orden por la misma razon que en
+        # _cupo_devolucion: si no ve el movimiento, deduce CENTRAL por defecto
+        # y mandaria a nuestra bodega una unidad que se quedo en el marketplace.
+        conn = get_conn(tenant_id=1, is_admin=True)
         cur = conn.cursor()
         cur.execute("""SELECT m.bodega_codigo, COALESCE(b.tipo, 'propia')
                          FROM movimientos m
