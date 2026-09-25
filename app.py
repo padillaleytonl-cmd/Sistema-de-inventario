@@ -1056,35 +1056,52 @@ def admin_perf_bloqueos():
 
 @app.route("/admin/lusync/alertas/limpiar")
 def admin_alertas_limpiar():
-    """Borra alertas viejas YA LEIDAS. SIMULA salvo que pases &aplicar=1.
+    """Depura la tabla alertas. SIMULA salvo que pases &aplicar=1.
 
-    Por que hace falta: la tabla tiene 422 mil filas contra 4.238 movimientos
-    del negocio, y el panel la consulta dos veces en cada carga. Los indices
-    parciales ayudaron a medias —el contador bajo de 4427 ms a 1730 ms— pero no
-    alcanzan: el filtro de RLS usa current_setting(), que Postgres no puede
-    resolver por indice, asi que recorre el indice entero igual.
+    Por que hace falta. Medido en produccion:
 
-    Lo que arregla esto de verdad es que la tabla no tenga 422 mil filas.
+        sku_sin_mapeo   418.465   <- 98,8% de la tabla
+        error_sync        4.983
+        cancelacion         256
+        resto                28
+        total           423.732, desde el 2026-04-30
 
-    Que NO toca, nunca:
-      - alertas sin leer, sea cual sea su antiguedad
-      - alertas mas recientes que 'dias'
-      - alertas de otros tenants: la consulta corre con el tenant de tu sesion,
-        asi que RLS solo deja ver y borrar las tuyas
+    Contra 4.238 movimientos del negocio. Y el panel consulta esta tabla dos
+    veces en cada carga: sin_mapeo_pendientes es el endpoint mas lento que
+    queda, con 6.625 ms.
 
-    Borra de a lotes y no todo de una: 422 mil filas en un solo DELETE es una
-    transaccion larga, que retiene locks y genera mucho WAL de golpe. Por lote
-    se puede parar a mitad sin dejar nada raro.
+    No son 418 mil avisos distintos: es el MISMO aviso repetido. crear_alerta()
+    no deduplicaba y los sync corren cada 5 o 10 minutos por seis marketplaces,
+    asi que cada vuelta que encontraba el mismo SKU sin mapear escribia una
+    fila nueva. Ya esta corregido en el origen; esto es para el historico.
+
+    Dos modos:
+
+      modo=repetidas  (recomendado) deja la MAS RECIENTE de cada
+                      (tipo, canal, sku) y borra las repetidas. No se pierde
+                      informacion: se siguen viendo todos los SKU sin mapear,
+                      una vez cada uno.
+
+      modo=viejas     borra las LEIDAS con mas de N dias. Conservador, pero
+                      aca solo alcanza a 18.919 filas de 423.732.
+
+    Nunca toca alertas de otros tenants: corre con el tenant de tu sesion, sin
+    is_admin, asi que RLS solo deja ver y borrar las propias.
+
+    Borra de a lotes con un commit por lote y un tope de tiempo, asi la
+    peticion siempre contesta y se puede volver a ejecutar para seguir. 423 mil
+    filas en un solo DELETE seria una transaccion larga, que retiene locks y
+    genera mucho WAL de golpe.
 
     Uso:
-      /admin/lusync/alertas/limpiar                    simula, 30 dias
-      /admin/lusync/alertas/limpiar?dias=90            simula, 90 dias
-      /admin/lusync/alertas/limpiar?dias=30&aplicar=1  BORRA
-      ...&aplicar=1&maximo=50000                       tope de filas por llamada
+      /admin/lusync/alertas/limpiar?modo=repetidas               simula
+      /admin/lusync/alertas/limpiar?modo=repetidas&aplicar=1     BORRA
+      /admin/lusync/alertas/limpiar?modo=viejas&dias=30          simula
     """
     if not (session.get("logged") or session.get("is_lusync_admin")):
         return jsonify({"error": "no autorizado"}), 401
 
+    import time as _t
     from inventario import get_conn, release_conn
 
     def _entero(nombre, por_defecto, minimo, maximo):
@@ -1094,54 +1111,74 @@ def admin_alertas_limpiar():
             v = por_defecto
         return max(minimo, min(maximo, v))
 
+    modo = (request.args.get("modo") or "repetidas").strip().lower()
+    if modo not in ("repetidas", "viejas"):
+        modo = "repetidas"
     dias = _entero("dias", 30, 1, 3650)
-    tope = _entero("maximo", 200000, 1000, 1000000)
-    lote = _entero("lote", 20000, 1000, 50000)
+    lote = _entero("lote", 10000, 500, 50000)
+    segundos = _entero("segundos", 25, 5, 60)
     aplicar = request.args.get("aplicar") == "1"
 
-    info = {"ok": True, "dias": dias, "aplicado": aplicar, "lectura": []}
+    # ROW_NUMBER y no "NOT IN (SELECT ...)": con 423 mil filas el NOT IN se
+    # vuelve cuadratico. La ventana recorre la tabla una sola vez.
+    SQL_REPETIDAS = """
+        SELECT id FROM (
+            SELECT id, ROW_NUMBER() OVER (
+                       PARTITION BY tipo, canal, sku
+                       ORDER BY fecha DESC, id DESC) AS puesto
+              FROM alertas
+        ) t WHERE t.puesto > 1"""
+    SQL_VIEJAS = """
+        SELECT id FROM alertas
+         WHERE leida IS TRUE
+           AND fecha < NOW() - (%(dias)s || ' days')::interval"""
+
+    sql_objetivo = SQL_REPETIDAS if modo == "repetidas" else SQL_VIEJAS
+
+    info = {"ok": True, "modo": modo, "aplicado": aplicar, "lectura": []}
+    if modo == "viejas":
+        info["dias"] = dias
     conn = None
     try:
-        # Sin is_admin: corre con el tenant de tu sesion, asi RLS garantiza que
-        # solo se vean y se borren TUS alertas.
+        # Sin is_admin: corre con el tenant de la sesion, asi RLS garantiza que
+        # solo se vean y se borren las alertas propias.
         conn = get_conn()
         cur = conn.cursor()
-
-        CONDICION = "leida IS TRUE AND fecha < NOW() - (%s || ' days')::interval"
 
         cur.execute("SELECT COUNT(*) FROM alertas")
         info["total_antes"] = int(cur.fetchone()[0])
 
-        cur.execute("SELECT COUNT(*) FROM alertas WHERE " + CONDICION, (str(dias),))
-        info["candidatas"] = int(cur.fetchone()[0])
+        cur.execute("SELECT COUNT(*) FROM (" + sql_objetivo + ") x", {"dias": str(dias)})
+        info["a_borrar"] = int(cur.fetchone()[0])
+        info["se_conservan"] = info["total_antes"] - info["a_borrar"]
 
         cur.execute("SELECT COUNT(*) FROM alertas WHERE leida IS NOT TRUE")
-        info["sin_leer_se_conservan"] = int(cur.fetchone()[0])
-
-        cur.execute("SELECT COUNT(*) FROM alertas WHERE leida IS TRUE AND NOT ("
-                    + CONDICION + ")", (str(dias),))
-        info["recientes_se_conservan"] = int(cur.fetchone()[0])
+        info["sin_leer_hoy"] = int(cur.fetchone()[0])
 
         if not aplicar:
             conn.rollback()
             info["borradas"] = 0
             info["lectura"].append(
-                "SIMULACION: no se borro nada. Se borrarian %d de %d filas. "
-                "Se conservan %d sin leer y %d recientes. Agrega &aplicar=1 "
-                "para hacerlo de verdad."
-                % (min(info["candidatas"], tope), info["total_antes"],
-                   info["sin_leer_se_conservan"], info["recientes_se_conservan"]))
+                "SIMULACION: no se borro nada. Se borrarian %d de %d filas y "
+                "quedarian %d."
+                % (info["a_borrar"], info["total_antes"], info["se_conservan"]))
+            if modo == "repetidas":
+                info["lectura"].append(
+                    "Modo 'repetidas': de cada (tipo, canal, sku) se conserva "
+                    "la mas reciente, asi que no se pierde ningun aviso: cada "
+                    "SKU sin mapear sigue apareciendo, una vez.")
+            info["lectura"].append("Agrega &aplicar=1 para hacerlo de verdad.")
             cur.close()
             return jsonify(info)
 
-        # ── Borrado por lotes ────────────────────────────────────────
-        borradas = 0
-        lotes = 0
-        while borradas < tope:
+        # ── Borrado por lotes, con tope de tiempo ────────────────────
+        limite = _t.time() + segundos
+        borradas, lotes = 0, 0
+        while _t.time() < limite:
             cur.execute(
                 "DELETE FROM alertas WHERE id IN ("
-                "  SELECT id FROM alertas WHERE " + CONDICION + " LIMIT %s)",
-                (str(dias), min(lote, tope - borradas)))
+                + sql_objetivo + " LIMIT %(lote)s)",
+                {"dias": str(dias), "lote": lote})
             n = cur.rowcount
             conn.commit()          # un commit por lote: nada queda a medias
             borradas += n
@@ -1156,8 +1193,8 @@ def admin_alertas_limpiar():
         info["total_despues"] = int(cur.fetchone()[0])
         conn.commit()
 
-        # ANALYZE para que Postgres deje de usar el plan viejo. No se hace
-        # VACUUM FULL: ese si bloquea la tabla entera.
+        # ANALYZE para que Postgres deje de usar el plan viejo. VACUUM FULL no
+        # se hace: ese bloquea la tabla entera.
         nivel_previo = None
         try:
             conn.commit()
@@ -1178,15 +1215,13 @@ def admin_alertas_limpiar():
                     pass
 
         info["lectura"].append(
-            "Borradas %d filas en %d lote(s). La tabla paso de %d a %d. "
-            "Se conservaron %d sin leer y %d recientes."
-            % (borradas, lotes, info["total_antes"], info["total_despues"],
-               info["sin_leer_se_conservan"], info["recientes_se_conservan"]))
-        if info["candidatas"] > borradas:
+            "Borradas %d filas en %d lote(s). La tabla paso de %d a %d."
+            % (borradas, lotes, info["total_antes"], info["total_despues"]))
+        if borradas < info["a_borrar"]:
             info["lectura"].append(
-                "Quedaron %d candidatas fuera por el tope de esta llamada. "
+                "Quedaron %d por borrar: se acabo el tiempo de esta llamada. "
                 "Volve a ejecutarla para seguir."
-                % (info["candidatas"] - borradas))
+                % (info["a_borrar"] - borradas))
 
         cur.close()
     except Exception as e:

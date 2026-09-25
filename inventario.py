@@ -2134,14 +2134,49 @@ def init_alertas():
     cur.close(); release_conn(conn)
 
 
+# Tipos de alerta que describen una CONDICION que dura, no un hecho puntual.
+# Mientras el SKU siga sin mapear, cada vuelta del sync vuelve a detectarlo.
+# Para estos no se crea una alerta nueva: se refresca la que ya hay sin leer.
+#
+# Sin esto, medido en produccion: 418.465 alertas 'sku_sin_mapeo' de un total
+# de 423.732, acumuladas desde el 30 de abril. Los sync corren cada 5 o 10
+# minutos por seis marketplaces, y cada vuelta escribia una fila mas. La tabla
+# llego a ser cien veces mas grande que los movimientos del negocio, y el panel
+# la consulta dos veces en cada carga.
+TIPOS_QUE_SE_REPITEN = ("sku_sin_mapeo", "error_sync")
+
+
 def crear_alerta(tipo, titulo, mensaje="", canal=None, orden_id=None, sku=None, enviar_email=True):
-    """Registra una alerta en BD y opcionalmente envía email a destinatarios configurados."""
+    """Registra una alerta en BD y opcionalmente envía email a destinatarios configurados.
+
+    Si el tipo describe una condicion persistente y ya hay una alerta sin leer
+    para el mismo canal y SKU, se refresca esa en vez de crear otra.
+    """
     conn = get_conn(is_admin=True); cur = conn.cursor()
     try:
-        cur.execute("""INSERT INTO alertas (tipo, canal, titulo, mensaje, orden_id, sku)
-                       VALUES (%s, %s, %s, %s, %s, %s)""",
-                    (tipo, canal, titulo, mensaje, orden_id, sku))
+        repetida = False
+        if tipo in TIPOS_QUE_SE_REPITEN:
+            # El UPDATE hace las dos cosas de una: si habia una sin leer, la
+            # refresca y avisa cuantas toco. Si no habia, rowcount es 0 y se
+            # inserta. Una sola ida a la base en el caso comun.
+            cur.execute("""UPDATE alertas
+                              SET fecha = NOW(), mensaje = %s, titulo = %s
+                            WHERE tipo = %s
+                              AND canal IS NOT DISTINCT FROM %s
+                              AND sku   IS NOT DISTINCT FROM %s
+                              AND leida IS NOT TRUE""",
+                        (mensaje, titulo, tipo, canal, sku))
+            repetida = cur.rowcount > 0
+
+        if not repetida:
+            cur.execute("""INSERT INTO alertas (tipo, canal, titulo, mensaje, orden_id, sku)
+                           VALUES (%s, %s, %s, %s, %s, %s)""",
+                        (tipo, canal, titulo, mensaje, orden_id, sku))
         conn.commit()
+
+        if repetida:
+            # Ya se habia avisado y sigue sin leerse: no se manda el mail otra vez.
+            enviar_email = False
     except Exception as e:
         print(f"[Alertas] crear error: {e}"); conn.rollback()
     cur.close(); release_conn(conn)
