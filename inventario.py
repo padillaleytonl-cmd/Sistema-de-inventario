@@ -241,6 +241,55 @@ def errores_venta():
         return list(reversed(_ERRORES_VENTA))
 
 
+def prestamos_de_este_hilo():
+    """Los ids de conexion que tiene prestados ESTE hilo ahora mismo."""
+    hilo = threading.get_ident()
+    try:
+        with _PRESTAMOS_LOCK:
+            return {i for i, d in _PRESTAMOS.items() if len(d) >= 4 and d[2] == hilo}
+    except Exception:
+        return set()
+
+
+def reclamar_prestamos(ids_previos, etiqueta=""):
+    """Devuelve al pool lo que este hilo pidio despues de ids_previos.
+
+    Se limita al hilo actual a proposito. Una conexion de otro hilo puede estar
+    en pleno uso, y soltarla desde afuera romperia esa operacion; un hilo, en
+    cambio, no puede estar en dos lugares a la vez, asi que lo que pidio y no
+    devolvio durante el tramo esta abandonado con certeza.
+
+    Devolver la conexion tambien limpia su transaccion: psycopg2 revierte sola
+    toda conexion que no este limpia antes de guardarla de vuelta en el pool.
+
+    Retorna cuantas recupero.
+    """
+    hilo = threading.get_ident()
+    huerfanas = []
+    try:
+        with _PRESTAMOS_LOCK:
+            for _id, datos in list(_PRESTAMOS.items()):
+                if _id in ids_previos or len(datos) < 4:
+                    continue
+                if datos[2] != hilo:
+                    continue
+                huerfanas.append(datos[3])
+    except Exception:
+        return 0
+
+    recuperadas = 0
+    for cn in huerfanas:
+        try:
+            release_conn(cn)
+            recuperadas += 1
+        except Exception:
+            pass
+    if recuperadas:
+        print(f"[Pool] {etiqueta or 'un tramo'} dejo {recuperadas} conexion(es) "
+              f"sin devolver; se recuperaron")
+    return recuperadas
+
+
 def cerrar_conexiones_al_salir(func):
     """Devuelve al pool lo que func haya pedido en este hilo y no devuelto.
 
@@ -261,30 +310,11 @@ def cerrar_conexiones_al_salir(func):
 
     @wraps(func)
     def envoltura(*args, **kwargs):
-        hilo = threading.get_ident()
-        with _PRESTAMOS_LOCK:
-            antes = set(_PRESTAMOS.keys())
+        antes = prestamos_de_este_hilo()
         try:
             return func(*args, **kwargs)
         finally:
-            huerfanas = []
-            try:
-                with _PRESTAMOS_LOCK:
-                    for _id, datos in list(_PRESTAMOS.items()):
-                        if _id in antes or len(datos) < 4:
-                            continue
-                        if datos[2] != hilo:
-                            continue   # de otro hilo: no es nuestra
-                        huerfanas.append(datos[3])
-            except Exception:
-                huerfanas = []
-            for cn in huerfanas:
-                try:
-                    release_conn(cn)
-                    print(f"[Pool] {func.__name__} dejo una conexion sin devolver; "
-                          f"se devolvio y se soltaron sus locks")
-                except Exception:
-                    pass
+            reclamar_prestamos(antes, func.__name__)
 
     return envoltura
 

@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template, session, redirect, jsonify, send_file
+from flask import Flask, request, render_template, session, redirect, jsonify, send_file, g
 import requests
 import os
 from datetime import datetime, timedelta
@@ -862,6 +862,40 @@ def auditoria_ordenes_limbo():
         release_conn(conn)
 
     return jsonify(resultado)
+
+
+# ── Red de seguridad del pool, por peticion ──────────────────────────
+#
+# Quedan 132 bloques en este archivo con la forma "pido la conexion dentro de
+# un try y la devuelvo solo si todo sale bien". Cuando algo falla, esa conexion
+# no vuelve nunca. Medido en produccion: 12 de 12 prestadas, 13 sin devolver,
+# la mas vieja de 4 horas y media. Con el pool agotado, get_conn abre una
+# conexion NUEVA en cada peticion —cerca de un segundo— y todo se arrastra sin
+# dar un solo error.
+#
+# En vez de reescribir 132 bloques, se cierra el borde: al terminar cada
+# peticion se devuelve lo que ESE hilo pidio durante ella y no devolvio.
+# Flask atiende cada peticion en un hilo, asi que lo que quedo prestado ahi
+# esta abandonado con certeza. Nunca se toca una conexion de otro hilo.
+@app.before_request
+def _pool_anotar_prestamos_previos():
+    try:
+        from inventario import prestamos_de_este_hilo
+        g._pool_antes = prestamos_de_este_hilo()
+    except Exception:
+        g._pool_antes = None
+
+
+@app.teardown_request
+def _pool_reclamar_prestamos(exc=None):
+    try:
+        antes = getattr(g, "_pool_antes", None)
+        if antes is None:
+            return
+        from inventario import reclamar_prestamos
+        reclamar_prestamos(antes, "la peticion %s" % request.path)
+    except Exception:
+        pass
 
 
 @app.route("/admin/lusync/perf/bloqueos")
@@ -1803,6 +1837,13 @@ def con_tenant_default(func):
             tenant_ids = [1]
 
         for tid in tenant_ids:
+            # Misma red que en las peticiones web: los sync tambien dejaban
+            # conexiones sin devolver cuando algo fallaba a mitad.
+            try:
+                from inventario import prestamos_de_este_hilo as _pdh
+                antes = _pdh()
+            except Exception:
+                antes = None
             try:
                 set_thread_tenant(tid, is_admin=False)
                 print(f"[{func.__name__}] Ejecutando para tenant_id={tid}")
@@ -1813,6 +1854,12 @@ def con_tenant_default(func):
                 traceback.print_exc()
             finally:
                 clear_thread_tenant()
+                if antes is not None:
+                    try:
+                        from inventario import reclamar_prestamos as _rp
+                        _rp(antes, func.__name__)
+                    except Exception:
+                        pass
     return wrapper
 
 
