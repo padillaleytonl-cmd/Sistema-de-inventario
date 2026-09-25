@@ -4491,10 +4491,17 @@ def fix_woo_movimientos():
 @app.route("/debug_woo_ordenes")
 def debug_woo_ordenes():
     """Ver órdenes de WooCommerce en estado processing"""
-    res = requests.get(
-        "https://www.babymine.cl/wp-json/wc/v3/orders",
-        params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET, "status": "processing", "per_page": 10}
-    )
+    # timeout: sin el, esta llamada se queda esperando a WooCommerce para
+    # siempre. Medido en produccion, tardo 34 segundos y dejo al panel entero
+    # esperando detras de ella.
+    try:
+        res = requests.get(
+            "https://www.babymine.cl/wp-json/wc/v3/orders",
+            params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET, "status": "processing", "per_page": 10},
+            timeout=8,
+        )
+    except requests.RequestException as e:
+        return {"error": "sin respuesta de WooCommerce", "detalle": str(e)[:200]}
     if res.status_code != 200:
         return {"error": res.status_code, "detalle": res.text[:200]}
     ordenes = res.json()

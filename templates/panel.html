@@ -4358,7 +4358,11 @@ function showSection(sec, btn){
   if(sec === 'devoluciones') cargarDevoluciones('todas');
   if(sec === 'audit') cargarAudit();
   if(sec === 'skumapeo') cargarSkuMapeo();
-  if(sec === 'canales' && typeof cargarCanales === 'function') cargarCanales();
+  if(sec === 'canales'){
+    if(typeof cargarCanales === 'function') cargarCanales();
+    if(typeof iniciarVigilanciaCanales === 'function') iniciarVigilanciaCanales();
+  }
+  if(sec === 'facturacion' && typeof dtInit === 'function') dtInit();
   if(sec === 'dashboard' && typeof cargarDashboardCompleto === 'function') cargarDashboardCompleto();
   if(sec === 'inventario') { cargarTipificaciones(); if(!_productosCache.length) cargar(); }
   if(sec === 'pos') posInit();
@@ -5926,8 +5930,20 @@ function verificarPendientes(){
   }).catch(()=>{});
 }
 
-verificarPendientes();
-setInterval(verificarPendientes, 120000);
+// Antes esto arrancaba solo al cargar la pagina, aunque nadie estuviera
+// mirando Canales. Y no sale gratis: /debug_woo_ordenes le pregunta a
+// WooCommerce y /walmart/ver_ordenes a Walmart. Medido en produccion, la
+// primera tardo entre 12 y 34 segundos, tapando al resto del panel.
+//
+// Ahora empieza recien cuando se abre la seccion, y el reloj se arma una
+// sola vez.
+var _vigilandoCanales = false;
+function iniciarVigilanciaCanales(){
+  if (_vigilandoCanales) { verificarPendientes(); return; }
+  _vigilandoCanales = true;
+  verificarPendientes();
+  setInterval(verificarPendientes, 120000);
+}
 
 // ── WALMART
 (function verificarWalmart(){
@@ -13852,7 +13868,8 @@ function dtTab(tab, btn){
   if(tab==='folios') dtCargarFolios();
 }
 // Garantizar primera fila apenas el panel existe en el DOM
-document.addEventListener('DOMContentLoaded', ()=>{ setTimeout(dtInit, 300); });
+// dtInit ya no corre al cargar: pedia /facturacion/folios/tipos-habilitados
+// para una seccion que estaba oculta. Ahora lo llama showSection('facturacion').
 
 let _dtNCMontoMax = 0;  // monto del documento referenciado (tope para "corrige montos")
 
