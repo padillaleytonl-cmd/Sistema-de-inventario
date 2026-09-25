@@ -1300,12 +1300,16 @@ def admin_perf_tablas():
                 "ultima": ult.isoformat() if ult else None,
             }
             if filas:
+                # El mensaje anterior leia p["primera"], que dejo de existir al
+                # simplificar la consulta a tipo + conteo. La excepcion se
+                # tragaba TODO el bloque, asi que el desglose nunca llegaba a
+                # verse: aparecia como "no disponible: 'primera'". Las fechas
+                # van en alertas_estado, que es donde corresponde.
                 p = filas[0]
                 info["lectura"].append(
-                    "El grueso son '%s' (%d de %d). La primera es del %s y la "
-                    "ultima del %s." % (p["tipo"], p["cuantas"],
-                                        info["tablas"].get("alertas", {}).get("filas", 0),
-                                        (p["primera"] or "?")[:10], (p["ultima"] or "?")[:10]))
+                    "El grueso son '%s': %d de %d."
+                    % (p["tipo"], p["cuantas"],
+                       info["tablas"].get("alertas", {}).get("filas", 0)))
         except Exception as e:
             conn.rollback()
             info["alertas_por_tipo"] = "no disponible: %s" % str(e)[:150]
