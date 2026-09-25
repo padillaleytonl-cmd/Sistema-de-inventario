@@ -5803,7 +5803,8 @@ def devoluciones_registrar_avanzado():
         # ciegas por un problema de consulta seria peor; pero queda en el log.
         cupo = _cupo_devolucion(oc, sku)
         if cupo.get("disponible") is None:
-            print(f"[devoluciones] no pude calcular el cupo de {oc}/{sku}; se deja pasar")
+            print(f"[devoluciones] no pude verificar el cupo de {oc}/{sku}: "
+                  f"{cupo.get('nota') or 'no se pudo calcular'}; se deja pasar")
         elif cantidad > cupo["disponible"]:
             if cupo["disponible"] == 0:
                 detalle = (f"Esta orden ya tiene registradas las {cupo['ya_devuelto']} "
@@ -5913,6 +5914,7 @@ def devoluciones_registrar_avanzado():
             "impacto_stock": impacto,
             "bodega_destino": bodega_destino,
             "bodega_motivo": razon_bodega,
+            "aviso_cupo": cupo.get("nota"),
             "estado": _estado_segun_tipificacion(tipificacion)
         })
     except Exception as e:
@@ -5950,25 +5952,36 @@ def _cupo_devolucion(orden_id, sku):
     conn = None
     try:
         from inventario import get_conn, release_conn
-        # MISMO acceso que devoluciones_buscar_orden, y no es un detalle: si el
-        # cupo ve menos movimientos que el formulario, cuenta vendido=0 y
-        # bloquea devoluciones legitimas. Probado: con el acceso normal esta
-        # consulta devolvia 0 para una orden que buscar_orden SI encuentra,
-        # porque la fila no pasa el filtro de RLS con el tenant de la sesion.
-        #
-        # El cupo tiene que contar exactamente las ventas que el usuario ve en
-        # el formulario; si miran cosas distintas, el tope no significa nada.
+        # Mismo acceso que devoluciones_buscar_orden, para que el cupo cuente
+        # exactamente las ventas que el usuario ve en el formulario. Si miran
+        # cosas distintas, el tope no significa nada.
         conn = get_conn(tenant_id=1, is_admin=True)
         cur = conn.cursor()
-        cur.execute("""SELECT COALESCE(SUM(ABS(cantidad)), 0) FROM movimientos
+        # Se cuentan las LINEAS ademas de las unidades, y la diferencia importa:
+        # hay ventas de MercadoLibre Full registradas con cantidad 0. La linea
+        # existe, la venta ocurrio, pero la cantidad quedo en cero.
+        #
+        # Ahi "vendido = 0" no significa "no se vendio nada", significa "no se
+        # cuanto se vendio". Tratarlo como cero bloquearia devoluciones
+        # legitimas; darlo por bueno dejaria reponer sin tope. Se distingue.
+        cur.execute("""SELECT COALESCE(SUM(ABS(cantidad)), 0), COUNT(*)
+                         FROM movimientos
                         WHERE orden_id = %s AND sku = %s AND tipo = 'salida'""",
                     (str(orden_id), sku))
-        vendido = int(cur.fetchone()[0] or 0)
+        _f = cur.fetchone()
+        vendido, lineas = int(_f[0] or 0), int(_f[1] or 0)
         cur.execute("""SELECT COALESCE(SUM(cantidad), 0) FROM devoluciones
                         WHERE oc_origen = %s AND sku = %s""",
                     (str(orden_id), sku))
         devuelto = int(cur.fetchone()[0] or 0)
         cur.close()
+        # Hay linea de venta pero sin unidades: la cantidad real se desconoce.
+        if lineas > 0 and vendido == 0:
+            return {"vendido": 0, "ya_devuelto": devuelto, "disponible": None,
+                    "cantidad_desconocida": True,
+                    "nota": ("La venta de este SKU esta registrada con cantidad 0, "
+                             "asi que no puedo verificar el tope. Se deja pasar, "
+                             "pero revisa que no estes reponiendo de mas.")}
         return {"vendido": vendido, "ya_devuelto": devuelto,
                 "disponible": max(0, vendido - devuelto)}
     except Exception as e:
