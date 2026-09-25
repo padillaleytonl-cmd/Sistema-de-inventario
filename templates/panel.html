@@ -1576,6 +1576,12 @@ tbody td {
   // las mismas llamadas de a 4 corren casi a su velocidad aislada.
   var MAX_EN_VUELO = 4;
 
+  // Cuanto puede una sola peticion quedarse con un turno. Una llamada sana
+  // tarda entre 600 y 1200 ms; lo que pase de aca ya no esta peleando por la
+  // base de datos, esta esperando a un marketplace, y no tiene por que
+  // mantener la fila cerrada mientras tanto.
+  var MAX_RETENCION = 1500;
+
   var fetchOriginal = window.fetch.bind(window);
   var enVuelo = 0;
   var cola = [];
@@ -1612,10 +1618,29 @@ tbody td {
   }
 
   function correr(url, opciones){
+    // El turno se suelta cuando la peticion vuelve O cuando se pasa de
+    // MAX_RETENCION, lo que ocurra primero. La peticion lenta sigue corriendo
+    // igual, pero deja de tapar a las demas.
+    //
+    // Esto NO es un detalle. Sin el tope, medido en produccion:
+    // /debug_woo_ordenes tardo 34,5 s y /alertas/contador 33,4 s —las dos
+    // salen a pedirle datos a WooCommerce— y entre ambas se quedaron con la
+    // mitad de los turnos durante medio minuto. La espera en cola de las que
+    // venian detras trepo a 40 s: peor que no tener cola.
+    var soltado = false, reloj = null;
+    function soltarTurno(){
+      if (soltado) return;
+      soltado = true;
+      if (reloj) { clearTimeout(reloj); reloj = null; }
+      enVuelo--;
+      siguiente();
+    }
+
     return new Promise(function(listo, falla){
       var tarea = {
         encolada: Date.now(),
         arrancar: function(){
+          reloj = setTimeout(soltarTurno, MAX_RETENCION);
           fetchOriginal(url, opciones).then(listo, falla);
         }
       };
@@ -1627,9 +1652,9 @@ tbody td {
         cola.push(tarea);
       }
     }).then(function(r){
-      enVuelo--; siguiente(); return r;
+      soltarTurno(); return r;
     }, function(e){
-      enVuelo--; siguiente(); throw e;
+      soltarTurno(); throw e;
     });
   }
 
