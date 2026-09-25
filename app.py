@@ -5788,6 +5788,23 @@ def devoluciones_registrar_avanzado():
             "fecha_registro": ahora.isoformat()
         })
 
+        # A donde vuelve la unidad. Se calcula ANTES de crear el registro porque
+        # tambien decide el estado con el que nace.
+        bodega_destino = (data.get("bodega_destino") or "").strip().upper()
+        if bodega_destino:
+            razon_bodega = "elegida a mano"
+        else:
+            bodega_destino, razon_bodega = _bodega_para_reintegro(oc, sku)
+
+        # PENDIENTE_RETIRO no es una bodega: es el caso en que el marketplace
+        # reviso la unidad, no la acepto de vuelta a su stock, y la dejo
+        # esperando que la retiremos. No esta vendible en Full ni llegó a la
+        # nuestra, asi que no suma a ninguna.
+        pendiente_retiro = (bodega_destino == "PENDIENTE_RETIRO")
+        if pendiente_retiro:
+            razon_bodega = ("el marketplace la reviso y la dejo para retiro: "
+                            "no suma a ninguna bodega hasta que llegue")
+
         # Crear devolución (usa función existente)
         dev_data = {
             "oc_origen": oc,
@@ -5798,7 +5815,8 @@ def devoluciones_registrar_avanzado():
             "motivo_cliente": motivo_texto[:500],
             "estado_producto": tipificacion,
             "responsable": responsable,
-            "estado": _estado_segun_tipificacion(tipificacion)
+            "estado": ("pendiente_retiro_mkt" if pendiente_retiro
+                       else _estado_segun_tipificacion(tipificacion))
         }
         dev_id = crear_devolucion(dev_data)
         if not dev_id:
@@ -5821,16 +5839,6 @@ def devoluciones_registrar_avanzado():
               deadline, ahora, orden_snapshot, dev_id))
         conn.commit()
         cur.close(); release_conn(conn)
-
-        # A que bodega vuelve la unidad. Si el front lo manda explicito, manda
-        # eso; si no, se deduce de la venta original: lo que salio de un
-        # fulfillment vuelve al fulfillment, porque el cliente le devuelve al
-        # marketplace y esa unidad nunca pasa por nuestra bodega.
-        bodega_destino = (data.get("bodega_destino") or "").strip().upper()
-        if bodega_destino:
-            razon_bodega = "elegida a mano"
-        else:
-            bodega_destino, razon_bodega = _bodega_para_reintegro(oc, sku)
 
         # Aplicar impacto en stock según tipificación
         impacto = _aplicar_impacto_devolucion(tipificacion, sku, cantidad, dev_id,
@@ -5920,8 +5928,17 @@ def _aplicar_impacto_devolucion(tipificacion, sku, cantidad, dev_id, bodega=None
     """Aplica el impacto en stock según la tipificación."""
     try:
         from inventario import get_conn, ajustar_stock_dev
+        destino = (bodega or "CENTRAL").strip().upper()
+
+        # PENDIENTE_RETIRO no es una bodega. Es el caso de MercadoLibre: reviso
+        # la unidad, no la devolvio a su stock vendible, y la dejo esperando que
+        # la retiremos. No esta en Full ni llegó a la nuestra: no suma a
+        # ninguna. Cuando llegue fisicamente se registra como cualquier otra.
+        if destino == "PENDIENTE_RETIRO":
+            return ("Sin impacto en stock: la unidad quedo en el marketplace "
+                    "esperando retiro. Agenda el retiro y registrala cuando llegue.")
+
         if tipificacion == "buen_estado":
-            destino = (bodega or "CENTRAL").strip().upper()
             ajustar_stock_dev(sku, cantidad, dev_id, "reintegro_buen_estado",
                               bodega=destino)
             return f"Reintegrado +{cantidad} a {destino}"

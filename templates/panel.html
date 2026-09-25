@@ -6971,18 +6971,32 @@ function prepararBodegaDevolucion(item){
   // bodega o no. Central es SOLO para lo que pasa por aca y se revisa; lo que
   // el marketplace acepta y se queda, vuelve a su propia bodega.
   const opciones = [];
-  if(esMkt) opciones.push({v:origen, t:'No llego — la acepto y reviso ' + DEV_BODEGAS_MKT[origen]});
+  if(esMkt) opciones.push({v:origen, t:'No llego — ' + DEV_BODEGAS_MKT[origen] + ' la reviso y la ACEPTO'});
+  // Tercer caso, por ahora solo de MercadoLibre: la revisan, NO la aceptan de
+  // vuelta a su stock —embalaje roto y similares— y la dejan esperando que la
+  // retiremos. No esta vendible en Full ni llegó a la nuestra: no suma a
+  // ninguna bodega hasta que la traigamos.
+  if(esMkt && origen.indexOf('MELI') === 0)
+    opciones.push({v:'PENDIENTE_RETIRO', t:'No llego — ML la reviso y la dejo PENDIENTE DE RETIRO'});
   opciones.push({v:'CENTRAL', t:'Si llego a mi bodega y la revise yo → Central'});
 
   sel.innerHTML = opciones.map(o=>'<option value="'+o.v+'">'+o.t+'</option>').join('');
   // El default es el origen cuando es de marketplace: es lo que pasa casi siempre
   sel.value = esMkt ? origen : 'CENTRAL';
 
-  motivo.textContent = esMkt
-    ? ('La venta salio de ' + DEV_BODEGAS_MKT[origen] + '. Si la unidad no llego a tu bodega '
-       + '—porque el marketplace la acepto y la reviso alla— dejalo asi: el stock vuelve a esa '
-       + 'bodega, no a Central. Central es solo para lo que pasa por la tuya.')
-    : 'La venta salio de bodega propia, asi que la unidad vuelve a Central despues de tu revision.';
+  function explicar(){
+    if(!esMkt) return 'La venta salio de bodega propia, asi que la unidad vuelve a Central despues de tu revision.';
+    const v = sel.value;
+    if(v === 'PENDIENTE_RETIRO')
+      return 'No suma a ninguna bodega. La unidad quedo en ML esperando que la retires: '
+           + 'agenda el retiro y registrala de nuevo cuando llegue a tu bodega.';
+    if(v === 'CENTRAL')
+      return 'Suma a Central. Usalo solo si la unidad llego fisicamente y la revisaste vos.';
+    return 'Suma a ' + DEV_BODEGAS_MKT[origen] + '. La unidad se quedo alla, revisada y aceptada '
+         + 'por el marketplace. Central es solo para lo que pasa por tu bodega.';
+  }
+  motivo.textContent = explicar();
+  sel.onchange = function(){ motivo.textContent = explicar(); };
 
   box.style.display = '';
 }
