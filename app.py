@@ -732,7 +732,7 @@ def trazar_ajuste_stock():
               AND (b.tipo='propia' OR b.tipo IS NULL OR sb.bodega_codigo='CENTRAL')
         """, (sku,))
         publicar = int((cur.fetchone() or [0])[0] or 0)
-        cur.close(); cn.close()
+        cur.close(); release_conn(cn)
         traza.append({"etapa": etapa, "central": bod.get("CENTRAL"),
                       "bodegas": bod, "productos_stock": prod,
                       "stock_que_se_publicaria": publicar})
@@ -963,7 +963,7 @@ def health_check_stock_fix():
         info["nota"] = ("Fix activo: CENTRAL es 'propia' y la query robusta está vigente."
                         if info["fix_activo"] else
                         "ATENCIÓN: CENTRAL no es 'propia'. Subí inventario.py y esperá el deploy.")
-        cur.close(); cn.close()
+        cur.close(); release_conn(cn)
     except Exception as e:
         info["error"] = str(e)
 
@@ -1042,7 +1042,7 @@ def recuperar_stock_lote():
                   AND (b.tipo = 'propia' OR b.tipo IS NULL OR sb.bodega_codigo = 'CENTRAL')
             """, (sku,))
             r["stock_que_se_publica"] = int((cur.fetchone() or [0])[0] or 0)
-            cur.close(); cn.close()
+            cur.close(); release_conn(cn)
             sincronizar_stock_marketplaces(sku, contexto="recuperar_lote")
             r["ok"] = True
         except Exception as e:
@@ -1165,7 +1165,7 @@ def reparar_central_stock():
               AND (b.tipo = 'propia' OR b.tipo IS NULL OR sb.bodega_codigo = 'CENTRAL')
         """, (sku,))
         stock_calculado = int((_cur.fetchone() or [0])[0] or 0)
-        _cur.close(); _cn.close()
+        _cur.close(); release_conn(_cn)
     except Exception as e:
         diag_bodegas = {"error": str(e)}
 
@@ -1384,7 +1384,7 @@ def sincronizar_stock_marketplaces(sku, stock=None, contexto="manual"):
         try:
             _get_pool().putconn(_cn)
         except Exception:
-            _cn.close()
+            release_conn(_cn)
     except Exception as e:
         # Fallback defensivo: si no se pudo leer CENTRAL, usar el valor recibido
         # (comportamiento legacy) en vez de fallar el sync por completo.
@@ -2173,7 +2173,7 @@ def _sync_falabella_automatico():
                                   AND tipo = 'salida'
                                   AND (numero_orden IS NULL OR numero_orden = orden_id::text)
                             """, (order_number, str(order_id), str(order_id), sku_lusync))
-                            _c_fan.commit(); _cur_fan.close(); _c_fan.close()
+                            _c_fan.commit(); _cur_fan.close(); release_conn(_c_fan)
                         except Exception as e_no:
                             print(f"[Scheduler Falabella] no pude setear numero_orden: {e_no}")
                         sincronizar_stock_marketplaces(
@@ -2608,7 +2608,7 @@ def _sync_paris_automatico():
                             _c_pa = _gc_pa(); _cr_pa = _c_pa.cursor()
                             _cr_pa.execute("DELETE FROM ordenes_procesadas WHERE order_id_texto = %s",
                                           (pa_key,))
-                            _c_pa.commit(); _cr_pa.close(); _c_pa.close()
+                            _c_pa.commit(); _cr_pa.close(); release_conn(_c_pa)
                             print(f"[Scheduler Paris] {sub_order} des-marcada — SKU sin mapeo, reintentará")
                     except Exception:
                         pass
@@ -3937,7 +3937,7 @@ def entrada():
                                 LEFT JOIN bodegas b ON b.codigo=sb.bodega_codigo
                         WHERE sb.sku=%s AND (b.tipo='propia' OR b.tipo IS NULL OR sb.bodega_codigo='CENTRAL')""", (p["sku"],))
                 stock_disponible = int(_cur.fetchone()[0] or 0)
-                _cur.close(); _c.close()
+                _cur.close(); release_conn(_c)
             except Exception as e:
                 stock_disponible = p["stock"]
                 print(f"[Entrada] error leyendo stock propio: {e}")
@@ -3959,7 +3959,7 @@ def _detectar_canal_por_oc(oc):
                         WHERE numero_orden = %s OR motivo LIKE %s
                         ORDER BY id DESC LIMIT 1""", (oc, f"%{oc}%"))
         row = _cur.fetchone()
-        _cur.close(); _c.close()
+        _cur.close(); release_conn(_c)
         if row and row[0]:
             return row[0]
     except Exception as e:
@@ -4022,7 +4022,7 @@ def salida():
                                 LEFT JOIN bodegas b ON b.codigo=sb.bodega_codigo
                         WHERE sb.sku=%s AND (b.tipo='propia' OR b.tipo IS NULL OR sb.bodega_codigo='CENTRAL')""", (p["sku"],))
                 stock_disponible = int(_cur.fetchone()[0] or 0)
-                _cur.close(); _c.close()
+                _cur.close(); release_conn(_c)
             except Exception as e:
                 stock_disponible = p["stock"]
                 print(f"[Salida] error leyendo stock propio: {e}")
@@ -6383,7 +6383,7 @@ def ruta_importar_excel():
                                       AND activo = TRUE
                                 """, (canal, sku_lusync, sku_para_guardar))
                                 ya_existe = cur_check.fetchone()[0] > 0
-                                cur_check.close(); conn_check.close()
+                                cur_check.close(); release_conn(conn_check)
                             except Exception as e_check:
                                 ya_existe = False
                                 log.append(f"Fila {i} {sku_lusync}/{canal}: error chequeando existencia: {e_check}")
@@ -6830,7 +6830,7 @@ def paris_forzar_orden(sub_order_number):
             _c = _gc(); _cur = _c.cursor()
             _cur.execute("DELETE FROM ordenes_procesadas WHERE order_id_texto IN (%s, %s)",
                          (pa_key, cancel_key))
-            _c.commit(); _cur.close(); _c.close()
+            _c.commit(); _cur.close(); release_conn(_c)
             print(f"[forzar_orden] Marca borrada manualmente con ?forzar=si: {pa_key}")
 
         # 3. Estado de la orden
@@ -6918,7 +6918,7 @@ def paris_forzar_orden(sub_order_number):
                 _c_fo = _gc_fo(); _cr_fo = _c_fo.cursor()
                 _cr_fo.execute("DELETE FROM ordenes_procesadas WHERE order_id_texto = %s",
                                (f"PARIS-{sub_order_number}",))
-                _c_fo.commit(); _cr_fo.close(); _c_fo.close()
+                _c_fo.commit(); _cr_fo.close(); release_conn(_c_fo)
             except Exception:
                 pass
 
@@ -8903,7 +8903,7 @@ def ruta_meli_reclasificar_bodegas():
                                      AND orden_id=%s AND sku=%s""",
                                 (bodega_correcta, orden_id, sku))
                     conn2.commit()
-                    cur2.close(); conn2.close()
+                    cur2.close(); release_conn(conn2)
                     log.append(f"✓ {orden_id} {sku} ({cantidad}u): {bodega_actual} → {bodega_correcta}")
                 movidas += 1
             except Exception as e:
@@ -11602,7 +11602,7 @@ def admin_migrar_sku_mapeo_a_canal():
                               AND activo = TRUE
                         """, (canal, sku_lusync, sku_canal_val))
                         ya_existe = cur_check.fetchone()[0] > 0
-                        cur_check.close(); conn_check.close()
+                        cur_check.close(); release_conn(conn_check)
                     except:
                         ya_existe = False
                     if ya_existe:
@@ -12732,7 +12732,7 @@ def admin_rellenar_fechas_compra():
                             ORDER BY fecha ASC LIMIT 1
                         """, (str(orden), str(orden)))
                         _row_wm = _cur_wm.fetchone()
-                        _cur_wm.close(); _c_wm.close()
+                        _cur_wm.close(); release_conn(_c_wm)
                         if _row_wm and _row_wm[0]:
                             fecha_compra = _row_wm[0]
                             print(f"[rellenar Walmart] {orden} archivada (404), usando fecha local como fallback")
@@ -12761,7 +12761,7 @@ def admin_rellenar_fechas_compra():
                         ORDER BY fecha DESC LIMIT 1
                     """, (str(orden), str(orden)))
                     _row_w = _cur_w.fetchone()
-                    _cur_w.close(); _c_w.close()
+                    _cur_w.close(); release_conn(_c_w)
                     if _row_w and _row_w[0]:
                         fecha_compra = _row_w[0]
 
@@ -23397,7 +23397,7 @@ def pos_entrada_lote():
         try:
             _c = _get_conn(); _cur = _c.cursor()
             _cur.execute("UPDATE movimientos SET documento_compra_id=%s WHERE id=%s", (doc_id, mov_id))
-            _c.commit(); _cur.close(); _c.close()
+            _c.commit(); _cur.close(); release_conn(_c)
         except Exception: pass
 
         # 2e. Registrar línea en movimientos_documento (trazabilidad de costeo)
@@ -23422,7 +23422,7 @@ def pos_entrada_lote():
                             LEFT JOIN bodegas b ON b.codigo=sb.bodega_codigo
                         WHERE sb.sku=%s AND (b.tipo='propia' OR b.tipo IS NULL OR sb.bodega_codigo='CENTRAL')""", (sku,))
             stock_disp = int(_cur.fetchone()[0] or 0)
-            _cur.close(); _c.close()
+            _cur.close(); release_conn(_c)
         except Exception:
             stock_disp = p["stock"]
 
@@ -23517,7 +23517,7 @@ def pos_salida_lote():
                             LEFT JOIN bodegas b ON b.codigo=sb.bodega_codigo
                         WHERE sb.sku=%s AND (b.tipo='propia' OR b.tipo IS NULL OR sb.bodega_codigo='CENTRAL')""", (sku,))
             stock_disp = int(_cur.fetchone()[0] or 0)
-            _cur.close(); _c.close()
+            _cur.close(); release_conn(_c)
         except Exception:
             stock_disp = p["stock"]
 
@@ -23600,7 +23600,7 @@ def pos_ajuste():
         _cur_s.execute("SELECT COALESCE(stock, 0) FROM productos WHERE sku = %s", (sku,))
         _row_s = _cur_s.fetchone()
         p["stock"] = int(_row_s[0]) if _row_s and _row_s[0] is not None else max(0, p["stock"] + cantidad_ajuste)
-        _cur_s.close(); _cs.close()
+        _cur_s.close(); release_conn(_cs)
     except Exception:
         # Si por algún motivo no se pudo releer, usar el cálculo manual como respaldo.
         p["stock"] = max(0, p["stock"] + cantidad_ajuste)
@@ -23631,7 +23631,7 @@ def pos_ajuste():
                         LEFT JOIN bodegas b ON b.codigo=sb.bodega_codigo
                         WHERE sb.sku=%s AND (b.tipo='propia' OR b.tipo IS NULL OR sb.bodega_codigo='CENTRAL')""", (sku,))
         stock_disp = int(_cur.fetchone()[0] or 0)
-        _cur.close(); _c.close()
+        _cur.close(); release_conn(_c)
     except Exception:
         stock_disp = p["stock"]
 
@@ -23708,7 +23708,7 @@ def pos_ajustes_historial():
         """, (limite,))
         cols = [d[0] for d in _cur.description]
         rows = [dict(zip(cols, r)) for r in _cur.fetchall()]
-        _cur.close(); _c.close()
+        _cur.close(); release_conn(_c)
         for r in rows:
             if r.get("fecha") and hasattr(r["fecha"], "isoformat"):
                 r["fecha"] = r["fecha"].isoformat()

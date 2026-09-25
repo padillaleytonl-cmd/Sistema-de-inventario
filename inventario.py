@@ -794,7 +794,7 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
                 row = cur2.fetchone()
                 stock_disponible = int(row[0]) if row and row[0] is not None else 0
                 cur2.close()
-                conn2.close()
+                release_conn(conn2)
                 from app import sincronizar_stock_marketplaces
                 resultado = sincronizar_stock_marketplaces(sku, stock_disponible, contexto=f"{tipo}_{canal}_{motivo[:20] if motivo else 'manual'}")
                 print(f"[SyncUniversal] {sku} stock_propio={stock_disponible} -> {resultado}")
