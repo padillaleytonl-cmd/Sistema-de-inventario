@@ -112,16 +112,17 @@ def es_dia_habil(fecha):
     """True si la fecha es lunes-viernes y NO es feriado oficial."""
     if fecha.weekday() >= 5:  # 5=sábado, 6=domingo
         return False
+    conn = None
     try:
         conn = get_conn(); cur = conn.cursor()
         cur.execute("SELECT 1 FROM feriados WHERE fecha = %s", (fecha.date() if hasattr(fecha, 'date') else fecha,))
         es_feriado = cur.fetchone() is not None
         cur.close()
-        try: release_conn(conn)
-        except: release_conn(conn)
         return not es_feriado
     except Exception:
         return True  # Si BD falla, asumir hábil
+    finally:
+        release_conn(conn)
 
 
 def calcular_deadline_72h_habiles(fecha_inicio):
@@ -196,11 +197,43 @@ def _anotar_prestamo(conn):
 
 
 def _olvidar_prestamo(conn):
+    """Da de baja el prestamo. Retorna True si esta conexion estaba prestada.
+
+    El valor de vuelta es lo que hace idempotente a release_conn: si la
+    conexion ya se habia devuelto, no esta en el registro y no hay que
+    devolverla otra vez.
+    """
     try:
         with _PRESTAMOS_LOCK:
-            _PRESTAMOS.pop(id(conn), None)
+            return _PRESTAMOS.pop(id(conn), None) is not None
+    except Exception:
+        return True
+
+
+# Los ultimos errores al registrar una venta. Cada uno de estos es una venta
+# que NO quedo registrada y que el scheduler va a reintentar cada 5 minutos.
+_ERRORES_VENTA = []
+_ERRORES_VENTA_LOCK = threading.Lock()
+
+
+def anotar_error_venta(sku, orden_id, canal, error):
+    try:
+        import time as _t
+        with _ERRORES_VENTA_LOCK:
+            _ERRORES_VENTA.append({
+                "cuando": _t.strftime("%Y-%m-%d %H:%M:%S"),
+                "sku": sku, "orden_id": str(orden_id or ""), "canal": canal,
+                "error": str(error)[:300],
+                "tipo": type(error).__name__,
+            })
+            del _ERRORES_VENTA[:-30]   # solo los ultimos 30
     except Exception:
         pass
+
+
+def errores_venta():
+    with _ERRORES_VENTA_LOCK:
+        return list(reversed(_ERRORES_VENTA))
 
 
 def prestamos_abiertos():
@@ -336,10 +369,21 @@ def _set_rls_context(conn, tenant_id, is_admin=False):
             print(f"[_set_rls_context] Error: {e}")
 
 def release_conn(conn):
-    """Devuelve la conexión al pool."""
-    _olvidar_prestamo(conn)
+    """Devuelve la conexion al pool. Llamarla dos veces no hace dano.
+
+    Lo segundo importa: para tapar las fugas hay que agregar un finally que
+    devuelva la conexion, y en casi todos lados el camino feliz YA la devuelve.
+    Sin esta proteccion, la segunda llamada caia en el except de abajo y hacia
+    conn.close() sobre una conexion que ya estaba sana dentro del pool: la
+    destruia. O sea, el arreglo habria causado la misma fuga que viene a
+    corregir.
+    """
+    if conn is None:
+        return
+    if not _olvidar_prestamo(conn):
+        return  # ya se devolvio antes; no tocarla
     try:
-        if conn and not conn.closed:
+        if not conn.closed:
             _get_pool().putconn(conn)
     except Exception:
         try: conn.close()
@@ -830,6 +874,7 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
     try:
         import threading
         def _sync_bg():
+            conn2 = None
             try:
                 conn2 = get_conn()
                 cur2 = conn2.cursor()
@@ -850,6 +895,8 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
                 import traceback
                 print(f"[SyncUniversal] Error sincronizando {sku}: {e}")
                 traceback.print_exc()
+            finally:
+                release_conn(conn2)
 
         threading.Thread(target=_sync_bg, daemon=True).start()
     except Exception:
@@ -862,15 +909,18 @@ def _calcular_stock_despues(sku):
     """Calcula stock total ACTUAL del SKU (snapshot post-movimiento).
     Suma todas las bodegas para tener un snapshot global.
     """
+    conn = None
     try:
         conn = get_conn(); cur = conn.cursor()
         cur.execute("SELECT COALESCE(SUM(cantidad), 0) FROM stock_bodega WHERE sku = %s", (sku,))
         r = cur.fetchone()
         total = int(r[0]) if r and r[0] is not None else 0
-        cur.close(); release_conn(conn)
+        cur.close()
         return total
     except Exception:
         return None
+    finally:
+        release_conn(conn)
 
 
 def _calcular_stock_antes(sku, tipo, cantidad):
@@ -984,6 +1034,7 @@ def eliminar_producto(sku):
 # ── AUDIT LOG ──
 
 def init_audit():
+    conn = None
     try:
         conn = get_conn()
         cur = conn.cursor()
@@ -1014,8 +1065,11 @@ def init_audit():
         print("[Audit] Tabla audit_log lista")
     except Exception as e:
         print(f"[Audit] Error init_audit: {e}")
+    finally:
+        release_conn(conn)
 
 def registrar_audit(usuario, ip, accion, entidad='', entidad_id='', detalle='', resultado='ok', dato_antes='', dato_despues=''):
+    conn = None
     try:
         conn = get_conn()
         cur = conn.cursor()
@@ -1039,6 +1093,8 @@ def registrar_audit(usuario, ip, accion, entidad='', entidad_id='', detalle='', 
         print(f"[Audit] {accion} · {usuario} · {resultado}")
     except Exception as e:
         print(f"[Audit] ERROR registrando: {e}")
+    finally:
+        release_conn(conn)
         # Reintentar creando la tabla si no existe
         try:
             init_audit()
@@ -2706,6 +2762,14 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
     except Exception:
         _tid = None
     registro_ok = False
+    # conn arranca en None para que el finally sepa si llego a pedirse.
+    #
+    # Sin ese finally, esta funcion fugaba una conexion por cada orden que
+    # fallaba. Y como al fallar devuelve "no_registrado", el scheduler
+    # reintenta la misma orden a los 5 minutos y fuga otra. Medido en
+    # produccion: las 12 conexiones del pool retenidas aqui, todas pedidas
+    # desde _sync_meli_automatico.
+    conn = None
     try:
         conn = get_conn(tenant_id=_tid, is_admin=True) if _tid else get_conn(is_admin=True)
         cur = conn.cursor()
@@ -2786,6 +2850,11 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
                     "advertencia": "ya_registrada"}
     except Exception as e:
         print(f"[Bodegas] Error registrando movimiento: {e}")
+        anotar_error_venta(sku, orden_id, canal_normalizado, e)
+    finally:
+        # Siempre, salga por donde salga. release_conn tolera que el camino
+        # feliz ya la haya devuelto.
+        release_conn(conn)
 
     # Si el INSERT del movimiento falló (ej. RLS), NO reportar ok:True, para que
     # el sync no marque la orden como procesada y la reintente en el próximo ciclo.
@@ -2822,6 +2891,7 @@ def reintegrar_stock_bodega(sku, cantidad, bodega_codigo, motivo, canal=None, or
     # Normalizar canal antes de insertar
     canal_normalizado = normalizar_canal(canal) if canal else "Sistema"
 
+    conn = None
     try:
         conn = get_conn(); cur = conn.cursor()
         cur.execute("SELECT nombre FROM productos WHERE sku=%s LIMIT 1", (sku,))
@@ -2836,6 +2906,8 @@ def reintegrar_stock_bodega(sku, cantidad, bodega_codigo, motivo, canal=None, or
         cur.close(); release_conn(conn)
     except Exception as e:
         print(f"[Bodegas] Error registrando entrada: {e}")
+    finally:
+        release_conn(conn)
 
 
 # ════════════════════════════════════════════════════════════════════════════

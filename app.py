@@ -883,6 +883,11 @@ def admin_perf_pool():
 
     import time as _t
     from inventario import _get_pool, get_conn, release_conn
+    try:
+        from inventario import errores_venta
+    except ImportError:
+        def errores_venta():
+            return []
 
     # Cambia con cada arreglo del pool: si el numero no sube, el build todavia
     # no llego y no tiene sentido interpretar lo que sigue.
@@ -942,6 +947,22 @@ def admin_perf_pool():
                                    "es quien la pidio." % len(viejas))
         except Exception as e_p:
             info["sin_devolver"] = "no disponible: %s" % str(e_p)[:120]
+
+        # Cada uno de estos es una venta que NO quedo registrada. Se muestran
+        # aca porque son la causa de fondo de las conexiones perdidas: la
+        # funcion que registra la venta solo puede dejar una conexion afuera
+        # si esta lanzando excepcion.
+        try:
+            fallas = errores_venta()
+            info["ventas_no_registradas"] = fallas[:15]
+            info["ventas_no_registradas_total"] = len(fallas)
+            if fallas:
+                lectura.append(
+                    "Hay %d ventas que no se pudieron registrar desde que arranco "
+                    "el servidor. El scheduler las reintenta cada 5 minutos y "
+                    "vuelven a fallar. Mira 'ventas_no_registradas'." % len(fallas))
+        except Exception as e_v:
+            info["ventas_no_registradas"] = "no disponible: %s" % str(e_v)[:120]
 
         info["lectura"] = lectura
     except Exception as e:
