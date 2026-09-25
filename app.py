@@ -6177,19 +6177,25 @@ def devoluciones_actualizar(dev_id):
     if not dev:
         return {"error": "no encontrada"}, 404
     actualizar_devolucion(dev_id, data)
-    # Si se reingresa al stock, registrar movimiento
+    # Si se reingresa al stock, sumarlo donde corresponde.
+    #
+    # Este es el cierre del circuito cuando la unidad estaba PENDIENTE DE RETIRO
+    # en el marketplace: se agenda el retiro, llega a nuestra bodega, se revisa,
+    # y si es revendible entra a CENTRAL. Aca siempre es CENTRAL, porque este
+    # camino es justamente el de la unidad que SI paso por nuestra bodega.
+    #
+    # Antes esto hacia "p['stock'] += cantidad; guardar_producto(p)", o sea
+    # escribia solo el total legacy y NO tocaba stock_bodega. Como el total se
+    # recalcula sumando las bodegas, la siguiente venta o sync de ese SKU
+    # pisaba el numero y la unidad reingresada desaparecia sin dejar rastro.
+    # ajustar_stock_dev actualiza las dos cosas y deja el movimiento.
     if data.get("estado") == "reingresada" and dev.get("sku") and not dev.get("impacto_stock_reingresado"):
-        productos = cargar_productos()
-        for p in productos:
-            if p["sku"] == dev["sku"]:
-                p["stock"] += int(dev.get("cantidad", 1))
-                guardar_producto(p)
-                registrar_movimiento("entrada", p["sku"], p["nombre"],
-                                     int(dev.get("cantidad", 1)), "Devolución reingresada",
-                                     usuario=session.get("usuario", "Sistema"),
-                                     canal="Manual", orden_id=dev.get("oc_origen"))
-                sincronizar_stock_marketplaces(p["sku"], p["stock"], contexto="auto_sync")
-                break
+        try:
+            from inventario import ajustar_stock_dev
+            ajustar_stock_dev(dev["sku"], int(dev.get("cantidad", 1)), dev_id,
+                              "reintegro_buen_estado", bodega="CENTRAL")
+        except Exception as e:
+            print(f"[devoluciones_actualizar] no pude reintegrar {dev.get('sku')}: {e}")
     return {"ok": True}
 
 @app.route("/devoluciones/<int:dev_id>/eliminar", methods=["POST"])

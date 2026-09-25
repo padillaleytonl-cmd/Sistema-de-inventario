@@ -3248,7 +3248,7 @@ def ajustar_stock_dev(sku, cantidad, dev_id, motivo_codigo="reintegro_buen_estad
         cur.execute("""INSERT INTO movimientos
             (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, bodega_codigo)
             VALUES ('entrada', %s, %s, %s, %s, %s, %s, NOW(), %s)""",
-            (sku, nombre, cantidad, motivo_texto, "Sistema (Devolución)", "Devolución", "CENTRAL"))
+            (sku, nombre, cantidad, motivo_texto, "Sistema (Devolución)", "Devolución", bodega))
         
         conn.commit()
         cur.close(); release_conn(conn)
@@ -3266,7 +3266,7 @@ def ajustar_stock_dev(sku, cantidad, dev_id, motivo_codigo="reintegro_buen_estad
             "ok": True,
             "stock_anterior": stock_anterior,
             "stock_nuevo": stock_nuevo,
-            "mensaje": f"Reintegrado +{cantidad} a CENTRAL (stock: {stock_anterior}→{stock_nuevo})"
+            "mensaje": f"Reintegrado +{cantidad} a {bodega} (stock: {stock_anterior}→{stock_nuevo})"
         }
     except Exception as e:
         import traceback
