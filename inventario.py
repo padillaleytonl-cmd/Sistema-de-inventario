@@ -449,6 +449,20 @@ def _set_rls_context(conn, tenant_id, is_admin=False):
         cur = conn.cursor()
         cur.execute(sql, params)
         cur.close()
+        # El commit NO es opcional. set_config(..., false) dura toda la sesion,
+        # PERO sigue siendo transaccional: si mas tarde alguien hace rollback
+        # —y el codigo esta lleno de rollbacks en los except— el contexto se
+        # borra junto con la transaccion, y de ahi en adelante esa conexion ve
+        # CERO filas en todas las tablas con RLS, sin dar ningun error.
+        #
+        # Se vio en produccion: /admin/lusync/perf/tablas contaba 422.002
+        # alertas al principio y 0 despues de un rollback por una tabla que no
+        # existe, en la misma conexion y en el mismo request.
+        #
+        # Cerrando la transaccion aca, el valor queda fijado en la sesion y los
+        # rollback posteriores ya no lo tocan. La conexion viene recien sacada
+        # del pool, asi que no hay nada en vuelo que este commit pueda arruinar.
+        conn.commit()
     except Exception as e:
         # Si hay transacción rota, intentar rollback y reintentar
         try:
@@ -456,6 +470,7 @@ def _set_rls_context(conn, tenant_id, is_admin=False):
             cur = conn.cursor()
             cur.execute(sql, params)
             cur.close()
+            conn.commit()
         except Exception:
             print(f"[_set_rls_context] Error: {e}")
 
