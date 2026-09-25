@@ -863,6 +863,83 @@ def auditoria_ordenes_limbo():
     return jsonify(resultado)
 
 
+@app.route("/admin/lusync/perf/tablas")
+def admin_perf_tablas():
+    """Tamano de las tablas calientes y sus indices. SOLO LECTURA.
+
+    Responde una pregunta concreta: un COUNT que tarda segundos es una tabla
+    grande sin el indice que esa consulta necesita. Postgres la recorre entera
+    cada vez.
+
+    Uso: /admin/lusync/perf/tablas
+    """
+    if not (session.get("logged") or session.get("is_lusync_admin")):
+        return jsonify({"error": "no autorizado"}), 401
+
+    import time as _t
+    from inventario import get_conn, release_conn
+
+    TABLAS = ["alertas", "movimientos", "productos", "stock_bodega",
+              "eventos_procesados", "audit_log", "sku_mapeo"]
+
+    info = {"ok": True, "solo_lectura": True, "tablas": {}, "lectura": []}
+    conn = None
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+
+        for tabla in TABLAS:
+            dato = {}
+            try:
+                t0 = _t.time()
+                cur.execute("SELECT COUNT(*) FROM %s" % tabla)
+                dato["filas"] = int(cur.fetchone()[0])
+                dato["ms_contar_todo"] = round((_t.time() - t0) * 1000)
+            except Exception as e:
+                conn.rollback()
+                info["tablas"][tabla] = {"error": str(e)[:120]}
+                continue
+
+            # Que indices tiene hoy
+            try:
+                cur.execute("""SELECT indexname FROM pg_indexes
+                               WHERE schemaname='public' AND tablename=%s
+                               ORDER BY indexname""", (tabla,))
+                dato["indices"] = [r[0] for r in cur.fetchall()]
+            except Exception:
+                conn.rollback()
+
+            info["tablas"][tabla] = dato
+
+        # La consulta exacta que hace /alertas/contador, con su plan
+        try:
+            t0 = _t.time()
+            cur.execute("SELECT COUNT(*) FROM alertas WHERE leida=FALSE")
+            no_leidas = int(cur.fetchone()[0])
+            ms = round((_t.time() - t0) * 1000)
+            cur.execute("EXPLAIN SELECT COUNT(*) FROM alertas WHERE leida=FALSE")
+            plan = [r[0] for r in cur.fetchall()]
+            info["contador_alertas"] = {"no_leidas": no_leidas, "ms": ms, "plan": plan}
+            # "Seq Scan" = recorre la tabla entera. Con indice diria "Index".
+            if any("Seq Scan" in p for p in plan):
+                info["lectura"].append(
+                    "El contador de alertas recorre la tabla ENTERA (Seq Scan): "
+                    "%d filas, %d ms. Le falta un indice sobre 'leida'."
+                    % (info["tablas"].get("alertas", {}).get("filas", 0), ms))
+        except Exception as e:
+            conn.rollback()
+            info["contador_alertas"] = {"error": str(e)[:200]}
+
+        cur.close()
+    except Exception as e:
+        import traceback
+        info = {"ok": False, "error": str(e)[:300], "traza": traceback.format_exc()[-500:]}
+    finally:
+        release_conn(conn)
+
+    return jsonify(info)
+
+
 @app.route("/admin/lusync/perf/pool")
 def admin_perf_pool():
     """Estado del pool de conexiones. SOLO LECTURA.
