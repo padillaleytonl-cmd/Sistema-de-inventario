@@ -3192,7 +3192,8 @@ def reintegrar_stock_bodega(sku, cantidad, bodega_codigo, motivo, canal=None, or
 # consistencia con la lógica vieja del sistema.
 # ════════════════════════════════════════════════════════════════════════════
 
-def ajustar_stock_dev(sku, cantidad, dev_id, motivo_codigo="reintegro_buen_estado"):
+def ajustar_stock_dev(sku, cantidad, dev_id, motivo_codigo="reintegro_buen_estado",
+                      bodega="CENTRAL"):
     """Ajusta stock por devolución: suma a CENTRAL + registra movimiento.
     
     Args:
@@ -3200,6 +3201,13 @@ def ajustar_stock_dev(sku, cantidad, dev_id, motivo_codigo="reintegro_buen_estad
         cantidad: cantidad a reintegrar (positiva)
         dev_id: ID de la devolución (para trazabilidad)
         motivo_codigo: código de motivo (reintegro_buen_estado, etc.)
+        bodega: a qué bodega vuelve la unidad. CENTRAL por defecto.
+
+            No siempre vuelve a la nuestra. Si la venta salió de un
+            fulfillment —MELI_FULL, PARIS_CD, WALMART_FBM…— el cliente le
+            devuelve AL MARKETPLACE, que la revisa en su propio centro. Esa
+            unidad nunca pasa por nuestra bodega, así que sumarla a CENTRAL
+            inventaría una que no tenemos y la perdería de donde sí está.
     
     Returns:
         dict con {ok: bool, stock_anterior, stock_nuevo, mensaje}
@@ -3209,11 +3217,12 @@ def ajustar_stock_dev(sku, cantidad, dev_id, motivo_codigo="reintegro_buen_estad
         if cantidad <= 0:
             return {"ok": False, "error": "cantidad debe ser > 0"}
         
-        # ── 1. Actualizar stock_bodega CENTRAL (modelo nuevo) ──
+        # ── 1. Actualizar stock_bodega de la bodega que corresponda ──
+        bodega = (bodega or "CENTRAL").strip().upper()
         try:
-            ajustar_stock_bodega(sku, "CENTRAL", cantidad)
+            ajustar_stock_bodega(sku, bodega, cantidad)
         except Exception as e:
-            print(f"[ajustar_stock_dev] Error stock_bodega CENTRAL: {e}")
+            print(f"[ajustar_stock_dev] Error stock_bodega {bodega}: {e}")
         
         # ── 2. Actualizar campo stock del producto (modelo legacy compatible) ──
         conn = get_conn(); cur = conn.cursor()

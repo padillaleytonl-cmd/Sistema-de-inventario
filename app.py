@@ -5822,8 +5822,19 @@ def devoluciones_registrar_avanzado():
         conn.commit()
         cur.close(); release_conn(conn)
 
+        # A que bodega vuelve la unidad. Si el front lo manda explicito, manda
+        # eso; si no, se deduce de la venta original: lo que salio de un
+        # fulfillment vuelve al fulfillment, porque el cliente le devuelve al
+        # marketplace y esa unidad nunca pasa por nuestra bodega.
+        bodega_destino = (data.get("bodega_destino") or "").strip().upper()
+        if bodega_destino:
+            razon_bodega = "elegida a mano"
+        else:
+            bodega_destino, razon_bodega = _bodega_para_reintegro(oc, sku)
+
         # Aplicar impacto en stock según tipificación
-        impacto = _aplicar_impacto_devolucion(tipificacion, sku, cantidad, dev_id)
+        impacto = _aplicar_impacto_devolucion(tipificacion, sku, cantidad, dev_id,
+                                              bodega=bodega_destino)
 
         registrar_audit(responsable, request.remote_addr,
                         "devolucion_avanzada",
@@ -5838,6 +5849,8 @@ def devoluciones_registrar_avanzado():
             "deadline_iso": deadline.isoformat(),
             "deadline_legible": deadline.strftime("%d/%m/%Y %H:%M"),
             "impacto_stock": impacto,
+            "bodega_destino": bodega_destino,
+            "bodega_motivo": razon_bodega,
             "estado": _estado_segun_tipificacion(tipificacion)
         })
     except Exception as e:
@@ -5858,14 +5871,60 @@ def _estado_segun_tipificacion(tipif):
     }.get(tipif, "pendiente")
 
 
-def _aplicar_impacto_devolucion(tipificacion, sku, cantidad, dev_id):
+def _bodega_para_reintegro(orden_id, sku):
+    """A qué bodega vuelve una unidad devuelta.
+
+    Se deduce de la venta original. Si salió de un fulfillment —MELI_FULL,
+    PARIS_CD, WALMART_FBM…— el cliente le devuelve AL MARKETPLACE, que la
+    revisa en su propio centro: esa unidad nunca pasa por nuestra bodega.
+    Sumarla a CENTRAL inventaría una que no tenemos.
+
+    Si salió de una bodega propia, vuelve a CENTRAL como siempre.
+
+    Retorna (bodega, por_que) para poder mostrarlo y que no sea una caja negra.
+    """
+    if not orden_id or not sku:
+        return "CENTRAL", "sin orden de origen: se asume nuestra bodega"
+    conn = None
+    try:
+        from inventario import get_conn, release_conn
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""SELECT m.bodega_codigo, COALESCE(b.tipo, 'propia')
+                         FROM movimientos m
+                    LEFT JOIN bodegas b ON b.codigo = m.bodega_codigo
+                        WHERE m.orden_id = %s AND m.sku = %s AND m.tipo = 'salida'
+                     ORDER BY m.id DESC LIMIT 1""",
+                    (str(orden_id), sku))
+        fila = cur.fetchone()
+        cur.close()
+        if not fila or not fila[0]:
+            return "CENTRAL", "no encontre la venta original: se asume nuestra bodega"
+        bodega, tipo = fila[0], (fila[1] or "propia")
+        if tipo == "propia":
+            return "CENTRAL", f"la venta salio de {bodega}, que es bodega propia"
+        return bodega, (f"la venta salio de {bodega}, que es del marketplace: "
+                        f"el cliente le devuelve a ellos, no a nosotros")
+    except Exception as e:
+        print(f"[_bodega_para_reintegro] {e}")
+        return "CENTRAL", "no pude averiguarlo: se asume nuestra bodega"
+    finally:
+        try:
+            from inventario import release_conn
+            release_conn(conn)
+        except Exception:
+            pass
+
+
+def _aplicar_impacto_devolucion(tipificacion, sku, cantidad, dev_id, bodega=None):
     """Aplica el impacto en stock según la tipificación."""
     try:
         from inventario import get_conn, ajustar_stock_dev
         if tipificacion == "buen_estado":
-            # Reintegra al stock CENTRAL
-            ajustar_stock_dev(sku, cantidad, dev_id, "reintegro_buen_estado")
-            return f"Reintegrado +{cantidad} a CENTRAL"
+            destino = (bodega or "CENTRAL").strip().upper()
+            ajustar_stock_dev(sku, cantidad, dev_id, "reintegro_buen_estado",
+                              bodega=destino)
+            return f"Reintegrado +{cantidad} a {destino}"
         elif tipificacion in ("reenviado", "reembolsado", "dado_de_baja", "reparable"):
             # No reintegra
             return "Sin impacto en stock (no reintegrable)"

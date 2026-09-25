@@ -3263,6 +3263,17 @@ tbody td {
       </div>
 
       <!-- Tipificación (NUEVO) -->
+      <!-- A que bodega vuelve la unidad. No siempre es la nuestra: si la venta
+           salio de un fulfillment, el cliente le devuelve AL MARKETPLACE, que la
+           revisa en su propio centro y esa unidad nunca pasa por aca. -->
+      <div id="devBodegaBox" style="display:none;margin-bottom:14px;">
+        <div style="font-size:10px;color:var(--muted);margin-bottom:6px;">Vuelve a la bodega</div>
+        <select id="devBodegaSelect"
+                style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg2);color:var(--text);font-size:12px;font-family:inherit;">
+        </select>
+        <div id="devBodegaMotivo" style="font-size:10px;color:var(--muted);margin-top:5px;line-height:1.4;"></div>
+      </div>
+
       <div id="devTipificacionBox" style="display:none;margin-bottom:14px;">
         <div style="font-size:10px;color:var(--muted);margin-bottom:6px;">Estado del producto recibido</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
@@ -6931,6 +6942,47 @@ function buscarOC(){
 }
 
 // Tipificación: marca visualmente y exige motivo si aplica
+// Bodegas de marketplace: lo que sale de aca, el cliente lo devuelve ELLOS,
+// no a nosotros. La unidad se revisa en el centro del marketplace y nunca pasa
+// por nuestra bodega, asi que reintegrarla a CENTRAL inventaria una que no
+// tenemos y la perderia de donde si esta.
+const DEV_BODEGAS_MKT = {
+  MELI_FULL:     'MercadoLibre Full',
+  MELI_FULL_TRANSITO: 'MercadoLibre Full (en transito)',
+  PARIS_CD:      'Paris CD',
+  WALMART_FBM:   'Walmart FBM',
+  FALABELLA_FBM: 'Falabella FBM',
+  RIPLEY_FBM:    'Ripley FBM',
+  HITES_FBM:     'Hites FBM',
+  WOO_DROP:      'WooCommerce Drop'
+};
+
+function prepararBodegaDevolucion(item){
+  const sel = document.getElementById('devBodegaSelect');
+  const box = document.getElementById('devBodegaBox');
+  const motivo = document.getElementById('devBodegaMotivo');
+  if(!sel || !box) return;
+
+  const origen = (item && item.bodega_origen) ? String(item.bodega_origen).toUpperCase() : '';
+  const esMkt = !!DEV_BODEGAS_MKT[origen];
+
+  // Opciones: siempre CENTRAL, y la del marketplace cuando la venta salio de ahi
+  const opciones = [];
+  if(esMkt) opciones.push({v:origen, t:DEV_BODEGAS_MKT[origen] + ' — el marketplace la revisa'});
+  opciones.push({v:'CENTRAL', t:'Bodega Central — llego fisicamente a nosotros'});
+
+  sel.innerHTML = opciones.map(o=>'<option value="'+o.v+'">'+o.t+'</option>').join('');
+  // El default es el origen cuando es de marketplace: es lo que pasa casi siempre
+  sel.value = esMkt ? origen : 'CENTRAL';
+
+  motivo.textContent = esMkt
+    ? ('La venta salio de ' + DEV_BODEGAS_MKT[origen] + '. Si el producto no llego a tu bodega, '
+       + 'dejalo asi: el stock vuelve alla, no a Central.')
+    : 'La venta salio de bodega propia, asi que vuelve a Central.';
+
+  box.style.display = '';
+}
+
 function seleccionarTipificacion(input){
   // Limpiar selección visual previa
   document.querySelectorAll('#devTipificacionBox label').forEach(l => {
@@ -6993,6 +7045,8 @@ function seleccionarProductoDev(item){
   document.getElementById('devSelFecha').textContent = item.fecha || '';
   const cEl = document.getElementById('devSelCanal');
   cEl.textContent = cb.label; cEl.style.background = cb.bg; cEl.style.color = cb.color;
+
+  prepararBodegaDevolucion(item);
 
   document.getElementById('devProductoSelBox').style.display = '';
   document.getElementById('devCantidadBox').style.display = '';
@@ -7059,7 +7113,8 @@ function confirmarNuevaDevolucion(){
       cantidad: cantidad,
       tipificacion: tipificacion,
       motivo_texto: motivoTexto,
-      responsable: usuario
+      responsable: usuario,
+      bodega_destino: (document.getElementById('devBodegaSelect')||{}).value || ''
     })
   })
   .then(r=>r.json())
