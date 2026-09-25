@@ -5629,12 +5629,16 @@ def devoluciones_buscar_orden():
     # ── Paso 1: Buscar en BD local ─────────────────────────────────
     conn = get_conn(tenant_id=1, is_admin=True)
     cur = conn.cursor()
+    # Se suma por SKU: una orden puede tener el mismo producto en varias lineas,
+    # y el cupo se cuenta por SKU, no por linea.
     cur.execute("""
-        SELECT m.sku, m.nombre, m.canal, ABS(m.cantidad) as cantidad,
-               TO_CHAR(m.fecha, 'DD/MM/YYYY HH24:MI') as fecha,
-               m.bodega_codigo, m.orden_id
+        SELECT m.sku, MAX(m.nombre) as nombre, MAX(m.canal) as canal,
+               SUM(ABS(m.cantidad)) as cantidad,
+               TO_CHAR(MAX(m.fecha), 'DD/MM/YYYY HH24:MI') as fecha,
+               MAX(m.bodega_codigo) as bodega_codigo, MAX(m.orden_id) as orden_id
         FROM movimientos m
         WHERE m.orden_id = %s AND m.tipo = 'salida'
+        GROUP BY m.sku
         ORDER BY m.sku
     """, (numero_limpio,))
     rows = cur.fetchall()
@@ -5788,6 +5792,38 @@ def devoluciones_registrar_avanzado():
             "fecha_registro": ahora.isoformat()
         })
 
+        # ── Nunca reponer mas de lo vendido ──────────────────────────
+        #
+        # Sin esto se puede registrar la misma devolucion las veces que uno
+        # quiera, y cada una suma stock: se inventan unidades. El cupo es por
+        # (orden, SKU), que es lo que deja seguir funcionando a las ordenes con
+        # varios productos: cada uno tiene el suyo.
+        #
+        # Si el cupo no se pudo calcular se deja pasar, porque bloquear a
+        # ciegas por un problema de consulta seria peor; pero queda en el log.
+        cupo = _cupo_devolucion(oc, sku)
+        if cupo.get("disponible") is None:
+            print(f"[devoluciones] no pude calcular el cupo de {oc}/{sku}; se deja pasar")
+        elif cantidad > cupo["disponible"]:
+            if cupo["disponible"] == 0:
+                detalle = (f"Esta orden ya tiene registradas las {cupo['ya_devuelto']} "
+                           f"unidad(es) de {sku} que se vendieron.")
+                if cupo["vendido"] == 0:
+                    detalle = (f"No encuentro ninguna venta de {sku} en la orden {oc}, "
+                               f"asi que no hay nada que devolver.")
+                sugerencia = ("Si la devolucion anterior fue un error, anulala primero "
+                              "y volve a registrarla.")
+            else:
+                detalle = (f"De {sku} se vendieron {cupo['vendido']} unidad(es) en esta "
+                           f"orden y ya hay {cupo['ya_devuelto']} devuelta(s): "
+                           f"quedan {cupo['disponible']}.")
+                sugerencia = f"Registra como maximo {cupo['disponible']}."
+            return jsonify({
+                "ok": False,
+                "error": f"No se pueden devolver {cantidad} unidad(es). {detalle} {sugerencia}",
+                "cupo": cupo,
+            }), 400
+
         # A donde vuelve la unidad. Se calcula ANTES de crear el registro porque
         # tambien decide el estado con el que nace.
         bodega_destino = (data.get("bodega_destino") or "").strip().upper()
@@ -5816,7 +5852,9 @@ def devoluciones_registrar_avanzado():
             "estado_producto": tipificacion,
             "responsable": responsable,
             "estado": ("pendiente_retiro_mkt" if pendiente_retiro
-                       else _estado_segun_tipificacion(tipificacion))
+                       else _estado_segun_tipificacion(tipificacion)),
+            # Queda guardado para poder revertir el reintegro si se anula
+            "bodega_destino": bodega_destino
         }
         dev_id = crear_devolucion(dev_data)
         if not dev_id:
@@ -5824,6 +5862,16 @@ def devoluciones_registrar_avanzado():
 
         # Actualizar campos avanzados
         conn = get_conn(); cur = conn.cursor()
+        # Si esta devolucion va a sumar stock, queda marcado. Sin esa marca, al
+        # anularla no se revertiria el reintegro y quedarian unidades fantasma:
+        # hasta ahora la marca solo se ponia al pasar por "reingresada" desde el
+        # panel, nunca al crearla directamente como "buen estado".
+        hubo_reintegro = (tipificacion == "buen_estado") and not pendiente_retiro
+
+        # estado y bodega_destino se setean ACA y no en crear_devolucion, que
+        # los ignora: inserta siempre con estado 'pendiente'. Sin esto, una
+        # devolucion que quedo pendiente de retiro en el marketplace nacia como
+        # 'pendiente' comun y se perdia de vista que hay que ir a buscarla.
         cur.execute("""
             UPDATE devoluciones SET
                 codigo = COALESCE(codigo, %s),
@@ -5833,10 +5881,14 @@ def devoluciones_registrar_avanzado():
                 fecha_deadline = %s,
                 fecha_recepcion = %s,
                 origen_datos = 'manual',
-                orden_data_json = %s
+                orden_data_json = %s,
+                estado = %s,
+                bodega_destino = %s,
+                impacto_stock_reingresado = %s
             WHERE id = %s
         """, (codigo, tipificacion, motivo_texto, responsable,
-              deadline, ahora, orden_snapshot, dev_id))
+              deadline, ahora, orden_snapshot,
+              dev_data["estado"], bodega_destino, hubo_reintegro, dev_id))
         conn.commit()
         cur.close(); release_conn(conn)
 
@@ -5877,6 +5929,47 @@ def _estado_segun_tipificacion(tipif):
         "dado_de_baja": "dada_de_baja",
         "reembolsado": "reembolsada"
     }.get(tipif, "pendiente")
+
+
+def _cupo_devolucion(orden_id, sku):
+    """Cuantas unidades de ese SKU en esa orden todavia se pueden devolver.
+
+    Nunca se pueden reponer mas unidades de las que se vendieron. El cupo es
+    por (orden, SKU) y no por orden: asi una orden con varios productos sigue
+    admitiendo la devolucion de cada uno, que es justamente la excepcion.
+
+    Retorna {vendido, ya_devuelto, disponible}. Si algo falla devuelve
+    disponible None, y quien llama decide: preferimos no bloquear a ciegas por
+    un problema de consulta, pero tampoco dar por bueno un cupo inventado.
+    """
+    vacio = {"vendido": None, "ya_devuelto": None, "disponible": None}
+    if not orden_id or not sku:
+        return vacio
+    conn = None
+    try:
+        from inventario import get_conn, release_conn
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""SELECT COALESCE(SUM(ABS(cantidad)), 0) FROM movimientos
+                        WHERE orden_id = %s AND sku = %s AND tipo = 'salida'""",
+                    (str(orden_id), sku))
+        vendido = int(cur.fetchone()[0] or 0)
+        cur.execute("""SELECT COALESCE(SUM(cantidad), 0) FROM devoluciones
+                        WHERE oc_origen = %s AND sku = %s""",
+                    (str(orden_id), sku))
+        devuelto = int(cur.fetchone()[0] or 0)
+        cur.close()
+        return {"vendido": vendido, "ya_devuelto": devuelto,
+                "disponible": max(0, vendido - devuelto)}
+    except Exception as e:
+        print(f"[_cupo_devolucion] {e}")
+        return vacio
+    finally:
+        try:
+            from inventario import release_conn
+            release_conn(conn)
+        except Exception:
+            pass
 
 
 def _bodega_para_reintegro(orden_id, sku):
@@ -6212,15 +6305,47 @@ def devoluciones_eliminar(dev_id):
         return {"error": "Clave incorrecta"}, 403
     conn = get_conn(tenant_id=1, is_admin=True)
     cur = conn.cursor()
-    cur.execute("SELECT codigo, oc_origen, nombre FROM devoluciones WHERE id = %s", (dev_id,))
+    cur.execute("""SELECT codigo, oc_origen, nombre, sku, cantidad,
+                          COALESCE(bodega_destino, 'CENTRAL'),
+                          COALESCE(impacto_stock_reingresado, FALSE)
+                     FROM devoluciones WHERE id = %s""", (dev_id,))
     row = cur.fetchone()
     detalle_dev = str(row) if row else str(dev_id)
     cur.execute("DELETE FROM devoluciones WHERE id = %s", (dev_id,))
     conn.commit()
     cur.close(); release_conn(conn)
+
+    # ── Revertir el stock que esta devolucion habia reintegrado ──────
+    #
+    # Antes esto era un DELETE pelado: la fila desaparecia y las unidades que
+    # habia sumado se quedaban. Dos problemas, no uno:
+    #
+    #   - quedaba stock fantasma, unidades que el sistema cree tener y no
+    #     existen;
+    #   - y como el cupo se calcula sobre las devoluciones vigentes, borrar la
+    #     fila LIBERABA el cupo. Alcanzaba con anular y volver a registrar para
+    #     duplicar unidades cuantas veces uno quisiera, que es exactamente lo
+    #     que el cupo viene a impedir.
+    reversion = None
+    if row and row[6] and row[3]:
+        sku_dev, cant_dev, bodega_dev = row[3], int(row[4] or 0), (row[5] or "CENTRAL")
+        if cant_dev > 0:
+            try:
+                from inventario import ajustar_stock_bodega, registrar_movimiento
+                ajustar_stock_bodega(sku_dev, bodega_dev, -cant_dev)
+                registrar_movimiento("salida", sku_dev, row[2] or sku_dev, cant_dev,
+                                     f"Anulacion devolucion {row[0] or dev_id}: se revierte el reintegro",
+                                     usuario=session.get("usuario", "Sistema"),
+                                     canal="Devolución", orden_id=row[1])
+                reversion = f"revertidas {cant_dev} u. de {bodega_dev}"
+            except Exception as e:
+                reversion = f"NO se pudo revertir el stock: {e}"
+                print(f"[devoluciones_eliminar] {reversion}")
     registrar_audit(session.get("usuario","admin"), request.remote_addr,
                     "eliminar_devolucion", entidad="devoluciones", entidad_id=str(dev_id),
-                    detalle=f"Devolución eliminada: {detalle_dev}", dato_antes=detalle_dev)
+                    detalle=f"Devolución eliminada: {detalle_dev}"
+                            + (f" · {reversion}" if reversion else ""),
+                    dato_antes=detalle_dev)
     return {"ok": True}
 
 @app.route("/devoluciones/<int:dev_id>/generar_codigo", methods=["POST"])

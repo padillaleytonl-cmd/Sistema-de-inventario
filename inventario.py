@@ -1365,7 +1365,8 @@ def init_devoluciones():
         ("etiqueta_generada", "BOOLEAN DEFAULT FALSE"),
         ("etiqueta_pdf_url", "TEXT"),              # URL del PDF generado
         ("origen_datos", "TEXT DEFAULT 'manual'"), # manual / webhook / sync
-        ("orden_data_json", "TEXT")                # snapshot de los datos de la OC al momento del registro
+        ("orden_data_json", "TEXT"),               # snapshot de los datos de la OC al momento del registro
+        ("bodega_destino", "TEXT")                 # a que bodega se reintegro; hace falta para poder revertirlo al anular
     ]
     for nombre, tipo in columnas_nuevas:
         try:
