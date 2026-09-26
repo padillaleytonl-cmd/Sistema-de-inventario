@@ -6844,6 +6844,32 @@ def admin_meli_inspeccionar_item(item_id):
         H = meli_headers()
         d = _rq.get(f"{MELI_API_URL}/items/{item_id}", headers=H, timeout=20).json()
 
+        # La variante no trae el SKU: seller_custom_field viene en null y
+        # attributes vacio. Se prueban las dos vias que quedan.
+        pruebas = {}
+        try:
+            d2 = _rq.get(f"{MELI_API_URL}/items/{item_id}",
+                         headers=H, params={"include_attributes": "all"}, timeout=20).json()
+            v2 = (d2.get("variations") or [{}])[0]
+            pruebas["include_attributes_all"] = {
+                "seller_custom_field": v2.get("seller_custom_field"),
+                "attributes": [{"id": a.get("id"), "value_name": a.get("value_name")}
+                               for a in (v2.get("attributes") or [])][:10],
+            }
+        except Exception as e:
+            pruebas["include_attributes_all"] = "error: %s" % str(e)[:120]
+
+        try:
+            upid = ((d.get("variations") or [{}])[0] or {}).get("user_product_id")
+            if upid:
+                up = _rq.get(f"{MELI_API_URL}/user-products/{upid}", headers=H, timeout=20)
+                pruebas["user_products"] = {"status": up.status_code,
+                                            "cuerpo": up.json() if up.status_code == 200 else up.text[:200]}
+            else:
+                pruebas["user_products"] = "la variante no trae user_product_id"
+        except Exception as e:
+            pruebas["user_products"] = "error: %s" % str(e)[:120]
+
         vars_info = []
         for v in (d.get("variations") or [])[:6]:
             vars_info.append({
@@ -6863,6 +6889,7 @@ def admin_meli_inspeccionar_item(item_id):
             "seller_custom_field_item": d.get("seller_custom_field"),
             "cuantas_variantes": len(d.get("variations") or []),
             "variantes": vars_info,
+            "donde_esta_el_sku": pruebas,
         })
     except Exception as e:
         import traceback
