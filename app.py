@@ -2962,8 +2962,10 @@ def _sync_falabella_automatico():
                             continue
 
                         # Venta propia (FBS): la unidad vuelve a central, como siempre.
-                        prod["stock"] += cantidad
-                        guardar_producto(prod)
+                        # # productos.stock se deriva de las bodegas: ajustar_stock_bodega lo
+                        # recalcula. Antes se escribia el total sin tocar CENTRAL, asi que el
+                        # siguiente recalculo del SKU borraba la reposicion.
+                        ajustar_stock_bodega(prod["sku"], "CENTRAL", cantidad)
                         registrar_movimiento(
                             "entrada", prod["sku"], prod["nombre"], cantidad,
                             f"Cancelación Falabella orden {order_number}",
@@ -3143,14 +3145,17 @@ def _sync_paris_automatico():
                                 continue
 
                             # Venta propia: vuelve a central, como siempre.
-                            prod["stock"] += cantidad
-                            guardar_producto(prod)
+                            ajustar_stock_bodega(prod["sku"], "CENTRAL", cantidad)
                             registrar_movimiento(
                                 "entrada", prod["sku"], prod["nombre"], cantidad,
                                 f"Cancelación París orden {sub_order}",
                                 usuario="Sistema", canal="París", orden_id=sub_order
                             )
-                            sincronizar_stock_marketplaces(prod["sku"], prod["stock"], contexto="paris_cancelacion_bg")
+                            # Se relee: prod["stock"] quedo viejo y publicaria
+                            # el numero de antes de la reposicion.
+                            sincronizar_stock_marketplaces(
+                                prod["sku"], get_stock_bodega(prod["sku"], "CENTRAL") or 0,
+                                contexto="paris_cancelacion_bg")
                             items_reintegrados.append(f"{prod['nombre']} (SKU: {seller_sku}) x{cantidad}")
                     if items_reintegrados:
                         try:
@@ -3363,14 +3368,15 @@ def _sync_ripley_automatico():
                         prod = next((p for p in productos if p["sku"] == sku_lusync), None)
                         if not prod:
                             continue
-                        prod["stock"] += cantidad
-                        guardar_producto(prod)
+                        ajustar_stock_bodega(prod["sku"], "CENTRAL", cantidad)
                         registrar_movimiento(
                             "entrada", prod["sku"], prod["nombre"], cantidad,
                             f"Cancelación Ripley orden {order_id}",
                             usuario="Sistema", canal="Ripley", orden_id=order_id
                         )
-                        sincronizar_stock_marketplaces(prod["sku"], prod["stock"], contexto="ripley_cancelacion_bg")
+                        sincronizar_stock_marketplaces(
+                            prod["sku"], get_stock_bodega(prod["sku"], "CENTRAL") or 0,
+                            contexto="ripley_cancelacion_bg")
                         items_reintegrados.append(f"{prod['nombre']} (SKU: {shop_sku}) x{cantidad}")
                     if items_reintegrados:
                         try:
@@ -3609,15 +3615,15 @@ def _sync_woo_automatico():
                     productos = cargar_productos()
                     for p in productos:
                         if p["sku"] == sku:
-                            p["stock"] += cantidad
-                            guardar_producto(p)
+                            ajustar_stock_bodega(p["sku"], "CENTRAL", cantidad)
                             registrar_movimiento(
                                 "entrada", p["sku"], p["nombre"], cantidad,
                                 f"Cancelación Web orden {order_id}",
                                 usuario="Sistema", canal="Web", orden_id=order_id
                             )
                             sincronizar_stock_marketplaces(
-                                p["sku"], p["stock"], contexto="woo_cancelacion_bg"
+                                p["sku"], get_stock_bodega(p["sku"], "CENTRAL") or 0,
+                                contexto="woo_cancelacion_bg"
                             )
                             items_reintegrados.append(f"{p['nombre']} (SKU: {sku}) x{cantidad}")
                             break
@@ -4197,13 +4203,14 @@ def _sync_recuperacion():
                         cantidad = int(float(qty.get("amount", 1)))
                     for p in productos:
                         if p["sku"] == sku:
-                            p["stock"] += cantidad
-                            guardar_producto(p)
+                            ajustar_stock_bodega(p["sku"], "CENTRAL", cantidad)
                             registrar_movimiento("entrada", p["sku"], p["nombre"],
                                                 cantidad, "Cancelación Walmart (recuperada)",
                                                 usuario="Sistema", canal="Walmart",
                                                 orden_id=customer_order_id)
-                            sincronizar_stock_marketplaces(p["sku"], p["stock"], contexto="auto_sync")
+                            sincronizar_stock_marketplaces(
+                                p["sku"], get_stock_bodega(p["sku"], "CENTRAL") or 0,
+                                contexto="auto_sync")
                             items_cancel_rec.append(f"{p['nombre']} (SKU: {sku}) x{cantidad}")
                 if items_cancel_rec:
                     try:
@@ -4592,12 +4599,10 @@ def entrada():
         if p["sku"] == sku_input:
             cantidad = int(data["cantidad"])
             from inventario import ajustar_stock_bodega
-            try:
-                ajustar_stock_bodega(p["sku"], "CENTRAL", cantidad)
-            except Exception as e:
-                print(f"[Entrada] error ajustando bodega CENTRAL: {e}")
-            p["stock"] += cantidad
-            guardar_producto(p)
+            # Sin p["stock"] += : ajustar_stock_bodega ya recalculo el total
+            # sumando las bodegas. Escribirlo aqui lo pisaba con p["stock"],
+            # que se leyo ANTES del ajuste y por lo tanto esta viejo.
+            ajustar_stock_bodega(p["sku"], "CENTRAL", cantidad)
             motivo_completo = (data.get("motivo") or "Entrada manual") + f" | Doc: {documento}"
             registrar_movimiento("entrada", p["sku"], p["nombre"], cantidad,
                                 motivo_completo, usuario=session.get("usuario","Luis Padilla"),
@@ -4683,12 +4688,8 @@ def salida():
             if p["stock"] < cantidad:
                 return {"error": "Stock insuficiente"}, 400
             from inventario import ajustar_stock_bodega
-            try:
-                ajustar_stock_bodega(p["sku"], "CENTRAL", -cantidad)
-            except Exception as e:
-                print(f"[Salida] error ajustando bodega CENTRAL: {e}")
-            p["stock"] -= cantidad
-            guardar_producto(p)
+            # Igual que en la entrada: el total se recalcula solo.
+            ajustar_stock_bodega(p["sku"], "CENTRAL", -cantidad)
             motivo_completo = (data.get("motivo") or "Salida manual") + f" | OC: {oc}"
             registrar_movimiento("salida", p["sku"], p["nombre"], cantidad,
                                 motivo_completo, usuario=session.get("usuario","Luis Padilla"),
@@ -4747,12 +4748,21 @@ def sync_ordenes():
             cantidad = item.get("quantity")
             for p in productos:
                 if p["sku"] == sku:
-                    p["stock"] -= cantidad
-                    guardar_producto(p)
+                    # La venta descuenta de CENTRAL, no del total legacy.
+                    #
+                    # Antes hacia "p['stock'] -= cantidad; guardar_producto(p)":
+                    # escribia productos.stock sin tocar ninguna bodega. Y como
+                    # ese total se DERIVA sumando stock_bodega, el siguiente
+                    # recalculo del SKU lo devolvia a su valor anterior: la venta
+                    # web quedaba registrada en el historial pero no descontaba
+                    # nada. El stock se iba recuperando solo, vendido y todo.
+                    ajustar_stock_bodega(p["sku"], "CENTRAL", -int(cantidad))
                     registrar_movimiento("salida", p["sku"], p["nombre"], cantidad, "Venta Web",
                                         usuario="Sistema", canal="WooCommerce",
                                         orden_id=str(o["id"]), fecha_override=fecha_real)
-                    sincronizar_stock_marketplaces(p["sku"], p["stock"], contexto="auto_sync")
+                    sincronizar_stock_marketplaces(
+                        p["sku"], get_stock_bodega(p["sku"], "CENTRAL") or 0,
+                        contexto="auto_sync")
         marcar_orden_procesada(o["id"])
         nuevas += 1
 
@@ -5445,13 +5455,14 @@ def walmart_sync_debug():
                     cantidad = int(float(qty.get("amount", 1)))
                 for p in productos:
                     if p["sku"] == sku:
-                        p["stock"] += cantidad
-                        guardar_producto(p)
+                        ajustar_stock_bodega(p["sku"], "CENTRAL", cantidad)
                         registrar_movimiento("entrada", p["sku"], p["nombre"],
                                             cantidad, "Cancelación Walmart",
                                             usuario="Sistema", canal="Walmart",
                                             orden_id=customer_order_id)
-                        sincronizar_stock_marketplaces(p["sku"], p["stock"], contexto="auto_sync")
+                        sincronizar_stock_marketplaces(
+                            p["sku"], get_stock_bodega(p["sku"], "CENTRAL") or 0,
+                            contexto="auto_sync")
                         items_cancel_man.append(f"{p['nombre']} (SKU: {sku}) x{cantidad}")
                         log.append(f"CANCELACION SKU:{sku} +{cantidad} Stock:{p['stock']}")
             if items_cancel_man:
@@ -8124,11 +8135,11 @@ def admin_revertir_duplicados(numero_orden):
             cantidad = int(m["cantidad"] or 1)
             bodega   = "CENTRAL"  # default — los duplicados suelen ser de CENTRAL
 
-            # Devolver el stock a la bodega
+            # Devolver el stock a la bodega. El total de productos se
+            # recalcula solo dentro de ajustar_stock_bodega; el UPDATE que
+            # habia aqui lo sumaba OTRA vez, asi que cada duplicado limpiado
+            # devolvia el doble al total.
             ajustar_stock_bodega(sku, bodega, +cantidad)
-
-            # Actualizar también la tabla productos
-            cur.execute("UPDATE productos SET stock = stock + %s WHERE sku = %s", (cantidad, sku))
 
             # Eliminar el movimiento duplicado
             cur.execute("DELETE FROM movimientos WHERE id = %s", (m["id"],))
@@ -24813,9 +24824,9 @@ def pos_entrada_lote():
         except Exception as e:
             errores.append({"sku": sku, "error": f"Error bodega: {e}"}); continue
 
-        # 2b. Actualizar productos.stock (suma total de bodegas propias)
-        p["stock"] += cantidad
-        guardar_producto(p)
+        # 2b. productos.stock ya quedo al dia: ajustar_stock_bodega lo
+        # recalcula sumando las bodegas. Escribirlo aqui lo pisaba con un
+        # valor leido antes del ajuste.
 
         # 2c. Registrar movimiento
         motivo = f"Entrada POS | Doc: {doc_data['numero_doc']} | Bodega: {bodega}"
@@ -24937,8 +24948,7 @@ def pos_salida_lote():
         except Exception as e:
             errores.append({"sku": sku, "error": f"Error bodega: {e}"}); continue
 
-        p["stock"] -= cantidad
-        guardar_producto(p)
+        # productos.stock lo recalcula ajustar_stock_bodega.
 
         canal = _detectar_canal_por_oc(oc) or "Manual"
         motivo = f"{motivo_g} | OC: {oc}" if oc else motivo_g
@@ -32718,8 +32728,11 @@ def admin_falabella_diagnostico_orden():
 
     Existe por un caso concreto: la orden 3252381231 se vendio por Full (FBF) y
     al cancelarse el stock volvio a CENTRAL en vez de a FALABELLA_FBM. El bloque
-    de cancelaciones hace prod["stock"] += cantidad sin consultar nunca
-    detectar_fulfillment_falabella, asi que toda cancelacion aterriza en central.
+    de cancelaciones escribia el total sin consultar nunca
+    detectar_fulfillment_falabella, asi que toda cancelacion aterrizaba en
+    central. Ya no escribe el total —ahora ajusta la bodega CENTRAL, que es lo
+    correcto para una venta propia— pero sigue sin distinguir si la venta fue
+    FBF, asi que una cancelacion de Full sigue aterrizando donde no va.
 
     Falta ademas distinguir si el cliente alcanzo a recibir el pedido o se
     cancelo antes, porque la unidad no esta en el mismo lugar en los dos casos.
@@ -32826,9 +32839,10 @@ def admin_falabella_diagnostico_orden():
                                  "return", "fulfil", "date", "fecha")):
             posibles_estado[k] = v if not isinstance(v, (dict, list)) else str(v)[:300]
 
-    # El scheduler de cancelaciones hace prod["stock"] += cantidad y
-    # guardar_producto(), que escribe en productos.stock — un almacen distinto
-    # del de las bodegas. Hay que mirar los dos para saber donde quedo la unidad.
+    # Se miran los dos almacenes —productos.stock y stock_bodega— porque
+    # historicamente no siempre coincidieron: el scheduler de cancelaciones
+    # escribia solo el total, sin tocar ninguna bodega. Eso ya esta corregido,
+    # pero las ordenes viejas pueden seguir mostrando la diferencia.
     _todos = cargar_productos()
     productos = {p.get("sku") for p in _todos if p.get("sku")}
     stock_global = {p.get("sku"): p.get("stock") for p in _todos}
