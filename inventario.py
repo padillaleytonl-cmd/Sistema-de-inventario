@@ -1253,7 +1253,7 @@ def init_audit():
     finally:
         release_conn(conn)
 
-def registrar_audit(usuario, ip, accion, entidad='', entidad_id='', detalle='', resultado='ok', dato_antes='', dato_despues=''):
+def registrar_audit(usuario, ip, accion, entidad='', entidad_id='', detalle='', resultado='ok', dato_antes='', dato_despues='', _reintento=False):
     conn = None
     try:
         conn = get_conn()
@@ -1278,14 +1278,28 @@ def registrar_audit(usuario, ip, accion, entidad='', entidad_id='', detalle='', 
         print(f"[Audit] {accion} · {usuario} · {resultado}")
     except Exception as e:
         print(f"[Audit] ERROR registrando: {e}")
+        # Reintentar UNA vez, creando la tabla por si no existia.
+        #
+        # Este bloque tiene que estar dentro del except y no en el finally.
+        # Estuvo en el finally por un error al agregar el cierre de conexiones,
+        # y como el finally corre SIEMPRE, cada auditoria exitosa volvia a
+        # llamarse a si misma: recursion hasta el limite de Python, con diez
+        # sentencias DDL de init_audit en cada vuelta. Guardar una sola celda
+        # en Bodegas pasaba de milisegundos a mas de 70 segundos.
+        #
+        # El _reintento tampoco es adorno: sin el, un fallo persistente —una
+        # tabla con permisos mal puestos, por ejemplo— hace que el reintento
+        # falle igual y vuelva a reintentar, sin fondo. Se prueba una vez y se
+        # abandona.
+        if not _reintento:
+            try:
+                init_audit()
+                registrar_audit(usuario, ip, accion, entidad, entidad_id, detalle,
+                                resultado, dato_antes, dato_despues, _reintento=True)
+            except Exception as e2:
+                print(f"[Audit] ERROR reintento: {e2}")
     finally:
         release_conn(conn)
-        # Reintentar creando la tabla si no existe
-        try:
-            init_audit()
-            registrar_audit(usuario, ip, accion, entidad, entidad_id, detalle, resultado, dato_antes, dato_despues)
-        except Exception as e2:
-            print(f"[Audit] ERROR reintento: {e2}")
 
 def listar_audit(limite=200, filtro_accion=None, filtro_usuario=None, filtro_resultado=None):
     conn = get_conn()
