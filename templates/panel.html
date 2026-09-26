@@ -11282,11 +11282,19 @@ async function bodegasGuardarCambios(){
       body: JSON.stringify({ cambios })
     });
     const d = await r.json();
-    if(d.ok){
-      toast(d.guardados + ' cambios guardados');
+    // Se mira d.errores y no solo d.ok: antes esto mostraba "N cambios
+    // guardados" aunque no se hubiera guardado ninguno, porque el backend
+    // devolvia ok:true con la lista de errores adentro y el front la ignoraba.
+    const fallos = d.errores || [];
+    if(d.ok && !fallos.length){
+      toast(d.guardados + ' cambio' + (d.guardados===1?'':'s') + ' guardado' + (d.guardados===1?'':'s'));
+      cargarBodegasMatriz();
+    } else if(d.guardados){
+      toast('Se guardaron ' + d.guardados + ' de ' + (d.intentados||'?') +
+            '. El resto fallo: ' + fallos.slice(0,2).join(' · '), 'warn');
       cargarBodegasMatriz();
     } else {
-      toast('Error: ' + (d.error || 'desconocido'));
+      toast('No se pudo guardar nada. ' + (fallos[0] || d.error || 'sin detalle'), 'error');
     }
   } catch(e){ toast('Error: ' + e.message); }
 }

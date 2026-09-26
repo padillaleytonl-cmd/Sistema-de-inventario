@@ -2693,7 +2693,20 @@ from collections import deque as _deque_recalc
 
 
 def set_stock_bodega(sku, bodega_codigo, cantidad):
-    """Establece el stock de un SKU en una bodega (override)."""
+    """Establece el stock de un SKU en una bodega (override).
+
+    LANZA la excepcion si no se pudo guardar. Antes se la tragaba:
+
+        except Exception as e:
+            print(...); conn.rollback()
+
+    y volvia como si hubiera guardado. Aguas arriba, /bodegas/guardar_lote
+    contaba la celda como guardada —nunca le llegaba un error— y el front
+    mostraba "N cambios guardados". Tres capas de silencio: el usuario editaba,
+    le decian que si, y la base no cambiaba.
+
+    Que falle es lo correcto: quien llama decide que hacer, pero se entera.
+    """
     conn = get_conn(); cur = conn.cursor()
     try:
         cur.execute("""INSERT INTO stock_bodega (sku, bodega_codigo, cantidad, actualizado_at)
@@ -2705,8 +2718,14 @@ def set_stock_bodega(sku, bodega_codigo, cantidad):
         # Sincronizar columna stock de productos (sumatoria de todas las bodegas)
         _recalcular_stock_total(sku)
     except Exception as e:
-        print(f"[Bodegas] set_stock_bodega: {e}"); conn.rollback()
-    cur.close(); release_conn(conn)
+        print(f"[Bodegas] set_stock_bodega {sku}/{bodega_codigo}: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        cur.close(); release_conn(conn)
 
 
 def ajustar_stock_bodega(sku, bodega_codigo, delta):
@@ -3154,6 +3173,84 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
         "stock_despues": stock_despues,
         "advertencia": advertencia
     }
+
+
+def transferir_stock_bodega(sku, desde, hasta, cantidad, usuario="Sistema", motivo=None):
+    """Mueve stock de una bodega a otra EN UNA SOLA TRANSACCION.
+
+    Antes el endpoint hacia dos llamadas sueltas:
+
+        ajustar_stock_bodega(sku, desde, -cantidad)
+        ajustar_stock_bodega(sku, hasta,  cantidad)
+
+    Cada una con su propia transaccion, y ajustar_stock_bodega ademas se traga
+    los errores. Si la segunda fallaba, las unidades salian del origen y no
+    entraban al destino: se perdian, y el endpoint devolvia ok igual.
+
+    Aca las dos filas se tocan en la misma transaccion: o se mueven las dos o
+    no se mueve ninguna. Y quedan los dos movimientos, que antes no existian:
+    una transferencia no dejaba rastro en el historial.
+
+    Lanza ValueError si no hay stock suficiente en el origen.
+    """
+    cantidad = int(cantidad)
+    if cantidad <= 0:
+        raise ValueError("La cantidad a transferir debe ser mayor que cero")
+    if desde == hasta:
+        raise ValueError("El origen y el destino son la misma bodega")
+
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        # FOR UPDATE: bloquea la fila de origen hasta el commit, para que una
+        # venta simultanea no se lleve las mismas unidades.
+        cur.execute("""SELECT cantidad FROM stock_bodega
+                        WHERE sku=%s AND bodega_codigo=%s FOR UPDATE""",
+                    (sku, desde))
+        fila = cur.fetchone()
+        disponible = int(fila[0]) if fila else 0
+        if disponible < cantidad:
+            raise ValueError(
+                f"Stock insuficiente en {desde}: hay {disponible} y se piden {cantidad}")
+
+        cur.execute("""UPDATE stock_bodega SET cantidad = cantidad - %s, actualizado_at = NOW()
+                        WHERE sku=%s AND bodega_codigo=%s""",
+                    (cantidad, sku, desde))
+        cur.execute("""INSERT INTO stock_bodega (sku, bodega_codigo, cantidad, actualizado_at)
+                       VALUES (%s, %s, %s, NOW())
+                       ON CONFLICT (sku, bodega_codigo)
+                       DO UPDATE SET cantidad = stock_bodega.cantidad + EXCLUDED.cantidad,
+                                     actualizado_at = NOW()""",
+                    (sku, hasta, cantidad))
+
+        cur.execute("SELECT nombre FROM productos WHERE sku=%s LIMIT 1", (sku,))
+        r = cur.fetchone()
+        nombre = r[0] if r else sku
+        texto = motivo or f"Transferencia {desde} -> {hasta}"
+
+        for tipo, bodega in (("salida", desde), ("entrada", hasta)):
+            cur.execute("""INSERT INTO movimientos
+                (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, bodega_codigo)
+                VALUES (%s, %s, %s, %s, %s, %s, 'Sistema', NOW(), %s)""",
+                (tipo, sku, nombre, cantidad, texto, usuario, bodega))
+
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        cur.close(); release_conn(conn)
+
+    # Fuera de la transaccion: el total se deriva de las bodegas y no cambio,
+    # pero se recalcula por si alguna fila no existia antes.
+    try:
+        _recalcular_stock_total(sku)
+    except Exception as e:
+        print(f"[Bodegas] transferir: no pude recalcular el total de {sku}: {e}")
+
+    return {"desde": get_stock_bodega(sku, desde), "hasta": get_stock_bodega(sku, hasta)}
 
 
 def reintegrar_stock_bodega(sku, cantidad, bodega_codigo, motivo, canal=None, orden_id=None,

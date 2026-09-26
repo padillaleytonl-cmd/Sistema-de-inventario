@@ -9112,14 +9112,21 @@ def ruta_bodegas_set_stock():
         registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
                         "set_stock_bodega",
                         detalle=f"SKU {sku} en bodega {bodega} = {cantidad}")
-        # Sincronizar stock total a todos los marketplaces
-        # Sumar stock en todas las bodegas para este SKU
+        # Lo que se publica es el stock PROPIO, no la suma de todas las bodegas.
+        #
+        # Antes sumaba todas, fulfillment incluido. Eso contradice la regla del
+        # negocio —el stock que tiene MercadoLibre en su bodega no puede cubrir
+        # un pedido que despachamos nosotros— y publicaba un numero inflado a
+        # los seis canales: sobreventa garantizada en cuanto alguien compre lo
+        # que en realidad esta en Full.
         try:
             from inventario import listar_bodegas
             bodegas_lista = listar_bodegas()
-            stock_total = sum(get_stock_bodega(sku, b["codigo"]) for b in bodegas_lista)
+            stock_total = sum(get_stock_bodega(sku, b["codigo"])
+                              for b in bodegas_lista
+                              if (b.get("tipo") or "propia") == "propia")
         except Exception:
-            stock_total = cantidad  # fallback
+            stock_total = get_stock_bodega(sku, "CENTRAL") or 0
         import threading
         threading.Thread(
             target=sincronizar_stock_marketplaces,
@@ -9439,9 +9446,19 @@ def ruta_bodegas_guardar_lote():
 
         registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
                         "editar_stock_bodegas", entidad="stock_bodega",
-                        detalle=f"{guardados} celdas actualizadas")
+                        detalle=f"{guardados} de {len(cambios)} celdas actualizadas"
+                                + (f" · {len(errores)} con error" if errores else ""))
 
-        return jsonify({"ok": True, "guardados": guardados, "errores": errores})
+        # ok:False cuando algo fallo. Antes devolvia ok:True siempre y el front
+        # mostraba "N cambios guardados" aunque no se hubiera guardado nada:
+        # set_stock_bodega se tragaba el error, asi que "guardados" se sumaba
+        # igual y "errores" quedaba vacio. Tres capas tapandose entre si.
+        return jsonify({
+            "ok": not errores,
+            "guardados": guardados,
+            "intentados": len(cambios),
+            "errores": errores,
+        }), (200 if not errores else 207)
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -9458,19 +9475,25 @@ def ruta_bodegas_transferir():
     if not sku or not desde or not hasta or cantidad <= 0:
         return jsonify({"ok": False, "error": "Faltan parámetros"})
 
-    stock_origen = get_stock_bodega(sku, desde)
-    if stock_origen < cantidad:
-        return jsonify({"ok": False, "error": f"Stock insuficiente en {desde}: {stock_origen}"})
-
+    # transferir_stock_bodega hace los dos lados en UNA transaccion y deja los
+    # movimientos. Antes eran dos llamadas sueltas a ajustar_stock_bodega, cada
+    # una con su transaccion y tragandose los errores: si la segunda fallaba,
+    # las unidades salian del origen, no entraban al destino, y el endpoint
+    # devolvia ok igual. Ademas la transferencia no dejaba ningun rastro en el
+    # historial de movimientos.
     try:
-        ajustar_stock_bodega(sku, desde, -cantidad)
-        ajustar_stock_bodega(sku, hasta, cantidad)
+        from inventario import transferir_stock_bodega
+        r = transferir_stock_bodega(sku, desde, hasta, cantidad,
+                                    usuario=session.get("usuario", "Sistema"))
         registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
                         "transferir_stock",
                         detalle=f"SKU {sku}: {cantidad}u {desde} → {hasta}")
         return jsonify({"ok": True,
-                        "stock_desde": get_stock_bodega(sku, desde),
-                        "stock_hasta": get_stock_bodega(sku, hasta)})
+                        "stock_desde": r["desde"],
+                        "stock_hasta": r["hasta"]})
+    except ValueError as e:
+        # Stock insuficiente o parametros invalidos: es del usuario, no del sistema
+        return jsonify({"ok": False, "error": str(e)}), 400
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
