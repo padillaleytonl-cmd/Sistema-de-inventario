@@ -1225,6 +1225,9 @@ def obtener_stock_full_real_meli(sku_lusync=None, max_publicaciones=200):
         
         # ── 2. Para cada item, obtener inventory_id + SKU + stock fulfillment ──
         resultado = {}
+        # Un mismo inventario Full puede alcanzarse desde varias publicaciones
+        # espejo. Se cuenta una sola vez.
+        inventarios_vistos = set()
         
         # Procesar items en lotes de 20 (multi-get)
         for i in range(0, len(item_ids), 20):
@@ -1274,7 +1277,25 @@ def obtener_stock_full_real_meli(sku_lusync=None, max_publicaciones=200):
                         in_transit = int(stock_data.get("in_transit", 0) or stock_data.get("in_transfer", 0) or 0)
                         total = int(stock_data.get("total", available + in_transit) or 0)
                         
-                        # Acumular si el SKU tiene multi-publicación
+                        # Acumular si el SKU tiene multi-publicacion, PERO sin
+                        # contar dos veces el mismo inventario.
+                        #
+                        # El stock Full pertenece al inventory_id, no a la
+                        # publicacion. Cuando hay publicaciones espejo —las que
+                        # ML muestra como "Sincronizada con #..."— varias apuntan
+                        # al MISMO inventory_id, y acumular sin filtrar sumaba
+                        # las mismas unidades una vez por publicacion.
+                        #
+                        # Eso daba exactamente el doble, y era la causa de los
+                        # descuadres de MELI_FULL: ODJ3NB001 reportaba 116 donde
+                        # ML tiene 58, CCCN001 28 donde hay 14. Peor: como el job
+                        # diario ajusta la bodega a este numero, corregirla a mano
+                        # no servia de nada, la volvia a duplicar en la vuelta
+                        # siguiente.
+                        if inventory_id in inventarios_vistos:
+                            continue
+                        inventarios_vistos.add(inventory_id)
+
                         if sku_lus not in resultado:
                             resultado[sku_lus] = {"available": 0, "in_transit": 0, "total": 0}
                         resultado[sku_lus]["available"] += available
