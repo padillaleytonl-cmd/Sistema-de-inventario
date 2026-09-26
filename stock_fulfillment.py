@@ -43,13 +43,22 @@ def leer_stock_full_meli(max_items=200):
             for item_id in items:
                 vistos += 1
                 try:
-                    # Sin filtro de campos a proposito. El filtro que habia
-                    # recortaba la respuesta y dejaba afuera los campos donde
-                    # vive el SKU DE LA VARIANTE, asi que las variantes se
-                    # quedaban sin SKU y su stock terminaba imputado al item_id
-                    # de la publicacion maestra.
+                    # include_attributes=all NO es opcional. Sin eso, las
+                    # variantes vuelven con seller_custom_field en null,
+                    # seller_sku inexistente y attributes VACIO: no hay por
+                    # donde sacarles el SKU, y su stock Full terminaba imputado
+                    # al item_id de la publicacion maestra —o directamente
+                    # perdido, porque todas las variantes compartian esa clave
+                    # y se pisaban entre si.
+                    #
+                    # Comprobado contra la publicacion MLC2709952404: con el
+                    # parametro, la variante 185082801861 trae
+                    # {"id": "SELLER_SKU", "value_name": "TPBCAO001"}, que es
+                    # justo lo que muestra ML en su panel.
                     ri = requests.get(f"{MELI_API_URL}/items/{item_id}",
-                                      headers=H, timeout=15)
+                                      headers=H,
+                                      params={"include_attributes": "all"},
+                                      timeout=15)
                     d = ri.json()
 
                     def _sku_de(obj):
