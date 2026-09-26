@@ -2779,9 +2779,27 @@ def ajustar_stock_bodega(sku, bodega_codigo, delta):
         conn.commit()
         _recalcular_stock_total(sku)
     except Exception as e:
+        # LANZA. Antes se tragaba el error y devolvia 0 como si hubiera
+        # ajustado, y eso mentia en los dos sentidos: una venta quedaba
+        # registrada sin haber descontado, y una transferencia sacaba unidades
+        # de una bodega sin ponerlas en la otra, siempre devolviendo ok.
+        #
+        # Se reviso una por una: de las 31 llamadas, 28 ya estaban dentro de un
+        # try. Las tres que no —el endpoint de diagnostico, el descuento de
+        # descontar_venta_inteligente y reintegrar_stock_bodega— es correcto
+        # que fallen: en las dos ultimas, el sync que las invoca atrapa el
+        # error, no marca la orden como procesada y la reintenta. Mejor eso que
+        # dar por buena una venta que no descontó.
         print(f"[Bodegas] ajustar_stock_bodega ERROR sku={sku} bodega={bodega_codigo} delta={delta}: {e}")
-        conn.rollback()
-    cur.close(); release_conn(conn)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        # En un finally: con el raise de arriba, un cierre suelto al final de
+        # la funcion no se ejecutaria y la conexion se quedaria afuera del pool.
+        cur.close(); release_conn(conn)
     return nuevo
 
 

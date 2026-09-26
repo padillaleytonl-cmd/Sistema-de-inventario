@@ -2935,8 +2935,19 @@ def _sync_falabella_automatico():
                             # Cancelada antes de entregar: la unidad sigue en la
                             # bodega de Falabella. No toca central ni re-sincroniza,
                             # porque el stock Full no afecta la disponibilidad propia.
+                            # Por item: ajustar_stock_bodega ahora lanza, y sin
+                            # esto un SKU con problema abortaria el resto de las
+                            # cancelaciones del lote. Se anota el fallo en la
+                            # misma lista que se muestra en la alerta, para que
+                            # no quede en silencio.
                             from inventario import ajustar_stock_bodega
-                            ajustar_stock_bodega(prod["sku"], "FALABELLA_FBM", cantidad)
+                            try:
+                                ajustar_stock_bodega(prod["sku"], "FALABELLA_FBM", cantidad)
+                            except Exception as e_aj:
+                                print(f"[Scheduler Falabella] no pude reponer {prod['sku']} en FALABELLA_FBM: {e_aj}")
+                                items_reintegrados.append(
+                                    f"{prod['nombre']} (SKU: {seller_sku}) x{cantidad} — ERROR al reponer: {str(e_aj)[:80]}")
+                                continue
                             registrar_movimiento(
                                 "entrada", prod["sku"], prod["nombre"], cantidad,
                                 f"Cancelación Falabella Full orden {order_number} (bodega FBF)",
@@ -3113,8 +3124,15 @@ def _sync_paris_automatico():
                             if es_cd_cancel:
                                 # Sigue en el centro de distribución de París. No
                                 # toca central ni re-sincroniza.
+                                # Por item, misma razon que en Falabella.
                                 from inventario import ajustar_stock_bodega
-                                ajustar_stock_bodega(prod["sku"], "PARIS_CD", cantidad)
+                                try:
+                                    ajustar_stock_bodega(prod["sku"], "PARIS_CD", cantidad)
+                                except Exception as e_aj:
+                                    print(f"[Scheduler Paris] no pude reponer {prod['sku']} en PARIS_CD: {e_aj}")
+                                    items_reintegrados.append(
+                                        f"{prod['nombre']} (SKU: {seller_sku}) x{cantidad} — ERROR al reponer: {str(e_aj)[:80]}")
+                                    continue
                                 registrar_movimiento(
                                     "entrada", prod["sku"], prod["nombre"], cantidad,
                                     f"Cancelación París Fulfillment orden {sub_order} (bodega PARIS_CD)",
