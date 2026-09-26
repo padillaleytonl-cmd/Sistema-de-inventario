@@ -37223,8 +37223,10 @@ if __name__ == "__main__":
     # problema que causaba tener app.py cargado dos veces. Los hilos dan
     # concurrencia sin duplicar el scheduler.
     #
-    # El --timeout 180 tampoco es decorativo: el default de gunicorn son 30
-    # segundos y hay endpoints que tardan mas —el reporte de ventas recorre los
-    # seis marketplaces— asi que con el default gunicorn mataria al worker a
+    # El --timeout 300 tampoco es decorativo: el default de gunicorn son 30
+    # segundos y hay endpoints que tardan mucho mas. Medido: la reconciliacion
+    # de stock Full contra MercadoLibre tardo 202 segundos y la de Falabella
+    # 186, porque recorren las publicaciones del canal una por una. Con 180
+    # quedaban al filo; con el default de 30, gunicorn mataria al worker a
     # mitad de camino.
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
