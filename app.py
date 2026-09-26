@@ -6824,6 +6824,123 @@ def stock_fulfillment_data():
     return {"filas": filas, "total": len(filas)}
 
 
+@app.route("/stock-fulfillment/aplicar")
+def stock_fulfillment_aplicar():
+    """Deja la bodega Full igual a lo que reporta el canal. SIMULA por defecto.
+
+    Criterio: el marketplace es la fuente de verdad de SU bodega. Es el mismo
+    que ya se aplica en Walmart WFS, donde el conteo que manda la API es el que
+    vale.
+
+    Se apoya en reconciliar_stock_full, que traduce los SKU del canal a los de
+    Lusync. El job diario no sirve para esto: usa otra lectura y descarta todo
+    SKU que no encuentre ya cargado, asi que corrige unos pocos y deja el resto.
+
+    No toca las publicaciones sin SKU mapeado: no hay a que producto imputarles
+    las unidades. Se listan aparte para que se mapeen.
+
+    Uso:
+      /stock-fulfillment/aplicar?canal=mercadolibre              simula
+      /stock-fulfillment/aplicar?canal=mercadolibre&aplicar=1    APLICA
+    """
+    if not (session.get("logged") or session.get("is_lusync_admin")):
+        return jsonify({"error": "no autorizado"}), 401
+
+    canal = (request.args.get("canal") or "mercadolibre").strip().lower()
+    aplicar = request.args.get("aplicar") == "1"
+
+    set_thread_tenant(1, is_admin=False)
+    try:
+        from stock_fulfillment import reconciliar_stock_full, BODEGA_FULL_POR_CANAL
+        from inventario import (cargar_productos, ajustar_stock_bodega,
+                                registrar_movimiento)
+
+        rec = reconciliar_stock_full(canal)
+        if rec.get("error"):
+            return jsonify({"ok": False, "error": rec["error"]}), 400
+
+        bodega = rec.get("bodega") or BODEGA_FULL_POR_CANAL.get(canal)
+        conocidos = {str(p.get("sku")) for p in cargar_productos()}
+
+        cambios, sin_mapear, sin_cambio = [], [], 0
+        for f in rec.get("filas", []):
+            sku = str(f.get("sku") or "")
+            en_canal = int(f.get("canal") or 0)
+            en_lusync = int(f.get("lusync") or 0)
+            delta = en_canal - en_lusync
+
+            if sku not in conocidos:
+                # Publicacion sin SKU en Lusync: no hay a que imputarla
+                if en_canal:
+                    sin_mapear.append({"sku": sku, "en_canal": en_canal})
+                continue
+            if delta == 0:
+                sin_cambio += 1
+                continue
+            cambios.append({"sku": sku, "nombre": f.get("nombre"),
+                            "de": en_lusync, "a": en_canal, "delta": delta})
+
+        info = {
+            "ok": True, "canal": canal, "bodega": bodega, "aplicado": aplicar,
+            "sin_cambio": sin_cambio,
+            "a_cambiar": len(cambios),
+            "cambios": sorted(cambios, key=lambda c: c["delta"]),
+            "sin_mapear": sin_mapear,
+            "unidades_antes": sum(int(f.get("lusync") or 0) for f in rec.get("filas", [])),
+            "unidades_canal": sum(int(f.get("canal") or 0) for f in rec.get("filas", [])),
+        }
+
+        if not aplicar:
+            info["lectura"] = [
+                "SIMULACION: no se toco nada. Se ajustarian %d SKU; %d ya cuadran."
+                % (len(cambios), sin_cambio),
+                "La bodega %s pasaria de %d a %d unidades."
+                % (bodega, info["unidades_antes"], info["unidades_canal"]),
+            ]
+            if sin_mapear:
+                info["lectura"].append(
+                    "Quedan afuera %d publicaciones sin SKU en Lusync (%d unidades): "
+                    "no hay a que producto imputarlas."
+                    % (len(sin_mapear), sum(x["en_canal"] for x in sin_mapear)))
+            info["lectura"].append("Agrega &aplicar=1 para hacerlo de verdad.")
+            return jsonify(info)
+
+        aplicados, fallidos = 0, []
+        for c in cambios:
+            try:
+                ajustar_stock_bodega(c["sku"], bodega, c["delta"])
+                registrar_movimiento(
+                    "entrada" if c["delta"] > 0 else "salida",
+                    c["sku"], c["nombre"] or c["sku"], abs(c["delta"]),
+                    "Reconciliacion %s: %s %d -> %d segun el canal"
+                    % (canal, bodega, c["de"], c["a"]),
+                    usuario=session.get("usuario", "Sistema"),
+                    canal=canal.capitalize())
+                aplicados += 1
+            except Exception as e:
+                fallidos.append({"sku": c["sku"], "error": str(e)[:150]})
+
+        info["aplicados"] = aplicados
+        info["fallidos"] = fallidos
+        info["lectura"] = [
+            "Ajustados %d SKU en %s. La bodega quedo en %d unidades, igual a lo "
+            "que reporta el canal." % (aplicados, bodega, info["unidades_canal"]),
+        ]
+        if fallidos:
+            info["lectura"].append("%d no se pudieron ajustar; ver 'fallidos'." % len(fallidos))
+        if sin_mapear:
+            info["lectura"].append(
+                "Siguen sin imputar %d unidades de publicaciones sin SKU en Lusync."
+                % sum(x["en_canal"] for x in sin_mapear))
+        return jsonify(info)
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e)[:300],
+                        "traza": traceback.format_exc()[-500:]}), 500
+    finally:
+        clear_thread_tenant()
+
+
 @app.route("/stock-fulfillment/reconciliar")
 def stock_fulfillment_reconciliar():
     """Detecta descuadres entre el stock Full de Lusync y el que reporta el canal.
