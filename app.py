@@ -6824,6 +6824,52 @@ def stock_fulfillment_data():
     return {"filas": filas, "total": len(filas)}
 
 
+@app.route("/admin/lusync/meli/inspeccionar-item/<item_id>")
+def admin_meli_inspeccionar_item(item_id):
+    """Muestra como viene una publicacion de ML y DONDE trae el SKU de cada
+    variante. SOLO LECTURA.
+
+    Hace falta porque las variantes quedaban sin SKU y su stock Full no se podia
+    imputar a ningun producto. En vez de adivinar en que campo lo guarda ML, se
+    mira una publicacion real.
+
+    Uso: /admin/lusync/meli/inspeccionar-item/MLC2709952404
+    """
+    if not (session.get("logged") or session.get("is_lusync_admin")):
+        return jsonify({"error": "no autorizado"}), 401
+    try:
+        import requests as _rq
+        from mercadolibre import get_meli_token, MELI_API_URL, meli_headers
+        get_meli_token()
+        H = meli_headers()
+        d = _rq.get(f"{MELI_API_URL}/items/{item_id}", headers=H, timeout=20).json()
+
+        vars_info = []
+        for v in (d.get("variations") or [])[:6]:
+            vars_info.append({
+                "variation_id": v.get("id"),
+                "campos_disponibles": sorted(list(v.keys())),
+                "seller_custom_field": v.get("seller_custom_field"),
+                "seller_sku": v.get("seller_sku"),
+                "attributes": [{"id": a.get("id"), "value_name": a.get("value_name")}
+                               for a in (v.get("attributes") or [])][:8],
+                "attribute_combinations": [{"id": a.get("id"), "value_name": a.get("value_name")}
+                                           for a in (v.get("attribute_combinations") or [])][:6],
+                "inventory_id": v.get("inventory_id"),
+            })
+        return jsonify({
+            "item_id": item_id,
+            "campos_del_item": sorted(list(d.keys()))[:40],
+            "seller_custom_field_item": d.get("seller_custom_field"),
+            "cuantas_variantes": len(d.get("variations") or []),
+            "variantes": vars_info,
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e)[:250],
+                        "traza": traceback.format_exc()[-400:]}), 500
+
+
 @app.route("/stock-fulfillment/aplicar")
 def stock_fulfillment_aplicar():
     """Deja la bodega Full igual a lo que reporta el canal. SIMULA por defecto.
