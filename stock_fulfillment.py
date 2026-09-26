@@ -43,19 +43,36 @@ def leer_stock_full_meli(max_items=200):
             for item_id in items:
                 vistos += 1
                 try:
+                    # Sin filtro de campos a proposito. El filtro que habia
+                    # recortaba la respuesta y dejaba afuera los campos donde
+                    # vive el SKU DE LA VARIANTE, asi que las variantes se
+                    # quedaban sin SKU y su stock terminaba imputado al item_id
+                    # de la publicacion maestra.
                     ri = requests.get(f"{MELI_API_URL}/items/{item_id}",
-                                      headers=H, params={"attributes": "id,seller_custom_field,inventory_id,seller_sku,attributes,variations"},
-                                      timeout=15)
+                                      headers=H, timeout=15)
                     d = ri.json()
 
                     def _sku_de(obj):
-                        # Buscar SKU en varias ubicaciones posibles de ML
+                        """El SKU de un item o de una variante.
+
+                        ML lo guarda en lugares distintos segun el caso, y en
+                        las variantes suele venir dentro de attributes o de
+                        attribute_combinations. Antes solo se miraban dos de
+                        esos lugares y las variantes quedaban sin SKU.
+                        """
                         s = obj.get("seller_custom_field") or obj.get("seller_sku")
                         if s:
-                            return s
-                        for a in (obj.get("attributes") or []):
-                            if a.get("id") == "SELLER_SKU":
-                                return a.get("value_name") or a.get("values", [{}])[0].get("name")
+                            return str(s).strip() or None
+                        for campo in ("attributes", "attribute_combinations"):
+                            for a in (obj.get(campo) or []):
+                                if a.get("id") != "SELLER_SKU":
+                                    continue
+                                v = a.get("value_name")
+                                if not v:
+                                    vals = a.get("values") or [{}]
+                                    v = vals[0].get("name") if vals else None
+                                if v:
+                                    return str(v).strip() or None
                         return None
 
                     # Recolectar (inventory_id, sku_canal, item_id, variation_id)
@@ -71,7 +88,17 @@ def leer_stock_full_meli(max_items=200):
                         if rf.status_code != 200:
                             continue
                         f = rf.json()
-                        clave = sku_canal or iid
+                        # La clave incluye la variante cuando no hay SKU. Antes
+                        # era "sku_canal or iid": todas las variantes sin SKU de
+                        # una misma publicacion compartian clave y se pisaban,
+                        # quedando solo la ultima. Una publicacion con 83
+                        # unidades repartidas en nueve variantes aparecia con 1.
+                        if sku_canal:
+                            clave = sku_canal
+                        elif vid:
+                            clave = f"{iid}::{vid}"
+                        else:
+                            clave = iid
                         resultado[str(clave)] = {
                             "sku_canal": sku_canal,
                             "item_id": iid,
@@ -331,7 +358,11 @@ def reconciliar_stock_full(canal):
         try:
             if sku_canal:
                 sku_lusync = obtener_sku_lusync_por_canal(canal, sku_canal=sku_canal)
-            if not sku_lusync and val.get("item_id"):
+            # Solo por item_id cuando la entrada NO es una variante. Con
+            # variantes, obtener_sku_lusync_por_canal avisa en su docstring que
+            # "devolveria cualquier variante al azar": imputarle el stock de una
+            # variante a otra es peor que dejarlo sin imputar.
+            if not sku_lusync and val.get("item_id") and not val.get("variation_id"):
                 sku_lusync = obtener_sku_lusync_por_canal(canal, sku_canal=None,
                                                           item_id_canal=val.get("item_id"))
         except Exception:
