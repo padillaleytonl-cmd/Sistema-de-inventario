@@ -9453,11 +9453,30 @@ def ruta_bodegas_guardar_lote():
         data = request.json or {}
         cambios = data.get("cambios", [])  # [{sku, bodega_codigo, cantidad}, ...]
 
+        # Solo bodegas que existen. stock_bodega no tiene clave foranea contra
+        # bodegas, asi que acepta cualquier codigo: se comprobo escribiendo en
+        # "BODEGA_QUE_NO_EXISTE" y la fila se creo sin chistar.
+        #
+        # Eso no es un detalle cosmetico. La matriz solo muestra las bodegas
+        # conocidas, asi que esas unidades quedan INVISIBLES ahi; pero
+        # _recalcular_stock_total suma TODAS las filas del SKU, asi que si
+        # entran al total del producto, que es el numero que se publica. Stock
+        # fantasma: no se ve en ningun lado y sin embargo se vende.
+        from inventario import listar_bodegas
+        try:
+            validas = {b["codigo"] for b in listar_bodegas(solo_activas=False)}
+        except Exception:
+            validas = None   # si no se pueden listar, no se bloquea el guardado
+
         guardados = 0
         errores = []
         for c in cambios:
             try:
-                set_stock_bodega(c["sku"], c["bodega_codigo"], int(c["cantidad"]))
+                bodega = c["bodega_codigo"]
+                if validas is not None and bodega not in validas:
+                    raise ValueError(
+                        f"la bodega '{bodega}' no existe; validas: {', '.join(sorted(validas))}")
+                set_stock_bodega(c["sku"], bodega, int(c["cantidad"]))
                 guardados += 1
             except Exception as e:
                 errores.append(f"{c.get('sku')}/{c.get('bodega_codigo')}: {e}")
