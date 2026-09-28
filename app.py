@@ -878,7 +878,7 @@ def _diagnostico_orden(movimientos, marcas, devoluciones=None):
     return balance, resumen, veredicto
 
 
-RASTREADOR_VERSION = "v8-2026-09-28"
+RASTREADOR_VERSION = "v9-2026-09-28"
 
 
 def _rastrear_ordenes(conn, ordenes):
@@ -1104,17 +1104,14 @@ def admin_diag_devoluciones():
 
         # ── Capa 2: el parser ────────────────────────────────────────
         from returns import (obtener_devoluciones_paris, obtener_devoluciones_ripley,
-                             obtener_devoluciones_walmart, obtener_devoluciones_meli)
+                             obtener_devoluciones_walmart, obtener_devoluciones_meli,
+                             obtener_devoluciones_falabella)
         LECTORES = {"paris": obtener_devoluciones_paris,
                     "ripley": obtener_devoluciones_ripley,
                     "walmart": obtener_devoluciones_walmart,
-                    "mercadolibre": obtener_devoluciones_meli}
+                    "mercadolibre": obtener_devoluciones_meli,
+                    "falabella": obtener_devoluciones_falabella}
         lector = LECTORES.get(canal)
-        if canal == "falabella":
-            salida["parser"] = {"error": "Falabella todavia no tiene lector de pull; "
-                                         "solo existe el handler de webhook. Es lo que "
-                                         "este diagnostico viene a resolver."}
-            lector = None
         if lector:
             try:
                 devs = lector(dias=30) or []

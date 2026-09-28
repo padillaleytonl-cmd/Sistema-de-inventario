@@ -632,6 +632,109 @@ def obtener_devoluciones_paris(dias=30):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FALABELLA (Seller Center)
+# ─────────────────────────────────────────────────────────────────────────────
+def obtener_devoluciones_falabella(dias=30):
+    """Devoluciones de Falabella. No hay endpoint: son un ESTADO de la orden.
+
+    Comprobado contra la cuenta real el 28-09-2026: de seis estados candidatos
+    el unico que entrega algo es "returned". Los demas —return_ship_by_customer,
+    return_awaiting_for_approval, return_rejected, return_completed, failed—
+    responden 200 con cero. Su documentacion del flujo esta en construccion,
+    asi que esto sale de la API y no de la guia.
+
+    La orden solo trae cabecera, sin SKU ni motivo ni plazo, asi que los items
+    se piden aparte con GetOrderItems. No se usa obtener_items_orden_falabella
+    porque agrupa por SKU descartando todo campo que no sea SellerSku, Sku,
+    Quantity, Status, Name y CreatedAt — justo lo que aca hace falta. Se llama
+    la API directo y se agrupa conservando el item crudo en "raw".
+
+    Falabella no entrega id de devolucion porque para ella no existe como
+    objeto; se arma uno estable con orden + SKU, que es lo que el upsert
+    necesita para no duplicar.
+    """
+    from falabella import llamar_api_falabella, obtener_ordenes_falabella
+
+    salida = []
+    try:
+        # Igual que en Paris: una devolucion vive semanas, asi que la ventana
+        # tiene piso de 90 dias para no perder las que siguen en curso.
+        ventana = max(int(dias or 30), 90)
+        ordenes = obtener_ordenes_falabella(estado="returned", dias=ventana, limit=100) or []
+
+        for o in ordenes:
+            order_id = str(o.get("OrderId") or "").strip()
+            order_num = str(o.get("OrderNumber") or order_id).strip()
+            if not order_id:
+                continue
+
+            res = llamar_api_falabella("GetOrderItems",
+                                       params_extra={"OrderId": order_id},
+                                       method="GET", formato="JSON")
+            if not res.get("ok"):
+                print(f"[Returns Falabella] items de {order_num}: {res.get('error')}")
+                continue
+            body = ((res.get("data") or {}).get("SuccessResponse") or {}).get("Body") or {}
+            crudos = (body.get("OrderItems") or {}).get("OrderItem") or []
+            if isinstance(crudos, dict):
+                crudos = [crudos]
+            if not isinstance(crudos, list):
+                continue
+
+            # Cada OrderItem es UNA unidad; se agrupan por SKU para la cantidad,
+            # conservando el primero para el resto de los campos.
+            por_sku = {}
+            for it in crudos:
+                if not isinstance(it, dict):
+                    continue
+                sku = (it.get("Sku") or it.get("SellerSku") or "").strip()
+                if not sku:
+                    continue
+                g = por_sku.setdefault(sku, {"cant": 0, "item": it})
+                g["cant"] += 1
+
+            for sku, g in por_sku.items():
+                it = g["item"]
+                estado_canal = str(it.get("Status") or "returned")
+                salida.append({
+                    "canal": "falabella",
+                    # Falabella no da id de devolucion: se arma uno estable.
+                    "return_id": f"{order_id}-{sku}",
+                    "claim_id": None,
+                    "order_id": order_num,
+                    "sku": None,
+                    "sku_canal": sku,
+                    "producto_nombre": it.get("Name"),
+                    "cantidad": g["cant"],
+                    "estado": _norm_estado("falabella", estado_canal),
+                    "estado_canal": estado_canal,
+                    # Los nombres de campo van en cascada porque no estan
+                    # documentados; lo que no se encuentre queda en "raw".
+                    "motivo": (it.get("Reason") or it.get("ReasonDetail")
+                               or it.get("CancelReason") or o.get("Remarks") or None),
+                    "tipo": "return",
+                    "monto_reembolso": (it.get("PaidPrice") or it.get("ItemPrice")
+                                        or o.get("Price")),
+                    "moneda": "CLP",
+                    "tracking_number": (it.get("TrackingCode") or it.get("TrackingNumber")),
+                    "transportista": it.get("ShipmentProvider"),
+                    # UpdatedAt de la orden es cuando paso a "returned", que es
+                    # lo mas cercano a la fecha de la solicitud que entrega.
+                    "fecha_solicitud": _parse_fecha(o.get("UpdatedAt") or o.get("CreatedAt")),
+                    "fecha_limite": _plazo_reclamo(
+                        _parse_fecha(it.get("Deadline") or it.get("ReturnDeadline")),
+                        None),
+                    "fecha_resolucion": None,
+                    "fecha_actualizacion_canal": _parse_fecha(o.get("UpdatedAt")),
+                    "acciones_disponibles": [],
+                    "raw": {"orden": o, "item": it},
+                })
+    except Exception as e:
+        print(f"[Returns Falabella] error: {e}")
+    return salida
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # UPSERT a la tabla devoluciones_marketplace
 # ─────────────────────────────────────────────────────────────────────────────
 def upsert_devolucion(dev, tenant_id=None):
@@ -740,12 +843,13 @@ def sincronizar_devoluciones(tenant_id=None, dias=30, canales=None):
     """Trae devoluciones de todos los canales de pull y las guarda.
     Devuelve un resumen por canal.
     """
-    canales = canales or ["mercadolibre", "walmart", "ripley", "paris"]
+    canales = canales or ["mercadolibre", "walmart", "ripley", "paris", "falabella"]
     funcs = {
         "mercadolibre": obtener_devoluciones_meli,
         "walmart": obtener_devoluciones_walmart,
         "ripley": obtener_devoluciones_ripley,
         "paris": obtener_devoluciones_paris,
+        "falabella": obtener_devoluciones_falabella,
     }
     resumen = {}
     for canal in canales:
