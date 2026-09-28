@@ -878,7 +878,7 @@ def _diagnostico_orden(movimientos, marcas, devoluciones=None):
     return balance, resumen, veredicto
 
 
-RASTREADOR_VERSION = "v6-2026-09-28"
+RASTREADOR_VERSION = "v7-2026-09-28"
 
 
 def _rastrear_ordenes(conn, ordenes):
@@ -1118,6 +1118,13 @@ def admin_diag_devoluciones():
         api = salida.get("api") or []
         par = salida.get("parser") or {}
         ruta_ok = salida.get("ruta_que_funciona")
+        # La ruta que usa el lector de CADA canal. Antes se comparaba contra
+        # "/v2/returns" a secas, que es de Paris, asi que a Ripley le decia
+        # que cambiara el lector a la ruta que ya estaba usando.
+        RUTA_LECTOR = {"paris": "/v2/returns/full", "ripley": "/api/returns",
+                       "walmart": "/v3/returns", "mercadolibre": "/post-purchase"}
+        esperada = RUTA_LECTOR.get(canal)
+        trae = sum(i.get("trae") or 0 for i in api if isinstance(i, dict))
         guardadas = sum(g["cantidad"] for g in salida["guardadas_por_canal"]
                         if g["canal"] == canal)
         salida["guardadas_de_este_canal"] = guardadas
@@ -1129,9 +1136,12 @@ def admin_diag_devoluciones():
                                     ". Si todas dan 404, el servicio no esta publicado en "
                                     "este host y hay que preguntarle a Paris; si dan 401 o "
                                     "403, es de credenciales.")
-        elif isinstance(api, list) and ruta_ok and ruta_ok != "/v2/returns":
-            salida["conclusion"] = ("La ruta que usamos (/v2/returns) esta caida, pero %s SI "
-                                    "responde. Hay que cambiar el lector a esa." % ruta_ok)
+        elif isinstance(api, list) and ruta_ok and esperada and ruta_ok != esperada:
+            salida["conclusion"] = ("El lector apunta a %s pero la que responde es %s. "
+                                    "Hay que cambiar el lector a esa." % (esperada, ruta_ok))
+        elif isinstance(api, list) and ruta_ok and not trae and not par.get("devoluciones_parseadas"):
+            salida["conclusion"] = ("El canal responde bien y no tiene ninguna devolucion. "
+                                    "No hay nada roto: no hay devoluciones que traer.")
         elif par.get("error"):
             salida["conclusion"] = "El parser falla: " + str(par["error"])
         elif not par.get("devoluciones_parseadas"):
