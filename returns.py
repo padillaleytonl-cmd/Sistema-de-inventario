@@ -455,70 +455,135 @@ def obtener_devoluciones_ripley(dias=30):
 # ─────────────────────────────────────────────────────────────────────────────
 # PARIS (Cencosud)
 # ─────────────────────────────────────────────────────────────────────────────
+def _estado_devolucion_paris(o):
+    """Estado de una devolucion de Paris a partir de sus fechas.
+
+    /v2/returns/full no trae campo "status": trae cuatro fechas que se van
+    llenando a medida que la devolucion avanza. Se leen de la mas avanzada a
+    la menos, que es el orden real del flujo y coincide con las pestañas del
+    portal (Por recibir / Recibido / En revision / Finalizado).
+
+    Devuelve (estado_normalizado, etiqueta_legible).
+    """
+    if o.get("finalStatusDate"):
+        return "resuelta", "finalizada"
+    if o.get("warehouseArrivalDate"):
+        # Llego a NUESTRA bodega: es la que requiere accion, hay que revisarla
+        # y decidir si es revendible.
+        return "abierta", "en_nuestra_bodega"
+    if o.get("storeReturnDate") or o.get("dispatchDate"):
+        return "en_transito", "en_camino"
+    return "abierta", "solicitada"
+
+
 def obtener_devoluciones_paris(dias=30):
+    """Devoluciones de Paris desde /v2/returns/full.
+
+    OJO: NO es /v2/returns. Medido contra la API real el 28-09-2026:
+
+        GET /v2/returns          404  "Cannot GET /v2/returns"
+        GET /v2/returns/summary  404
+        GET /v2/returns/full     200
+
+    /v2/returns se cayo el 15/09, cuando Paris migro el modulo, y el lector
+    siguio devolviendo lista vacia sin avisar —devuelve [] tanto si falla como
+    si no hay nada—, asi que las devoluciones dejaron de entrar y nadie se
+    entero durante 13 dias.
+
+    El contrato de /full es distinto al de /returns:
+
+        responde un ARRAY plano, no {"data": [...], "count": N}
+        no trae "status" ni "returnType"; el estado sale de cuatro fechas
+        no trae "createdAt"; la solicitud es "originReturnDate"
+        el tracking y el monto viven dentro de items[], no en la raiz
+        gteCreatedAt y lteCreatedAt son OBLIGATORIOS
+
+    La ventana filtra por fecha de CREACION de la devolucion. Como una
+    devolucion vive semanas —30 dias para pedirla, mas el viaje, mas la
+    revision—, una ventana corta dejaria fuera devoluciones todavia en curso.
+    Por eso se respeta "dias" pero con piso de 90.
+    """
     from paris import PARIS_BASE_URL, paris_headers
+    from datetime import datetime as _dt, timedelta as _td
+
     salida = []
     try:
-        offset = 0
-        while True:
-            params = {"offset": offset, "limit": 50}
-            r = requests.get(f"{PARIS_BASE_URL}/v2/returns", headers=paris_headers(),
-                             params=params, timeout=25)
-            if r.status_code != 200:
-                print(f"[Returns Paris] status {r.status_code}: {r.text[:150]}")
-                break
-            data = r.json()
-            arr = data.get("data") or []
-            if not arr:
-                break
-            for o in arr:
-                return_id = str(o.get("id") or o.get("returnNumber") or "")
-                items = o.get("items") or []
-                sku_canal = None
-                sku_seller = None
-                nombre = None
-                cant = 1
-                if items and isinstance(items, list):
-                    i0 = items[0]
-                    sku_canal = i0.get("sku")
-                    sku_seller = i0.get("skuSeller")
-                    nombre = i0.get("name")
-                    cant = int(i0.get("quantity") or 1)
-                # status/returnType/returnReason son objetos {id,name,...}
-                st = o.get("status") or {}
-                estado_canal = st.get("name") if isinstance(st, dict) else str(st)
-                rt = o.get("returnType") or {}
-                tipo = rt.get("name") if isinstance(rt, dict) else str(rt)
-                rr = o.get("returnReason") or {}
-                motivo = (rr.get("description") or rr.get("name")) if isinstance(rr, dict) else str(rr)
-                salida.append({
-                    "canal": "paris",
-                    "return_id": return_id,
-                    "claim_id": None,
-                    "order_id": str(o.get("subOrderNumber") or o.get("orderNumber") or ""),
-                    "sku": None,
-                    "sku_canal": sku_seller or sku_canal,  # skuSeller es tu SKU
-                    "producto_nombre": nombre,
-                    "cantidad": cant,
-                    "estado": _norm_estado("paris", estado_canal),
-                    "estado_canal": str(estado_canal or ""),
-                    "motivo": motivo,
-                    "tipo": tipo or "return",
-                    "monto_reembolso": o.get("refundAmount") or o.get("totalAmount"),
-                    "moneda": "CLP",
-                    "tracking_number": o.get("trackingNumber"),
-                    "transportista": o.get("carrier"),
-                    "fecha_solicitud": _parse_fecha(o.get("createdAt")),
-                    "fecha_limite": _parse_fecha(o.get("deadline") or o.get("expiresAt")),
-                    "fecha_resolucion": _parse_fecha(o.get("closedAt") or o.get("resolvedAt")),
-                    "fecha_actualizacion_canal": _parse_fecha(o.get("updatedAt") or o.get("createdAt")),
-                    "acciones_disponibles": [],
-                    "raw": o,
-                })
-            count = data.get("count") or 0
-            offset += 50
-            if offset >= count or offset > 1000:
-                break
+        ventana = max(int(dias or 30), 90)
+        hasta = _dt.utcnow()
+        desde = hasta - _td(days=ventana)
+        params = {"gteCreatedAt": desde.strftime("%Y-%m-%d"),
+                  "lteCreatedAt": hasta.strftime("%Y-%m-%d")}
+
+        r = requests.get(f"{PARIS_BASE_URL}/v2/returns/full", headers=paris_headers(),
+                         params=params, timeout=30)
+        if r.status_code != 200:
+            print(f"[Returns Paris] /v2/returns/full status {r.status_code}: {r.text[:200]}")
+            return salida
+
+        cuerpo = r.json()
+        # Array plano. Se tolera igual el envoltorio {"data": [...]} por si
+        # Paris lo vuelve a cambiar.
+        arr = cuerpo if isinstance(cuerpo, list) else (cuerpo.get("data") or [])
+
+        for o in arr:
+            if not isinstance(o, dict):
+                continue
+            # Mismo orden que antes (id primero) para no duplicar las filas ya
+            # guardadas: el upsert es ON CONFLICT (canal, return_id).
+            return_id = str(o.get("id") or o.get("returnNumber") or "")
+            if not return_id:
+                continue
+
+            items = [i for i in (o.get("items") or []) if isinstance(i, dict)]
+            i0 = items[0] if items else {}
+            cant = int(i0.get("quantity") or 1)
+
+            rr = o.get("returnReason") or {}
+            motivo = ((rr.get("description") or rr.get("name"))
+                      if isinstance(rr, dict) else str(rr or ""))
+
+            estado, etiqueta = _estado_devolucion_paris(o)
+
+            # La fecha mas avanzada que tenga, para saber cuando se movio por
+            # ultima vez sin que la API entregue un updatedAt.
+            fechas = [o.get("finalStatusDate"), o.get("warehouseArrivalDate"),
+                      o.get("dispatchDate"), o.get("storeReturnDate"),
+                      o.get("originReturnDate")]
+            ultima = next((f for f in fechas if f), None)
+
+            salida.append({
+                "canal": "paris",
+                "return_id": return_id,
+                "claim_id": None,
+                "order_id": str(o.get("subOrderNumber") or o.get("orderNumber") or ""),
+                "sku": None,
+                "sku_canal": i0.get("skuSeller") or i0.get("sku"),  # skuSeller es tu SKU
+                "producto_nombre": i0.get("name"),
+                "cantidad": cant,
+                "estado": estado,
+                "estado_canal": etiqueta,
+                "motivo": motivo,
+                "tipo": "return",
+                "monto_reembolso": i0.get("priceAfterDiscounts"),
+                "moneda": "CLP",
+                "tracking_number": i0.get("trackingNumber"),
+                "transportista": o.get("carrier"),
+                "fecha_solicitud": _parse_fecha(o.get("originReturnDate")),
+                "fecha_limite": None,   # /full no expone plazo
+                "fecha_resolucion": _parse_fecha(o.get("finalStatusDate")),
+                "fecha_actualizacion_canal": _parse_fecha(ultima),
+                "acciones_disponibles": [],
+                "raw": o,
+            })
+
+        multi = [o for o in arr
+                 if isinstance(o, dict) and len(o.get("items") or []) > 1]
+        if multi:
+            # Una fila por devolucion es lo que permite el upsert
+            # ON CONFLICT (canal, return_id). Con varios productos solo se
+            # guarda el primero, igual que antes; el resto queda en "raw".
+            print(f"[Returns Paris] {len(multi)} devoluciones con mas de un "
+                  f"producto: solo se guarda el primero (el resto queda en raw)")
     except Exception as e:
         print(f"[Returns Paris] error: {e}")
     return salida
