@@ -783,7 +783,7 @@ def trazar_ajuste_stock():
                             "Mirá 'stock_que_se_publicaria' en cada etapa."})
 
 
-def _diagnostico_orden(movimientos, marcas):
+def _diagnostico_orden(movimientos, marcas, devoluciones=None):
     """Que hizo una orden con el stock. Devuelve (balance, resumen, veredicto).
 
     Aparte del route para poder probarla sin base de datos: es la parte que
@@ -813,16 +813,30 @@ def _diagnostico_orden(movimientos, marcas):
     pendiente = {k: v for k, v in balance.items()
                  if v["descontado"] - v["repuesto"] != 0}
 
+    devoluciones = devoluciones or []
     marcada_venta = any("CANCEL" not in (mk.get("clave") or "").upper() for mk in marcas)
     marcada_cancel = any("CANCEL" in (mk.get("clave") or "").upper() for mk in marcas)
     hubo_salida = any(m.get("tipo") == "salida" for m in movimientos)
     hubo_entrada = any(m.get("tipo") == "entrada" for m in movimientos)
+
+    # ¿Hay alguna razon para esperar que la unidad volviera?
+    #
+    # Esta pregunta es la que faltaba. Antes se comparaba descontado contra
+    # repuesto y cualquier diferencia era DESCUADRE, pero una venta que se
+    # completa BIEN nunca se repone: la unidad salio porque se vendio. O sea
+    # se marcaba como problema justo el caso sano.
+    #
+    # Solo hay algo que reclamar si el canal dijo que la orden se cancelo, si
+    # hay una devolucion registrada, o si alguien ya repuso una parte y quedo
+    # a medias.
+    hay_motivo_para_volver = bool(marcada_cancel or devoluciones or hubo_entrada)
 
     resumen = {
         "marcada_como_vendida": marcada_venta,
         "marcada_como_cancelada": marcada_cancel,
         "hubo_descuento": hubo_salida,
         "hubo_reposicion": hubo_entrada,
+        "devoluciones_del_canal": len(devoluciones),
         "movimientos_encontrados": len(movimientos),
     }
 
@@ -837,6 +851,18 @@ def _diagnostico_orden(movimientos, marcas):
         veredicto = ("Hay marca pero ningun movimiento de salida: la venta no "
                      "desconto stock. Si el pedido si se despacho, esto es una "
                      "venta en limbo.")
+    elif not hay_motivo_para_volver:
+        veredicto = ("Venta normal: desconto stock y nadie pidio que volviera. "
+                     "No hay cancelacion ni devolucion registrada, asi que el "
+                     "stock esta como debe estar.")
+    elif devoluciones and not marcada_cancel and not pendiente:
+        veredicto = ("Hay una devolucion en curso y el descuento ya cuadra. La "
+                     "unidad salio de la bodega de verdad; vuelve a entrar "
+                     "cuando llegue y pase por revision.")
+    elif devoluciones and not marcada_cancel:
+        veredicto = ("DEVOLUCION EN CURSO, no cancelacion. La unidad se vendio y "
+                     "se despacho, asi que el descuento es correcto. No se repone "
+                     "sola: entra por el flujo de revision cuando llegue a bodega.")
     elif not pendiente:
         veredicto = ("Cuadra: lo que se desconto se repuso completo. El stock esta "
                      "donde corresponde.")
@@ -869,7 +895,7 @@ def _rastrear_ordenes(conn, ordenes):
 
     for num in ordenes:
         info = {"orden": num, "movimientos": [], "marcas": [], "alertas": [],
-                "stock_actual": {}}
+                "devoluciones": [], "stock_actual": {}}
         variantes = [p + num for p in PREFIJOS]
 
         with conn.cursor() as cur:
@@ -911,6 +937,21 @@ def _rastrear_ordenes(conn, ordenes):
             info["alertas"] = [{"tipo": r[0], "titulo": r[1], "sku": r[2],
                                 "leida": bool(r[3]), "fecha": r[4]} for r in cur.fetchall()]
 
+            # Devoluciones que el canal ya reporto para esta orden. Sin esto
+            # el rastreador no podia contestar "donde quedo la unidad" cuando
+            # la respuesta era "el cliente la devolvio y viene en camino".
+            cur.execute("""SELECT canal, return_id, COALESCE(sku,''),
+                                  COALESCE(cantidad,1), COALESCE(estado,''),
+                                  COALESCE(estado_canal,''), COALESCE(motivo,''),
+                                  TO_CHAR(fecha_solicitud,'DD/MM/YYYY HH24:MI')
+                             FROM devoluciones_marketplace
+                            WHERE COALESCE(order_id,'') = ANY(%s)
+                            ORDER BY fecha_solicitud ASC""", (variantes,))
+            info["devoluciones"] = [
+                {"canal": r[0], "return_id": r[1], "sku": r[2], "cantidad": r[3],
+                 "estado": r[4], "estado_canal": r[5], "motivo": r[6],
+                 "solicitada": r[7]} for r in cur.fetchall()]
+
             skus = sorted({m["sku"] for m in info["movimientos"] if m["sku"]})
             if skus:
                 cur.execute("""SELECT sku, bodega_codigo, cantidad
@@ -920,7 +961,8 @@ def _rastrear_ordenes(conn, ordenes):
                 for sk, bod, cant in cur.fetchall():
                     info["stock_actual"].setdefault(sk, {})[bod] = int(cant)
 
-        balance, resumen, veredicto = _diagnostico_orden(info["movimientos"], info["marcas"])
+        balance, resumen, veredicto = _diagnostico_orden(
+            info["movimientos"], info["marcas"], info["devoluciones"])
         info["balance"] = balance
         info["resumen"] = resumen
         info["veredicto"] = veredicto
