@@ -757,7 +757,16 @@ def obtener_devoluciones_falabella(dias=30):
                         [x for x in [(it.get("Reason") or "").strip(),
                                      (it.get("ReasonDetail") or "").strip()] if x]
                     ) or (o.get("Remarks") or None),
-                    "tipo": "return",
+                    # ShippingType del item dice si el producto salio de la
+                    # bodega de Falabella o de la nuestra, y eso decide a que
+                    # bodega vuelve la unidad. Es el unico dato util que el
+                    # item trae de mas: Reason, ReasonDetail y ReturnStatus
+                    # existen como campos pero Falabella los manda vacios
+                    # —comprobado volcando el item crudo—, asi que el motivo
+                    # de la devolucion simplemente no esta disponible por API.
+                    "tipo": ("return_fulfillment"
+                             if "fulfillment" in str(it.get("ShippingType") or "").lower()
+                             else "return_seller"),
                     "monto_reembolso": (it.get("PaidPrice") or it.get("ItemPrice")
                                         or o.get("Price")),
                     "moneda": "CLP",
