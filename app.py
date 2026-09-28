@@ -878,7 +878,7 @@ def _diagnostico_orden(movimientos, marcas, devoluciones=None):
     return balance, resumen, veredicto
 
 
-RASTREADOR_VERSION = "v4-2026-09-28"
+RASTREADOR_VERSION = "v5-2026-09-28"
 
 
 def _rastrear_ordenes(conn, ordenes):
@@ -1001,25 +1001,53 @@ def admin_diag_devoluciones():
         # la API y una respuesta vacia se ven exactamente igual.
         if canal == "paris":
             import requests as _rq
+            from datetime import datetime as _dt, timedelta as _td
             from paris import PARIS_BASE_URL, paris_headers
-            try:
-                r = _rq.get(f"{PARIS_BASE_URL}/v2/returns", headers=paris_headers(),
-                            params={"offset": 0, "limit": 5}, timeout=25)
-                cuerpo = {}
+
+            # Las tres rutas que documenta Cencosud. Se prueban todas porque
+            # "Cannot GET /v2/returns" es el 404 por defecto de Express: dice
+            # que ninguna ruta coincide, no que falten parametros. Si el
+            # servicio registro las sub-rutas y no la raiz, /full responde
+            # aunque /returns no — y /full trae mas datos.
+            _hasta = _dt.utcnow().strftime("%Y-%m-%d")
+            _desde = (_dt.utcnow() - _td(days=60)).strftime("%Y-%m-%d")
+            RUTAS = [
+                ("/v2/returns", {"offset": 0, "limit": 5}),
+                ("/v2/returns", {"offset": 0, "limit": 5,
+                                 "gteCreatedAt": _desde, "lteCreatedAt": _hasta}),
+                ("/v2/returns/full", {"gteCreatedAt": _desde, "lteCreatedAt": _hasta}),
+                ("/v2/returns/summary", {"gteCreatedAt": _desde, "lteCreatedAt": _hasta}),
+            ]
+            salida["api"] = []
+            for ruta, params in RUTAS:
+                intento = {"ruta": ruta, "params": sorted(params.keys())}
                 try:
-                    cuerpo = r.json()
-                except Exception:
-                    pass
-                arr = (cuerpo.get("data") or []) if isinstance(cuerpo, dict) else []
-                salida["api"] = {
-                    "status": r.status_code,
-                    "count_reportado": (cuerpo.get("count") if isinstance(cuerpo, dict) else None),
-                    "trae_en_esta_pagina": len(arr),
-                    "primer_registro": arr[0] if arr else None,
-                    "cuerpo_si_fallo": (r.text[:400] if r.status_code != 200 else None),
-                }
-            except Exception as e:
-                salida["api"] = {"error": str(e)[:300]}
+                    r = _rq.get(f"{PARIS_BASE_URL}{ruta}", headers=paris_headers(),
+                                params=params, timeout=25)
+                    intento["status"] = r.status_code
+                    cuerpo = None
+                    try:
+                        cuerpo = r.json()
+                    except Exception:
+                        pass
+                    if r.status_code == 200 and isinstance(cuerpo, dict):
+                        arr = cuerpo.get("data")
+                        if arr is None and isinstance(cuerpo, list):
+                            arr = cuerpo
+                        intento["count_reportado"] = cuerpo.get("count")
+                        intento["trae"] = len(arr or [])
+                        intento["primer_registro"] = (arr or [None])[0]
+                    elif r.status_code == 200 and isinstance(cuerpo, list):
+                        intento["trae"] = len(cuerpo)
+                        intento["primer_registro"] = cuerpo[0] if cuerpo else None
+                    else:
+                        intento["cuerpo"] = r.text[:300]
+                except Exception as e:
+                    intento["error"] = str(e)[:250]
+                salida["api"].append(intento)
+
+            _ok = [i for i in salida["api"] if i.get("status") == 200]
+            salida["ruta_que_funciona"] = (_ok[0]["ruta"] if _ok else None)
 
         # ── Capa 2: el parser ────────────────────────────────────────
         from returns import (obtener_devoluciones_paris, obtener_devoluciones_ripley,
@@ -1062,15 +1090,23 @@ def admin_diag_devoluciones():
                 for r in cur.fetchall()]
 
         # ── El diagnostico ───────────────────────────────────────────
-        api = salida.get("api") or {}
+        api = salida.get("api") or []
         par = salida.get("parser") or {}
+        ruta_ok = salida.get("ruta_que_funciona")
         guardadas = sum(g["cantidad"] for g in salida["guardadas_por_canal"]
                         if g["canal"] == canal)
         salida["guardadas_de_este_canal"] = guardadas
 
-        if api.get("error") or (api.get("status") and api["status"] != 200):
-            salida["conclusion"] = ("La API del canal no responde bien. El problema es de "
-                                    "credenciales o de endpoint, no de Lusync.")
+        if isinstance(api, list) and not ruta_ok and api:
+            estados = ", ".join("%s -> %s" % (i["ruta"], i.get("status") or i.get("error"))
+                                for i in api)
+            salida["conclusion"] = ("Ninguna ruta de devoluciones responde: " + estados +
+                                    ". Si todas dan 404, el servicio no esta publicado en "
+                                    "este host y hay que preguntarle a Paris; si dan 401 o "
+                                    "403, es de credenciales.")
+        elif isinstance(api, list) and ruta_ok and ruta_ok != "/v2/returns":
+            salida["conclusion"] = ("La ruta que usamos (/v2/returns) esta caida, pero %s SI "
+                                    "responde. Hay que cambiar el lector a esa." % ruta_ok)
         elif par.get("error"):
             salida["conclusion"] = "El parser falla: " + str(par["error"])
         elif not par.get("devoluciones_parseadas"):
