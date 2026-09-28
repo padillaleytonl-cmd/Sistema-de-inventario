@@ -7275,6 +7275,123 @@ def devoluciones_mkt_sync():
     return {"ok": True, "resumen": resumen}
 
 
+@app.route("/devoluciones/dashboard")
+def devoluciones_dashboard():
+    """Datos del dashboard de devoluciones para un rango de fechas.
+
+    Uso: /devoluciones/dashboard?desde=2026-08-29&hasta=2026-09-28
+
+    Devuelve el resumen, el desglose por canal y la lista en una sola
+    respuesta, para que las tres partes de la pantalla no puedan
+    contradecirse.
+
+    Las horas restantes se calculan acá y no se leen de dias_restantes: esa
+    columna guarda días enteros congelados en el último sync, y un plazo de
+    72 horas no se mide en días ni tolera estar media hora desactualizado.
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    from datetime import timedelta as _td
+    ahora = now_chile().replace(tzinfo=None)
+
+    def _fecha(txt, por_defecto):
+        try:
+            return datetime.strptime(txt, "%Y-%m-%d")
+        except Exception:
+            return por_defecto
+
+    hasta = _fecha(request.args.get("hasta", ""), ahora)
+    desde = _fecha(request.args.get("desde", ""), ahora - _td(days=30))
+    hasta_fin = hasta.replace(hour=23, minute=59, second=59)
+    desde_ini = desde.replace(hour=0, minute=0, second=0)
+    buscar = (request.args.get("q") or "").strip()
+
+    conn = get_conn(tenant_id=1)
+    try:
+        cur = conn.cursor()
+        q = """SELECT canal, return_id, COALESCE(order_id,''), COALESCE(sku,''),
+                      COALESCE(sku_canal,''), COALESCE(producto_nombre,''),
+                      COALESCE(cantidad,1), COALESCE(estado,'abierta'),
+                      COALESCE(estado_canal,''), COALESCE(motivo,''),
+                      monto_reembolso, COALESCE(tracking_number,''),
+                      fecha_solicitud, fecha_limite, COALESCE(url_gestion,'')
+                 FROM devoluciones_marketplace
+                WHERE fecha_solicitud IS NOT NULL
+                  AND fecha_solicitud BETWEEN %s AND %s"""
+        params = [desde_ini, hasta_fin]
+        if buscar:
+            # Una sola caja que busca por orden, SKU, producto o n° de
+            # devolución: quien tiene el papel en la mano no sabe cuál de esos
+            # cuatro le tocó.
+            q += """ AND (order_id ILIKE %s OR return_id ILIKE %s
+                          OR COALESCE(sku,'') ILIKE %s OR COALESCE(sku_canal,'') ILIKE %s
+                          OR COALESCE(producto_nombre,'') ILIKE %s)"""
+            params += ["%%%s%%" % buscar] * 5
+        q += " ORDER BY (fecha_limite IS NULL), fecha_limite ASC, fecha_solicitud DESC LIMIT 500"
+        cur.execute(q, params)
+        filas = cur.fetchall()
+
+        # Abiertas que quedan FUERA del rango: se cuentan aparte para que el
+        # filtro no las esconda en silencio.
+        cur.execute("""SELECT COUNT(*) FROM devoluciones_marketplace
+                        WHERE COALESCE(estado,'abierta') NOT IN ('resuelta','cancelada')
+                          AND (fecha_solicitud IS NULL
+                               OR fecha_solicitud NOT BETWEEN %s AND %s)""",
+                    (desde_ini, hasta_fin))
+        fuera = int((cur.fetchone() or [0])[0] or 0)
+        cur.close()
+    finally:
+        release_conn(conn)
+
+    def _clasificar(estado, fecha_limite):
+        if estado in ("resuelta", "cancelada"):
+            return "lista"
+        if estado == "en_transito":
+            return "camino"
+        return "bodega" if fecha_limite else "solicitada"
+
+    lista, resumen = [], {"bodega": 0, "camino": 0, "solicitada": 0, "lista": 0,
+                          "vencidas": 0, "vencen_hoy": 0}
+    por_canal = {}
+    for (canal, rid, oid, sku, skuc, nombre, cant, estado, estadoc, motivo,
+         monto, track, fsol, flim, url) in filas:
+        grupo = _clasificar(estado, flim)
+        horas = None
+        if flim:
+            horas = int((flim - ahora).total_seconds() // 3600)
+        resumen[grupo] += 1
+        if horas is not None and grupo == "bodega":
+            if horas < 0:
+                resumen["vencidas"] += 1
+            elif horas < 24:
+                resumen["vencen_hoy"] += 1
+        if grupo != "lista":
+            c = por_canal.setdefault(canal, {"canal": canal, "bodega": 0,
+                                             "camino": 0, "solicitada": 0, "total": 0})
+            c[grupo] += 1
+            c["total"] += 1
+        lista.append({
+            "canal": canal, "return_id": rid, "orden": oid,
+            "sku": sku or skuc, "producto": nombre, "cantidad": int(cant or 1),
+            "grupo": grupo, "estado": estado, "estado_canal": estadoc,
+            "motivo": motivo, "monto": float(monto) if monto is not None else None,
+            "tracking": track, "url": url,
+            "solicitada": fsol.strftime("%d/%m/%Y") if fsol else "",
+            "dias": (ahora - fsol).days if fsol else None,
+            "horas_restantes": horas,
+        })
+
+    return jsonify({
+        "rango": {"desde": desde.strftime("%Y-%m-%d"), "hasta": hasta.strftime("%Y-%m-%d")},
+        "resumen": resumen,
+        "por_canal": sorted(por_canal.values(), key=lambda x: -x["total"]),
+        "lista": lista,
+        "abiertas_fuera_del_rango": fuera,
+        "total": len(lista),
+    })
+
+
 @app.route("/devoluciones-mkt")
 def devoluciones_mkt_list():
     """Lista todas las devoluciones de marketplace con sus tiempos y alertas de plazo."""
