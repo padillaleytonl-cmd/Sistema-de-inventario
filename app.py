@@ -1956,6 +1956,31 @@ def reparar_central_stock():
 #   sincronizar_stock_marketplaces(sku, nuevo_stock)
 # ════════════════════════════════════════════════════════════════════════════
 
+def _cantidad_de_linea(valor, por_defecto=1):
+    """Unidades de una linea de orden, distinguiendo el 0 real del dato ausente.
+
+    El patron que habia en los syncs era int(valor or 1), que mete en la misma
+    bolsa dos casos distintos:
+
+      - la clave no vino  -> asumir 1 es razonable y se mantiene
+      - el canal dijo 0   -> inventar 1 descuenta stock por una venta que no
+                             existe
+
+    Dejando pasar el 0, descontar_venta_inteligente lo rechaza, avisa y la
+    orden queda visible en /admin/lusync/auditoria-ordenes en vez de mover
+    stock a ciegas.
+
+    Tolera el null del JSON a proposito: el cambio directo a
+    .get("quantity", 1) devolveria None y reventaria en int(None).
+    """
+    if valor is None or valor == "":
+        return por_defecto
+    try:
+        return int(float(valor))
+    except (TypeError, ValueError):
+        return por_defecto
+
+
 def _asegurar_fecha_compra(canal, orden_id, fecha_compra, sku=None):
     """Asegura que el último movimiento de salida de esta orden tenga fecha_compra_marketplace.
     Se llama después de descontar_venta porque bodegas_logic.descontar_venta puede no
@@ -2616,7 +2641,7 @@ def _sync_meli_automatico():
                             (item_data.get("seller_sku") or "").strip()
                             or (item_data.get("seller_custom_field") or "").strip()
                         )
-                        cantidad = int(item.get("quantity", 1))
+                        cantidad = _cantidad_de_linea(item.get("quantity"))
                         if not sku_seller:
                             continue
 
@@ -2707,7 +2732,7 @@ def _sync_meli_automatico():
                             (item_data.get("seller_sku") or "").strip()
                             or (item_data.get("seller_custom_field") or "").strip()
                         )
-                        cantidad = int(item.get("quantity", 1))
+                        cantidad = _cantidad_de_linea(item.get("quantity"))
                         if not sku_seller: continue
 
                         # Traducir SKU canal a Lusync
@@ -2908,7 +2933,9 @@ def _sync_falabella_automatico():
                         # y agrupa cantidad real (cada OrderItem = 1 unidad)
                         seller_sku = (item.get("SellerSku") or item.get("Sku") or
                                       item.get("sellerSku") or item.get("sku") or "").strip()
-                        cantidad = int(item.get("Quantity") or item.get("quantity") or 1)
+                        cantidad = _cantidad_de_linea(
+                            item.get("Quantity") if item.get("Quantity") is not None
+                            else item.get("quantity"))
                         if not seller_sku:
                             continue
 
@@ -3012,7 +3039,9 @@ def _sync_falabella_automatico():
                     for item in items_orden:
                         seller_sku = (item.get("SellerSku") or item.get("Sku") or
                                       item.get("sellerSku") or item.get("sku") or "").strip()
-                        cantidad = int(item.get("Quantity") or item.get("quantity") or 1)
+                        cantidad = _cantidad_de_linea(
+                            item.get("Quantity") if item.get("Quantity") is not None
+                            else item.get("quantity"))
                         if not seller_sku:
                             continue
                         ultimo_sku = seller_sku
@@ -3219,7 +3248,7 @@ def _sync_paris_automatico():
                     for ship in (o.get("shipments") or []):
                         for item in (ship.get("items") or []):
                             seller_sku = (item.get("seller_sku") or item.get("sellerSku") or "").strip()
-                            cantidad = int(item.get("quantity") or 1)
+                            cantidad = _cantidad_de_linea(item.get("quantity"))
                             if not seller_sku:
                                 continue
                             ultimo_sku = seller_sku
@@ -3325,7 +3354,7 @@ def _sync_paris_automatico():
                 for ship in (o.get("shipments") or []):
                     for item in (ship.get("items") or []):
                         seller_sku = (item.get("seller_sku") or item.get("sellerSku") or "").strip()
-                        cantidad = int(item.get("quantity") or 1)
+                        cantidad = _cantidad_de_linea(item.get("quantity"))
                         if not seller_sku:
                             continue
                         if seller_sku in _items_paris:
@@ -3542,7 +3571,7 @@ def _sync_ripley_automatico():
                     for item in items_orden:
                         shop_sku = (item.get("offer_sku") or item.get("shop_sku") or
                                     item.get("sku") or item.get("seller_sku") or "").strip()
-                        cantidad = int(item.get("quantity") or 1)
+                        cantidad = _cantidad_de_linea(item.get("quantity"))
                         if not shop_sku:
                             continue
                         ultimo_sku = shop_sku
@@ -3653,7 +3682,7 @@ def _sync_ripley_automatico():
                 for item in items_orden:
                     shop_sku = (item.get("offer_sku") or item.get("shop_sku") or
                                 item.get("sku") or item.get("seller_sku") or "").strip()
-                    cantidad = int(item.get("quantity") or 1)
+                    cantidad = _cantidad_de_linea(item.get("quantity"))
                     if not shop_sku:
                         continue
 
@@ -3775,7 +3804,7 @@ def _sync_woo_automatico():
 
                 for line in o.get("line_items", []):
                     sku = (line.get("sku") or "").strip()
-                    cantidad = int(line.get("quantity") or 1)
+                    cantidad = _cantidad_de_linea(line.get("quantity"))
                     if not sku: continue
                     productos = cargar_productos()
                     for p in productos:
@@ -3854,7 +3883,7 @@ def _sync_woo_automatico():
                 ultimo_sku = None
                 for line in o.get("line_items", []):
                     sku = (line.get("sku") or "").strip()
-                    cantidad = int(line.get("quantity") or 1)
+                    cantidad = _cantidad_de_linea(line.get("quantity"))
                     if not sku: continue
                     ultimo_sku = sku
                     productos = cargar_productos()
@@ -8266,7 +8295,7 @@ def paris_forzar_orden(sub_order_number):
         for ship in shipments:
             for item in (ship.get("items") or []):
                 seller_sku = (item.get("seller_sku") or item.get("sellerSku") or "").strip()
-                cantidad   = int(item.get("quantity") or 1)
+                cantidad   = _cantidad_de_linea(item.get("quantity"))
                 if not seller_sku:
                     items_fallidos.append({"error": "item sin seller_sku", "item": item})
                     continue
@@ -13969,7 +13998,7 @@ def admin_sync_meli_rango():
                             (item_data.get("seller_sku") or "").strip()
                             or (item_data.get("seller_custom_field") or "").strip()
                         )
-                        cantidad = int(item.get("quantity", 1))
+                        cantidad = _cantidad_de_linea(item.get("quantity"))
                         if not sku_seller:
                             continue
                         
@@ -15972,7 +16001,7 @@ def admin_rls_forzar_sync_woo():
 
                 for line in o.get("line_items", []):
                     sku = (line.get("sku") or "").strip()
-                    cantidad = int(line.get("quantity") or 1)
+                    cantidad = _cantidad_de_linea(line.get("quantity"))
                     if not sku:
                         sin_sku += 1
                         log.append(f"   ⚠ {woo_key}: line sin SKU")
@@ -16057,7 +16086,7 @@ def admin_rls_forzar_sync_woo():
                 items_reintegrados = []
                 for line in o.get("line_items", []):
                     sku = (line.get("sku") or "").strip()
-                    cantidad = int(line.get("quantity") or 1)
+                    cantidad = _cantidad_de_linea(line.get("quantity"))
                     if not sku: continue
                     productos = cargar_productos()
                     for p in productos:
@@ -26037,7 +26066,7 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                         it    = item.get("item") or {}
                         sku_s = (it.get("seller_custom_field") or it.get("seller_sku") or "").strip()
                         prod  = it.get("title") or ""
-                        qty   = int(item.get("quantity") or 1)
+                        qty   = _cantidad_de_linea(item.get("quantity"))
                         price = float(item.get("unit_price") or 0)
                         for _ in range(qty):
                             _filas_canal.append(fila("MercadoLibre", order_id, fecha,
@@ -26155,7 +26184,7 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                         sku_s = (item.get("sellerSku") or item.get("seller_sku") or
                                  item.get("sku") or item.get("jda_sku") or item.get("jdaSku") or "")
                         prod  = item.get("name") or item.get("productName") or item.get("title") or ""
-                        qty   = int(item.get("quantity") or 1)
+                        qty   = _cantidad_de_linea(item.get("quantity"))
                         # priceAfterDiscounts = lo que pago el cliente
                         price = float(item.get("priceAfterDiscounts") or
                                       item.get("price_after_discounts") or
@@ -26374,7 +26403,7 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                         for item in items_fa:
                             sku_s = item.get("SellerSku") or item.get("Sku") or ""
                             prod  = item.get("Name") or item.get("ProductName") or ""
-                            qty   = int(item.get("Quantity") or 1)
+                            qty   = _cantidad_de_linea(item.get("Quantity"))
                             price = (_to_float(item.get("PaidPrice")) or
                                      _to_float(item.get("ItemPrice")) or
                                      _to_float(item.get("Price")))
@@ -26476,7 +26505,7 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                     for line in lineas_woo:
                         sku_s = (line.get("sku") or "").strip()
                         prod  = line.get("name") or ""
-                        qty   = int(line.get("quantity") or 1)
+                        qty   = _cantidad_de_linea(line.get("quantity"))
                         # Precio = total / quantity (precio realmente pagado, no precio_normal)
                         line_total = float(line.get("total") or 0)
                         line_tax   = float(line.get("total_tax") or 0)
