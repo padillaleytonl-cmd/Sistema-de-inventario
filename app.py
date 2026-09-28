@@ -878,7 +878,7 @@ def _diagnostico_orden(movimientos, marcas, devoluciones=None):
     return balance, resumen, veredicto
 
 
-RASTREADOR_VERSION = "v11-2026-09-28"
+RASTREADOR_VERSION = "v12-2026-09-28"
 
 
 def _rastrear_ordenes(conn, ordenes):
@@ -1029,6 +1029,32 @@ def admin_diag_devoluciones():
             _con = [i for i in salida["api"] if i.get("trae")]
             salida["ruta_que_funciona"] = (_con[0]["ruta"] if _con else None)
             salida["estados_con_datos"] = [i["ruta"] for i in _con]
+
+            # El item CRUDO de la primera orden en devolucion. Reason,
+            # ReasonDetail y ReturnStatus vienen vacios y hay que saber si la
+            # API no los manda o los manda en blanco: son dos problemas
+            # distintos y desde el resultado parseado se ven igual.
+            try:
+                from falabella import llamar_api_falabella as _lfa, obtener_ordenes_falabella as _ofa2
+                _ords = _ofa2(estado="returned", dias=90, limit=1) or []
+                if _ords:
+                    _oid = str(_ords[0].get("OrderId") or "")
+                    _r = _lfa("GetOrderItems", params_extra={"OrderId": _oid},
+                              method="GET", formato="JSON")
+                    _b = ((_r.get("data") or {}).get("SuccessResponse") or {}).get("Body") or {}
+                    _it = (_b.get("OrderItems") or {}).get("OrderItem") or []
+                    if isinstance(_it, dict):
+                        _it = [_it]
+                    if _it:
+                        _i0 = _it[0]
+                        salida["item_crudo"] = {
+                            "orden": _oid,
+                            "todas_las_claves": sorted(_i0.keys()),
+                            "con_valor": {k: v for k, v in _i0.items()
+                                          if v not in (None, "", "0")},
+                        }
+            except Exception as e:
+                salida["item_crudo"] = {"error": str(e)[:250]}
 
         if canal == "ripley":
             # Ripley tiene lector y esta en la lista de canales, pero nunca
