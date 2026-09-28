@@ -880,7 +880,7 @@ def _diagnostico_orden(movimientos, marcas, devoluciones=None):
     return balance, resumen, veredicto
 
 
-RASTREADOR_VERSION = "v12-2026-09-28"
+RASTREADOR_VERSION = "v13-2026-09-28"
 
 
 def _rastrear_ordenes(conn, ordenes):
@@ -1038,7 +1038,41 @@ def admin_diag_devoluciones():
             # distintos y desde el resultado parseado se ven igual.
             try:
                 from falabella import llamar_api_falabella as _lfa, obtener_ordenes_falabella as _ofa2
-                _ords = _ofa2(estado="returned", dias=90, limit=1) or []
+                # TODAS las ordenes, no la primera. Mirar una sola me hizo
+                # concluir que Falabella no entrega la razon de devolucion, y
+                # su propio portal la muestra: venia vacia en ESA orden.
+                _ords = _ofa2(estado="returned", dias=90, limit=100) or []
+                _campos = []
+                for _o in _ords:
+                    _oid2 = str(_o.get("OrderId") or "")
+                    if not _oid2:
+                        continue
+                    _r2 = _lfa("GetOrderItems", params_extra={"OrderId": _oid2},
+                               method="GET", formato="JSON")
+                    _b2 = ((_r2.get("data") or {}).get("SuccessResponse") or {}).get("Body") or {}
+                    _i2 = (_b2.get("OrderItems") or {}).get("OrderItem") or []
+                    if isinstance(_i2, dict):
+                        _i2 = [_i2]
+                    for _it2 in (_i2 if isinstance(_i2, list) else []):
+                        if not isinstance(_it2, dict):
+                            continue
+                        if not str(_it2.get("Status") or "").lower().startswith("return"):
+                            continue
+                        _campos.append({
+                            "orden": str(_o.get("OrderNumber") or _oid2),
+                            "sku": _it2.get("Sku"),
+                            "Status": _it2.get("Status"),
+                            "ReturnStatus": _it2.get("ReturnStatus"),
+                            "Reason": _it2.get("Reason"),
+                            "ReasonDetail": _it2.get("ReasonDetail"),
+                            "ShippingType": _it2.get("ShippingType"),
+                            "UpdatedAt": _it2.get("UpdatedAt"),
+                        })
+                salida["items_devolucion"] = _campos
+                salida["cuantos_con_razon"] = sum(
+                    1 for c in _campos if (c.get("Reason") or c.get("ReasonDetail")))
+                salida["cuantos_con_returnstatus"] = sum(
+                    1 for c in _campos if c.get("ReturnStatus"))
                 if _ords:
                     _oid = str(_ords[0].get("OrderId") or "")
                     _r = _lfa("GetOrderItems", params_extra={"OrderId": _oid},
