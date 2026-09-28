@@ -51,7 +51,8 @@ from woo import actualizar_stock_woo
 from mercadolibre import actualizar_stock_meli
 from falabella import actualizar_stock_falabella_lusync as actualizar_stock_falabella
 from ripley import actualizar_stock_ripley_lusync as actualizar_stock_ripley
-from inventario import (desmarcar_orden_procesada_texto,
+from inventario import (now_chile,
+                        desmarcar_orden_procesada_texto,
                         cargar_productos, guardar_productos, guardar_producto,
                         get_conn, release_conn,
                         registrar_movimiento, cargar_movimientos, cargar_movimientos_hoy,
