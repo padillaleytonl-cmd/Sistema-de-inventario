@@ -782,6 +782,177 @@ def trazar_ajuste_stock():
                             "Mirá 'stock_que_se_publicaria' en cada etapa."})
 
 
+def _diagnostico_orden(movimientos, marcas):
+    """Que hizo una orden con el stock. Devuelve (balance, resumen, veredicto).
+
+    Aparte del route para poder probarla sin base de datos: es la parte que
+    decide si una orden cuadra o si hay unidades descontadas que nunca
+    volvieron, y equivocarse ahi es peor que no tener la herramienta.
+
+    El balance se lleva por SKU y bodega, no por SKU: una venta Full descuenta
+    de la bodega del marketplace y una venta propia de CENTRAL, y sumarlas
+    juntas taparia justo el error que buscamos —reponer en la bodega
+    equivocada da cero en el total y sin embargo esta mal—.
+    """
+    balance = {}
+    for m in movimientos:
+        if not m.get("sku"):
+            continue
+        clave = "%s @ %s" % (m["sku"], m.get("bodega") or "CENTRAL")
+        b = balance.setdefault(clave, {"descontado": 0, "repuesto": 0, "sin_descontar": 0})
+        if m.get("tipo") == "salida":
+            # Lo que de verdad salio de la bodega es lo vendido menos lo que
+            # no habia. Sin restar el faltante, una venta que no alcanzo a
+            # descontar apareceria como un descuadre que no existe.
+            b["descontado"] += max(0, (m.get("cantidad") or 0) - (m.get("faltante") or 0))
+            b["sin_descontar"] += (m.get("faltante") or 0)
+        elif m.get("tipo") == "entrada":
+            b["repuesto"] += (m.get("cantidad") or 0)
+
+    pendiente = {k: v for k, v in balance.items()
+                 if v["descontado"] - v["repuesto"] != 0}
+
+    marcada_venta = any("CANCEL" not in (mk.get("clave") or "").upper() for mk in marcas)
+    marcada_cancel = any("CANCEL" in (mk.get("clave") or "").upper() for mk in marcas)
+    hubo_salida = any(m.get("tipo") == "salida" for m in movimientos)
+    hubo_entrada = any(m.get("tipo") == "entrada" for m in movimientos)
+
+    resumen = {
+        "marcada_como_vendida": marcada_venta,
+        "marcada_como_cancelada": marcada_cancel,
+        "hubo_descuento": hubo_salida,
+        "hubo_reposicion": hubo_entrada,
+        "movimientos_encontrados": len(movimientos),
+    }
+
+    if not movimientos and not marcas:
+        veredicto = ("Lusync no tiene NADA de esta orden: ni movimiento ni marca. "
+                     "Nunca la vio, asi que no toco stock.")
+    elif not hubo_salida and marcada_cancel:
+        veredicto = ("La orden se cancelo sin que la venta se hubiera registrado "
+                     "nunca. NO se desconto stock, asi que no hay nada que reponer. "
+                     "Solo quedo la marca de cancelada.")
+    elif not hubo_salida:
+        veredicto = ("Hay marca pero ningun movimiento de salida: la venta no "
+                     "desconto stock. Si el pedido si se despacho, esto es una "
+                     "venta en limbo.")
+    elif not pendiente:
+        veredicto = ("Cuadra: lo que se desconto se repuso completo. El stock esta "
+                     "donde corresponde.")
+    else:
+        detalle = "; ".join(
+            "%s: %s %d unidades" % (
+                k,
+                "faltan por reponer" if v["descontado"] - v["repuesto"] > 0 else "se repusieron de mas",
+                abs(v["descontado"] - v["repuesto"]))
+            for k, v in pendiente.items())
+        veredicto = "DESCUADRE. " + detalle
+
+    return balance, resumen, veredicto
+
+
+@app.route("/admin/lusync/ordenes/rastrear")
+def admin_rastrear_orden():
+    """Todo lo que Lusync sabe de una orden, y que hizo con el stock.
+
+    Uso:
+      /admin/lusync/ordenes/rastrear?orden=3253331503
+      /admin/lusync/ordenes/rastrear?orden=3253331503,3140599511
+
+    Responde tres preguntas: si la venta descontó stock, si algo se repuso, y
+    si quedó un descuadre, de qué bodega y cuántas unidades.
+
+    SOLO LEE. No escribe en ninguna tabla.
+    """
+    bypass_token = _admin_bypass_token()
+    token = request.args.get("token", "")
+    if not (session.get("logged") or session.get("is_lusync_admin")
+            or (token and token == bypass_token)):
+        return redirect("/admin/lusync/login")
+
+    from inventario import get_conn, release_conn
+
+    ordenes = [o.strip() for o in (request.args.get("orden", "") or "").split(",") if o.strip()]
+    if not ordenes:
+        return jsonify({"error": "Falta ?orden=NUMERO (puedes pasar varios separados por coma)"}), 400
+
+    # Los prefijos con que cada canal marca sus ordenes. 'PA-' y 'ML-' son de
+    # la migracion vieja y siguen apareciendo en datos antiguos.
+    PREFIJOS = ["", "FALABELLA-", "PARIS-", "PA-", "MELI-", "ML-", "WALMART-", "WM-",
+                "RIPLEY-", "RP-", "WOO-", "WC-", "HITES-"]
+
+    salida = {"generado": str(now_chile()), "ordenes": []}
+
+    conn = get_conn(tenant_id=1, is_admin=True)
+    try:
+        for num in ordenes:
+            info = {"orden": num, "movimientos": [], "marcas": [], "alertas": [],
+                    "stock_actual": {}}
+
+            with conn.cursor() as cur:
+                # ── Movimientos. Se busca por orden_id y por numero_orden,
+                # y con los prefijos, porque no todos los canales guardan igual.
+                variantes = [p + num for p in PREFIJOS]
+                cur.execute("""
+                    SELECT id, tipo, sku, nombre, cantidad, COALESCE(faltante,0),
+                           COALESCE(motivo,''), COALESCE(usuario,''), COALESCE(canal,''),
+                           TO_CHAR(fecha,'DD/MM/YYYY HH24:MI'),
+                           COALESCE(bodega_codigo,'CENTRAL'),
+                           stock_antes, stock_despues,
+                           COALESCE(origen_registro,''), COALESCE(orden_id,'')
+                      FROM movimientos
+                     WHERE orden_id = ANY(%s) OR numero_orden = ANY(%s)
+                     ORDER BY fecha ASC, id ASC
+                """, (variantes, variantes))
+                for r in cur.fetchall():
+                    info["movimientos"].append({
+                        "id": r[0], "tipo": r[1], "sku": r[2], "producto": r[3],
+                        "cantidad": r[4], "faltante": r[5], "motivo": r[6],
+                        "usuario": r[7], "canal": r[8], "fecha": r[9],
+                        "bodega": r[10], "stock_antes": r[11], "stock_despues": r[12],
+                        "origen": r[13], "orden_id_guardado": r[14],
+                    })
+
+                # ── Marcas de procesada, incluida la de cancelacion.
+                variantes_marca = variantes + [p + "CANCEL-" + num for p in PREFIJOS]
+                cur.execute("""SELECT order_id_texto, TO_CHAR(fecha,'DD/MM/YYYY HH24:MI')
+                                 FROM ordenes_procesadas
+                                WHERE order_id_texto = ANY(%s)
+                                ORDER BY fecha ASC""", (variantes_marca,))
+                info["marcas"] = [{"clave": r[0], "fecha": r[1]} for r in cur.fetchall()]
+
+                # ── Alertas
+                cur.execute("""SELECT tipo, titulo, COALESCE(sku,''), leida,
+                                      TO_CHAR(fecha,'DD/MM/YYYY HH24:MI')
+                                 FROM alertas
+                                WHERE orden_id = ANY(%s)
+                                ORDER BY fecha ASC""", (variantes,))
+                info["alertas"] = [{"tipo": r[0], "titulo": r[1], "sku": r[2],
+                                    "leida": r[3], "fecha": r[4]} for r in cur.fetchall()]
+
+                # ── Stock de hoy de los SKU involucrados
+                skus = sorted({m["sku"] for m in info["movimientos"] if m["sku"]})
+                if skus:
+                    cur.execute("""SELECT sku, bodega_codigo, cantidad
+                                     FROM stock_bodega
+                                    WHERE sku = ANY(%s) AND cantidad <> 0
+                                    ORDER BY sku, bodega_codigo""", (skus,))
+                    for sk, bod, cant in cur.fetchall():
+                        info["stock_actual"].setdefault(sk, {})[bod] = int(cant)
+
+            balance, resumen, veredicto = _diagnostico_orden(
+                info["movimientos"], info["marcas"])
+            info["balance"] = balance
+            info["resumen"] = resumen
+            info["veredicto"] = veredicto
+
+            salida["ordenes"].append(info)
+    finally:
+        release_conn(conn)
+
+    return jsonify(salida)
+
+
 @app.route("/admin/lusync/ventas/faltantes")
 def admin_ventas_faltantes():
     """Ventas registradas que NO alcanzaron a descontar stock.
