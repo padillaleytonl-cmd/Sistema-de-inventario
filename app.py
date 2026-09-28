@@ -2396,7 +2396,9 @@ def _sync_walmart_automatico():
                         print(f"[Scheduler] {customer_order_id} {tipo_str}: {sku_lusync} {_efecto}")
 
                         # Sync a otros canales SOLO si fue Seller (afectó Central)
-                        if not es_wfs:
+                        # y solo si la venta se registro: si no, el stock no
+                        # cambio y no hay nada que anunciar.
+                        if not es_wfs and resultado.get("ok"):
                             stock_total = resultado.get("stock_despues", 0)
                             sincronizar_stock_marketplaces(sku_lusync, stock_total, contexto="walmart_orden_bg")
                         # Solo contar como descontado si el movimiento se registró de
@@ -3370,11 +3372,21 @@ def _sync_paris_automatico():
                             origen_registro="scheduler"
                         )
                         _asegurar_fecha_compra("Paris", sub_order, fecha_compra_pa, sku=sku_lusync)
-                        sincronizar_stock_marketplaces(
-                            sku_lusync, resultado.get("stock_despues", 0),
-                            contexto="paris_orden_bg"
-                        )
-                        items_descontados.append(f"{seller_sku} x{cantidad}")
+                        # Solo si el movimiento se registro de verdad. Antes se
+                        # agregaba siempre, y mas abajo "if items_descontados"
+                        # marca la orden como procesada: una venta que no se
+                        # registro quedaba marcada, sin reintento y sin rastro.
+                        # Publicar tampoco corresponde si no hubo venta: el
+                        # stock no cambio.
+                        if resultado.get("ok"):
+                            sincronizar_stock_marketplaces(
+                                sku_lusync, resultado.get("stock_despues", 0),
+                                contexto="paris_orden_bg"
+                            )
+                            items_descontados.append(f"{seller_sku} x{cantidad}")
+                        else:
+                            errores.append(f"Paris {sub_order}/{sku_lusync}: "
+                                           f"{resultado.get('advertencia') or 'no registrado'}")
                         print(f"[Scheduler Paris] {sub_order} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado.get('bodega','?')}")
 
                 if items_descontados:
@@ -3664,11 +3676,17 @@ def _sync_ripley_automatico():
                         origen_registro="scheduler"
                     )
                     _asegurar_fecha_compra("Ripley", order_id, fecha_compra_rp, sku=sku_lusync)
-                    sincronizar_stock_marketplaces(
-                        sku_lusync, resultado.get("stock_despues", 0),
-                        contexto="ripley_orden_bg"
-                    )
-                    items_descontados.append(f"{shop_sku} x{cantidad}")
+                    # Mismo caso que Paris: marcar una orden cuyo movimiento no
+                    # se escribio es perder la venta en silencio.
+                    if resultado.get("ok"):
+                        sincronizar_stock_marketplaces(
+                            sku_lusync, resultado.get("stock_despues", 0),
+                            contexto="ripley_orden_bg"
+                        )
+                        items_descontados.append(f"{shop_sku} x{cantidad}")
+                    else:
+                        errores.append(f"Ripley {order_id}/{sku_lusync}: "
+                                       f"{resultado.get('advertencia') or 'no registrado'}")
                     print(f"[Scheduler Ripley] {order_id} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado.get('bodega','?')}")
 
                 if items_descontados:
@@ -4818,6 +4836,15 @@ def entrada():
     if not sku_input:
         return {"error": "SKU obligatorio"}, 400
 
+    # Sin esto, int(data["cantidad"]) aceptaba un 0 —movimiento vacio en el
+    # historial— y un negativo, que hacia lo contrario de lo que dice el boton.
+    try:
+        _cant_in = int(data.get("cantidad"))
+    except (TypeError, ValueError):
+        return {"error": "Cantidad inválida"}, 400
+    if _cant_in <= 0:
+        return {"error": "La cantidad debe ser mayor que cero"}, 400
+
     registrar_audit(session.get("usuario","Sistema"), request.remote_addr, "entrada_manual",
                    entidad="productos", detalle=f"sku={sku_input} cant={data.get('cantidad')} doc={documento}")
 
@@ -4903,6 +4930,17 @@ def salida():
     sku_input = (data.get("sku") or "").strip()
     if not sku_input:
         return {"error": "SKU obligatorio"}, 400
+
+    # Igual que en la entrada: int(data["cantidad"]) aceptaba un 0 —que
+    # escribe un movimiento vacio— y un negativo, que SUMA stock desde el
+    # boton de salida. El chequeo de stock de mas abajo no los atrapa: con
+    # cantidad 0 o negativa siempre pasa.
+    try:
+        _cant_out = int(data.get("cantidad"))
+    except (TypeError, ValueError):
+        return {"error": "Cantidad inválida"}, 400
+    if _cant_out <= 0:
+        return {"error": "La cantidad debe ser mayor que cero"}, 400
 
     canal_detectado = _detectar_canal_por_oc(oc) or "Manual"
     registrar_audit(session.get("usuario","Sistema"), request.remote_addr, "salida_manual",
@@ -13942,7 +13980,7 @@ def admin_sync_meli_rango():
                             sku_lusync = sku_seller
                         
                         try:
-                            descontar_venta_inteligente(
+                            _res_rango = descontar_venta_inteligente(
                                 sku=sku_lusync,
                                 cantidad=cantidad,
                                 canal="mercadolibre",
@@ -13950,7 +13988,12 @@ def admin_sync_meli_rango():
                                 orden_id=order_id,
                                 fecha_compra_marketplace=fecha_compra
                             )
-                            items_descontados.append({"sku_canal": sku_seller, "sku_lusync": sku_lusync, "cantidad": cantidad})
+                            # Contar solo lo que de verdad quedo escrito.
+                            if _res_rango and _res_rango.get("ok"):
+                                items_descontados.append({"sku_canal": sku_seller, "sku_lusync": sku_lusync, "cantidad": cantidad})
+                            else:
+                                errores.append(f"{order_id}/{sku_seller}: "
+                                               f"{(_res_rango or {}).get('advertencia') or 'no registrado'}")
                         except Exception as e:
                             errores.append(f"{order_id}/{sku_seller}→{sku_lusync}: {str(e)[:100]}")
                     

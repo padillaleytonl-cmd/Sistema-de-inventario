@@ -2187,7 +2187,8 @@ def init_alertas():
 # cada venta dispararia una alerta nueva. El detalle exacto —que orden, cuanto
 # se debe— vive en movimientos.faltante, que es el registro; la alerta solo
 # avisa que hay que ir a mirar.
-TIPOS_QUE_SE_REPITEN = ("sku_sin_mapeo", "error_sync", "venta_sin_stock")
+TIPOS_QUE_SE_REPITEN = ("sku_sin_mapeo", "error_sync", "venta_sin_stock",
+                        "venta_cantidad_invalida")
 
 
 def crear_alerta(tipo, titulo, mensaje="", canal=None, orden_id=None, sku=None, enviar_email=True):
@@ -3019,6 +3020,47 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
         dict con: {ok, bodega_codigo, stock_bodega_antes, stock_bodega_despues, sku, cantidad}
     """
     bodega = determinar_bodega_para_canal(canal, fulfillment=fulfillment)
+
+    # Una venta de cero unidades no existe.
+    #
+    # Guardarla es la trampa que ya nos costo una venta: la fila queda con el
+    # orden_id, uniq_venta_orden_sku_tipo la da por registrada y esa orden no
+    # se descuenta nunca mas. Inventar un 1 para salir del paso es peor: mueve
+    # stock real por un dato que no tenemos.
+    #
+    # Asi que no se registra y se dice que no se pudo. El sync no marca la
+    # orden, la auditoria de ordenes la ve en limbo —que es exactamente lo que
+    # es— y queda a la vista hasta que alguien la resuelva.
+    try:
+        cantidad = int(cantidad)
+    except (TypeError, ValueError):
+        cantidad = 0
+    if cantidad <= 0:
+        print(f"[Bodegas] {sku}/{orden_id}: cantidad {cantidad} — no se registra")
+        try:
+            crear_alerta(
+                tipo="venta_cantidad_invalida",
+                titulo=f"Venta sin cantidad válida: {sku}",
+                mensaje=(f"La orden <b>{orden_id or 's/n'}</b> de {canal} llegó con "
+                         f"cantidad <b>{cantidad}</b> para {sku}.<br><br>"
+                         "No se registró ni se descontó stock: no se puede saber "
+                         "cuántas unidades se vendieron. Hay que mirarla en el "
+                         "portal del canal y registrarla a mano."),
+                canal=canal, orden_id=str(orden_id or ""), sku=sku
+            )
+        except Exception as e_al:
+            print(f"[Bodegas] no pude alertar la cantidad invalida de {sku}: {e_al}")
+        # El stock real y no None: hay canales que leen stock_despues para
+        # publicar sin mirar 'ok', y publicar un None es peor que no publicar.
+        try:
+            _st_actual = get_stock_bodega(sku, bodega) or 0
+        except Exception:
+            _st_actual = 0
+        return {"ok": False, "sku": sku, "cantidad_solicitada": cantidad,
+                "cantidad_descontada": 0, "faltante": 0, "bodega": bodega,
+                "stock_antes": _st_actual, "stock_despues": _st_actual,
+                "advertencia": "cantidad_invalida",
+                "error": "La orden llegó con cantidad %s; no se registra." % cantidad}
 
     # IDEMPOTENCIA, ANTES de tocar el stock.
     #
