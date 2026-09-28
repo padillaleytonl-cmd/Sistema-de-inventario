@@ -637,11 +637,17 @@ def obtener_devoluciones_paris(dias=30):
 def obtener_devoluciones_falabella(dias=30):
     """Devoluciones de Falabella. No hay endpoint: son un ESTADO de la orden.
 
-    Comprobado contra la cuenta real el 28-09-2026: de seis estados candidatos
-    el unico que entrega algo es "returned". Los demas —return_ship_by_customer,
-    return_awaiting_for_approval, return_rejected, return_completed, failed—
-    responden 200 con cero. Su documentacion del flujo esta en construccion,
-    asi que esto sale de la API y no de la guia.
+    Los estados son los que documenta GetOrderItems:
+
+        return_shipped_by_customer    el cliente ya la despacho
+        return_waiting_for_approval   espera que la aprobemos
+        return_rejected               rechazada
+        returned                      Falabella recibio el producto
+
+    Una version anterior de este lector traia solo "returned" porque los otros
+    dos se probaron con el nombre mal escrito —return_ship_by_customer y
+    return_awaiting_for_approval, que no existen— y devolvian cero. Eso dejaba
+    fuera justo las que piden accion.
 
     La orden solo trae cabecera, sin SKU ni motivo ni plazo, asi que los items
     se piden aparte con GetOrderItems. No se usa obtener_items_orden_falabella
@@ -660,7 +666,22 @@ def obtener_devoluciones_falabella(dias=30):
         # Igual que en Paris: una devolucion vive semanas, asi que la ventana
         # tiene piso de 90 dias para no perder las que siguen en curso.
         ventana = max(int(dias or 30), 90)
-        ordenes = obtener_ordenes_falabella(estado="returned", dias=ventana, limit=100) or []
+
+        # Los cuatro estados del ciclo de devolucion. Una orden puede aparecer
+        # en mas de una consulta si tiene items en estados distintos, asi que
+        # se deduplica por OrderId antes de pedir los items.
+        ESTADOS_DEV = ["return_shipped_by_customer", "return_waiting_for_approval",
+                       "return_rejected", "returned"]
+        ordenes, vistas = [], set()
+        for est in ESTADOS_DEV:
+            try:
+                for o in (obtener_ordenes_falabella(estado=est, dias=ventana, limit=100) or []):
+                    oid = str(o.get("OrderId") or "")
+                    if oid and oid not in vistas:
+                        vistas.add(oid)
+                        ordenes.append(o)
+            except Exception as e:
+                print(f"[Returns Falabella] estado {est}: {e}")
 
         for o in ordenes:
             order_id = str(o.get("OrderId") or "").strip()
@@ -687,6 +708,14 @@ def obtener_devoluciones_falabella(dias=30):
             for it in crudos:
                 if not isinstance(it, dict):
                     continue
+                # Solo los items que de verdad estan en devolucion. La orden
+                # aparece en la consulta si CUALQUIERA de sus items lo esta,
+                # asi que sin este filtro una orden de dos productos donde se
+                # devolvio uno generaria tambien una "devolucion" del que el
+                # cliente se quedo.
+                est_it = (it.get("Status") or "").strip().lower()
+                if not est_it.startswith("return"):
+                    continue
                 sku = (it.get("Sku") or it.get("SellerSku") or "").strip()
                 if not sku:
                     continue
@@ -695,7 +724,15 @@ def obtener_devoluciones_falabella(dias=30):
 
             for sku, g in por_sku.items():
                 it = g["item"]
-                estado_canal = str(it.get("Status") or "returned")
+                # Dos estados distintos: el del item en el flujo de la orden, y
+                # el de la solicitud de devolucion en si. La documentacion
+                # define ReturnStatus como "Estado de la solicitud de
+                # devolucion, si la hay (por ejemplo, Pendiente, Aprobada)".
+                # Se prefiere ese cuando viene, porque es el que dice si
+                # Falabella ya la aprobo.
+                estado_item = str(it.get("Status") or "returned")
+                estado_dev = str(it.get("ReturnStatus") or "").strip()
+                estado_canal = f"{estado_item} · {estado_dev}" if estado_dev else estado_item
                 salida.append({
                     "canal": "falabella",
                     # Falabella no da id de devolucion: se arma uno estable.
@@ -706,12 +743,20 @@ def obtener_devoluciones_falabella(dias=30):
                     "sku_canal": sku,
                     "producto_nombre": it.get("Name"),
                     "cantidad": g["cant"],
-                    "estado": _norm_estado("falabella", estado_canal),
+                    # Se normaliza por el estado del ITEM: sus valores estan
+                    # documentados y son estables. ReturnStatus trae texto
+                    # libre en español ("Pendiente", "Aprobada") y no sirve
+                    # para mapear, solo para mostrar.
+                    "estado": _norm_estado("falabella", estado_item),
                     "estado_canal": estado_canal,
-                    # Los nombres de campo van en cascada porque no estan
-                    # documentados; lo que no se encuentre queda en "raw".
-                    "motivo": (it.get("Reason") or it.get("ReasonDetail")
-                               or it.get("CancelReason") or o.get("Remarks") or None),
+                    # Reason y ReasonDetail estan documentados como "Motivo de
+                    # cancelacion o devolucion" y "Razon detallada". Se
+                    # combinan cuando vienen los dos: el primero es la
+                    # categoria y el segundo el texto del cliente.
+                    "motivo": " — ".join(
+                        [x for x in [(it.get("Reason") or "").strip(),
+                                     (it.get("ReasonDetail") or "").strip()] if x]
+                    ) or (o.get("Remarks") or None),
                     "tipo": "return",
                     "monto_reembolso": (it.get("PaidPrice") or it.get("ItemPrice")
                                         or o.get("Price")),
@@ -721,9 +766,14 @@ def obtener_devoluciones_falabella(dias=30):
                     # UpdatedAt de la orden es cuando paso a "returned", que es
                     # lo mas cercano a la fecha de la solicitud que entrega.
                     "fecha_solicitud": _parse_fecha(o.get("UpdatedAt") or o.get("CreatedAt")),
-                    "fecha_limite": _plazo_reclamo(
-                        _parse_fecha(it.get("Deadline") or it.get("ReturnDeadline")),
-                        None),
+                    # Falabella no entrega plazo: la lista de campos de
+                    # GetOrderItems no trae ninguna fecha limite. Y "returned"
+                    # significa, textual, "cuando Falabella recibe el producto
+                    # que el cliente ha devuelto": es la llegada a FALABELLA,
+                    # no a nuestra bodega. El reloj de 72 horas no se puede
+                    # arrancar desde aca — falta la señal de llegada propia,
+                    # que esta API no da.
+                    "fecha_limite": None,
                     "fecha_resolucion": None,
                     "fecha_actualizacion_canal": _parse_fecha(o.get("UpdatedAt")),
                     "acciones_disponibles": [],

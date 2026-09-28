@@ -878,7 +878,7 @@ def _diagnostico_orden(movimientos, marcas, devoluciones=None):
     return balance, resumen, veredicto
 
 
-RASTREADOR_VERSION = "v10-2026-09-28"
+RASTREADOR_VERSION = "v11-2026-09-28"
 
 
 def _rastrear_ordenes(conn, ordenes):
@@ -1005,9 +1005,12 @@ def admin_diag_devoluciones():
             # estados candidatos porque su documentacion del flujo esta en
             # construccion y los nombres no estan publicados.
             from falabella import obtener_ordenes_falabella as _ofa
-            ESTADOS = ["returned", "return_ship_by_customer",
-                       "return_awaiting_for_approval", "return_rejected",
-                       "return_completed", "failed"]
+            # Los cuatro que documenta GetOrderItems. Antes habia dos
+            # inventados —return_ship_by_customer y
+            # return_awaiting_for_approval— que devolvian cero y me hicieron
+            # concluir que solo existia "returned".
+            ESTADOS = ["returned", "return_shipped_by_customer",
+                       "return_waiting_for_approval", "return_rejected"]
             salida["api"] = []
             for est in ESTADOS:
                 intento = {"ruta": "GetOrders?Status=%s" % est}
