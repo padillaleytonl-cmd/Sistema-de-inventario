@@ -878,7 +878,7 @@ def _diagnostico_orden(movimientos, marcas, devoluciones=None):
     return balance, resumen, veredicto
 
 
-RASTREADOR_VERSION = "v9-2026-09-28"
+RASTREADOR_VERSION = "v10-2026-09-28"
 
 
 def _rastrear_ordenes(conn, ordenes):
@@ -1179,9 +1179,16 @@ def admin_diag_devoluciones():
                                     "por esta via. Puede ser otro endpoint u otro filtro: "
                                     "comparar 'primer_registro' con lo que se ve en el portal.")
         elif not guardadas:
-            salida["conclusion"] = ("El parser SI trae devoluciones pero no hay ninguna "
-                                    "guardada: el problema esta en la escritura "
-                                    "(probablemente RLS o un error tragado en el sync).")
+            # Cuidado con afirmar que la escritura falla: si el lector se acaba
+            # de agregar, el job de sync —cada 30 min— puede no haber corrido
+            # todavia, y eso se ve exactamente igual. Se dice lo que se sabe y
+            # se separa de lo que habria que comprobar.
+            salida["conclusion"] = ("El parser trae %d devoluciones y no hay ninguna "
+                                    "guardada. Si el lector de este canal se agrego hace "
+                                    "poco, es lo esperable: el sync corre cada 30 minutos. "
+                                    "Vuelve a mirar despues de la proxima pasada; si sigue "
+                                    "en cero, entonces si el problema es de escritura."
+                                    % par.get("devoluciones_parseadas", 0))
         else:
             salida["conclusion"] = ("Trae %d y hay %d guardadas. Si falta una en concreto, "
                                     "comparar su order_id con el de la muestra."
