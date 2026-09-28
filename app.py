@@ -7416,32 +7416,37 @@ def devoluciones_dashboard():
     finally:
         release_conn(conn)
 
-    def _clasificar(estado, fecha_limite):
+    def _clasificar(estado, llegada):
+        # Tres etapas. "Solicitada" no existe como etapa: una devolucion
+        # pedida que todavia no llega esta "En camino". Lo que decide si esta
+        # en nuestra bodega es la LLEGADA —que informa la API o se pistolea—,
+        # no si hay plazo: hay canales que no dan plazo y el producto igual
+        # esta aca.
         if estado in ("resuelta", "cancelada"):
             return "lista"
-        if estado == "en_transito":
-            return "camino"
-        return "bodega" if fecha_limite else "solicitada"
+        return "bodega" if llegada else "camino"
 
-    lista, resumen = [], {"bodega": 0, "camino": 0, "solicitada": 0, "lista": 0,
-                          "vencidas": 0, "vencen_hoy": 0}
+    lista, resumen = [], {"bodega": 0, "camino": 0, "lista": 0,
+                          "vencidas": 0, "vencen_hoy": 0, "bodega_sin_plazo": 0}
     por_canal = {}
     for (canal, rid, oid, sku, skuc, nombre, cant, estado, estadoc, motivo,
          monto, track, fsol, flim, url, tipo, decision, dec_user, dec_fecha,
          llegada) in filas:
-        grupo = _clasificar(estado, flim)
+        grupo = _clasificar(estado, llegada)
         horas = None
         if flim:
             horas = int((flim - ahora).total_seconds() // 3600)
         resumen[grupo] += 1
-        if horas is not None and grupo == "bodega":
-            if horas < 0:
+        if grupo == "bodega":
+            if horas is None:
+                resumen["bodega_sin_plazo"] += 1
+            elif horas < 0:
                 resumen["vencidas"] += 1
             elif horas < 24:
                 resumen["vencen_hoy"] += 1
         if grupo != "lista":
             c = por_canal.setdefault(canal, {"canal": canal, "bodega": 0,
-                                             "camino": 0, "solicitada": 0, "total": 0})
+                                             "camino": 0, "total": 0})
             c[grupo] += 1
             c["total"] += 1
         lista.append({
@@ -7492,14 +7497,12 @@ def devoluciones_mkt_llegada():
     if not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
 
-    from datetime import timedelta as _td
     datos = request.json or {}
     codigo = (datos.get("codigo") or "").strip()
     if not codigo:
         return jsonify({"ok": False, "error": "Falta el código"}), 400
 
     ahora = now_chile().replace(tzinfo=None)
-    limite = ahora + _td(hours=72)
 
     conn = get_conn(tenant_id=1)
     try:
@@ -7533,13 +7536,13 @@ def devoluciones_mkt_llegada():
                             "horas_restantes": horas,
                             "mensaje": "Ya estaba marcada como recibida; el plazo no se reinicia"})
 
-        # COALESCE: si el canal ya dio un plazo, ese manda.
+        # Solo la llegada. El plazo es el que informe la API del canal; si no
+        # informa ninguno, no se inventa. Antes se ponia ahora + 72 horas.
         cur.execute("""UPDATE devoluciones_marketplace
-                          SET fecha_llegada_bodega = %s,
-                              fecha_limite = COALESCE(fecha_limite, %s)
+                          SET fecha_llegada_bodega = %s
                         WHERE canal = %s AND return_id = %s
                     RETURNING fecha_limite""",
-                    (ahora, limite, canal, rid))
+                    (ahora, canal, rid))
         nuevo_limite = (cur.fetchone() or [None])[0]
         conn.commit()
         cur.close()
@@ -7552,8 +7555,9 @@ def devoluciones_mkt_llegada():
                     "llego": ahora.strftime("%d/%m/%Y %H:%M"),
                     "vence": nuevo_limite.strftime("%d/%m/%Y %H:%M") if nuevo_limite else None,
                     "horas_restantes": horas,
-                    "plazo_del_canal": bool(flim),
-                    "mensaje": "Recibida — el plazo empieza ahora"})
+                    "plazo_del_canal": bool(nuevo_limite),
+                    "mensaje": ("Recibida" if nuevo_limite
+                                else "Recibida · el canal no informa plazo")})
 
 
 @app.route("/devoluciones-mkt/decision", methods=["POST"])

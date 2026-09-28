@@ -3047,7 +3047,7 @@ tbody td {
 
       <div style="display:flex;align-items:center;gap:8px;background:var(--info-bg);border-radius:var(--radius);padding:9px 12px;font-size:12px;color:var(--muted);margin-bottom:12px;">
         <span style="color:#185FA5;">ⓘ</span>
-        <span>Desde que recibes el producto tienes <b style="font-weight:500;">72 horas</b> para responder. El reloj parte cuando pistoleas el paquete.</span>
+        <span>El plazo que ves es <b style="font-weight:500;">el que informa cada canal</b>. Si el canal no lo entrega, no se muestra uno calculado por nosotros.</span>
       </div>
 
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
@@ -3089,7 +3089,7 @@ tbody td {
             onkeydown="if(event.key==='Enter') lookupPistoleoDev(this.value)">
           <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:14px;">⊡</span>
         </div>
-        <span style="font-size:11px;color:var(--muted);">Un código DEV- abre su ficha. Cualquier otro —N° de orden, tracking o SKU— marca que el paquete llegó y arranca el plazo de 72 h</span>
+        <span style="font-size:11px;color:var(--muted);">Un código DEV- abre su ficha. Cualquier otro —N° de orden, tracking o SKU— marca que el paquete llegó a la bodega</span>
       </div>
     </div>
 
@@ -6265,9 +6265,9 @@ function eliminarDevolucion(){
 let _pistoleoDevId = null;
 
 // Marca que el paquete de una devolucion del canal llego a nuestra bodega.
-// Para Falabella es la unica forma de arrancar el plazo de 72 horas: su
-// estado "returned" significa que llego a FALABELLA, no a nosotros, y su API
-// no entrega ninguna fecha limite.
+// Solo registra la llegada, que decide la etapa "En nuestra bodega". NO pone
+// plazo: el plazo es el que informa la API de cada canal, y si el canal no
+// lo entrega —Paris y Falabella no lo hacen— no se inventa uno.
 function marcarLlegadaDevolucion(codigo){
   fetch('/devoluciones-mkt/llegada', {
     method: 'POST',
@@ -6287,8 +6287,9 @@ function marcarLlegadaDevolucion(codigo){
       toast('Ya estaba recibida el ' + d.llego + ' · ' + prod +
             (d.horas_restantes !== null ? ' · quedan ' + d.horas_restantes + ' h' : ''), 'warn');
     } else {
-      toast('Recibida: ' + prod + ' · vence ' + (d.vence || '—') +
-            (d.plazo_del_canal ? ' (plazo del canal)' : ' (72 h desde ahora)'));
+      toast('Recibida: ' + prod + (d.plazo_del_canal
+            ? ' · vence ' + d.vence + ' (plazo del canal)'
+            : ' · el canal no informa plazo'));
     }
     if(typeof dashCargar === 'function') dashCargar();
     if(typeof cargarDevoluciones === 'function') cargarDevoluciones('todas');
@@ -6954,9 +6955,10 @@ let _devSelItem = null;   // item seleccionado del lookup
 //   camino    en_transito
 //   revision  el reloj corre       -> esta en nuestra bodega, hay que decidir
 //   completa  resuelta o cancelada
+// Tres etapas. No hay "Solicitada": lo pedido que todavia no llega esta En
+// camino. En nuestra bodega es lo que ya llego y se puede reclamar.
 const DASH_TABS = [
-  {k:'revision', t:'Revisión pendiente'}, {k:'punto', t:'En punto de devolución'},
-  {k:'camino', t:'En camino'}, {k:'completa', t:'Completadas'}
+  {k:'revision', t:'En nuestra bodega'}, {k:'camino', t:'En camino'}, {k:'completa', t:'Completadas'}
 ];
 const DASH_CANAL = {
   paris:{t:'París',c:'#0C447C'}, walmart:{t:'Walmart',c:'#0071CE'},
@@ -6968,9 +6970,8 @@ let _dashDatos = null, _dashTab = 'revision';
 function _dashIso(d){ return d.toISOString().slice(0,10); }
 function _dashEtapa(r){
   if(r.grupo === 'lista') return 'completa';
-  if(r.grupo === 'camino') return 'camino';
   if(r.grupo === 'bodega') return 'revision';
-  return 'punto';
+  return 'camino';
 }
 
 function dashCargar(){
@@ -7011,8 +7012,12 @@ function dashTab(k){ _dashTab = k; dashRender(); }
 
 function _dashPlazo(r){
   const h = r.horas_restantes;
+  // Sin plazo de la API no se muestra ninguno: un reloj que el canal no
+  // respalda da seguridad falsa.
   if(h === null || h === undefined)
-    return '<span style="font-size:11px;color:var(--hint);">Sin recibir</span>';
+    return r.grupo === 'bodega'
+      ? '<span style="font-size:11px;color:var(--muted);">El canal no informa plazo</span>'
+      : '<span style="font-size:11px;color:var(--hint);">—</span>';
   if(h < 0)
     return `<span style="font-size:11px;padding:3px 9px;border-radius:999px;background:var(--danger-bg);color:#A32D2D;white-space:nowrap;">${Math.abs(h)} h tarde</span>`;
   const bg = h < 24 ? 'var(--warn-bg)' : 'var(--bg2)', co = h < 24 ? '#854F0B' : 'var(--muted)';

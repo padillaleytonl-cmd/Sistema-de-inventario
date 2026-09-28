@@ -167,28 +167,23 @@ def traducir_estado_canal(canal, estado_crudo):
     return str(estado_crudo).replace("_", " ").strip().capitalize()
 
 
-# Horas que hay para reclamar una devolucion desde que llega a nuestra bodega.
-# Misma regla en los cinco canales.
-PLAZO_RECLAMO_HORAS = 72
+def _plazo_reclamo(plazo_del_canal, llegada_a_bodega=None):
+    """El plazo para responder una devolucion: el que informa la API del canal.
 
+    Solo ese. Si el canal no lo entrega se devuelve None y la pantalla dice
+    que el canal no informa plazo. No se calcula nada de nuestro lado.
 
-def _plazo_reclamo(plazo_del_canal, llegada_a_bodega):
-    """Cuando vence el plazo para reclamar. Devuelve datetime o None.
+    Una version anterior caia a "llegada + 72 horas" cuando el canal no daba
+    plazo. Era un tiempo definido por nosotros —y en horas corridas, cuando
+    Falabella habla de horas habiles—, y como el upsert lo conservaba con
+    COALESCE, una vez guardado sobrevivia a todas las sincronizaciones. Un
+    reloj que el canal no respalda da seguridad falsa, que es peor que no
+    tener reloj.
 
-    Se prefiere SIEMPRE el plazo que informa el canal: es el que vale si hay
-    una disputa, y el que el canal va a mirar. El calculo es solo el respaldo
-    para los canales que no lo entregan —hoy, Paris—, y usa la regla del
-    negocio: 72 horas desde la llegada a nuestra bodega.
-
-    Devolver None es correcto y significa algo: todavia no hay reloj porque
-    el producto no ha llegado. No es lo mismo que "sin plazo".
+    llegada_a_bodega se ignora a proposito; queda en la firma para no romper
+    a quien la llame.
     """
-    if plazo_del_canal:
-        return plazo_del_canal
-    if llegada_a_bodega:
-        from datetime import timedelta as _td
-        return llegada_a_bodega + _td(hours=PLAZO_RECLAMO_HORAS)
-    return None
+    return plazo_del_canal or None
 
 
 def _norm_estado(canal, estado_crudo):
@@ -503,7 +498,10 @@ def _estado_devolucion_paris(o):
         return "abierta", "en_nuestra_bodega"
     if o.get("storeReturnDate") or o.get("dispatchDate"):
         return "en_transito", "en_camino"
-    return "abierta", "solicitada"
+    # Pedida y todavia sin moverse: para nosotros ya esta "En camino". No
+    # existe una etapa "solicitada" aparte; el propio portal de Paris agrupa
+    # estas como "Solicitudes por recibir: que van en camino a tu bodega".
+    return "en_transito", "en_camino"
 
 
 def obtener_devoluciones_paris(dias=30):
@@ -607,11 +605,13 @@ def obtener_devoluciones_paris(dias=30):
                 "fecha_solicitud": _parse_fecha(
                     o.get("originReturnDate") or o.get("storeReturnDate")
                     or o.get("dispatchDate") or o.get("originOrderDate")),
-                # /v2/returns/full no expone plazo, asi que se calcula desde
-                # la llegada a bodega. Mientras el producto no llegue, esto es
-                # None a proposito: el reloj todavia no arranco.
-                "fecha_limite": _plazo_reclamo(
-                    None, _parse_fecha(o.get("warehouseArrivalDate"))),
+                # /v2/returns/full no trae ningun plazo, asi que NO hay plazo.
+                # Antes se calculaba desde la llegada a bodega; eso era un
+                # tiempo nuestro, no de Paris.
+                "fecha_limite": None,
+                # La llegada si la informa Paris, y es un hecho, no un plazo:
+                # decide si la devolucion esta "En nuestra bodega".
+                "fecha_llegada_bodega": _parse_fecha(o.get("warehouseArrivalDate")),
                 "fecha_resolucion": _parse_fecha(o.get("finalStatusDate")),
                 "fecha_actualizacion_canal": _parse_fecha(ultima),
                 "acciones_disponibles": [],
@@ -860,9 +860,10 @@ def upsert_devolucion(dev, tenant_id=None):
                  tracking_number, transportista, fecha_solicitud, fecha_limite,
                  fecha_resolucion, fecha_actualizacion_canal, dias_restantes,
                  requiere_accion, acciones_disponibles, raw_json,
-                 primera_deteccion, ultima_sincronizacion, tenant_id, url_gestion)
+                 primera_deteccion, ultima_sincronizacion, tenant_id, url_gestion,
+                 fecha_llegada_bodega)
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-                    NOW(), NOW(), %s, %s)
+                    NOW(), NOW(), %s, %s, %s)
             ON CONFLICT (canal, return_id) DO UPDATE SET
                 order_id = EXCLUDED.order_id,
                 sku = COALESCE(EXCLUDED.sku, devoluciones_marketplace.sku),
@@ -877,7 +878,14 @@ def upsert_devolucion(dev, tenant_id=None):
                 moneda = EXCLUDED.moneda,
                 tracking_number = COALESCE(EXCLUDED.tracking_number, devoluciones_marketplace.tracking_number),
                 transportista = COALESCE(EXCLUDED.transportista, devoluciones_marketplace.transportista),
-                fecha_limite = COALESCE(EXCLUDED.fecha_limite, devoluciones_marketplace.fecha_limite),
+                -- El plazo es el de la API, sin COALESCE: si el canal deja de
+                -- informarlo, se borra. Con COALESCE un plazo calculado por
+                -- nosotros sobrevivia a todas las sincronizaciones.
+                fecha_limite = EXCLUDED.fecha_limite,
+                -- La llegada SI se conserva: puede venir del pistoleo, y la
+                -- sincronizacion no debe borrar lo que se registro a mano.
+                fecha_llegada_bodega = COALESCE(EXCLUDED.fecha_llegada_bodega,
+                                                devoluciones_marketplace.fecha_llegada_bodega),
                 fecha_resolucion = COALESCE(EXCLUDED.fecha_resolucion, devoluciones_marketplace.fecha_resolucion),
                 fecha_actualizacion_canal = EXCLUDED.fecha_actualizacion_canal,
                 dias_restantes = EXCLUDED.dias_restantes,
@@ -894,7 +902,8 @@ def upsert_devolucion(dev, tenant_id=None):
             dev.get("moneda") or "CLP", dev.get("tracking_number"), dev.get("transportista"),
             dev.get("fecha_solicitud"), dev.get("fecha_limite"), dev.get("fecha_resolucion"),
             dev.get("fecha_actualizacion_canal"), dias_restantes, requiere_accion,
-            json.dumps(acciones, ensure_ascii=False), raw_json, tenant_id, url_gestion
+            json.dumps(acciones, ensure_ascii=False), raw_json, tenant_id, url_gestion,
+            dev.get("fecha_llegada_bodega")
         ))
         conn.commit()
         cur.close()
