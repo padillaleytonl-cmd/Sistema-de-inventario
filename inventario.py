@@ -1418,6 +1418,34 @@ def init_devoluciones():
 
 
 @cerrar_conexiones_al_salir
+def asegurar_llegada_bodega():
+    """Columna donde se anota que el paquete llego fisicamente a nuestra bodega.
+
+    Hay canales que no informan la llegada. Falabella es el caso claro: su
+    estado "returned" significa que el producto llego a FALABELLA, no a
+    nosotros, y no entrega ninguna fecha limite. Sin esa señal el plazo de 72
+    horas no puede empezar a correr, asi que la ponemos nosotros al recibir el
+    paquete, con el pistoleo.
+
+    Va en transaccion propia para que un ALTER vecino que falle no se la
+    lleve por delante.
+    """
+    conn = get_conn(is_admin=True)
+    cur = conn.cursor()
+    try:
+        cur.execute("""ALTER TABLE devoluciones_marketplace
+                       ADD COLUMN IF NOT EXISTS fecha_llegada_bodega TIMESTAMP""")
+        conn.commit()
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        print(f"[Devoluciones] no pude asegurar fecha_llegada_bodega: {e}")
+    finally:
+        cur.close(); release_conn(conn)
+
+
 def init_devoluciones_mkt():
     """Tabla de trazabilidad de devoluciones traídas automáticamente desde las
     APIs de cada marketplace (separada de 'devoluciones', que es el registro

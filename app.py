@@ -111,6 +111,8 @@ init_db()
 init_devoluciones()
 try:
     init_devoluciones_mkt()
+    from inventario import asegurar_llegada_bodega
+    asegurar_llegada_bodega()
 except Exception as _e:
     print(f"[init_devoluciones_mkt] {_e}")
 try:
@@ -7423,6 +7425,90 @@ def devoluciones_dashboard():
         "abiertas_fuera_del_rango": fuera,
         "total": len(lista),
     })
+
+
+@app.route("/devoluciones-mkt/llegada", methods=["POST"])
+def devoluciones_mkt_llegada():
+    """Marca que una devolución del canal llegó físicamente a nuestra bodega.
+
+    Es el arranque del plazo de 72 horas para los canales que no informan la
+    llegada. Falabella es el caso: su estado "returned" es la llegada a
+    FALABELLA, no a nosotros, y no entrega fecha límite.
+
+    Se pistolea lo que venga en el paquete — N° de orden, tracking, N° de
+    devolución o SKU — porque quien recibe no sabe cuál de esos le tocó.
+
+    Dos cuidados:
+      - NO pisa el plazo del canal. Si MercadoLibre, Ripley o Walmart ya
+        dieron uno, ese manda: es el que vale en una disputa.
+      - Marcar dos veces no reinicia el reloj. Un paquete se pistolea de más
+        sin querer, y reiniciar escondería un atraso real.
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    from datetime import timedelta as _td
+    datos = request.json or {}
+    codigo = (datos.get("codigo") or "").strip()
+    if not codigo:
+        return jsonify({"ok": False, "error": "Falta el código"}), 400
+
+    ahora = now_chile().replace(tzinfo=None)
+    limite = ahora + _td(hours=72)
+
+    conn = get_conn(tenant_id=1)
+    try:
+        cur = conn.cursor()
+        cur.execute("""SELECT canal, return_id, COALESCE(order_id,''),
+                              COALESCE(producto_nombre,''), COALESCE(sku_canal,''),
+                              fecha_llegada_bodega, fecha_limite, COALESCE(estado,'')
+                         FROM devoluciones_marketplace
+                        WHERE order_id = %s OR return_id = %s
+                           OR COALESCE(tracking_number,'') = %s
+                           OR COALESCE(sku_canal,'') = %s OR COALESCE(sku,'') = %s
+                        ORDER BY (fecha_llegada_bodega IS NOT NULL),
+                                 fecha_solicitud DESC
+                        LIMIT 1""",
+                    (codigo, codigo, codigo, codigo, codigo))
+        fila = cur.fetchone()
+        if not fila:
+            cur.close()
+            return jsonify({"ok": False, "encontrada": False,
+                            "error": "No hay ninguna devolución con ese código"}), 404
+
+        canal, rid, oid, nombre, skuc, llegada, flim, estado = fila
+
+        if llegada:
+            cur.close()
+            horas = int((flim - ahora).total_seconds() // 3600) if flim else None
+            return jsonify({"ok": True, "encontrada": True, "ya_estaba": True,
+                            "canal": canal, "orden": oid, "producto": nombre,
+                            "sku": skuc, "estado": estado,
+                            "llego": llegada.strftime("%d/%m/%Y %H:%M"),
+                            "horas_restantes": horas,
+                            "mensaje": "Ya estaba marcada como recibida; el plazo no se reinicia"})
+
+        # COALESCE: si el canal ya dio un plazo, ese manda.
+        cur.execute("""UPDATE devoluciones_marketplace
+                          SET fecha_llegada_bodega = %s,
+                              fecha_limite = COALESCE(fecha_limite, %s)
+                        WHERE canal = %s AND return_id = %s
+                    RETURNING fecha_limite""",
+                    (ahora, limite, canal, rid))
+        nuevo_limite = (cur.fetchone() or [None])[0]
+        conn.commit()
+        cur.close()
+    finally:
+        release_conn(conn)
+
+    horas = int((nuevo_limite - ahora).total_seconds() // 3600) if nuevo_limite else None
+    return jsonify({"ok": True, "encontrada": True, "ya_estaba": False,
+                    "canal": canal, "orden": oid, "producto": nombre, "sku": skuc,
+                    "llego": ahora.strftime("%d/%m/%Y %H:%M"),
+                    "vence": nuevo_limite.strftime("%d/%m/%Y %H:%M") if nuevo_limite else None,
+                    "horas_restantes": horas,
+                    "plazo_del_canal": bool(flim),
+                    "mensaje": "Recibida — el plazo empieza ahora"})
 
 
 @app.route("/devoluciones-mkt")

@@ -3078,12 +3078,12 @@ tbody td {
     <div style="margin-bottom:12px;">
       <div style="display:flex;gap:8px;align-items:center;">
         <div style="position:relative;flex:0 0 320px;">
-          <input id="devPistoleoInput" type="text" placeholder="Escanear código DEV-..." autocomplete="off"
+          <input id="devPistoleoInput" type="text" placeholder="Escanear DEV- o el paquete que llega" autocomplete="off"
             style="width:100%;padding:8px 10px 8px 36px;border:1.5px solid #378ADD;border-radius:8px;font-size:13px;font-family:monospace;background:#E6F1FB;color:#0C447C;box-sizing:border-box;"
             onkeydown="if(event.key==='Enter') lookupPistoleoDev(this.value)">
           <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:14px;">⊡</span>
         </div>
-        <span style="font-size:11px;color:var(--muted);">Pistolée un código DEV- para ver su estado al instante</span>
+        <span style="font-size:11px;color:var(--muted);">Un código DEV- abre su ficha. Cualquier otro —N° de orden, tracking o SKU— marca que el paquete llegó y arranca el plazo de 72 h</span>
       </div>
     </div>
 
@@ -6258,10 +6258,47 @@ function eliminarDevolucion(){
 // ── PISTOLEO LOOKUP DEV
 let _pistoleoDevId = null;
 
+// Marca que el paquete de una devolucion del canal llego a nuestra bodega.
+// Para Falabella es la unica forma de arrancar el plazo de 72 horas: su
+// estado "returned" significa que llego a FALABELLA, no a nosotros, y su API
+// no entrega ninguna fecha limite.
+function marcarLlegadaDevolucion(codigo){
+  fetch('/devoluciones-mkt/llegada', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({codigo: codigo})
+  })
+  .then(r => r.json())
+  .then(d => {
+    if(!d.ok){
+      toast(d.error || ('Sin devolución para ' + codigo), 'error');
+      return;
+    }
+    const prod = (d.producto || d.sku || '').slice(0, 40);
+    if(d.ya_estaba){
+      // A proposito no se reinicia el reloj: un paquete se pistolea de mas
+      // sin querer, y reiniciarlo esconderia un atraso real.
+      toast('Ya estaba recibida el ' + d.llego + ' · ' + prod +
+            (d.horas_restantes !== null ? ' · quedan ' + d.horas_restantes + ' h' : ''), 'warn');
+    } else {
+      toast('Recibida: ' + prod + ' · vence ' + (d.vence || '—') +
+            (d.plazo_del_canal ? ' (plazo del canal)' : ' (72 h desde ahora)'));
+    }
+    if(typeof dashCargar === 'function') dashCargar();
+    if(typeof cargarDevoluciones === 'function') cargarDevoluciones('todas');
+  })
+  .catch(e => toast('Error marcando la llegada: ' + e.message, 'error'));
+}
+
 function lookupPistoleoDev(codigo){
   codigo = (codigo||'').trim();
-  if(!codigo || !codigo.startsWith('DEV-')) return;
+  if(!codigo) return;
   document.getElementById('devPistoleoInput').value = '';
+
+  // Lo que no es un DEV- se prueba como devolucion del canal. Antes se
+  // descartaba en silencio: pistolear la etiqueta de un paquete no hacia nada
+  // y tampoco decia por que.
+  if(!codigo.startsWith('DEV-')){ marcarLlegadaDevolucion(codigo); return; }
 
   fetch('/devoluciones/buscar?codigo=' + encodeURIComponent(codigo))
     .then(r=>r.json())
