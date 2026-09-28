@@ -883,6 +883,10 @@ def admin_rastrear_orden():
 
     salida = {"generado": str(now_chile()), "ordenes": []}
 
+    # Una herramienta de diagnostico que devuelve un 500 mudo no sirve de
+    # nada: el error que hay que leer es justamente el suyo.
+    import traceback as _tb_rast
+
     conn = get_conn(tenant_id=1, is_admin=True)
     try:
         for num in ordenes:
@@ -901,7 +905,8 @@ def admin_rastrear_orden():
                            stock_antes, stock_despues,
                            COALESCE(origen_registro,''), COALESCE(orden_id,'')
                       FROM movimientos
-                     WHERE orden_id = ANY(%s) OR numero_orden = ANY(%s)
+                     WHERE COALESCE(orden_id::text, '') = ANY(%s)
+                        OR COALESCE(numero_orden, '') = ANY(%s)
                      ORDER BY fecha ASC, id ASC
                 """, (variantes, variantes))
                 for r in cur.fetchall():
@@ -917,15 +922,19 @@ def admin_rastrear_orden():
                 variantes_marca = variantes + [p + "CANCEL-" + num for p in PREFIJOS]
                 cur.execute("""SELECT order_id_texto, TO_CHAR(fecha,'DD/MM/YYYY HH24:MI')
                                  FROM ordenes_procesadas
-                                WHERE order_id_texto = ANY(%s)
-                                ORDER BY fecha ASC""", (variantes_marca,))
+                                WHERE COALESCE(order_id_texto, '') = ANY(%s)
+                                   OR COALESCE(orden_id::text, '') = ANY(%s)
+                                ORDER BY fecha ASC""", (variantes_marca, variantes_marca))
                 info["marcas"] = [{"clave": r[0], "fecha": r[1]} for r in cur.fetchall()]
 
                 # ── Alertas
+                # Mismo cuidado con el tipo: en alertas orden_id es TEXT, pero
+                # castear no cuesta nada y evita repetir el 500 si algun dia
+                # cambia.
                 cur.execute("""SELECT tipo, titulo, COALESCE(sku,''), leida,
                                       TO_CHAR(fecha,'DD/MM/YYYY HH24:MI')
                                  FROM alertas
-                                WHERE orden_id = ANY(%s)
+                                WHERE COALESCE(orden_id::text, '') = ANY(%s)
                                 ORDER BY fecha ASC""", (variantes,))
                 info["alertas"] = [{"tipo": r[0], "titulo": r[1], "sku": r[2],
                                     "leida": r[3], "fecha": r[4]} for r in cur.fetchall()]
@@ -947,6 +956,17 @@ def admin_rastrear_orden():
             info["veredicto"] = veredicto
 
             salida["ordenes"].append(info)
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return jsonify({
+            "error": "El rastreador falló",
+            "detalle": str(e)[:400],
+            "donde": _tb_rast.format_exc().strip().splitlines()[-3:],
+            "orden_en_curso": num if ordenes else None,
+        }), 500
     finally:
         release_conn(conn)
 
