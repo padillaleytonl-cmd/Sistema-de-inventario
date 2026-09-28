@@ -782,6 +782,109 @@ def trazar_ajuste_stock():
                             "Mirá 'stock_que_se_publicaria' en cada etapa."})
 
 
+@app.route("/admin/lusync/ventas/faltantes")
+def admin_ventas_faltantes():
+    """Ventas registradas que NO alcanzaron a descontar stock.
+
+    Cuando la bodega no tenía lo suficiente, el movimiento guarda lo vendido
+    en 'cantidad' y lo que quedó debiendo en 'faltante'. Mientras ese faltante
+    siga en pie, el stock publicado a los canales está más alto que la
+    realidad.
+
+    Uso:
+      /admin/lusync/ventas/faltantes                    lista lo pendiente
+      /admin/lusync/ventas/faltantes?aplicar=1          salda TODO lo que se pueda
+      /admin/lusync/ventas/faltantes?mov=123&aplicar=1  salda solo ese movimiento
+
+    Sin &aplicar=1 solo simula: dice cuánto se saldaría y no toca nada.
+
+    Saldar no es automático a propósito. Que llegue mercadería no significa
+    que esas unidades sean para cubrir una venta vieja: pudo llegar para otra
+    cosa, o la venta pudo cancelarse. Lo decide una persona, igual que en el
+    flujo de devoluciones.
+    """
+    bypass_token = _admin_bypass_token()
+    token = request.args.get("token", "")
+    if not (session.get("logged") or session.get("is_lusync_admin")
+            or (token and token == bypass_token)):
+        return redirect("/admin/lusync/login")
+
+    from inventario import get_conn, release_conn, get_stock_bodega, ajustar_stock_bodega
+
+    aplicar = request.args.get("aplicar") == "1"
+    solo_mov = request.args.get("mov", "").strip()
+
+    salida = {"generado": str(now_chile()), "modo": "APLICADO" if aplicar else "simulacion",
+              "pendientes": [], "saldado": 0, "sigue_pendiente": 0}
+
+    conn = get_conn(tenant_id=1, is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            sql = """SELECT id, sku, nombre, COALESCE(bodega_codigo,'CENTRAL'),
+                            cantidad, COALESCE(faltante,0), COALESCE(canal,''),
+                            COALESCE(orden_id,''), TO_CHAR(fecha,'DD/MM/YYYY HH24:MI')
+                       FROM movimientos
+                      WHERE COALESCE(faltante,0) > 0"""
+            params = []
+            if solo_mov:
+                sql += " AND id = %s"
+                params.append(int(solo_mov))
+            sql += " ORDER BY fecha ASC"
+            cur.execute(sql, params)
+            filas = cur.fetchall()
+
+        for (mid, sku, nombre, bodega, cant, falta, canal, orden, fecha) in filas:
+            disponible = get_stock_bodega(sku, bodega) or 0
+            puede = min(int(falta), int(disponible))
+            fila = {"movimiento": mid, "sku": sku, "producto": nombre,
+                    "bodega": bodega, "canal": canal, "orden": orden,
+                    "fecha": fecha, "vendidas": cant, "faltante": int(falta),
+                    "hay_en_bodega": int(disponible), "se_puede_saldar": puede}
+
+            if aplicar and puede > 0:
+                try:
+                    ajustar_stock_bodega(sku, bodega, -puede)
+                    cn2 = get_conn(tenant_id=1, is_admin=True)
+                    try:
+                        with cn2.cursor() as c2:
+                            c2.execute("""UPDATE movimientos
+                                             SET faltante = GREATEST(0, COALESCE(faltante,0) - %s)
+                                           WHERE id = %s""", (puede, mid))
+                            # El saldo deja su propia linea: cambia stock, tiene
+                            # que verse. Va como 'ajuste' y no como 'salida'
+                            # para no contarse como una venta nueva — la venta
+                            # ya quedo registrada en su momento.
+                            c2.execute("""INSERT INTO movimientos
+                                (tipo, sku, nombre, cantidad, motivo, usuario, canal,
+                                 fecha, bodega_codigo, fecha_importacion,
+                                 origen_registro, stock_antes, stock_despues)
+                                VALUES ('ajuste', %s, %s, %s, %s, %s, 'Manual', NOW(),
+                                        %s, NOW(), 'manual', %s, %s)""",
+                                (sku, nombre, puede,
+                                 "Saldo de venta sin stock — orden %s (mov %s)" % (orden or "s/n", mid),
+                                 session.get("usuario", "Sistema"), bodega,
+                                 disponible, disponible - puede))
+                        cn2.commit()
+                    finally:
+                        release_conn(cn2)
+                    fila["saldado"] = puede
+                    fila["faltante"] = int(falta) - puede
+                    salida["saldado"] += puede
+                except Exception as e:
+                    fila["error"] = str(e)[:150]
+
+            salida["sigue_pendiente"] += fila["faltante"]
+            salida["pendientes"].append(fila)
+    finally:
+        release_conn(conn)
+
+    salida["total_movimientos"] = len(salida["pendientes"])
+    if not aplicar and salida["pendientes"]:
+        salida["nota"] = ("Esto es una simulacion. Agrega &aplicar=1 para descontar "
+                          "de verdad lo que aparece en se_puede_saldar.")
+    return jsonify(salida)
+
+
 @app.route("/admin/lusync/auditoria-ordenes")
 def auditoria_ordenes_limbo():
     """Audita qué órdenes de cada marketplace NO están registradas en Lusync.
@@ -803,10 +906,35 @@ def auditoria_ordenes_limbo():
     resultado = {"generado": str(now_chile()), "dias": dias, "canales": {}}
 
     def _registrada(cur, num, prefijo):
-        cur.execute("""SELECT 1 FROM movimientos
-                       WHERE (orden_id=%s OR orden_id=%s) AND tipo IN ('salida','ajuste')
-                       LIMIT 1""", (str(num), "%s-%s" % (prefijo, num)))
-        return cur.fetchone() is not None
+        """None si no hay venta registrada; si la hay, cuantas unidades quedaron
+        sin descontar.
+
+        Antes devolvia True/False mirando solo si existia la fila. Una venta
+        que no alcanzo a descontar —bodega sin stock— existe igual, asi que
+        esta auditoria, que se hizo para cazar ventas en limbo, la daba por
+        buena. Es el caso que mas se le parece: la orden esta en el portal, en
+        Lusync hay un registro, y el stock nunca se movio.
+        """
+        cur.execute("""SELECT COUNT(*), COALESCE(SUM(COALESCE(faltante, 0)), 0)
+                       FROM movimientos
+                       WHERE (orden_id=%s OR orden_id=%s)
+                         AND tipo IN ('salida','ajuste')""",
+                    (str(num), "%s-%s" % (prefijo, num)))
+        r = cur.fetchone() or (0, 0)
+        if not int(r[0] or 0):
+            return None
+        return int(r[1] or 0)
+
+    def _revisar(cur, oid, prefijo, clave_marca=None):
+        """Devuelve la entrada para la lista de limbo, o None si esta sana."""
+        falta = _registrada(cur, oid, prefijo)
+        if falta is None:
+            marca = clave_marca if clave_marca is not None else "%s-%s" % (prefijo, oid)
+            return {"id": oid,
+                    "estado": "marcada_sin_venta" if _marcada(cur, marca) else "no_marcada"}
+        if falta:
+            return {"id": oid, "estado": "registrada_sin_descontar", "faltante": falta}
+        return None
 
     def _marcada(cur, key):
         cur.execute("SELECT 1 FROM ordenes_procesadas WHERE order_id_texto=%s LIMIT 1", (key,))
@@ -824,9 +952,9 @@ def auditoria_ordenes_limbo():
                     if o.get("status") not in ("paid", "confirmed"):
                         continue
                     oid = str(o.get("id", ""))
-                    if not _registrada(cur, oid, "MELI"):
-                        limbo.append({"id": oid,
-                                      "estado": "marcada_sin_venta" if _marcada(cur, "MELI-%s" % oid) else "no_marcada"})
+                    _entrada = _revisar(cur, oid, "MELI")
+                    if _entrada:
+                        limbo.append(_entrada)
                 resultado["canales"]["MercadoLibre"] = {"traidas": len(ords), "en_limbo": len(limbo), "ordenes": limbo}
             except Exception as e:
                 resultado["canales"]["MercadoLibre"] = {"error": str(e)[:120]}
@@ -840,9 +968,9 @@ def auditoria_ordenes_limbo():
                         if not coid or coid in vistos:
                             continue
                         vistos.add(coid); total += 1
-                        if not _registrada(cur, coid, "WALMART"):
-                            limbo.append({"id": coid,
-                                          "estado": "marcada_sin_venta" if _marcada(cur, coid) else "no_marcada"})
+                        _entrada = _revisar(cur, coid, "WALMART", clave_marca=coid)
+                        if _entrada:
+                            limbo.append(_entrada)
                 resultado["canales"]["Walmart"] = {"traidas": total, "en_limbo": len(limbo), "ordenes": limbo[:50]}
             except Exception as e:
                 resultado["canales"]["Walmart"] = {"error": str(e)[:120]}
@@ -854,9 +982,9 @@ def auditoria_ordenes_limbo():
                 limbo = []
                 for o in ords:
                     oid = str(o.get("OrderId") or o.get("OrderNumber") or "")
-                    if not _registrada(cur, oid, "FALABELLA"):
-                        limbo.append({"id": oid,
-                                      "estado": "marcada_sin_venta" if _marcada(cur, "FALABELLA-%s" % oid) else "no_marcada"})
+                    _entrada = _revisar(cur, oid, "FALABELLA")
+                    if _entrada:
+                        limbo.append(_entrada)
                 resultado["canales"]["Falabella"] = {"traidas": len(ords), "en_limbo": len(limbo), "ordenes": limbo}
             except Exception as e:
                 resultado["canales"]["Falabella"] = {"error": str(e)[:120]}
@@ -868,9 +996,9 @@ def auditoria_ordenes_limbo():
                 limbo = []
                 for o in ords:
                     oid = str(o.get("subOrderNumber") or o.get("id") or "")
-                    if not _registrada(cur, oid, "PARIS"):
-                        limbo.append({"id": oid,
-                                      "estado": "marcada_sin_venta" if _marcada(cur, "PARIS-%s" % oid) else "no_marcada"})
+                    _entrada = _revisar(cur, oid, "PARIS")
+                    if _entrada:
+                        limbo.append(_entrada)
                 resultado["canales"]["Paris"] = {"traidas": len(ords), "en_limbo": len(limbo), "ordenes": limbo}
             except Exception as e:
                 resultado["canales"]["Paris"] = {"error": str(e)[:120]}
@@ -882,9 +1010,9 @@ def auditoria_ordenes_limbo():
                 limbo = []
                 for o in ords:
                     oid = str(o.get("order_id") or o.get("commercial_id") or "")
-                    if not _registrada(cur, oid, "RIPLEY"):
-                        limbo.append({"id": oid,
-                                      "estado": "marcada_sin_venta" if _marcada(cur, "RIPLEY-%s" % oid) else "no_marcada"})
+                    _entrada = _revisar(cur, oid, "RIPLEY")
+                    if _entrada:
+                        limbo.append(_entrada)
                 resultado["canales"]["Ripley"] = {"traidas": len(ords), "en_limbo": len(limbo), "ordenes": limbo}
             except Exception as e:
                 resultado["canales"]["Ripley"] = {"error": str(e)[:120]}
@@ -9236,7 +9364,9 @@ def ruta_bodegas_set_stock():
     if not sku or not bodega:
         return jsonify({"ok": False, "error": "sku y bodega_codigo requeridos"})
     try:
-        set_stock_bodega(sku, bodega, cantidad)
+        set_stock_bodega(sku, bodega, cantidad,
+                     usuario=session.get("usuario", "Sistema"),
+                     motivo=f"Edicion directa de {bodega}")
         registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
                         "set_stock_bodega",
                         detalle=f"SKU {sku} en bodega {bodega} = {cantidad}")
@@ -9478,7 +9608,9 @@ def ruta_bodegas_importar_excel():
                             advertencias += 1
                             log_lines.append(f"! Fila {fila_idx} {sku}: {bod_codigo} negativo, ajustado a 0")
                             cantidad = 0
-                        set_stock_bodega(sku, bod_codigo, cantidad)
+                        set_stock_bodega(sku, bod_codigo, cantidad,
+                                        usuario=session.get("usuario", "Sistema"),
+                                        motivo=f"Importacion masiva de stock ({bod_codigo})")
                         cambios.append(f"{bod_codigo}={cantidad}")
                     except (ValueError, TypeError):
                         advertencias += 1
@@ -9586,7 +9718,9 @@ def ruta_bodegas_guardar_lote():
                 if validas is not None and bodega not in validas:
                     raise ValueError(
                         f"la bodega '{bodega}' no existe; validas: {', '.join(sorted(validas))}")
-                set_stock_bodega(c["sku"], bodega, int(c["cantidad"]))
+                set_stock_bodega(c["sku"], bodega, int(c["cantidad"]),
+                                 usuario=session.get("usuario", "Sistema"),
+                                 motivo=f"Edicion de la matriz de bodegas ({bodega})")
                 guardados += 1
             except Exception as e:
                 errores.append(f"{c.get('sku')}/{c.get('bodega_codigo')}: {e}")
@@ -19582,10 +19716,12 @@ def admin_importar_stock_full_meli():
             try:
                 if not dry_run:
                     # Stock APTAS PARA VENDER → MELI_FULL
-                    set_stock_bodega(sku_real, "MELI_FULL", aptas)
+                    set_stock_bodega(sku_real, "MELI_FULL", aptas,
+                                       motivo="Conteo de MercadoLibre Full")
                     resultados["actualizados_full"] += 1
                     # Stock EN CAMINO → MELI_FULL_TRANSITO
-                    set_stock_bodega(sku_real, "MELI_FULL_TRANSITO", transito)
+                    set_stock_bodega(sku_real, "MELI_FULL_TRANSITO", transito,
+                                       motivo="Conteo de MercadoLibre Full (transito)")
                     resultados["actualizados_transito"] += 1
                 
                 resultados["matched"].append({
@@ -23331,7 +23467,9 @@ def admin_stock_set_bodega():
         return jsonify({"error": "Requiere ?tenant_id=N&sku=XXXX&bodega=CENTRAL&cantidad=N"}), 400
     try:
         # set_stock_bodega fija la bodega y recalcula productos.stock = suma bodegas
-        set_stock_bodega(sku, bodega, cantidad)
+        set_stock_bodega(sku, bodega, cantidad,
+                         usuario=session.get("usuario", "Sistema"),
+                         motivo=f"Reparacion admin de {bodega}")
         # Republicar a canales (publica CENTRAL por el fix de sincronizar)
         sync = {}
         try:
@@ -23746,7 +23884,9 @@ def admin_corregir_stock_bodega():
         cur.close(); release_conn(conn)
 
         # Aplicar corrección
-        set_stock_bodega(sku, bodega, cantidad)
+        set_stock_bodega(sku, bodega, cantidad,
+                         usuario=session.get("usuario", "Sistema"),
+                         motivo=f"Reparacion admin de {bodega}")
 
         return jsonify({"ok": True, "sku": sku, "bodega": bodega, "antes": antes, "ahora": cantidad})
     except Exception as e:

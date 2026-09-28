@@ -1136,6 +1136,29 @@ def asegurar_columnas_movimientos():
     """
     conn = get_conn(is_admin=True)
     cur = conn.cursor()
+
+    # PRIMERO y en su propia transaccion. El INSERT de cada venta nombra esta
+    # columna, asi que no puede depender de que los demas ALTER salgan bien:
+    # el bloque de abajo hace rollback de TODO si cualquiera falla, y eso se
+    # llevaria la columna dejando el descuento de los seis canales caido.
+    try:
+        cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS faltante INTEGER DEFAULT 0")
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"[Perf] no pude asegurar movimientos.faltante: {e}")
+
+    # El indice es solo velocidad para /admin/lusync/ventas/faltantes. Que no
+    # exista no puede costar una venta, asi que tambien va aparte.
+    try:
+        cur.execute("""CREATE INDEX IF NOT EXISTS idx_mov_faltante
+                       ON movimientos (sku, bodega_codigo)
+                       WHERE COALESCE(faltante, 0) > 0""")
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"[Perf] no pude crear idx_mov_faltante: {e}")
+
     try:
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS usuario TEXT DEFAULT 'Sistema'")
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS canal TEXT DEFAULT 'Sistema'")
@@ -1173,7 +1196,8 @@ def cargar_movimientos(limite=20):
                COALESCE(origen_registro, 'sistema'),
                stock_antes,
                stock_despues,
-               COALESCE(numero_orden, '')
+               COALESCE(numero_orden, ''),
+               COALESCE(faltante, 0)
         FROM movimientos ORDER BY fecha DESC LIMIT %s
     """, (limite,))
     rows = cur.fetchall()
@@ -1186,7 +1210,8 @@ def cargar_movimientos(limite=20):
              "origen":r[13] or "sistema",
              "stock_antes": r[14] if r[14] is not None else None,
              "stock_despues": r[15] if r[15] is not None else None,
-             "numero_orden": r[16] or ""
+             "numero_orden": r[16] or "",
+             "faltante": int(r[17] or 0)
              } for r in rows]
 
 
@@ -2158,7 +2183,11 @@ def init_alertas():
 # minutos por seis marketplaces, y cada vuelta escribia una fila mas. La tabla
 # llego a ser cien veces mas grande que los movimientos del negocio, y el panel
 # la consulta dos veces en cada carga.
-TIPOS_QUE_SE_REPITEN = ("sku_sin_mapeo", "error_sync")
+# "venta_sin_stock" se refresca en vez de acumular: si un SKU esta corto,
+# cada venta dispararia una alerta nueva. El detalle exacto —que orden, cuanto
+# se debe— vive en movimientos.faltante, que es el registro; la alerta solo
+# avisa que hay que ir a mirar.
+TIPOS_QUE_SE_REPITEN = ("sku_sin_mapeo", "error_sync", "venta_sin_stock")
 
 
 def crear_alerta(tipo, titulo, mensaje="", canal=None, orden_id=None, sku=None, enviar_email=True):
@@ -2706,7 +2735,7 @@ def get_stock_bodega(sku, bodega_codigo):
 from collections import deque as _deque_recalc
 
 
-def set_stock_bodega(sku, bodega_codigo, cantidad):
+def set_stock_bodega(sku, bodega_codigo, cantidad, usuario="Sistema", motivo=None):
     """Establece el stock de un SKU en una bodega (override).
 
     LANZA la excepcion si no se pudo guardar. Antes se la tragaba:
@@ -2720,14 +2749,52 @@ def set_stock_bodega(sku, bodega_codigo, cantidad):
     le decian que si, y la base no cambiaba.
 
     Que falle es lo correcto: quien llama decide que hacer, pero se entera.
+
+    DEJA MOVIMIENTO. Las doce llamadas a esta funcion cambiaban stock sin
+    escribir una sola fila en el historial, asi que el stock podia aparecer y
+    desaparecer sin explicacion —se vio en produccion: una bodega paso de 0 a
+    4 entre dos movimientos, sin nada en medio—. El 'ajuste' se inserta en la
+    MISMA transaccion que el cambio: o quedan los dos o no queda ninguno.
+
+    Solo escribe si el valor cambia de verdad: guardar la matriz sin editar
+    nada, o una reconciliacion que confirma lo que ya habia, no ensucian el
+    historial.
     """
     conn = get_conn(); cur = conn.cursor()
     try:
+        nuevo_valor = max(0, int(cantidad))
+
+        # El valor anterior, bloqueado hasta el commit para que el delta que se
+        # anota sea el que de verdad ocurrio y no uno pisado entre medio.
+        cur.execute("""SELECT cantidad FROM stock_bodega
+                        WHERE sku=%s AND bodega_codigo=%s FOR UPDATE""",
+                    (sku, bodega_codigo))
+        fila = cur.fetchone()
+        anterior = int(fila[0]) if fila and fila[0] is not None else 0
+
         cur.execute("""INSERT INTO stock_bodega (sku, bodega_codigo, cantidad, actualizado_at)
                        VALUES (%s, %s, %s, NOW())
                        ON CONFLICT (sku, bodega_codigo)
                        DO UPDATE SET cantidad=EXCLUDED.cantidad, actualizado_at=NOW()""",
-                    (sku, bodega_codigo, max(0, int(cantidad))))
+                    (sku, bodega_codigo, nuevo_valor))
+
+        # Solo si cambio algo. Crear la fila de una bodega en 0 no es un
+        # cambio de stock y no merece una linea en el historial.
+        delta = nuevo_valor - anterior
+        if delta:
+            cur.execute("SELECT nombre FROM productos WHERE sku=%s LIMIT 1", (sku,))
+            r = cur.fetchone()
+            nombre = r[0] if r else sku
+            texto = motivo or f"Ajuste de bodega {bodega_codigo}: {anterior} -> {nuevo_valor}"
+            cur.execute("""INSERT INTO movimientos
+                (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha,
+                 bodega_codigo, fecha_importacion, origen_registro,
+                 stock_antes, stock_despues)
+                VALUES ('ajuste', %s, %s, %s, %s, %s, 'Manual', NOW(), %s, NOW(),
+                        'manual', %s, %s)""",
+                (sku, nombre, abs(delta), texto, usuario, bodega_codigo,
+                 anterior, nuevo_valor))
+
         conn.commit()
         # Sincronizar columna stock de productos (sumatoria de todas las bodegas)
         _recalcular_stock_total(sku)
@@ -3002,14 +3069,20 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
         # de WALMART_FBM es el que reporta Walmart y el job diario lo copia tal
         # cual, asi que descontar aqui lo restaria dos veces.
         descontar = cantidad
+        faltante = 0
         advertencia = "solo_registro"
         stock_despues = stock_antes
     else:
         # Si la bodega no tiene stock suficiente, descontar lo que se pueda
         # y registrar advertencia
         descontar = min(cantidad, stock_antes)
+        # Lo vendido que NO se pudo descontar. Se guarda en el movimiento: es
+        # la unica forma de saber despues cuanto se debe, porque la cantidad
+        # real de la venta no se puede reconstruir desde Lusync una vez que
+        # se guardo el valor descontado en su lugar.
+        faltante = max(0, cantidad - descontar)
         advertencia = None
-        if stock_antes < cantidad:
+        if faltante:
             advertencia = f"Bodega {bodega} sin stock suficiente: pedidas {cantidad}, había {stock_antes}"
             print(f"[Bodegas] WARN {advertencia}")
 
@@ -3066,6 +3139,10 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
         nombre = r[0] if r else sku
 
         motivo_final = motivo or f"Venta {canal_normalizado}{' (Fulfillment)' if fulfillment else ''}"
+        if faltante:
+            # En el motivo tambien, para que se entienda leyendo el historial
+            # sin tener que cruzar columnas.
+            motivo_final += f" — SIN STOCK en {bodega}: faltan {faltante} de {cantidad}"
 
         ahora_chile = now_chile().replace(tzinfo=None)
 
@@ -3100,17 +3177,23 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
         # paralelo y ambos pasen la verificación de arriba, la BD rechaza el segundo
         # INSERT sin error. Esta capa es la que realmente evita duplicados por
         # concurrencia (el SELECT+INSERT de arriba no es atómico entre procesos).
+        # cantidad = lo VENDIDO. Antes se guardaba "descontar", o sea lo que
+        # alcanzo a salir de la bodega, y una venta sin stock quedaba anotada
+        # como cantidad 0: la venta desaparecia del historial y del reporte, y
+        # el indice unico dejaba esa fila en cero bloqueando el reintento para
+        # siempre. Lo que no se pudo descontar va aparte, en faltante.
         cur.execute("""INSERT INTO movimientos
             (tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha, orden_id,
              bodega_codigo, fecha_importacion, fecha_compra_marketplace,
-             origen_registro, stock_antes, stock_despues)
-            VALUES ('salida', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             origen_registro, stock_antes, stock_despues, faltante)
+            VALUES ('salida', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (orden_id, sku, tipo)
                 WHERE tipo IN ('salida','ajuste') AND orden_id IS NOT NULL
                 DO NOTHING""",
-            (sku, nombre, descontar, motivo_final, usuario, canal_normalizado,
+            (sku, nombre, cantidad, motivo_final, usuario, canal_normalizado,
              ahora_chile, orden_id, bodega, ahora_chile,
-             fecha_compra_clean, origen_registro, stock_antes, stock_despues))
+             fecha_compra_clean, origen_registro, stock_antes, stock_despues,
+             faltante))
         inserto = (cur.rowcount > 0)  # 0 si el índice bloqueó un duplicado
         conn.commit()
         # Se marca JUSTO despues del commit, no despues de soltar la conexion.
@@ -3195,11 +3278,33 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
                      "El stock descontado se devolvio."
         }
 
+    # La advertencia existia desde antes, pero solo se imprimia: ningun sync
+    # la mira y en pantalla no se veia nada. Una venta que no descuenta tiene
+    # que llegarle a una persona.
+    if faltante:
+        try:
+            crear_alerta(
+                tipo="venta_sin_stock",
+                titulo=f"Venta sin stock en {bodega}: {sku}",
+                mensaje=(f"La orden <b>{orden_id or 's/n'}</b> de {canal_normalizado} "
+                         f"vendió {cantidad} de <b>{sku}</b> y en {bodega} "
+                         f"había {stock_antes}.<br>"
+                         f"Quedan <b>{faltante}</b> unidades sin descontar.<br><br>"
+                         "El stock publicado a los canales está más alto que la "
+                         "realidad hasta que se salde. Se revisa en "
+                         "/admin/lusync/ventas/faltantes"),
+                canal=canal_normalizado,
+                sku=sku
+            )
+        except Exception as e_al:
+            print(f"[Bodegas] no pude crear la alerta de faltante para {sku}: {e_al}")
+
     return {
         "ok": True,
         "sku": sku,
         "cantidad_solicitada": cantidad,
         "cantidad_descontada": descontar,
+        "faltante": faltante,
         "bodega": bodega,
         "stock_antes": stock_antes,
         "stock_despues": stock_despues,

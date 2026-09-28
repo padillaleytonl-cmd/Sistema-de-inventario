@@ -5324,9 +5324,19 @@ function cargarMovimientosFull(){
       };
       const cat = paleta[categoria];
 
-      const qty = isEntrada
-        ? `<span style="font-size:12px;font-weight:500;color:${cat.qtyColor};">+${m.cantidad}</span>`
-        : `<span style="font-size:12px;font-weight:500;color:${cat.qtyColor};">−${m.cantidad}</span>`;
+      // Un 'ajuste' puede sumar o restar. Mirando solo tipo === 'entrada'
+      // una correccion hacia arriba se pintaba en negativo. El signo sale de
+      // stock_antes/stock_despues, que esos movimientos siempre traen.
+      let signoQty = isEntrada ? '+' : '−';
+      if (m.tipo === 'ajuste' && m.stock_antes != null && m.stock_despues != null) {
+        signoQty = (m.stock_despues >= m.stock_antes) ? '+' : '−';
+      }
+      // Lo vendido que no se pudo descontar. Sin esto la fila dice "−1" con
+      // la bodega igual antes y despues, y parece un error de la tabla.
+      const faltaTag = (m.faltante > 0)
+        ? `<div style="font-size:9px;color:#A32D2D;background:#fef2f2;border:0.5px solid #fecaca;border-radius:999px;padding:1px 6px;margin-top:3px;white-space:nowrap;font-weight:600;display:inline-block;">sin stock: ${m.faltante}</div>`
+        : '';
+      const qty = `<span style="font-size:12px;font-weight:500;color:${cat.qtyColor};">${signoQty}${m.cantidad}</span>${faltaTag}`;
       const ocNum = m.numero_orden || m.orden_id;
       const ocTag = ocNum
         ? `<span style="font-size:11px;font-family:'DM Mono',monospace;color:#1E40AF;background:#DBEAFE;padding:2px 7px;border-radius:5px;border:0.5px solid #93C5FD;white-space:nowrap;font-weight:500;letter-spacing:0.02em;">OC-${ocNum}</span>`
