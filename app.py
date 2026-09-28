@@ -7384,7 +7384,10 @@ def devoluciones_dashboard():
                       COALESCE(cantidad,1), COALESCE(estado,'abierta'),
                       COALESCE(estado_canal,''), COALESCE(motivo,''),
                       monto_reembolso, COALESCE(tracking_number,''),
-                      fecha_solicitud, fecha_limite, COALESCE(url_gestion,'')
+                      fecha_solicitud, fecha_limite, COALESCE(url_gestion,''),
+                      COALESCE(tipo,''), COALESCE(decision,''),
+                      COALESCE(decision_usuario,''), decision_fecha,
+                      fecha_llegada_bodega
                  FROM devoluciones_marketplace
                 WHERE fecha_solicitud IS NOT NULL
                   AND fecha_solicitud BETWEEN %s AND %s"""
@@ -7424,7 +7427,8 @@ def devoluciones_dashboard():
                           "vencidas": 0, "vencen_hoy": 0}
     por_canal = {}
     for (canal, rid, oid, sku, skuc, nombre, cant, estado, estadoc, motivo,
-         monto, track, fsol, flim, url) in filas:
+         monto, track, fsol, flim, url, tipo, decision, dec_user, dec_fecha,
+         llegada) in filas:
         grupo = _clasificar(estado, flim)
         horas = None
         if flim:
@@ -7449,6 +7453,13 @@ def devoluciones_dashboard():
             "solicitada": fsol.strftime("%d/%m/%Y") if fsol else "",
             "dias": (ahora - fsol).days if fsol else None,
             "horas_restantes": horas,
+            # "fulfillment" = salio de la bodega del canal, asi que ahi vuelve.
+            "modelo": ("Fulfillment" if "fulfillment" in (tipo or "").lower()
+                       else ("Propio" if tipo else "")),
+            "decision": decision or None,
+            "decision_por": dec_user or None,
+            "decision_fecha": dec_fecha.strftime("%d/%m/%Y %H:%M") if dec_fecha else None,
+            "llego": llegada.strftime("%d/%m/%Y %H:%M") if llegada else None,
         })
 
     return jsonify({
@@ -7543,6 +7554,67 @@ def devoluciones_mkt_llegada():
                     "horas_restantes": horas,
                     "plazo_del_canal": bool(flim),
                     "mensaje": "Recibida — el plazo empieza ahora"})
+
+
+@app.route("/devoluciones-mkt/decision", methods=["POST"])
+def devoluciones_mkt_decision():
+    """Registra en Lusync si aceptas o rechazas una devolución del canal.
+
+    NO escribe al marketplace. Aceptar o rechazar allá es irreversible y tiene
+    dinero detrás, así que la confirmación la haces tú en el portal; acá queda
+    constancia de qué decidiste y quién se hizo cargo, para poder auditarlo
+    después contra lo que quedó respondido en el canal.
+
+    Cambiar de opinión se permite mientras la devolución no esté cerrada: lo
+    que no se permite es que el cambio pase sin dejar rastro, así que cada
+    decisión se anota en el log de auditoría.
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    datos = request.json or {}
+    canal = (datos.get("canal") or "").strip()
+    rid = (datos.get("return_id") or "").strip()
+    decision = (datos.get("decision") or "").strip().lower()
+    if not canal or not rid:
+        return jsonify({"ok": False, "error": "Falta canal o return_id"}), 400
+    if decision not in ("aceptada", "rechazada", ""):
+        return jsonify({"ok": False, "error": "Decisión inválida"}), 400
+
+    usuario = session.get("usuario", "Sistema")
+    ahora = now_chile().replace(tzinfo=None)
+
+    conn = get_conn(tenant_id=1)
+    try:
+        cur = conn.cursor()
+        cur.execute("""UPDATE devoluciones_marketplace
+                          SET decision = %s,
+                              decision_usuario = %s,
+                              decision_fecha = %s
+                        WHERE canal = %s AND return_id = %s
+                    RETURNING COALESCE(order_id,''), COALESCE(producto_nombre,'')""",
+                    (decision or None, usuario if decision else None,
+                     ahora if decision else None, canal, rid))
+        fila = cur.fetchone()
+        if not fila:
+            conn.rollback(); cur.close()
+            return jsonify({"ok": False, "error": "No existe esa devolución"}), 404
+        conn.commit(); cur.close()
+    finally:
+        release_conn(conn)
+
+    orden, producto = fila
+    try:
+        registrar_audit(usuario, request.remote_addr, "decision_devolucion",
+                        entidad="devoluciones_marketplace",
+                        detalle=f"{canal}/{rid} orden {orden}: {decision or 'sin decisión'}")
+    except Exception as e:
+        print(f"[Devoluciones] no pude auditar la decision de {rid}: {e}")
+
+    return jsonify({"ok": True, "decision": decision or None,
+                    "orden": orden, "producto": producto,
+                    "usuario": usuario,
+                    "cuando": ahora.strftime("%d/%m/%Y %H:%M") if decision else None})
 
 
 @app.route("/devoluciones-mkt")

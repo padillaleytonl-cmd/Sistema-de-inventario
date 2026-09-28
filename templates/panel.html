@@ -3043,34 +3043,40 @@ tbody td {
 
     <!-- Dashboard de devoluciones -->
     <div style="margin-bottom:16px;">
+      <div id="dashTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;"></div>
 
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
-        <span style="font-size:11px;color:var(--muted);">Período</span>
-        <span id="dashChips"></span>
-        <input id="dashDesde" type="date" style="padding:5px 8px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
-        <span style="font-size:11px;color:var(--muted);">a</span>
-        <input id="dashHasta" type="date" style="padding:5px 8px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
-        <input id="dashBuscar" type="text" placeholder="Buscar N° de orden, SKU, producto o devolución"
-          style="margin-left:auto;padding:6px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);width:300px;"
-          onkeydown="if(event.key==='Enter') dashCargar()">
-        <button class="btn-secondary" onclick="dashCargar()" style="padding:6px 12px;font-size:12px;">Buscar</button>
+      <div style="display:flex;align-items:center;gap:8px;background:var(--info-bg);border-radius:var(--radius);padding:9px 12px;font-size:12px;color:var(--muted);margin-bottom:12px;">
+        <span style="color:#185FA5;">ⓘ</span>
+        <span>Desde que recibes el producto tienes <b style="font-weight:500;">72 horas</b> para responder. El reloj parte cuando pistoleas el paquete.</span>
       </div>
 
-      <div id="dashCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px;"></div>
-
-      <div class="card" style="padding:14px 16px;margin-bottom:12px;">
-        <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">Abiertas por canal — lo que todavía no se cierra</div>
-        <div id="dashCanales"></div>
-        <div id="dashLeyenda" style="display:flex;flex-wrap:wrap;gap:14px;margin-top:10px;font-size:11px;color:var(--muted);"></div>
-        <div id="dashFuera" style="display:none;font-size:11px;color:#854F0B;margin-top:10px;"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+        <input id="dashBuscar" type="text" placeholder="Buscar por N° de orden, SKU o producto"
+          style="padding:6px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);width:280px;"
+          onkeydown="if(event.key==='Enter') dashCargar()">
+        <select id="dashCanal" onchange="dashRender()" style="padding:6px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
+          <option value="">Todos los canales</option>
+          <option value="falabella">Falabella</option><option value="paris">París</option>
+          <option value="walmart">Walmart</option><option value="mercadolibre">MercadoLibre</option>
+          <option value="ripley">Ripley</option>
+        </select>
+        <input id="dashDesde" type="date" onchange="dashCargar()" style="padding:5px 8px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
+        <span style="font-size:11px;color:var(--muted);">→</span>
+        <input id="dashHasta" type="date" onchange="dashCargar()" style="padding:5px 8px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
+        <button class="btn-secondary" onclick="dashCargar()" style="padding:6px 12px;font-size:12px;">Buscar</button>
+        <button class="btn-secondary" onclick="dashExportar()" style="margin-left:auto;padding:6px 12px;font-size:12px;">Exportar</button>
       </div>
 
       <div class="card" style="padding:0;overflow:hidden;">
-        <div style="display:flex;align-items:center;gap:10px;padding:9px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);">
-          <span id="dashResumenTxt" style="font-size:11px;color:var(--muted);"></span>
-          <button id="dashLimpiar" onclick="dashLimpiarFiltro()" style="display:none;margin-left:auto;background:transparent;border:0.5px solid var(--border);border-radius:8px;padding:3px 10px;font-size:11px;cursor:pointer;color:var(--text);">Quitar filtros</button>
+        <div style="display:grid;grid-template-columns:minmax(0,2fr) 44px 108px 96px 96px minmax(0,1.3fr) 112px 132px;gap:10px;padding:8px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);font-size:10px;color:var(--muted);">
+          <span>PRODUCTO</span><span>CANT.</span><span>N° DE ORDEN</span><span>CANAL</span>
+          <span>MODELO LOG.</span><span>RAZÓN</span><span>RECEPCIÓN</span><span>¿DE ACUERDO?</span>
         </div>
         <div id="dashLista"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 14px;font-size:11px;color:var(--muted);">
+          <span id="dashResumenTxt"></span>
+          <span id="dashFuera"></span>
+        </div>
       </div>
     </div>
 
@@ -6939,156 +6945,163 @@ let _devSelItem = null;   // item seleccionado del lookup
 
 
 // ── DASHBOARD DE DEVOLUCIONES ───────────────────────────────────────────
-// Las tarjetas, las barras y la lista salen de UNA sola respuesta del
-// backend. Si cada una consultara por su cuenta podrian mostrar numeros
-// distintos del mismo momento.
-const DASH_EST = {
-  bodega:     {t:'En mi bodega', c:'#BA7517'},
-  camino:     {t:'En camino',    c:'#378ADD'},
-  solicitada: {t:'Solicitada',   c:'#888780'},
-  lista:      {t:'Finalizada',   c:'#1D9E75'}
-};
-const DASH_ABIERTOS = ['bodega','camino','solicitada'];
+// Estructura tomada del portal de Falabella, que es el que el equipo ya lee:
+// pestañas por etapa con contador, filtros arriba, tabla con acciones.
+//
+// Las etapas conservan el vocabulario de Falabella en vez de inventar otro.
+// Se derivan de lo que cada canal informa:
+//   punto     abierta y sin reloj  -> el cliente la dejo, no llega aun
+//   camino    en_transito
+//   revision  el reloj corre       -> esta en nuestra bodega, hay que decidir
+//   completa  resuelta o cancelada
+const DASH_TABS = [
+  {k:'revision', t:'Revisión pendiente'}, {k:'punto', t:'En punto de devolución'},
+  {k:'camino', t:'En camino'}, {k:'completa', t:'Completadas'}
+];
 const DASH_CANAL = {
   paris:{t:'París',c:'#0C447C'}, walmart:{t:'Walmart',c:'#0071CE'},
   mercadolibre:{t:'MercadoLibre',c:'#BA7517'}, falabella:{t:'Falabella',c:'#00B25E'},
   ripley:{t:'Ripley',c:'#A01B7A'}, hites:{t:'Hites',c:'#E30613'}
 };
-const DASH_PRE = [{k:1,t:'Día'},{k:7,t:'Semana'},{k:30,t:'1 mes'},{k:60,t:'2 meses'},{k:90,t:'3 meses'}];
-let _dashDatos = null, _dashCanal = null, _dashGrupo = null, _dashPre = 30;
+let _dashDatos = null, _dashTab = 'revision';
 
 function _dashIso(d){ return d.toISOString().slice(0,10); }
-function _dashMenos(n){ const d = new Date(); d.setDate(d.getDate() - n + 1); return d; }
-
-function dashSetPeriodo(n){
-  _dashPre = n;
-  document.getElementById('dashDesde').value = _dashIso(_dashMenos(n));
-  document.getElementById('dashHasta').value = _dashIso(new Date());
-  dashCargar();
-}
-
-function dashChips(){
-  document.getElementById('dashChips').innerHTML = DASH_PRE.map(p =>
-    `<button onclick="dashSetPeriodo(${p.k})" style="padding:4px 10px;font-size:11px;border-radius:999px;cursor:pointer;margin-right:4px;border:0.5px solid ${_dashPre===p.k?'var(--text)':'var(--border)'};background:${_dashPre===p.k?'var(--bg2)':'transparent'};color:var(--text);">${p.t}</button>`).join('');
+function _dashEtapa(r){
+  if(r.grupo === 'lista') return 'completa';
+  if(r.grupo === 'camino') return 'camino';
+  if(r.grupo === 'bodega') return 'revision';
+  return 'punto';
 }
 
 function dashCargar(){
-  const desde = document.getElementById('dashDesde').value;
-  const hasta = document.getElementById('dashHasta').value;
   const q = document.getElementById('dashBuscar').value.trim();
-  const url = `/devoluciones/dashboard?desde=${desde}&hasta=${hasta}` + (q ? '&q=' + encodeURIComponent(q) : '');
+  const url = '/devoluciones/dashboard?desde=' + document.getElementById('dashDesde').value +
+              '&hasta=' + document.getElementById('dashHasta').value +
+              (q ? '&q=' + encodeURIComponent(q) : '');
   document.getElementById('dashLista').innerHTML =
     '<div style="color:var(--hint);font-size:12px;text-align:center;padding:30px;">Cargando...</div>';
   fetch(url).then(r => r.json()).then(d => {
     if(d.error){ toast('No se pudo cargar: ' + d.error, 'error'); return; }
-    _dashDatos = d;
-    dashRender();
+    _dashDatos = d; dashRender();
   }).catch(e => toast('Error cargando el dashboard: ' + e.message, 'error'));
+}
+
+function dashFilas(){
+  if(!_dashDatos) return [];
+  const cn = document.getElementById('dashCanal').value;
+  return (_dashDatos.lista || []).filter(r =>
+    _dashEtapa(r) === _dashTab && (!cn || r.canal === cn));
 }
 
 function dashRender(){
   if(!_dashDatos) return;
-  const d = _dashDatos, r = d.resumen || {};
-  dashChips();
-
-  document.getElementById('dashCards').innerHTML = [...DASH_ABIERTOS,'lista'].map(e => {
-    let sub = '';
-    if(e === 'bodega'){
-      if(r.vencidas)      sub = `<div style="font-size:11px;color:var(--danger);margin-top:3px;">${r.vencidas} fuera de plazo</div>`;
-      else if(r.vencen_hoy) sub = `<div style="font-size:11px;color:var(--warn);margin-top:3px;">${r.vencen_hoy} vencen hoy</div>`;
-    }
-    const act = _dashGrupo === e;
-    return `<div onclick="dashFiltrarGrupo('${e}')" style="background:var(--card);border:0.5px solid ${act?'var(--text)':'var(--border)'};border-radius:var(--radius);padding:12px 14px;cursor:pointer;">
-      <div style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;">
-        <span style="width:8px;height:8px;border-radius:2px;background:${DASH_EST[e].c};"></span>${DASH_EST[e].t}</div>
-      <div style="font-size:22px;font-weight:600;color:var(--text);margin-top:4px;font-variant-numeric:tabular-nums;">${r[e]||0}</div>${sub}</div>`;
+  const todas = _dashDatos.lista || [];
+  const cn = document.getElementById('dashCanal').value;
+  document.getElementById('dashTabs').innerHTML = DASH_TABS.map(t => {
+    const n = todas.filter(r => _dashEtapa(r) === t.k && (!cn || r.canal === cn)).length;
+    const act = _dashTab === t.k;
+    return `<button onclick="dashTab('${t.k}')" style="padding:6px 12px;font-size:12px;border-radius:7px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;
+      border:0.5px solid ${act?'var(--text)':'var(--border)'};background:${act?'var(--text)':'transparent'};color:${act?'var(--bg)':'var(--text)'};">
+      ${t.t}<span style="font-size:10px;padding:1px 6px;border-radius:999px;background:${act?'rgba(255,255,255,.22)':'var(--bg2)'};">${n}</span></button>`;
   }).join('');
-
-  const canales = d.por_canal || [];
-  const max = Math.max(1, ...canales.map(c => c.total));
-  document.getElementById('dashCanales').innerHTML = canales.length ? canales.map(c => {
-    const meta = DASH_CANAL[c.canal] || {t:c.canal, c:'#888780'};
-    const segs = DASH_ABIERTOS.filter(e => c[e] > 0).map(e =>
-      `<span style="background:${DASH_EST[e].c};flex:${c[e]};border-radius:2px;"></span>`).join('');
-    const act = _dashCanal === c.canal;
-    return `<div onclick="dashFiltrarCanal('${c.canal}')" style="display:grid;grid-template-columns:130px minmax(0,1fr) 40px;align-items:center;gap:10px;padding:6px 8px;border-radius:var(--radius);cursor:pointer;border:0.5px solid ${act?'var(--text)':'transparent'};">
-      <span style="font-size:12px;color:var(--text);display:flex;align-items:center;gap:7px;">
-        <span style="width:8px;height:8px;border-radius:2px;background:${meta.c};"></span>${meta.t}</span>
-      <span style="display:flex;gap:2px;height:8px;width:${Math.round(c.total/max*100)}%;">${segs}</span>
-      <span style="font-size:12px;color:var(--muted);text-align:right;font-variant-numeric:tabular-nums;">${c.total}</span></div>`;
-  }).join('') : '<div style="font-size:12px;color:var(--hint);padding:8px;">Sin devoluciones abiertas en este rango</div>';
-
-  document.getElementById('dashLeyenda').innerHTML = DASH_ABIERTOS.map(e =>
-    `<span style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:2px;background:${DASH_EST[e].c};"></span>${DASH_EST[e].t}</span>`).join('') +
-    '<span style="color:var(--hint);">El plazo corre desde que llega a bodega</span>';
-
-  const fuera = document.getElementById('dashFuera');
-  if(d.abiertas_fuera_del_rango){
-    fuera.style.display = '';
-    fuera.textContent = `${d.abiertas_fuera_del_rango} devoluciones abiertas quedan fuera de este rango`;
-  } else { fuera.style.display = 'none'; }
-
   dashListar();
 }
 
-function dashListar(){
-  const d = _dashDatos; if(!d) return;
-  const filas = (d.lista || []).filter(x =>
-    (!_dashCanal || x.canal === _dashCanal) && (!_dashGrupo || x.grupo === _dashGrupo));
+function dashTab(k){ _dashTab = k; dashRender(); }
 
-  document.getElementById('dashLista').innerHTML = filas.length ? filas.slice(0,120).map(x => {
-    const meta = DASH_CANAL[x.canal] || {t:x.canal, c:'#888780'};
-    const h = x.horas_restantes;
-    let reloj = `<span style="font-size:11px;color:var(--muted);">${x.dias!=null?x.dias+' d':'—'}</span>`;
-    if(h !== null && h !== undefined && x.grupo === 'bodega'){
-      reloj = h < 0
-        ? `<span style="font-size:11px;color:var(--danger);font-weight:500;">${Math.abs(h)} h tarde</span>`
-        : `<span style="font-size:11px;color:${h<24?'var(--warn)':'var(--muted)'};">quedan ${h} h</span>`;
-    }
-    return `<div style="display:grid;grid-template-columns:minmax(0,1fr) 110px 110px 90px 100px;align-items:center;gap:10px;padding:9px 14px;border-bottom:0.5px solid var(--border);">
-      <div style="min-width:0;">
-        <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${x.producto||'(sin nombre)'}</div>
-        <div style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;">
-          <span style="font-family:'DM Mono',monospace;">${x.sku||'—'}</span> · ${x.motivo||'sin motivo'} · OC ${x.orden||'—'}</div></div>
-      <div><span style="font-size:10px;padding:2px 8px;border-radius:999px;background:var(--bg2);color:var(--text);display:inline-flex;align-items:center;gap:5px;">
-        <span style="width:7px;height:7px;border-radius:2px;background:${meta.c};"></span>${meta.t}</span></div>
-      <div><span style="font-size:10px;padding:2px 8px;border-radius:999px;background:var(--bg2);color:var(--text);display:inline-flex;align-items:center;gap:5px;">
-        <span style="width:7px;height:7px;border-radius:2px;background:${DASH_EST[x.grupo].c};"></span>${DASH_EST[x.grupo].t}</span></div>
-      <div style="text-align:right;">${reloj}</div>
-      <div style="text-align:right;">
-        <button onclick="dashCrearDev('${(x.orden||'').replace(/'/g,'')}')" style="background:var(--text);color:var(--bg);border:none;border-radius:7px;padding:5px 10px;font-size:11px;cursor:pointer;">Crear DEV</button></div></div>`;
-  }).join('') : '<div style="color:var(--hint);font-size:12px;text-align:center;padding:30px;">Sin devoluciones con estos filtros</div>';
-
-  const partes = [];
-  if(_dashCanal) partes.push((DASH_CANAL[_dashCanal]||{t:_dashCanal}).t);
-  if(_dashGrupo) partes.push(DASH_EST[_dashGrupo].t.toLowerCase());
-  document.getElementById('dashResumenTxt').textContent =
-    (partes.length ? partes.join(' · ') + ' — ' : '') + filas.length + ' devoluciones' +
-    (filas.length > 120 ? ' (se muestran 120)' : '');
-  document.getElementById('dashLimpiar').style.display = partes.length ? '' : 'none';
+function _dashPlazo(r){
+  const h = r.horas_restantes;
+  if(h === null || h === undefined)
+    return '<span style="font-size:11px;color:var(--hint);">Sin recibir</span>';
+  if(h < 0)
+    return `<span style="font-size:11px;padding:3px 9px;border-radius:999px;background:var(--danger-bg);color:#A32D2D;white-space:nowrap;">${Math.abs(h)} h tarde</span>`;
+  const bg = h < 24 ? 'var(--warn-bg)' : 'var(--bg2)', co = h < 24 ? '#854F0B' : 'var(--muted)';
+  return `<span style="font-size:11px;padding:3px 9px;border-radius:999px;background:${bg};color:${co};white-space:nowrap;">quedan ${h} h</span>`;
 }
 
-function dashFiltrarCanal(c){ _dashCanal = (_dashCanal === c ? null : c); dashRender(); }
-function dashFiltrarGrupo(g){ _dashGrupo = (_dashGrupo === g ? null : g); dashRender(); }
-function dashLimpiarFiltro(){ _dashCanal = null; _dashGrupo = null; dashRender(); }
-
-// El puente entre lo que reporta el canal y el flujo interno de bodega: abre
-// el alta que ya existe con el numero de orden puesto y la busqueda hecha,
-// que es el paso que hoy se hace copiando el numero a mano.
-function dashCrearDev(orden){
-  abrirModalNuevaDevolucion();
-  if(orden){
-    const inp = document.getElementById('devOcInput');
-    if(inp){ inp.value = orden; buscarOC(); }
+function _dashAcciones(r){
+  const id = `${r.canal}|${r.return_id}`;
+  if(r.decision){
+    const ok = r.decision === 'aceptada';
+    return `<div style="font-size:11px;color:${ok?'var(--success)':'var(--danger)'};">
+        ${ok?'Aceptada':'Rechazada'}<div style="color:var(--hint);font-size:10px;margin-top:2px;">${r.decision_por||''} ${r.decision_fecha||''}</div></div>
+      <button onclick="dashDecidir('${id}','')" style="margin-top:4px;background:transparent;border:0.5px solid var(--border);border-radius:6px;padding:3px 8px;font-size:10px;cursor:pointer;color:var(--muted);">Deshacer</button>`;
   }
+  return `<div style="display:flex;flex-direction:column;gap:4px;">
+      <button onclick="dashDecidir('${id}','aceptada')" style="background:var(--text);color:var(--bg);border:none;border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;">Sí, aceptar</button>
+      <button onclick="dashDecidir('${id}','rechazada')" style="background:transparent;border:0.5px solid var(--border);border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;color:var(--text);">No, rechazar</button>
+      <button disabled title="La emisión de nota de crédito todavía no está conectada"
+        style="background:var(--bg2);border:0.5px solid var(--border);border-radius:6px;padding:4px 8px;font-size:11px;color:var(--hint);cursor:not-allowed;">Emitir NC</button>
+    </div>`;
+}
+
+function dashListar(){
+  const filas = dashFilas();
+  document.getElementById('dashLista').innerHTML = filas.length ? filas.slice(0,100).map(r => {
+    const cn = DASH_CANAL[r.canal] || {t:r.canal, c:'#888780'};
+    return `<div style="display:grid;grid-template-columns:minmax(0,2fr) 44px 108px 96px 96px minmax(0,1.3fr) 112px 132px;gap:10px;align-items:center;padding:11px 14px;border-bottom:0.5px solid var(--border);">
+      <div style="min-width:0;">
+        <div style="font-size:12px;color:var(--text);line-height:1.35;">${r.producto||'(sin nombre)'}</div>
+        <div style="font-size:11px;color:var(--hint);font-family:'DM Mono',monospace;margin-top:3px;">${r.sku||'—'}</div></div>
+      <div style="font-size:12px;color:var(--text);font-variant-numeric:tabular-nums;">${r.cantidad}</div>
+      <div style="font-size:11px;font-family:'DM Mono',monospace;color:var(--text);">${r.orden||'—'}</div>
+      <div><span style="font-size:10px;padding:2px 8px;border-radius:999px;background:var(--bg2);color:var(--text);display:inline-flex;align-items:center;gap:5px;white-space:nowrap;">
+        <span style="width:7px;height:7px;border-radius:2px;background:${cn.c};"></span>${cn.t}</span></div>
+      <div style="font-size:11px;color:var(--muted);">${r.modelo||'—'}</div>
+      <div style="min-width:0;">
+        <div style="font-size:11px;color:var(--text);line-height:1.35;">${r.motivo||'<span style="color:var(--hint);">Sin razón informada</span>'}</div>
+        <div style="font-size:10px;color:var(--hint);margin-top:2px;">${r.llego ? 'Recibido ' + r.llego : (r.solicitada||'')}</div></div>
+      <div>${_dashPlazo(r)}</div>
+      <div>${_dashAcciones(r)}</div></div>`;
+  }).join('') : '<div style="color:var(--hint);font-size:12px;text-align:center;padding:36px;">Sin devoluciones en esta etapa</div>';
+
+  document.getElementById('dashResumenTxt').textContent =
+    filas.length + ' en esta etapa' + (filas.length > 100 ? ' (se muestran 100)' : '');
+  const f = _dashDatos.abiertas_fuera_del_rango;
+  document.getElementById('dashFuera').textContent =
+    f ? f + ' abiertas fuera del rango de fechas' : '';
+}
+
+// La decision se guarda en Lusync y NO se escribe al canal: aceptar o
+// rechazar alla es irreversible y tiene plata detras. La confirmacion se
+// sigue haciendo en el portal del marketplace.
+function dashDecidir(id, decision){
+  const [canal, return_id] = id.split('|');
+  fetch('/devoluciones-mkt/decision', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({canal, return_id, decision})
+  }).then(r => r.json()).then(d => {
+    if(!d.ok){ toast(d.error || 'No se pudo registrar', 'error'); return; }
+    toast(decision ? ('Registrado: ' + decision + ' · confirma en el portal del canal')
+                   : 'Decisión deshecha');
+    dashCargar();
+  }).catch(e => toast('Error: ' + e.message, 'error'));
+}
+
+function dashExportar(){
+  const filas = dashFilas();
+  if(!filas.length){ toast('No hay nada que exportar en esta etapa', 'warn'); return; }
+  const cab = ['Canal','Orden','SKU','Producto','Cantidad','Modelo','Razon','Etapa',
+               'Recibido','Horas restantes','Decision','Decidio','Fecha decision'];
+  const esc = v => '"' + String(v === null || v === undefined ? '' : v).replace(/"/g,'""') + '"';
+  const csv = [cab.join(';')].concat(filas.map(r => [
+    r.canal, r.orden, r.sku, r.producto, r.cantidad, r.modelo, r.motivo,
+    _dashTab, r.llego || '', r.horas_restantes === null ? '' : r.horas_restantes,
+    r.decision || '', r.decision_por || '', r.decision_fecha || ''
+  ].map(esc).join(';'))).join('\n');
+  // BOM para que Excel en español no rompa los acentos
+  const blob = new Blob(['\ufeff' + csv], {type:'text/csv;charset=utf-8;'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'devoluciones_' + _dashTab + '_' + _dashIso(new Date()) + '.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 function dashInit(){
-  document.getElementById('dashDesde').value = _dashIso(_dashMenos(30));
+  const d = new Date(); d.setDate(d.getDate() - 89);
+  document.getElementById('dashDesde').value = _dashIso(d);
   document.getElementById('dashHasta').value = _dashIso(new Date());
-  document.getElementById('dashDesde').onchange = () => { _dashPre = 0; dashCargar(); };
-  document.getElementById('dashHasta').onchange = () => { _dashPre = 0; dashCargar(); };
-  dashChips();
   dashCargar();
 }
 

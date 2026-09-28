@@ -1435,6 +1435,18 @@ def asegurar_llegada_bodega():
     try:
         cur.execute("""ALTER TABLE devoluciones_marketplace
                        ADD COLUMN IF NOT EXISTS fecha_llegada_bodega TIMESTAMP""")
+        # La decision se registra en Lusync y NO se escribe al canal: aceptar
+        # o rechazar alla es irreversible y tiene plata detras. Aca queda
+        # constancia de que se decidio y de quien se hizo cargo.
+        cur.execute("""ALTER TABLE devoluciones_marketplace
+                       ADD COLUMN IF NOT EXISTS decision TEXT""")
+        cur.execute("""ALTER TABLE devoluciones_marketplace
+                       ADD COLUMN IF NOT EXISTS decision_usuario TEXT""")
+        cur.execute("""ALTER TABLE devoluciones_marketplace
+                       ADD COLUMN IF NOT EXISTS decision_fecha TIMESTAMP""")
+        # Para cuando se conecte la nota de credito. Hoy nada la escribe.
+        cur.execute("""ALTER TABLE devoluciones_marketplace
+                       ADD COLUMN IF NOT EXISTS nc_folio TEXT""")
         conn.commit()
     except Exception as e:
         try:
