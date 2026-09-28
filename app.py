@@ -878,7 +878,7 @@ def _diagnostico_orden(movimientos, marcas, devoluciones=None):
     return balance, resumen, veredicto
 
 
-RASTREADOR_VERSION = "v3-2026-09-28"
+RASTREADOR_VERSION = "v4-2026-09-28"
 
 
 def _rastrear_ordenes(conn, ordenes):
@@ -969,6 +969,138 @@ def _rastrear_ordenes(conn, ordenes):
         resultado.append(info)
 
     return resultado
+
+
+@app.route("/admin/lusync/devoluciones/diagnostico")
+def admin_diag_devoluciones():
+    """Por qué no están llegando las devoluciones de un canal.
+
+    Uso:
+      /admin/lusync/devoluciones/diagnostico
+      /admin/lusync/devoluciones/diagnostico?canal=paris
+
+    Mide las tres capas por separado —la API del canal, el parser, y lo que
+    hay guardado— para ver dónde se corta la cadena.
+
+    SOLO LEE. No escribe nada ni dispara el sync.
+    """
+    bypass_token = _admin_bypass_token()
+    token = request.args.get("token", "")
+    if not (session.get("logged") or session.get("is_lusync_admin")
+            or (token and token == bypass_token)):
+        return redirect("/admin/lusync/login")
+
+    canal = (request.args.get("canal") or "paris").strip().lower()
+    salida = {"version": RASTREADOR_VERSION, "canal": canal,
+              "generado": str(now_chile())}
+    conn = None
+    try:
+        # ── Capa 1: la API cruda ─────────────────────────────────────
+        # Se pega directo para ver el status. El lector de returns.py
+        # imprime el error y devuelve [], asi que desde afuera un fallo de
+        # la API y una respuesta vacia se ven exactamente igual.
+        if canal == "paris":
+            import requests as _rq
+            from paris import PARIS_BASE_URL, paris_headers
+            try:
+                r = _rq.get(f"{PARIS_BASE_URL}/v2/returns", headers=paris_headers(),
+                            params={"offset": 0, "limit": 5}, timeout=25)
+                cuerpo = {}
+                try:
+                    cuerpo = r.json()
+                except Exception:
+                    pass
+                arr = (cuerpo.get("data") or []) if isinstance(cuerpo, dict) else []
+                salida["api"] = {
+                    "status": r.status_code,
+                    "count_reportado": (cuerpo.get("count") if isinstance(cuerpo, dict) else None),
+                    "trae_en_esta_pagina": len(arr),
+                    "primer_registro": arr[0] if arr else None,
+                    "cuerpo_si_fallo": (r.text[:400] if r.status_code != 200 else None),
+                }
+            except Exception as e:
+                salida["api"] = {"error": str(e)[:300]}
+
+        # ── Capa 2: el parser ────────────────────────────────────────
+        from returns import (obtener_devoluciones_paris, obtener_devoluciones_ripley,
+                             obtener_devoluciones_walmart, obtener_devoluciones_meli)
+        LECTORES = {"paris": obtener_devoluciones_paris,
+                    "ripley": obtener_devoluciones_ripley,
+                    "walmart": obtener_devoluciones_walmart,
+                    "mercadolibre": obtener_devoluciones_meli}
+        lector = LECTORES.get(canal)
+        if lector:
+            try:
+                devs = lector(dias=30) or []
+                salida["parser"] = {
+                    "devoluciones_parseadas": len(devs),
+                    "muestra": [{"return_id": d.get("return_id"),
+                                 "order_id": d.get("order_id"),
+                                 "sku_canal": d.get("sku_canal"),
+                                 "cantidad": d.get("cantidad"),
+                                 "estado": d.get("estado"),
+                                 "estado_canal": d.get("estado_canal"),
+                                 "motivo": d.get("motivo"),
+                                 "solicitada": str(d.get("fecha_solicitud") or "")}
+                                for d in devs[:5]],
+                }
+            except Exception as e:
+                salida["parser"] = {"error": str(e)[:300]}
+        else:
+            salida["parser"] = {"error": "canal sin lector: %s" % canal}
+
+        # ── Capa 3: lo que hay guardado ──────────────────────────────
+        from inventario import get_conn, release_conn
+        conn = get_conn(tenant_id=1, is_admin=True)
+        with conn.cursor() as cur:
+            cur.execute("""SELECT COALESCE(canal,'?'), COUNT(*),
+                                  TO_CHAR(MAX(fecha_solicitud),'DD/MM/YYYY HH24:MI')
+                             FROM devoluciones_marketplace
+                            GROUP BY 1 ORDER BY 1""")
+            salida["guardadas_por_canal"] = [
+                {"canal": r[0], "cantidad": r[1], "mas_reciente": r[2]}
+                for r in cur.fetchall()]
+
+        # ── El diagnostico ───────────────────────────────────────────
+        api = salida.get("api") or {}
+        par = salida.get("parser") or {}
+        guardadas = sum(g["cantidad"] for g in salida["guardadas_por_canal"]
+                        if g["canal"] == canal)
+        salida["guardadas_de_este_canal"] = guardadas
+
+        if api.get("error") or (api.get("status") and api["status"] != 200):
+            salida["conclusion"] = ("La API del canal no responde bien. El problema es de "
+                                    "credenciales o de endpoint, no de Lusync.")
+        elif par.get("error"):
+            salida["conclusion"] = "El parser falla: " + str(par["error"])
+        elif not par.get("devoluciones_parseadas"):
+            salida["conclusion"] = ("El canal responde 200 pero no entrega devoluciones "
+                                    "por esta via. Puede ser otro endpoint u otro filtro: "
+                                    "comparar 'primer_registro' con lo que se ve en el portal.")
+        elif not guardadas:
+            salida["conclusion"] = ("El parser SI trae devoluciones pero no hay ninguna "
+                                    "guardada: el problema esta en la escritura "
+                                    "(probablemente RLS o un error tragado en el sync).")
+        else:
+            salida["conclusion"] = ("Trae %d y hay %d guardadas. Si falta una en concreto, "
+                                    "comparar su order_id con el de la muestra."
+                                    % (par["devoluciones_parseadas"], guardadas))
+
+        return jsonify(salida)
+    except Exception as e:
+        import traceback as _tb
+        salida["error"] = "El diagnostico fallo"
+        salida["tipo"] = type(e).__name__
+        salida["detalle"] = str(e)[:400]
+        salida["traza"] = _tb.format_exc().strip().splitlines()[-5:]
+        return jsonify(salida), 500
+    finally:
+        try:
+            if conn is not None:
+                from inventario import release_conn as _rc
+                _rc(conn)
+        except Exception:
+            pass
 
 
 @app.route("/admin/lusync/ordenes/rastrear")
