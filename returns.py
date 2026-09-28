@@ -719,8 +719,17 @@ def obtener_devoluciones_falabella(dias=30):
                 sku = (it.get("Sku") or it.get("SellerSku") or "").strip()
                 if not sku:
                     continue
-                g = por_sku.setdefault(sku, {"cant": 0, "item": it})
+                g = por_sku.setdefault(sku, {"cant": 0, "item": it, "monto": 0.0})
                 g["cant"] += 1
+                # Grand Total segun la documentacion de Falabella: PaidPrice
+                # mas ShippingAmount, POR PRODUCTO. Cada OrderItem es una
+                # unidad, asi que se acumula: quedarse con el primero
+                # valorizaba en 1 una devolucion de 2.
+                for campo in ("PaidPrice", "ShippingAmount"):
+                    try:
+                        g["monto"] += float(it.get(campo) or 0)
+                    except (TypeError, ValueError):
+                        pass
 
             for sku, g in por_sku.items():
                 it = g["item"]
@@ -767,8 +776,14 @@ def obtener_devoluciones_falabella(dias=30):
                     "tipo": ("return_fulfillment"
                              if "fulfillment" in str(it.get("ShippingType") or "").lower()
                              else "return_seller"),
-                    "monto_reembolso": (it.get("PaidPrice") or it.get("ItemPrice")
-                                        or o.get("Price")),
+                    # PaidPrice + ShippingAmount, que es el "Grand Total" que
+                    # documenta Falabella para documentos tributarios. NO
+                    # ItemPrice, que es el precio antes de descuentos, ni el
+                    # Price de la orden, que su propia documentacion marca
+                    # como el que difiere con promociones y rompe los
+                    # documentos tributarios. De aca sale el monto de la nota
+                    # de credito.
+                    "monto_reembolso": round(g["monto"], 2) or None,
                     "moneda": "CLP",
                     "tracking_number": (it.get("TrackingCode") or it.get("TrackingNumber")),
                     "transportista": it.get("ShipmentProvider"),
