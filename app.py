@@ -3356,6 +3356,37 @@ def _sync_ripley_automatico():
                         continue
                     items_reintegrados = []
                     ultimo_sku = None
+
+                    # De donde salio la venta decide a donde vuelve la unidad.
+                    #
+                    # Ripley era el unico canal que no consultaba esto al
+                    # cancelar: reponia SIEMPRE en CENTRAL. Una venta Full se
+                    # descuenta de RIPLEY_FBM, asi que devolverla a Central
+                    # inventa una unidad que no tenemos y deja la bodega de
+                    # Ripley corta. Mismo error que ya se corrigio en
+                    # MercadoLibre y que Falabella y Paris ya tenian resuelto.
+                    es_rip_cancel = detectar_fulfillment_ripley(o)
+
+                    # ¿Alcanzo a recibirlo el cliente? No es lo mismo:
+                    #   - Cancelada antes de entregar: la unidad no se movio de
+                    #     la bodega de Ripley, vuelve a RIPLEY_FBM.
+                    #   - Entregada y despues devuelta: es una devolucion, y
+                    #     donde queda la unidad depende de como la procese
+                    #     Ripley. Eso NO se adivina: se avisa y lo ve una persona.
+                    def _entregada_ripley(orden_rp):
+                        marcas = [str(orden_rp.get("order_state") or ""),
+                                  str(orden_rp.get("status") or "")]
+                        for ln in (orden_rp.get("order_lines") or []):
+                            if isinstance(ln, dict):
+                                marcas.append(str(ln.get("order_line_state") or ""))
+                        for ev in (orden_rp.get("order_state_reason_label"),
+                                   orden_rp.get("shipping_deadline")):
+                            marcas.append(str(ev or ""))
+                        texto = " ".join(marcas).upper()
+                        return any(m in texto for m in ("RECEIVED", "CLOSED", "SHIPPED", "ENTREGAD"))
+
+                    entregada_rp = _entregada_ripley(o)
+
                     for item in items_orden:
                         shop_sku = (item.get("offer_sku") or item.get("shop_sku") or
                                     item.get("sku") or item.get("seller_sku") or "").strip()
@@ -3368,7 +3399,63 @@ def _sync_ripley_automatico():
                         prod = next((p for p in productos if p["sku"] == sku_lusync), None)
                         if not prod:
                             continue
-                        ajustar_stock_bodega(prod["sku"], "CENTRAL", cantidad)
+
+                        if es_rip_cancel and entregada_rp:
+                            # El cliente la recibio: es una devolucion, no una
+                            # cancelacion. No se inventa stock; queda para revisar.
+                            registrar_movimiento(
+                                "ajuste", prod["sku"], prod["nombre"], 0,
+                                f"Ripley Full orden {order_id} cancelada DESPUÉS de entregada — revisar dónde quedó la unidad",
+                                usuario="Sistema", canal="Ripley", orden_id=order_id
+                            )
+                            try:
+                                crear_alerta(
+                                    tipo="devolucion",
+                                    titulo=f"Devolución Ripley Full: {order_id}",
+                                    mensaje=(f"La orden {order_id} se canceló <b>después de entregada</b>.<br>"
+                                             f"{prod['nombre']} (SKU {prod['sku']}) x{cantidad}.<br><br>"
+                                             "No se reintegró stock automáticamente: hay que confirmar si la "
+                                             "unidad volvió a la bodega de Ripley o al vendedor."),
+                                    sku=prod["sku"]
+                                )
+                            except Exception:
+                                pass
+                            items_reintegrados.append(
+                                f"{prod['nombre']} (SKU: {shop_sku}) x{cantidad} — devolución, sin reintegrar")
+                            continue
+
+                        if es_rip_cancel:
+                            # Cancelada antes de entregar: sigue en la bodega de
+                            # Ripley. No toca central ni re-sincroniza, porque el
+                            # stock Full no afecta la disponibilidad propia.
+                            #
+                            # Por item: ajustar_stock_bodega lanza, y sin esto un
+                            # SKU con problema abortaria el resto del lote. El
+                            # fallo se anota donde se ve.
+                            try:
+                                ajustar_stock_bodega(prod["sku"], "RIPLEY_FBM", cantidad)
+                            except Exception as e_aj:
+                                print(f"[Scheduler Ripley] no pude reponer {prod['sku']} en RIPLEY_FBM: {e_aj}")
+                                items_reintegrados.append(
+                                    f"{prod['nombre']} (SKU: {shop_sku}) x{cantidad} — ERROR al reponer: {str(e_aj)[:80]}")
+                                continue
+                            registrar_movimiento(
+                                "entrada", prod["sku"], prod["nombre"], cantidad,
+                                f"Cancelación Ripley Full orden {order_id} (bodega RIPLEY_FBM)",
+                                usuario="Sistema", canal="Ripley", orden_id=order_id
+                            )
+                            items_reintegrados.append(
+                                f"{prod['nombre']} (SKU: {shop_sku}) x{cantidad} → Ripley Full")
+                            continue
+
+                        # Venta propia: vuelve a central, como siempre.
+                        try:
+                            ajustar_stock_bodega(prod["sku"], "CENTRAL", cantidad)
+                        except Exception as e_aj:
+                            print(f"[Scheduler Ripley] no pude reponer {prod['sku']} en CENTRAL: {e_aj}")
+                            items_reintegrados.append(
+                                f"{prod['nombre']} (SKU: {shop_sku}) x{cantidad} — ERROR al reponer: {str(e_aj)[:80]}")
+                            continue
                         registrar_movimiento(
                             "entrada", prod["sku"], prod["nombre"], cantidad,
                             f"Cancelación Ripley orden {order_id}",
