@@ -878,7 +878,7 @@ def _diagnostico_orden(movimientos, marcas, devoluciones=None):
     return balance, resumen, veredicto
 
 
-RASTREADOR_VERSION = "v7-2026-09-28"
+RASTREADOR_VERSION = "v8-2026-09-28"
 
 
 def _rastrear_ordenes(conn, ordenes):
@@ -999,6 +999,34 @@ def admin_diag_devoluciones():
         # Se pega directo para ver el status. El lector de returns.py
         # imprime el error y devuelve [], asi que desde afuera un fallo de
         # la API y una respuesta vacia se ven exactamente igual.
+        if canal == "falabella":
+            # Falabella no tiene endpoint de devoluciones: son ESTADOS de la
+            # orden, sobre la misma API firmada por Actions. Se prueban los
+            # estados candidatos porque su documentacion del flujo esta en
+            # construccion y los nombres no estan publicados.
+            from falabella import obtener_ordenes_falabella as _ofa
+            ESTADOS = ["returned", "return_ship_by_customer",
+                       "return_awaiting_for_approval", "return_rejected",
+                       "return_completed", "failed"]
+            salida["api"] = []
+            for est in ESTADOS:
+                intento = {"ruta": "GetOrders?Status=%s" % est}
+                try:
+                    ords = _ofa(estado=est, dias=90, limit=5) or []
+                    intento["status"] = 200
+                    intento["trae"] = len(ords)
+                    if ords:
+                        o0 = ords[0]
+                        intento["claves_orden"] = sorted(list(o0.keys()))[:20]
+                        intento["primer_registro"] = {
+                            k: o0.get(k) for k in list(o0.keys())[:14]}
+                except Exception as e:
+                    intento["error"] = str(e)[:200]
+                salida["api"].append(intento)
+            _con = [i for i in salida["api"] if i.get("trae")]
+            salida["ruta_que_funciona"] = (_con[0]["ruta"] if _con else None)
+            salida["estados_con_datos"] = [i["ruta"] for i in _con]
+
         if canal == "ripley":
             # Ripley tiene lector y esta en la lista de canales, pero nunca
             # trajo una sola devolucion. Se pega directo para ver en que capa
@@ -1082,6 +1110,11 @@ def admin_diag_devoluciones():
                     "walmart": obtener_devoluciones_walmart,
                     "mercadolibre": obtener_devoluciones_meli}
         lector = LECTORES.get(canal)
+        if canal == "falabella":
+            salida["parser"] = {"error": "Falabella todavia no tiene lector de pull; "
+                                         "solo existe el handler de webhook. Es lo que "
+                                         "este diagnostico viene a resolver."}
+            lector = None
         if lector:
             try:
                 devs = lector(dias=30) or []
