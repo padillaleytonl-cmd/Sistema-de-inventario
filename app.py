@@ -851,9 +851,86 @@ def _diagnostico_orden(movimientos, marcas):
     return balance, resumen, veredicto
 
 
+RASTREADOR_VERSION = "v3-2026-09-28"
+
+
+def _rastrear_ordenes(conn, ordenes):
+    """Junta lo que hay de cada orden en las cuatro tablas. Solo lee.
+
+    OJO con los tipos: movimientos.orden_id y ordenes_procesadas.orden_id son
+    BIGINT, no TEXT. Comparar contra = ANY(array_de_texto) revienta con
+    "operator does not exist: bigint = text". Por eso se castea la columna,
+    igual que hacen las consultas viejas del archivo.
+    """
+    PREFIJOS = ["", "FALABELLA-", "PARIS-", "PA-", "MELI-", "ML-", "WALMART-", "WM-",
+                "RIPLEY-", "RP-", "WOO-", "WC-", "HITES-"]
+    resultado = []
+
+    for num in ordenes:
+        info = {"orden": num, "movimientos": [], "marcas": [], "alertas": [],
+                "stock_actual": {}}
+        variantes = [p + num for p in PREFIJOS]
+
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, tipo, sku, nombre, cantidad, COALESCE(faltante,0),
+                       COALESCE(motivo,''), COALESCE(usuario,''), COALESCE(canal,''),
+                       TO_CHAR(fecha,'DD/MM/YYYY HH24:MI'),
+                       COALESCE(bodega_codigo,'CENTRAL'),
+                       stock_antes, stock_despues,
+                       COALESCE(origen_registro,''), COALESCE(orden_id::text,'')
+                  FROM movimientos
+                 WHERE COALESCE(orden_id::text,'') = ANY(%s)
+                    OR COALESCE(numero_orden,'') = ANY(%s)
+                 ORDER BY fecha ASC, id ASC
+            """, (variantes, variantes))
+            for r in cur.fetchall():
+                info["movimientos"].append({
+                    "id": r[0], "tipo": r[1], "sku": r[2], "producto": r[3],
+                    "cantidad": r[4], "faltante": r[5], "motivo": r[6],
+                    "usuario": r[7], "canal": r[8], "fecha": r[9],
+                    "bodega": r[10], "stock_antes": r[11], "stock_despues": r[12],
+                    "origen": r[13], "orden_id_guardado": r[14],
+                })
+
+            variantes_marca = variantes + [p + "CANCEL-" + num for p in PREFIJOS]
+            cur.execute("""SELECT COALESCE(order_id_texto, orden_id::text),
+                                  TO_CHAR(fecha,'DD/MM/YYYY HH24:MI')
+                             FROM ordenes_procesadas
+                            WHERE COALESCE(order_id_texto,'') = ANY(%s)
+                               OR COALESCE(orden_id::text,'') = ANY(%s)
+                            ORDER BY fecha ASC""", (variantes_marca, variantes_marca))
+            info["marcas"] = [{"clave": r[0] or "", "fecha": r[1]} for r in cur.fetchall()]
+
+            cur.execute("""SELECT tipo, titulo, COALESCE(sku,''), leida,
+                                  TO_CHAR(fecha,'DD/MM/YYYY HH24:MI')
+                             FROM alertas
+                            WHERE COALESCE(orden_id::text,'') = ANY(%s)
+                            ORDER BY fecha ASC""", (variantes,))
+            info["alertas"] = [{"tipo": r[0], "titulo": r[1], "sku": r[2],
+                                "leida": bool(r[3]), "fecha": r[4]} for r in cur.fetchall()]
+
+            skus = sorted({m["sku"] for m in info["movimientos"] if m["sku"]})
+            if skus:
+                cur.execute("""SELECT sku, bodega_codigo, cantidad
+                                 FROM stock_bodega
+                                WHERE sku = ANY(%s) AND cantidad <> 0
+                                ORDER BY sku, bodega_codigo""", (skus,))
+                for sk, bod, cant in cur.fetchall():
+                    info["stock_actual"].setdefault(sk, {})[bod] = int(cant)
+
+        balance, resumen, veredicto = _diagnostico_orden(info["movimientos"], info["marcas"])
+        info["balance"] = balance
+        info["resumen"] = resumen
+        info["veredicto"] = veredicto
+        resultado.append(info)
+
+    return resultado
+
+
 @app.route("/admin/lusync/ordenes/rastrear")
 def admin_rastrear_orden():
-    """Todo lo que Lusync sabe de una orden, y que hizo con el stock.
+    """Todo lo que Lusync sabe de una orden, y qué hizo con el stock.
 
     Uso:
       /admin/lusync/ordenes/rastrear?orden=3253331503
@@ -863,6 +940,11 @@ def admin_rastrear_orden():
     si quedó un descuadre, de qué bodega y cuántas unidades.
 
     SOLO LEE. No escribe en ninguna tabla.
+
+    Todo el cuerpo va dentro del try, get_conn y jsonify incluidos: en la
+    versión anterior estaban afuera y cualquier fallo ahí salía como el 500
+    mudo de Flask, que es justo lo que una herramienta de diagnóstico no
+    puede hacer.
     """
     bypass_token = _admin_bypass_token()
     token = request.args.get("token", "")
@@ -870,107 +952,41 @@ def admin_rastrear_orden():
             or (token and token == bypass_token)):
         return redirect("/admin/lusync/login")
 
-    from inventario import get_conn, release_conn
-
-    ordenes = [o.strip() for o in (request.args.get("orden", "") or "").split(",") if o.strip()]
-    if not ordenes:
-        return jsonify({"error": "Falta ?orden=NUMERO (puedes pasar varios separados por coma)"}), 400
-
-    # Los prefijos con que cada canal marca sus ordenes. 'PA-' y 'ML-' son de
-    # la migracion vieja y siguen apareciendo en datos antiguos.
-    PREFIJOS = ["", "FALABELLA-", "PARIS-", "PA-", "MELI-", "ML-", "WALMART-", "WM-",
-                "RIPLEY-", "RP-", "WOO-", "WC-", "HITES-"]
-
-    salida = {"generado": str(now_chile()), "ordenes": []}
-
-    # Una herramienta de diagnostico que devuelve un 500 mudo no sirve de
-    # nada: el error que hay que leer es justamente el suyo.
-    import traceback as _tb_rast
-
-    conn = get_conn(tenant_id=1, is_admin=True)
+    conn = None
     try:
-        for num in ordenes:
-            info = {"orden": num, "movimientos": [], "marcas": [], "alertas": [],
-                    "stock_actual": {}}
+        from inventario import get_conn, release_conn
 
-            with conn.cursor() as cur:
-                # ── Movimientos. Se busca por orden_id y por numero_orden,
-                # y con los prefijos, porque no todos los canales guardan igual.
-                variantes = [p + num for p in PREFIJOS]
-                cur.execute("""
-                    SELECT id, tipo, sku, nombre, cantidad, COALESCE(faltante,0),
-                           COALESCE(motivo,''), COALESCE(usuario,''), COALESCE(canal,''),
-                           TO_CHAR(fecha,'DD/MM/YYYY HH24:MI'),
-                           COALESCE(bodega_codigo,'CENTRAL'),
-                           stock_antes, stock_despues,
-                           COALESCE(origen_registro,''), COALESCE(orden_id,'')
-                      FROM movimientos
-                     WHERE COALESCE(orden_id::text, '') = ANY(%s)
-                        OR COALESCE(numero_orden, '') = ANY(%s)
-                     ORDER BY fecha ASC, id ASC
-                """, (variantes, variantes))
-                for r in cur.fetchall():
-                    info["movimientos"].append({
-                        "id": r[0], "tipo": r[1], "sku": r[2], "producto": r[3],
-                        "cantidad": r[4], "faltante": r[5], "motivo": r[6],
-                        "usuario": r[7], "canal": r[8], "fecha": r[9],
-                        "bodega": r[10], "stock_antes": r[11], "stock_despues": r[12],
-                        "origen": r[13], "orden_id_guardado": r[14],
-                    })
+        ordenes = [o.strip() for o in (request.args.get("orden", "") or "").split(",") if o.strip()]
+        if not ordenes:
+            return jsonify({"version": RASTREADOR_VERSION,
+                            "error": "Falta ?orden=NUMERO (varios separados por coma)"}), 400
 
-                # ── Marcas de procesada, incluida la de cancelacion.
-                variantes_marca = variantes + [p + "CANCEL-" + num for p in PREFIJOS]
-                cur.execute("""SELECT order_id_texto, TO_CHAR(fecha,'DD/MM/YYYY HH24:MI')
-                                 FROM ordenes_procesadas
-                                WHERE COALESCE(order_id_texto, '') = ANY(%s)
-                                   OR COALESCE(orden_id::text, '') = ANY(%s)
-                                ORDER BY fecha ASC""", (variantes_marca, variantes_marca))
-                info["marcas"] = [{"clave": r[0], "fecha": r[1]} for r in cur.fetchall()]
-
-                # ── Alertas
-                # Mismo cuidado con el tipo: en alertas orden_id es TEXT, pero
-                # castear no cuesta nada y evita repetir el 500 si algun dia
-                # cambia.
-                cur.execute("""SELECT tipo, titulo, COALESCE(sku,''), leida,
-                                      TO_CHAR(fecha,'DD/MM/YYYY HH24:MI')
-                                 FROM alertas
-                                WHERE COALESCE(orden_id::text, '') = ANY(%s)
-                                ORDER BY fecha ASC""", (variantes,))
-                info["alertas"] = [{"tipo": r[0], "titulo": r[1], "sku": r[2],
-                                    "leida": r[3], "fecha": r[4]} for r in cur.fetchall()]
-
-                # ── Stock de hoy de los SKU involucrados
-                skus = sorted({m["sku"] for m in info["movimientos"] if m["sku"]})
-                if skus:
-                    cur.execute("""SELECT sku, bodega_codigo, cantidad
-                                     FROM stock_bodega
-                                    WHERE sku = ANY(%s) AND cantidad <> 0
-                                    ORDER BY sku, bodega_codigo""", (skus,))
-                    for sk, bod, cant in cur.fetchall():
-                        info["stock_actual"].setdefault(sk, {})[bod] = int(cant)
-
-            balance, resumen, veredicto = _diagnostico_orden(
-                info["movimientos"], info["marcas"])
-            info["balance"] = balance
-            info["resumen"] = resumen
-            info["veredicto"] = veredicto
-
-            salida["ordenes"].append(info)
+        conn = get_conn(tenant_id=1, is_admin=True)
+        datos = _rastrear_ordenes(conn, ordenes)
+        return jsonify({"version": RASTREADOR_VERSION,
+                        "generado": str(now_chile()),
+                        "ordenes": datos})
     except Exception as e:
+        import traceback as _tb
         try:
-            conn.rollback()
+            if conn is not None:
+                conn.rollback()
         except Exception:
             pass
         return jsonify({
+            "version": RASTREADOR_VERSION,
             "error": "El rastreador falló",
-            "detalle": str(e)[:400],
-            "donde": _tb_rast.format_exc().strip().splitlines()[-3:],
-            "orden_en_curso": num if ordenes else None,
+            "tipo": type(e).__name__,
+            "detalle": str(e)[:600],
+            "traza": _tb.format_exc().strip().splitlines()[-6:],
         }), 500
     finally:
-        release_conn(conn)
-
-    return jsonify(salida)
+        try:
+            if conn is not None:
+                from inventario import release_conn as _rc
+                _rc(conn)
+        except Exception:
+            pass
 
 
 @app.route("/admin/lusync/ventas/faltantes")
