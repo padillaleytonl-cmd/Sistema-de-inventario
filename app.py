@@ -878,7 +878,7 @@ def _diagnostico_orden(movimientos, marcas, devoluciones=None):
     return balance, resumen, veredicto
 
 
-RASTREADOR_VERSION = "v5-2026-09-28"
+RASTREADOR_VERSION = "v6-2026-09-28"
 
 
 def _rastrear_ordenes(conn, ordenes):
@@ -999,6 +999,31 @@ def admin_diag_devoluciones():
         # Se pega directo para ver el status. El lector de returns.py
         # imprime el error y devuelve [], asi que desde afuera un fallo de
         # la API y una respuesta vacia se ven exactamente igual.
+        if canal == "ripley":
+            # Ripley tiene lector y esta en la lista de canales, pero nunca
+            # trajo una sola devolucion. Se pega directo para ver en que capa
+            # se corta, igual que se hizo con Paris.
+            import requests as _rq
+            from ripley import RIPLEY_BASE_URL, ripley_headers
+            try:
+                r = _rq.get(f"{RIPLEY_BASE_URL}/api/returns", headers=ripley_headers(),
+                            params={"max": 5}, timeout=25)
+                cuerpo = None
+                try:
+                    cuerpo = r.json()
+                except Exception:
+                    pass
+                arr = (cuerpo.get("returns") or cuerpo.get("data") or []) if isinstance(cuerpo, dict) else (cuerpo or [])
+                salida["api"] = [{"ruta": "/api/returns", "status": r.status_code,
+                                  "trae": len(arr) if isinstance(arr, list) else 0,
+                                  "claves_respuesta": (list(cuerpo.keys())[:12] if isinstance(cuerpo, dict) else None),
+                                  "primer_registro": (arr[0] if isinstance(arr, list) and arr else None),
+                                  "cuerpo": (r.text[:300] if r.status_code != 200 else None)}]
+                salida["ruta_que_funciona"] = "/api/returns" if r.status_code == 200 else None
+            except Exception as e:
+                salida["api"] = [{"ruta": "/api/returns", "error": str(e)[:250]}]
+                salida["ruta_que_funciona"] = None
+
         if canal == "paris":
             import requests as _rq
             from datetime import datetime as _dt, timedelta as _td

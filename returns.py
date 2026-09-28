@@ -167,6 +167,30 @@ def traducir_estado_canal(canal, estado_crudo):
     return str(estado_crudo).replace("_", " ").strip().capitalize()
 
 
+# Horas que hay para reclamar una devolucion desde que llega a nuestra bodega.
+# Misma regla en los cinco canales.
+PLAZO_RECLAMO_HORAS = 72
+
+
+def _plazo_reclamo(plazo_del_canal, llegada_a_bodega):
+    """Cuando vence el plazo para reclamar. Devuelve datetime o None.
+
+    Se prefiere SIEMPRE el plazo que informa el canal: es el que vale si hay
+    una disputa, y el que el canal va a mirar. El calculo es solo el respaldo
+    para los canales que no lo entregan —hoy, Paris—, y usa la regla del
+    negocio: 72 horas desde la llegada a nuestra bodega.
+
+    Devolver None es correcto y significa algo: todavia no hay reloj porque
+    el producto no ha llegado. No es lo mismo que "sin plazo".
+    """
+    if plazo_del_canal:
+        return plazo_del_canal
+    if llegada_a_bodega:
+        from datetime import timedelta as _td
+        return llegada_a_bodega + _td(hours=PLAZO_RECLAMO_HORAS)
+    return None
+
+
 def _norm_estado(canal, estado_crudo):
     """Mapea el estado crudo de cada canal a un estado normalizado común."""
     e = (str(estado_crudo) or "").lower()
@@ -371,7 +395,12 @@ def obtener_devoluciones_walmart(dias=30):
                         "tracking_number": tracking,
                         "transportista": transportista,
                         "fecha_solicitud": _parse_fecha(o.get("returnOrderDate")),
-                        "fecha_limite": _parse_fecha(o.get("returnByDate")),
+                        # OJO: en Walmart returnByDate suele ser el plazo del
+                        # CLIENTE para devolver, no el del seller para reclamar.
+                        # Hay que comprobarlo contra una devolucion real antes
+                        # de confiar en este numero.
+                        "fecha_limite": _plazo_reclamo(
+                            _parse_fecha(o.get("returnByDate")), None),
                         "fecha_resolucion": None,
                         "fecha_actualizacion_canal": _parse_fecha(o.get("returnOrderDate")),
                         "acciones_disponibles": [],
@@ -438,7 +467,8 @@ def obtener_devoluciones_ripley(dias=30):
                     "tracking_number": o.get("tracking_number"),
                     "transportista": o.get("carrier"),
                     "fecha_solicitud": _parse_fecha(o.get("created_date") or o.get("creation_date")),
-                    "fecha_limite": _parse_fecha(o.get("deadline") or o.get("expiration_date")),
+                    "fecha_limite": _plazo_reclamo(
+                        _parse_fecha(o.get("deadline") or o.get("expiration_date")), None),
                     "fecha_resolucion": _parse_fecha(o.get("closed_date")),
                     "fecha_actualizacion_canal": _parse_fecha(o.get("last_updated_date") or o.get("update_date")),
                     "acciones_disponibles": [],
@@ -577,7 +607,11 @@ def obtener_devoluciones_paris(dias=30):
                 "fecha_solicitud": _parse_fecha(
                     o.get("originReturnDate") or o.get("storeReturnDate")
                     or o.get("dispatchDate") or o.get("originOrderDate")),
-                "fecha_limite": None,   # /full no expone plazo
+                # /v2/returns/full no expone plazo, asi que se calcula desde
+                # la llegada a bodega. Mientras el producto no llegue, esto es
+                # None a proposito: el reloj todavia no arranco.
+                "fecha_limite": _plazo_reclamo(
+                    None, _parse_fecha(o.get("warehouseArrivalDate"))),
                 "fecha_resolucion": _parse_fecha(o.get("finalStatusDate")),
                 "fecha_actualizacion_canal": _parse_fecha(ultima),
                 "acciones_disponibles": [],
@@ -764,7 +798,8 @@ def procesar_webhook_falabella_return(payload, tenant_id=None):
             "tracking_number": p.get("TrackingNumber"),
             "transportista": p.get("Carrier"),
             "fecha_solicitud": _parse_fecha(p.get("CreatedAt") or p.get("createdAt")),
-            "fecha_limite": _parse_fecha(p.get("Deadline") or p.get("deadline")),
+            "fecha_limite": _plazo_reclamo(
+                _parse_fecha(p.get("Deadline") or p.get("deadline")), None),
             "fecha_resolucion": None,
             "fecha_actualizacion_canal": _parse_fecha(p.get("UpdatedAt") or p.get("updatedAt")) or now_chile().replace(tzinfo=None),
             "acciones_disponibles": [],
