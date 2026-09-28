@@ -568,7 +568,15 @@ def obtener_devoluciones_paris(dias=30):
                 "moneda": "CLP",
                 "tracking_number": i0.get("trackingNumber"),
                 "transportista": o.get("carrier"),
-                "fecha_solicitud": _parse_fecha(o.get("originReturnDate")),
+                # originReturnDate viene en null en varias devoluciones (se vio
+                # en 3 de las primeras 5 de produccion). Sin fecha no se puede
+                # calcular la antiguedad ni priorizar, que es justo para lo que
+                # sirve el modulo, asi que se cae a la siguiente fecha conocida.
+                # originOrderDate es la de la ORDEN, no la de la devolucion:
+                # va ultima y solo para no dejarla vacia.
+                "fecha_solicitud": _parse_fecha(
+                    o.get("originReturnDate") or o.get("storeReturnDate")
+                    or o.get("dispatchDate") or o.get("originOrderDate")),
                 "fecha_limite": None,   # /full no expone plazo
                 "fecha_resolucion": _parse_fecha(o.get("finalStatusDate")),
                 "fecha_actualizacion_canal": _parse_fecha(ultima),
