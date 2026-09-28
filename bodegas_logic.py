@@ -16,6 +16,8 @@ Estructura del módulo:
   3. Reintegración para cancelaciones
   4. Helpers de sincronización
 """
+import os
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # DETECTORES DE FULFILLMENT POR MARKETPLACE
@@ -211,32 +213,55 @@ def detectar_fulfillment_falabella(orden_data):
         return False
 
 
+# Centros de fulfillment de Ripley. Vacía = no operamos Ripley Full, que es
+# la situación de hoy.
+#
+# El código del centro viene en fulfillment.center.code de la orden y aparece
+# solo, sin que haya que pedirlo, en la primera venta Full real. Se agrega
+# acá (o en la variable de entorno RIPLEY_CENTROS_FULL, separados por coma) y
+# desde ese momento esas ventas descuentan de RIPLEY_FBM en vez de CENTRAL.
+RIPLEY_CENTROS_FULL = {
+    c.strip().upper()
+    for c in (os.environ.get("RIPLEY_CENTROS_FULL") or "").split(",")
+    if c.strip()
+}
+
+
 def detectar_fulfillment_ripley(orden_data):
     """
-    Ripley: ventas de bodega propia (normal) vs FULL Ripley.
+    Ripley (Mirakl): venta que despachamos nosotros vs Ripley Full.
 
-    Campo REAL confirmado (Ripley usa Mirakl): shipping_type_code.
-    Regla confirmada por el vendedor:
-      "FP_CENTRAL24" = Flota Propia (como ML Flex) -> sale de TU bodega -> descuenta (normal)
-      "AllDay"       = Blue Express                -> sale de TU bodega -> descuenta (normal)
-      cualquier OTRO shipping_type_code            -> FULL Ripley -> NO descuenta central
+    Lo dice fulfillment.center.code — "Center code", dentro de "Fulfillment
+    information" en la orden de OR11 (GET /api/orders). Es obligatorio, así
+    que viene en todas las órdenes.
 
-    Solo FP_CENTRAL24 y AllDay salen de bodega propia; todo lo demás es fulfillment.
+    Antes se decidía por shipping_type_code, que la documentación define como
+    "Code of shipping's type": eso es el MÉTODO DE DESPACHO —el courier, la
+    modalidad de entrega—, no quién cumple la orden. Se estaba preguntando
+    cómo se despacha para responder de qué bodega sale.
+
+    Y el default estaba al revés: cualquier código distinto de FP_CENTRAL24 o
+    ALLDAY se daba por Full. Bastaba un courier nuevo para mandar una venta
+    nuestra a RIPLEY_FBM, que está en cero. Ahí descontar_venta_inteligente
+    hace min(cantidad, 0) = 0, guarda ese cero, y el movimiento queda
+    bloqueado por uniq_venta_orden_sku_tipo: esa venta no vuelve a descontar
+    de CENTRAL nunca, ni cuando llegue stock.
+
+    Por eso ahora Full hay que demostrarlo. Mientras no operemos Ripley Full
+    la lista de centros está vacía y todo descuenta de CENTRAL, que es la
+    verdad de hoy. Equivocarse hacia Seller descuenta de donde sí hay
+    mercadería; equivocarse hacia Full no descuenta de ninguna parte.
+
+    logistic_class no sirve acá: no existe en la orden ni en order_lines, es
+    atributo de la OFERTA. Ripley documenta que en las ofertas Full la clase
+    logística empieza por "Fulfillment", y ripley.py ya la lee de /api/offers.
     """
     try:
-        stc = (orden_data.get("shipping_type_code") or "").strip().upper()
-        if stc:
-            # Códigos que salen de bodega propia (despacha el vendedor)
-            if stc in ("FP_CENTRAL24", "ALLDAY"):
-                return False
-            # Cualquier otro código = Full Ripley
-            return True
-
-        # Fallback: campos antiguos si no vino shipping_type_code
-        f_type = (orden_data.get("fulfillment_type") or
-                  orden_data.get("shipping_type") or "").upper()
-        if "FULFILLED" in f_type or f_type == "FBR":
-            return True
+        centro = (((orden_data.get("fulfillment") or {}).get("center") or {})
+                  .get("code") or "").strip().upper()
+        if centro:
+            return centro in RIPLEY_CENTROS_FULL
+        # Sin centro no hay con qué afirmar que sea Full.
         return False
     except Exception as e:
         print(f"[Bodegas] detectar_fulfillment_ripley error: {e}")

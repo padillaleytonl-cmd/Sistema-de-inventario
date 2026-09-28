@@ -234,3 +234,78 @@ una columna aparte para el total si hace falta para reportes. Requiere:
 **Por qué no se hizo ahora:** toca datos históricos y el foco del día era frenar
 las pérdidas de stock, no reescribir el historial. Pero mientras siga así, todo
 diagnóstico sobre movimientos arrastra ruido.
+
+---
+
+## 10. Ripley Full: está codificado, no está operando
+
+**No tenemos stock en bodegas de Ripley.** No existe ni una venta Full de
+Ripley en el histórico, así que nada de lo de abajo se ha ejecutado nunca
+contra un dato real. Estaba anotado en el docstring de `stock_fulfillment.py`
+("Paris y Ripley quedan PENDIENTES") y en ninguna otra parte; queda acá para
+que aparezca cuando se busque.
+
+### Lo que se arregló el 27-09-2026
+
+`detectar_fulfillment_ripley` decidía con `shipping_type_code`, que la
+documentación de Mirakl define como *"Code of shipping's type"*: es el método
+de despacho —el courier—, no quién cumple la orden. Y el default estaba al
+revés: cualquier código distinto de `FP_CENTRAL24` o `ALLDAY` se daba por
+Full.
+
+Eso era una trampa esperando: con `RIPLEY_FBM` en cero, un código de courier
+nuevo mandaba una venta nuestra a descontar de una bodega vacía.
+`descontar_venta_inteligente` hace `min(cantidad, 0) = 0`, **guarda ese cero**,
+y el movimiento queda bloqueado por `uniq_venta_orden_sku_tipo`. Esa venta no
+vuelve a descontar de `CENTRAL` nunca más, ni cuando llegue stock. No hay
+alerta: el log incluso imprime `-1 desde RIPLEY_FBM` porque usa `cantidad` y
+no lo que se descontó de verdad.
+
+Ahora Full hay que demostrarlo: se lee `fulfillment.center.code` —campo
+obligatorio de la orden, dentro de *"Fulfillment information"*— y solo es Full
+si el código está en `RIPLEY_CENTROS_FULL` (vacía hoy, configurable por
+variable de entorno, separada por comas). Equivocarse hacia Seller descuenta
+de donde sí hay mercadería; equivocarse hacia Full no descuenta de ninguna
+parte.
+
+### Qué falta para cuando se abra Ripley Full
+
+1. **El código del centro.** Aparece solo en la primera orden Full real, en
+   `fulfillment.center.code`. Se agrega a `RIPLEY_CENTROS_FULL` y desde ahí
+   esas ventas descuentan de `RIPLEY_FBM`.
+
+2. **No publicar stock en esas ofertas.** Ripley documenta que *"para
+   productos Fulfillment, el stock estará bloqueado desde Mirakl, ya que leerá
+   automáticamente el stock en bodega"*. O sea se comporta como Walmart WFS:
+   hay que pasar `ajustar_stock=False` y **copiar** el conteo que reporta
+   Ripley, no descontarlo. Hoy la venta Full de Ripley sí descontaría, así que
+   restaría dos veces. **Esto no está hecho.**
+
+3. **Leer el stock Full de Ripley.** `stock_fulfillment.py` cubre
+   MercadoLibre, Walmart y Falabella. Falta `leer_stock_ripley()` y sumarlo a
+   `cruzar_stock_fulfillment`.
+
+4. **Las ofertas Full son SKU aparte.** Ripley exige que los productos
+   Fulfillment tengan *"un SKU Seller único y distinto a los demás"*, con el
+   atributo `info_fulfillment`, y que la clase logística empiece por
+   "Fulfillment". Hay que mapearlos, o una venta Full llegará como SKU sin
+   mapeo. `ripley.py` ya lee `logistic_class` desde `/api/offers`, así que el
+   dato está disponible para detectarlos.
+
+### Sin verificar
+
+- La rama de cancelación que repone en `RIPLEY_FBM` (en `_sync_ripley_automatico`)
+  está escrita y **nunca se ejecutó**. Cuando llegue la primera cancelación Full
+  real, mirar que caiga en la rama correcta.
+- El docstring de `ripley.py` dice que Full es `logistic_class='FBR'`. Es falso
+  por partida doble: `logistic_class` no existe en la orden —ni en `order_lines`,
+  se revisó el esquema completo de OR11— y `'FBR'` no es el valor de Ripley. No
+  se corrigió porque `ripley.py` es módulo de integración y el cambio pide
+  autorización aparte.
+
+### Fuentes
+
+- OR11 — List orders with pagination:
+  https://developer.mirakl.com/content/product/mmp/rest/seller/openapi3/orders/or11
+- Carga de Producto y Venta en el Marketplace de Ripley.com:
+  https://ripley.zendesk.com/hc/es-419/articles/14118531367063-Carga-de-Producto-y-Venta-en-el-Marketplace-de-Ripley-com

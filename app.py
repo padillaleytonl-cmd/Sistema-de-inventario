@@ -3373,17 +3373,29 @@ def _sync_ripley_automatico():
                     #   - Entregada y despues devuelta: es una devolucion, y
                     #     donde queda la unidad depende de como la procese
                     #     Ripley. Eso NO se adivina: se avisa y lo ve una persona.
+                    #
+                    # La primera version contaba SHIPPED como entregada.
+                    # Es falso: en Mirakl SHIPPED dice que la orden SALIO, no
+                    # que llego. Una cancelacion en transito se habria
+                    # tratado como devolucion y habria quedado esperando
+                    # revision humana, en vez de volver sola a la bodega de
+                    # Ripley.
+                    #
+                    # La prueba directa es received_date, que la orden
+                    # documenta como "Product's date of receipt". Los estados
+                    # se comparan completos y no por substring: son un enum
+                    # cerrado (RECEIVED, CLOSED, SHIPPED, CANCELED, ...).
+                    ENTREGADA_RP = ("RECEIVED", "CLOSED")
+
                     def _entregada_ripley(orden_rp):
-                        marcas = [str(orden_rp.get("order_state") or ""),
-                                  str(orden_rp.get("status") or "")]
-                        for ln in (orden_rp.get("order_lines") or []):
-                            if isinstance(ln, dict):
-                                marcas.append(str(ln.get("order_line_state") or ""))
-                        for ev in (orden_rp.get("order_state_reason_label"),
-                                   orden_rp.get("shipping_deadline")):
-                            marcas.append(str(ev or ""))
-                        texto = " ".join(marcas).upper()
-                        return any(m in texto for m in ("RECEIVED", "CLOSED", "SHIPPED", "ENTREGAD"))
+                        lineas = [ln for ln in (orden_rp.get("order_lines") or [])
+                                  if isinstance(ln, dict)]
+                        if orden_rp.get("received_date") or any(
+                                ln.get("received_date") for ln in lineas):
+                            return True
+                        estados = [str(orden_rp.get("order_state") or "")]
+                        estados += [str(ln.get("order_line_state") or "") for ln in lineas]
+                        return any(e.strip().upper() in ENTREGADA_RP for e in estados)
 
                     entregada_rp = _entregada_ripley(o)
 
