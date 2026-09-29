@@ -1447,6 +1447,19 @@ def asegurar_llegada_bodega():
         # Para cuando se conecte la nota de credito. Hoy nada la escribe.
         cur.execute("""ALTER TABLE devoluciones_marketplace
                        ADD COLUMN IF NOT EXISTS nc_folio TEXT""")
+        # Que se hizo con el inventario: reintegrado, desechado, repuestos,
+        # con_detalle, o ya_procesada (se habia resuelto fuera de Lusync).
+        cur.execute("""ALTER TABLE devoluciones_marketplace
+                       ADD COLUMN IF NOT EXISTS destino_inventario TEXT""")
+        cur.execute("""ALTER TABLE devoluciones_marketplace
+                       ADD COLUMN IF NOT EXISTS destino_usuario TEXT""")
+        cur.execute("""ALTER TABLE devoluciones_marketplace
+                       ADD COLUMN IF NOT EXISTS destino_fecha TIMESTAMP""")
+        # Enlace directo a su registro en 'devoluciones'. Cruzar por numero de
+        # orden no alcanza: Falabella muestra el OrderNumber y sus ventas se
+        # registraron con el OrderId interno.
+        cur.execute("""ALTER TABLE devoluciones_marketplace
+                       ADD COLUMN IF NOT EXISTS dev_id INTEGER""")
         conn.commit()
     except Exception as e:
         try:

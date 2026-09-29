@@ -6832,7 +6832,9 @@ def _estado_segun_tipificacion(tipif):
         "reenviado": "aceptada_reenviada",
         "reparable": "en_reparacion",
         "dado_de_baja": "dada_de_baja",
-        "reembolsado": "reembolsada"
+        "reembolsado": "reembolsada",
+        "repuestos": "para_repuestos",
+        "con_detalle": "con_detalle",
     }.get(tipif, "pendiente")
 
 
@@ -6962,7 +6964,8 @@ def _aplicar_impacto_devolucion(tipificacion, sku, cantidad, dev_id, bodega=None
             ajustar_stock_dev(sku, cantidad, dev_id, "reintegro_buen_estado",
                               bodega=destino)
             return f"Reintegrado +{cantidad} a {destino}"
-        elif tipificacion in ("reenviado", "reembolsado", "dado_de_baja", "reparable"):
+        elif tipificacion in ("reenviado", "reembolsado", "dado_de_baja", "reparable",
+                              "repuestos", "con_detalle"):
             # No reintegra
             return "Sin impacto en stock (no reintegrable)"
         return "Sin impacto"
@@ -7008,7 +7011,9 @@ def devoluciones_etiqueta_pdf(dev_id):
             "reparable": (HexColor("#92400e"), "EN REPARACION"),
             "reembolsado": (HexColor("#1e3a8a"), "REEMBOLSADO"),
             "buen_estado": (HexColor("#065f46"), "REINTEGRADO"),
-            "reenviado": (HexColor("#854F0B"), "REENVIADO")
+            "reenviado": (HexColor("#854F0B"), "REENVIADO"),
+            "repuestos": (HexColor("#3C3489"), "PARA REPUESTOS"),
+            "con_detalle": (HexColor("#92400e"), "CON DETALLE")
         }.get(tipif, (black, "DEVOLUCION"))
 
         # Generar código de barras como imagen en memoria
@@ -7345,6 +7350,80 @@ def devoluciones_mkt_sync():
     return {"ok": True, "resumen": resumen}
 
 
+# Desde cuando se exige anular la boleta de una devolucion de marketplace. La
+# regla aplica desde que se definio y NO a las anteriores: sin este corte, las
+# ~180 ya resueltas por los canales volvian a aparecer como "por anular".
+DEV_NC_DESDE = datetime(2026, 9, 29)
+
+# Que se puede hacer con el inventario de una devolucion de marketplace, y
+# como queda registrado. Solo las que no vuelven bien al stock llevan codigo
+# DEV: son las que hay que seguir fisicamente.
+DESTINOS_INVENTARIO = {
+    "reintegrado": {"tipif": "buen_estado", "dev": False, "t": "Reintegrado a stock"},
+    "desechado":   {"tipif": "dado_de_baja", "dev": True, "t": "Desechado"},
+    "repuestos":   {"tipif": "repuestos", "dev": True, "t": "Para repuestos"},
+    "con_detalle": {"tipif": "con_detalle", "dev": True, "t": "Con detalle"},
+    "ya_procesada": {"tipif": None, "dev": False, "t": "Ya estaba procesada"},
+}
+
+
+def _orden_de_venta(canal, order_id, return_id):
+    """El numero con que se registro la VENTA, que es la clave del cupo y de
+    la bodega de reintegro.
+
+    Falabella: la devolucion guarda el OrderNumber —el que se ve en su
+    portal— pero sus ventas se registraron con el OrderId interno. Con el
+    OrderNumber, _cupo_devolucion no encuentra la venta y deja pasar cualquier
+    cantidad. El OrderId esta en el return_id, que se arma como OrderId-SKU.
+    """
+    if (canal or "").lower() == "falabella" and return_id and "-" in return_id:
+        return return_id.split("-", 1)[0]
+    return order_id
+
+
+def _etapa_devolucion(estado, fecha_solicitud, vence, llegada, autoaceptada,
+                      procesada, nc_folio, corte=None):
+    """En que etapa esta una devolucion de marketplace. Devuelve
+    (grupo, nc_aplica, por_anular).
+
+    Aparte y pura para poder probarla: de esta logica salio el bug que puso
+    el historico de Walmart como "Autoaceptado · No olvides anular la Boleta".
+
+    La regla de la boleta aplica solo desde el corte. Sin el, las ~180
+    devoluciones ya resueltas por los canales volvian como "por anular".
+    """
+    corte = corte or DEV_NC_DESDE
+    nc_aplica = bool(fecha_solicitud and fecha_solicitud >= corte)
+
+    if estado == "cancelada":
+        grupo = "lista"
+    elif nc_aplica:
+        # Completada = se decidio el inventario Y se anulo la boleta.
+        if procesada and nc_folio:
+            grupo = "lista"
+        elif llegada or autoaceptada or procesada or estado == "resuelta":
+            grupo = "bodega"
+        else:
+            grupo = "camino"
+    else:
+        # Anteriores al corte: la boleta no se exige. Completadas si el canal
+        # las cerro, si ya se decidio el inventario, o si su plazo vencio
+        # antes de que existiera la regla.
+        vencida_antes = vence is not None and vence < corte
+        if estado == "resuelta" or procesada or vencida_antes:
+            grupo = "lista"
+        elif llegada or autoaceptada:
+            grupo = "bodega"
+        else:
+            grupo = "camino"
+
+    # Aceptada —por el canal, por vencimiento o ya procesada— y dentro de la
+    # regla: lo que queda pendiente es anular la boleta.
+    por_anular = (nc_aplica and grupo == "bodega" and not nc_folio
+                  and (autoaceptada or estado == "resuelta" or procesada))
+    return grupo, nc_aplica, por_anular
+
+
 def _devoluciones_consolidadas(desde=None, hasta=None, buscar=""):
     """Las devoluciones de los canales, clasificadas y con su plazo real.
 
@@ -7372,7 +7451,9 @@ def _devoluciones_consolidadas(desde=None, hasta=None, buscar=""):
                       COALESCE(estado_canal,''), COALESCE(motivo,''),
                       monto_reembolso, fecha_solicitud, fecha_limite,
                       COALESCE(url_gestion,''), COALESCE(tipo,''),
-                      fecha_llegada_bodega, COALESCE(nc_folio,'')
+                      fecha_llegada_bodega, COALESCE(nc_folio,''),
+                      COALESCE(destino_inventario,''), COALESCE(destino_usuario,''),
+                      destino_fecha, dev_id
                  FROM devoluciones_marketplace WHERE 1=1"""
         params = []
         if desde and hasta:
@@ -7387,8 +7468,17 @@ def _devoluciones_consolidadas(desde=None, hasta=None, buscar=""):
         cur.execute(q, params)
         filas = cur.fetchall()
 
-        # La revision interna de cada una: su DEV. Viven en otra tabla y nada
-        # las unia; se cruzan por lo que las dos tienen, orden y SKU.
+        # El codigo DEV de cada una. Primero por el enlace directo (dev_id),
+        # que es exacto; despues por orden y SKU, para las que se revisaron
+        # antes de que existiera el enlace.
+        ids = sorted({f[20] for f in filas if f[20]})
+        por_id = {}
+        if ids:
+            cur.execute("""SELECT id, COALESCE(codigo,''), COALESCE(estado,''),
+                                  COALESCE(tipificacion,''), COALESCE(bodega_destino,'')
+                             FROM devoluciones WHERE id = ANY(%s)""", (ids,))
+            for did, cod, est, tip, bod in cur.fetchall():
+                por_id[did] = (cod, est, tip, bod)
         ordenes = sorted({f[2] for f in filas if f[2]})
         revisiones = {}
         if ordenes:
@@ -7409,33 +7499,30 @@ def _devoluciones_consolidadas(desde=None, hasta=None, buscar=""):
                "vencen_24h": 0, "autoaceptadas": 0, "por_anular": 0}
     por_canal = {}
     for (canal, rid, oid, sku, skuc, nombre, cant, estado, estadoc, motivo,
-         monto, fsol, flim, url, tipo, llegada, nc) in filas:
+         monto, fsol, flim, url, tipo, llegada, nc,
+         destino, dest_user, dest_fecha, dev_id) in filas:
 
-        rev = (revisiones.get((oid, sku)) or revisiones.get((oid, skuc))
-               or revisiones.get((oid, "")))
-        dev_codigo, dev_estado, dev_tip = rev if rev else ("", "", "")
+        if dev_id and dev_id in por_id:
+            dev_codigo, dev_estado, dev_tip, dev_bodega = por_id[dev_id]
+        else:
+            rev = (revisiones.get((oid, sku)) or revisiones.get((oid, skuc))
+                   or revisiones.get((oid, "")))
+            dev_codigo, dev_estado, dev_tip = rev if rev else ("", "", "")
+            dev_bodega = ""
 
         vence, fuente = plazo_efectivo(canal, flim, llegada)
         horas = int((vence - ahora).total_seconds() // 3600) if vence else None
         # Vencido el plazo, el canal acepta solo. Paris lo dice textual.
         autoaceptada = horas is not None and horas < 0
-
-        if nc or estado == "cancelada":
-            grupo = "lista"
-        elif llegada or autoaceptada:
-            grupo = "bodega"
-        else:
-            grupo = "camino"
-
-        # Con la devolucion aceptada —por el canal o por vencimiento— lo que
-        # queda pendiente es anular la boleta.
-        por_anular = grupo == "bodega" and not nc and (autoaceptada or estado == "resuelta")
+        procesada = bool(destino)
+        grupo, nc_aplica, por_anular = _etapa_devolucion(
+            estado, fsol, vence, llegada, autoaceptada, procesada, nc)
 
         resumen[grupo] += 1
         if grupo == "bodega":
             if autoaceptada:
                 resumen["autoaceptadas"] += 1
-            elif horas is not None and horas < 24 and not dev_codigo:
+            elif horas is not None and horas < 24 and not procesada:
                 resumen["vencen_24h"] += 1
             if por_anular:
                 resumen["por_anular"] += 1
@@ -7462,9 +7549,16 @@ def _devoluciones_consolidadas(desde=None, hasta=None, buscar=""):
             "autoaceptada": autoaceptada,
             "por_anular": por_anular,
             "nc_folio": nc or None,
+            "nc_aplica": nc_aplica,
+            "procesada": procesada,
+            "destino": destino or None,
+            "destino_t": (DESTINOS_INVENTARIO.get(destino) or {}).get("t"),
+            "destino_por": dest_user or None,
+            "destino_fecha": dest_fecha.strftime("%d/%m/%Y %H:%M") if dest_fecha else None,
             "dev_codigo": dev_codigo or None,
             "dev_estado": dev_estado or None,
             "dev_tipificacion": dev_tip or None,
+            "dev_bodega": dev_bodega or None,
         })
 
     return lista, resumen, por_canal
@@ -7514,6 +7608,176 @@ def devoluciones_dashboard():
     })
 
 
+@app.route("/devoluciones-mkt/procesar-info")
+def devoluciones_mkt_procesar_info():
+    """Lo que hay que saber ANTES de procesar: a que bodega volveria, por que,
+    y cuanto queda por devolver de esa orden. Solo lee.
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    canal = (request.args.get("canal") or "").strip()
+    rid = (request.args.get("return_id") or "").strip()
+    fila = _fila_devolucion_mkt(canal, rid)
+    if not fila:
+        return jsonify({"ok": False, "error": "No existe esa devolución"}), 404
+    orden_venta = _orden_de_venta(canal, fila["order_id"], rid)
+    sku = fila["sku"] or fila["sku_canal"]
+    bodega, razon = _bodega_para_reintegro(orden_venta, sku)
+    cupo = _cupo_devolucion(orden_venta, sku)
+    return jsonify({"ok": True, "bodega": bodega, "bodega_motivo": razon,
+                    "cupo": cupo, "cantidad": fila["cantidad"],
+                    "llego": bool(fila["llegada"]),
+                    "producto": fila["producto"], "sku": sku,
+                    "ya_procesada": fila["destino"]})
+
+
+def _fila_devolucion_mkt(canal, rid):
+    from inventario import get_conn, release_conn
+    conn = get_conn(tenant_id=1)
+    try:
+        cur = conn.cursor()
+        cur.execute("""SELECT COALESCE(order_id,''), COALESCE(sku,''), COALESCE(sku_canal,''),
+                              COALESCE(producto_nombre,''), COALESCE(cantidad,1),
+                              fecha_llegada_bodega, COALESCE(destino_inventario,''),
+                              COALESCE(motivo,'')
+                         FROM devoluciones_marketplace
+                        WHERE canal = %s AND return_id = %s""", (canal, rid))
+        f = cur.fetchone()
+        cur.close()
+    finally:
+        release_conn(conn)
+    if not f:
+        return None
+    return {"order_id": f[0], "sku": f[1], "sku_canal": f[2], "producto": f[3],
+            "cantidad": int(f[4] or 1), "llegada": f[5], "destino": f[6],
+            "motivo": f[7]}
+
+
+@app.route("/devoluciones-mkt/procesar", methods=["POST"])
+def devoluciones_mkt_procesar():
+    """Decide que pasa con el inventario de una devolucion de marketplace.
+
+    La devolucion ya existe —la trajo la API del canal—, asi que aca no se
+    crea: solo se registra que se hizo con el producto.
+
+      reintegrado  vuelve al stock, a la bodega de donde salio la venta. Sin
+                   codigo DEV: vuelve al stock normal.
+      desechado    \
+      repuestos     > codigo DEV, porque hay que seguir el producto fisico.
+      con_detalle  /  No tocan el stock vendible.
+      ya_procesada se resolvio fuera de Lusync. No mueve nada.
+
+    Se guarda igual un registro en 'devoluciones' para los cuatro primeros:
+    es lo que lee _cupo_devolucion, y sin el una segunda devolucion de la
+    misma orden podria reponer otra vez las mismas unidades.
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    from inventario import crear_devolucion, generar_codigo_dev, get_conn, release_conn
+    datos = request.json or {}
+    canal = (datos.get("canal") or "").strip()
+    rid = (datos.get("return_id") or "").strip()
+    destino = (datos.get("destino") or "").strip()
+    motivo = (datos.get("motivo") or "").strip()
+    usuario = session.get("usuario", "Sistema")
+
+    conf = DESTINOS_INVENTARIO.get(destino)
+    if not conf:
+        return jsonify({"ok": False, "error": "Destino inválido"}), 400
+    if conf["dev"] and not motivo:
+        return jsonify({"ok": False,
+                        "error": "Cuenta brevemente qué tiene el producto: queda en la etiqueta DEV"}), 400
+
+    fila = _fila_devolucion_mkt(canal, rid)
+    if not fila:
+        return jsonify({"ok": False, "error": "No existe esa devolución"}), 404
+    # Una devolucion se procesa una vez. Procesarla dos veces repondria dos
+    # veces las mismas unidades.
+    if fila["destino"]:
+        return jsonify({"ok": False,
+                        "error": "Esta devolución ya se procesó: " +
+                                 (DESTINOS_INVENTARIO.get(fila["destino"]) or {}).get("t", fila["destino"])}), 409
+
+    try:
+        cantidad = int(datos.get("cantidad") or fila["cantidad"])
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Cantidad inválida"}), 400
+    if cantidad <= 0:
+        return jsonify({"ok": False, "error": "La cantidad debe ser mayor que cero"}), 400
+
+    orden_venta = _orden_de_venta(canal, fila["order_id"], rid)
+    sku = fila["sku"] or fila["sku_canal"]
+    ahora = now_chile().replace(tzinfo=None)
+    dev_id, codigo, impacto, bodega, razon = None, None, "Sin movimiento de stock", None, None
+
+    if destino != "ya_procesada":
+        cupo = _cupo_devolucion(orden_venta, sku)
+        if cupo.get("disponible") is not None and cantidad > cupo["disponible"]:
+            return jsonify({"ok": False, "cupo": cupo,
+                            "error": (f"De {sku} se vendieron {cupo['vendido']} en esta orden y ya "
+                                      f"hay {cupo['ya_devuelto']} devuelta(s): quedan "
+                                      f"{cupo['disponible']}. Nunca se repone más de lo vendido.")}), 409
+
+        bodega, razon = _bodega_para_reintegro(orden_venta, sku)
+        # CENTRAL es solo para lo que paso por nuestra bodega. Si todavia no
+        # llega, reintegrarla ahi inventaria una unidad que no tenemos.
+        if destino == "reintegrado" and bodega == "CENTRAL" and not fila["llegada"]:
+            return jsonify({"ok": False,
+                            "error": ("El producto todavía no llega a tu bodega. "
+                                      "Pistoléalo al recibirlo y después reintégralo.")}), 409
+
+        if conf["dev"]:
+            codigo = generar_codigo_dev(canal)
+
+        dev_id = crear_devolucion({
+            "oc_origen": orden_venta, "canal": canal, "sku": sku,
+            "nombre": fila["producto"], "cantidad": cantidad,
+            "motivo_cliente": fila["motivo"] or None, "responsable": usuario,
+        })
+        if not dev_id:
+            return jsonify({"ok": False, "error": "No se pudo registrar"}), 500
+
+        conn = get_conn(); cur = conn.cursor()
+        try:
+            cur.execute("""UPDATE devoluciones SET
+                              codigo = %s, tipificacion = %s, motivo_texto = %s,
+                              usuario_revisor = %s, fecha_recepcion = %s,
+                              origen_datos = 'marketplace', estado = %s,
+                              bodega_destino = %s, impacto_stock_reingresado = %s
+                            WHERE id = %s""",
+                        (codigo, conf["tipif"], motivo or None, usuario,
+                         fila["llegada"] or ahora, _estado_segun_tipificacion(conf["tipif"]),
+                         bodega, destino == "reintegrado", dev_id))
+            conn.commit()
+        finally:
+            cur.close(); release_conn(conn)
+
+        impacto = _aplicar_impacto_devolucion(conf["tipif"], sku, cantidad, dev_id, bodega=bodega)
+
+    conn = get_conn(tenant_id=1); cur = conn.cursor()
+    try:
+        cur.execute("""UPDATE devoluciones_marketplace
+                          SET destino_inventario = %s, destino_usuario = %s,
+                              destino_fecha = %s, dev_id = %s
+                        WHERE canal = %s AND return_id = %s""",
+                    (destino, usuario, ahora, dev_id, canal, rid))
+        conn.commit()
+    finally:
+        cur.close(); release_conn(conn)
+
+    try:
+        registrar_audit(usuario, request.remote_addr, "procesar_devolucion_mkt",
+                        entidad="devoluciones_marketplace",
+                        detalle=f"{canal}/{rid} · {destino} · x{cantidad} · {impacto}")
+    except Exception as e:
+        print(f"[Devoluciones] no pude auditar {rid}: {e}")
+
+    return jsonify({"ok": True, "destino": destino, "destino_t": conf["t"],
+                    "codigo": codigo, "dev_id": dev_id, "impacto": impacto,
+                    "bodega": bodega, "bodega_motivo": razon})
+
+
 @app.route("/devoluciones/por-vencer")
 def devoluciones_por_vencer():
     """Lo que alimenta el aviso del Inicio.
@@ -7528,7 +7792,7 @@ def devoluciones_por_vencer():
     lista, resumen, _ = _devoluciones_consolidadas()
     urgentes = sorted(
         [x for x in lista if x["grupo"] == "bodega" and not x["autoaceptada"]
-         and not x["dev_codigo"] and x["horas_restantes"] is not None
+         and not x["procesada"] and x["horas_restantes"] is not None
          and x["horas_restantes"] < 24],
         key=lambda x: x["horas_restantes"])
     return jsonify({

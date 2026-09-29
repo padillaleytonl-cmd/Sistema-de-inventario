@@ -3054,23 +3054,14 @@ tbody td {
 
     <!-- Dashboard de devoluciones -->
     <div style="margin-bottom:16px;">
-      <div id="dashTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;"></div>
-
-      <div style="display:flex;align-items:center;gap:8px;background:var(--info-bg);border-radius:var(--radius);padding:9px 12px;font-size:12px;color:var(--muted);margin-bottom:12px;">
-        <span style="color:#185FA5;">ⓘ</span>
-        <span>El plazo es <b style="font-weight:500;">el de cada canal</b>: el que informa su API, o la regla que el canal publica si no lo entrega (París y Falabella: 3 días hábiles desde que llega). Vencido, el canal la acepta solo.</span>
-      </div>
+      <div id="dashCanalTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;"></div>
+      <div id="dashTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;"></div>
+      <div id="dashRegla" style="display:flex;align-items:center;gap:8px;border-radius:var(--radius);padding:9px 12px;font-size:12px;color:var(--muted);margin-bottom:12px;"></div>
 
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
         <input id="dashBuscar" type="text" placeholder="Buscar por N° de orden, SKU o producto"
           style="padding:6px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);width:280px;"
           onkeydown="if(event.key==='Enter') dashCargar()">
-        <select id="dashCanal" onchange="dashRender()" style="padding:6px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
-          <option value="">Todos los canales</option>
-          <option value="falabella">Falabella</option><option value="paris">París</option>
-          <option value="walmart">Walmart</option><option value="mercadolibre">MercadoLibre</option>
-          <option value="ripley">Ripley</option>
-        </select>
         <input id="dashDesde" type="date" onchange="dashCargar()" style="padding:5px 8px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
         <span style="font-size:11px;color:var(--muted);">→</span>
         <input id="dashHasta" type="date" onchange="dashCargar()" style="padding:5px 8px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
@@ -3079,14 +3070,39 @@ tbody td {
       </div>
 
       <div class="card" style="padding:0;overflow:hidden;">
-        <div style="display:grid;grid-template-columns:132px minmax(0,2fr) 40px 104px 92px 80px minmax(0,1.2fr) 126px 140px;gap:10px;padding:8px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);font-size:10px;color:var(--muted);">
-          <span>DEV</span><span>PRODUCTO</span><span>CANT.</span><span>N° DE ORDEN</span><span>CANAL</span>
-          <span>MODELO</span><span>RAZÓN</span><span>PLAZO</span><span>ACCIÓN</span>
+        <div style="display:grid;grid-template-columns:minmax(0,2fr) 40px 104px 88px 80px minmax(0,1.2fr) 118px 150px 140px;gap:10px;padding:8px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);font-size:10px;color:var(--muted);">
+          <span>PRODUCTO</span><span>CANT.</span><span>N° DE ORDEN</span><span>CANAL</span>
+          <span>MODELO</span><span>RAZÓN</span><span>PLAZO</span><span>INVENTARIO · DEV</span><span>ACCIÓN</span>
         </div>
         <div id="dashLista"></div>
         <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 14px;font-size:11px;color:var(--muted);">
           <span id="dashResumenTxt"></span>
           <span id="dashFuera"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Procesar una devolucion de marketplace: que pasa con el producto -->
+    <div id="modalProcesarDev" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9100;align-items:center;justify-content:center;">
+      <div style="background:var(--card);border:0.5px solid var(--border);border-radius:12px;padding:22px;width:480px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.18);">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:12px;">
+          <div style="min-width:0;">
+            <div style="font-size:15px;font-weight:500;color:var(--text);">¿Qué hacemos con el producto?</div>
+            <div id="procProducto" style="font-size:12px;color:var(--muted);margin-top:3px;"></div>
+          </div>
+          <button onclick="cerrarProcesarDev()" aria-label="Cerrar" style="background:transparent;border:none;font-size:18px;cursor:pointer;color:var(--muted);">✕</button>
+        </div>
+        <div id="procInfo" style="font-size:12px;color:var(--muted);background:var(--bg2);border-radius:8px;padding:10px 12px;margin-bottom:12px;">Cargando…</div>
+        <div id="procOpciones" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;"></div>
+        <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;">
+          <label for="procCantidad" style="font-size:12px;color:var(--muted);">Cantidad</label>
+          <input id="procCantidad" type="number" min="1" step="1" style="width:80px;padding:6px 8px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
+        </div>
+        <textarea id="procMotivo" rows="2" placeholder="Qué tiene el producto (obligatorio si se desecha, va a repuestos o tiene detalle)"
+          style="width:100%;padding:8px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);box-sizing:border-box;resize:vertical;"></textarea>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">
+          <button onclick="cerrarProcesarDev()" style="background:transparent;border:0.5px solid var(--border);border-radius:8px;padding:7px 14px;font-size:12px;cursor:pointer;color:var(--text);">Cancelar</button>
+          <button id="procConfirmar" onclick="confirmarProcesarDev()" style="background:var(--text);color:var(--bg);border:none;border-radius:8px;padding:7px 16px;font-size:12px;cursor:pointer;font-weight:500;">Confirmar</button>
         </div>
       </div>
     </div>
@@ -6956,34 +6972,32 @@ function imprimirEtiquetaDev(){
 let _devSelItem = null;   // item seleccionado del lookup
 
 
-// ── DASHBOARD DE DEVOLUCIONES ───────────────────────────────────────────
-// Estructura tomada del portal de Falabella, que es el que el equipo ya lee:
-// pestañas por etapa con contador, filtros arriba, tabla con acciones.
+// ── DASHBOARD DE DEVOLUCIONES (diseño A: canal primero) ─────────────────
+// Pestañas por marketplace arriba y, dentro de cada una, sus etapas: como si
+// fuera el portal de ese canal. "Todos" va primero para poder buscar un numero
+// de orden sin adivinar antes de que canal es.
 //
-// Las etapas conservan el vocabulario de Falabella en vez de inventar otro.
-// Se derivan de lo que cada canal informa:
-//   punto     abierta y sin reloj  -> el cliente la dejo, no llega aun
-//   camino    en_transito
-//   revision  el reloj corre       -> esta en nuestra bodega, hay que decidir
-//   completa  resuelta o cancelada
 // Tres etapas. No hay "Solicitada": lo pedido que todavia no llega esta En
-// camino. En nuestra bodega es lo que ya llego y se puede reclamar.
+// camino. En nuestra bodega es lo que ya llego y hay que procesar.
 const DASH_TABS = [
-  {k:'revision', t:'En nuestra bodega'}, {k:'camino', t:'En camino'}, {k:'completa', t:'Completadas'}
+  {k:'bodega', t:'En nuestra bodega'}, {k:'camino', t:'En camino'}, {k:'lista', t:'Completadas'}
 ];
 const DASH_CANAL = {
-  paris:{t:'París',c:'#0C447C'}, walmart:{t:'Walmart',c:'#0071CE'},
-  mercadolibre:{t:'MercadoLibre',c:'#BA7517'}, falabella:{t:'Falabella',c:'#00B25E'},
-  ripley:{t:'Ripley',c:'#A01B7A'}, hites:{t:'Hites',c:'#E30613'}
+  walmart:{t:'Walmart',c:'#0071CE',api:true}, paris:{t:'París',c:'#0C447C',api:false},
+  mercadolibre:{t:'MercadoLibre',c:'#BA7517',api:true}, falabella:{t:'Falabella',c:'#00B25E',api:false},
+  ripley:{t:'Ripley',c:'#A01B7A',api:true}
 };
-let _dashDatos = null, _dashTab = 'revision';
+const DASH_ORDEN = ['walmart','paris','mercadolibre','falabella','ripley'];
+const DASH_DESTINOS = [
+  {k:'reintegrado', t:'Reintegrar a stock', d:'Vuelve bien a la venta. Sin código DEV.'},
+  {k:'desechado',   t:'Desechar',           d:'Se da de baja. Lleva código DEV.', dev:true},
+  {k:'repuestos',   t:'Para repuestos',     d:'No se vende; se usa para piezas. Lleva código DEV.', dev:true},
+  {k:'con_detalle', t:'Tiene un detalle',   d:'No vuelve al stock normal. Lleva código DEV.', dev:true},
+  {k:'ya_procesada',t:'Ya estaba procesada',d:'Se resolvió fuera de Lusync. No mueve stock.'}
+];
+let _dashDatos = null, _dashCanalSel = 'todos', _dashTab = 'bodega', _procActual = null;
 
 function _dashIso(d){ return d.toISOString().slice(0,10); }
-function _dashEtapa(r){
-  if(r.grupo === 'lista') return 'completa';
-  if(r.grupo === 'bodega') return 'revision';
-  return 'camino';
-}
 
 function dashCargar(){
   const q = document.getElementById('dashBuscar').value.trim();
@@ -6998,67 +7012,101 @@ function dashCargar(){
   }).catch(e => toast('Error cargando el dashboard: ' + e.message, 'error'));
 }
 
-function dashFilas(){
-  if(!_dashDatos) return [];
-  const cn = document.getElementById('dashCanal').value;
-  return (_dashDatos.lista || []).filter(r =>
-    _dashEtapa(r) === _dashTab && (!cn || r.canal === cn));
+function _dashDelCanal(){
+  const todas = (_dashDatos && _dashDatos.lista) || [];
+  return _dashCanalSel === 'todos' ? todas : todas.filter(r => r.canal === _dashCanalSel);
+}
+function dashFilas(){ return _dashDelCanal().filter(r => r.grupo === _dashTab); }
+
+function _dashBoton(activo, html, onclick){
+  return `<button onclick="${onclick}" style="padding:6px 12px;font-size:12px;border-radius:7px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;
+    border:0.5px solid ${activo?'var(--text)':'var(--border)'};background:${activo?'var(--text)':'transparent'};color:${activo?'var(--bg)':'var(--text)'};">${html}</button>`;
+}
+function _dashNum(activo, n){
+  return `<span style="font-size:10px;padding:1px 6px;border-radius:999px;background:${activo?'rgba(255,255,255,.22)':'var(--bg2)'};">${n}</span>`;
 }
 
 function dashRender(){
   if(!_dashDatos) return;
   const todas = _dashDatos.lista || [];
-  const cn = document.getElementById('dashCanal').value;
-  document.getElementById('dashTabs').innerHTML = DASH_TABS.map(t => {
-    const n = todas.filter(r => _dashEtapa(r) === t.k && (!cn || r.canal === cn)).length;
-    const act = _dashTab === t.k;
-    return `<button onclick="dashTab('${t.k}')" style="padding:6px 12px;font-size:12px;border-radius:7px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;
-      border:0.5px solid ${act?'var(--text)':'var(--border)'};background:${act?'var(--text)':'transparent'};color:${act?'var(--bg)':'var(--text)'};">
-      ${t.t}<span style="font-size:10px;padding:1px 6px;border-radius:999px;background:${act?'rgba(255,255,255,.22)':'var(--bg2)'};">${n}</span></button>`;
+  const abiertas = rs => rs.filter(r => r.grupo !== 'lista').length;
+  const anular = rs => rs.filter(r => r.por_anular).length;
+
+  const tabs = [{k:'todos', t:'Todos', rs: todas}].concat(DASH_ORDEN.map(k => (
+    {k, t: DASH_CANAL[k].t, c: DASH_CANAL[k].c, rs: todas.filter(r => r.canal === k)})));
+  document.getElementById('dashCanalTabs').innerHTML = tabs.map(t => {
+    const act = _dashCanalSel === t.k, pa = anular(t.rs);
+    const dot = t.c ? `<span style="width:8px;height:8px;border-radius:2px;background:${t.c};"></span>` : '';
+    const badge = pa ? `<span style="font-size:10px;padding:1px 6px;border-radius:999px;background:var(--warn-bg);color:#854F0B;">${pa} por anular</span>` : '';
+    return _dashBoton(act, `${dot}${t.t}${_dashNum(act, abiertas(t.rs))}${badge}`, `dashCanal('${t.k}')`);
   }).join('');
+
+  const del = _dashDelCanal();
+  document.getElementById('dashTabs').innerHTML = DASH_TABS.map(t => {
+    const act = _dashTab === t.k;
+    return _dashBoton(act, `${t.t}${_dashNum(act, del.filter(r => r.grupo === t.k).length)}`, `dashTab('${t.k}')`);
+  }).join('');
+
+  // De donde sale el plazo de este canal.
+  const reg = document.getElementById('dashRegla');
+  const c = DASH_CANAL[_dashCanalSel];
+  if(!c){
+    reg.style.background = 'var(--info-bg)';
+    reg.innerHTML = 'El plazo es <b style="font-weight:500;">el de cada canal</b>: el que informa su API, o la regla que publica si no lo entrega. Vencido, el canal la acepta solo.';
+  } else if(c.api){
+    reg.style.background = 'var(--info-bg)';
+    reg.innerHTML = `El plazo lo informa la API de <b style="font-weight:500;">${c.t}</b>. Si vence sin respuesta, el canal la acepta solo.`;
+  } else {
+    reg.style.background = 'var(--bg2)';
+    reg.innerHTML = `${c.t} no informa el plazo por API. Se aplica su propia regla: <b style="font-weight:500;">3 días hábiles desde que llega</b>` +
+      (_dashCanalSel === 'falabella' ? ', y la llegada se registra con el pistoleo.' : ', con la llegada que informa su API.');
+  }
   dashListar();
 }
 
+function dashCanal(k){ _dashCanalSel = k; dashRender(); }
 function dashTab(k){ _dashTab = k; dashRender(); }
 
 function _dashPlazo(r){
   if(r.grupo === 'lista'){
-    return r.nc_folio
-      ? `<span style="font-size:11px;padding:3px 9px;border-radius:999px;background:var(--success-bg);color:var(--success);white-space:nowrap;">NC ${r.nc_folio}</span>`
-      : '<span style="font-size:11px;color:var(--muted);">Cerrada por el canal</span>';
+    if(r.nc_folio) return `<span style="font-size:11px;padding:3px 9px;border-radius:999px;background:var(--success-bg);color:var(--success);white-space:nowrap;">NC ${r.nc_folio}</span>`;
+    return '<span style="font-size:11px;color:var(--muted);">Completada</span>';
   }
   if(r.grupo === 'camino') return '<span style="font-size:11px;color:var(--hint);">—</span>';
-  // Vencido el plazo, el canal acepta solo. "X horas tarde" sugeria que
-  // todavia se podia hacer algo, y no.
+  // Vencido el plazo, el canal acepta solo: "X horas tarde" sugeria que
+  // todavia se podia hacer algo.
   if(r.autoaceptada)
     return '<span style="font-size:11px;padding:3px 9px;border-radius:999px;background:var(--warn-bg);color:#854F0B;white-space:nowrap;">Autoaceptado</span>';
   const h = r.horas_restantes;
   if(h === null || h === undefined)
-    return '<span style="font-size:11px;color:var(--muted);">El canal no informa plazo</span>';
+    return '<span style="font-size:11px;color:var(--muted);">Sin plazo aún</span>';
   const urg = h < 24;
-  // De donde sale el plazo: la API del canal, o la regla que el canal publica
-  // (Paris y Falabella no lo entregan por API).
   const fuente = r.plazo_fuente === 'api' ? 'según la API' : 'regla del canal';
   return `<span title="${(r.plazo_regla||'Plazo informado por la API del canal').replace(/"/g,'')}" style="font-size:11px;padding:3px 9px;border-radius:999px;white-space:nowrap;background:${urg?'var(--warn-bg)':'var(--bg2)'};color:${urg?'#854F0B':'var(--muted)'};">quedan ${h} h</span>
     <div style="font-size:10px;color:var(--hint);margin-top:3px;">${fuente}</div>`;
 }
 
-function _dashDev(r){
-  if(!r.dev_codigo)
+// Que se hizo con el inventario y, si corresponde, su codigo DEV. Solo lo
+// que no vuelve bien al stock lleva codigo.
+function _dashInventario(r){
+  if(!r.procesada)
     return r.grupo === 'bodega'
-      ? '<span style="font-size:11px;color:var(--hint);">Sin revisar</span>'
+      ? '<span style="font-size:11px;color:var(--hint);">Sin procesar</span>'
       : '<span style="font-size:11px;color:var(--hint);">—</span>';
-  const eb = (typeof DEV_ESTADO_BADGE !== 'undefined' && DEV_ESTADO_BADGE[r.dev_estado]) || null;
-  const cod = r.dev_codigo.replace(/'/g,'');
-  return `<a href="#" onclick="lookupPistoleoDev('${cod}');return false;" style="font-size:11px;font-family:'DM Mono',monospace;color:var(--violet);text-decoration:none;">${r.dev_codigo}</a>
-    <div style="font-size:10px;color:var(--muted);margin-top:2px;">${eb ? eb.label : (r.dev_estado||'')}</div>`;
+  let cod = '';
+  if(r.dev_codigo){
+    const c = r.dev_codigo.replace(/'/g,'');
+    cod = `<a href="#" onclick="lookupPistoleoDev('${c}');return false;" style="display:block;font-size:11px;font-family:'DM Mono',monospace;color:var(--violet);text-decoration:none;margin-top:2px;">${r.dev_codigo}</a>`;
+  }
+  const bod = (r.destino === 'reintegrado' && r.dev_bodega) ? ` a ${r.dev_bodega}` : '';
+  return `<div style="font-size:11px;color:var(--text);">${r.destino_t || r.destino}${bod}</div>${cod}`;
 }
 
 function _dashAcciones(r){
-  if(r.grupo !== 'bodega') return '';
+  if(r.grupo === 'lista') return '';
   const partes = [];
-  if(!r.dev_codigo)
-    partes.push(`<button onclick="dashRevisar('${(r.orden||'').replace(/'/g,'')}')" style="background:var(--text);color:var(--bg);border:none;border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;">Revisar</button>`);
+  if(!r.procesada)
+    partes.push(`<button onclick="dashProcesar('${r.canal}','${(r.return_id||'').replace(/'/g,'')}')" style="background:var(--text);color:var(--bg);border:none;border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;">Procesar</button>`);
   if(r.por_anular){
     partes.push('<div style="font-size:10px;line-height:1.3;padding:5px 7px;border-radius:6px;background:var(--warn-bg);color:#854F0B;">No olvides anular la Boleta o DT</div>');
     partes.push('<button disabled title="La emisión de nota de crédito todavía no está conectada" style="background:var(--bg2);border:0.5px solid var(--border);border-radius:6px;padding:4px 8px;font-size:11px;color:var(--hint);cursor:not-allowed;">Emitir NC</button>');
@@ -7073,8 +7121,7 @@ function dashListar(){
     ((a.horas_restantes ?? 1e9) - (b.horas_restantes ?? 1e9)));
   document.getElementById('dashLista').innerHTML = filas.length ? filas.slice(0,100).map(r => {
     const cn = DASH_CANAL[r.canal] || {t:r.canal, c:'#888780'};
-    return `<div style="display:grid;grid-template-columns:132px minmax(0,2fr) 40px 104px 92px 80px minmax(0,1.2fr) 126px 140px;gap:10px;align-items:center;padding:11px 14px;border-bottom:0.5px solid var(--border);">
-      <div>${_dashDev(r)}</div>
+    return `<div style="display:grid;grid-template-columns:minmax(0,2fr) 40px 104px 88px 80px minmax(0,1.2fr) 118px 150px 140px;gap:10px;align-items:center;padding:11px 14px;border-bottom:0.5px solid var(--border);">
       <div style="min-width:0;">
         <div style="font-size:12px;color:var(--text);line-height:1.35;">${r.producto||'(sin nombre)'}</div>
         <div style="font-size:11px;color:var(--hint);font-family:'DM Mono',monospace;margin-top:3px;">${r.sku||'—'}</div></div>
@@ -7087,6 +7134,7 @@ function dashListar(){
         <div style="font-size:11px;color:var(--text);line-height:1.35;">${r.motivo||'<span style="color:var(--hint);">El canal no informa la razón</span>'}</div>
         <div style="font-size:10px;color:var(--hint);margin-top:2px;">${r.llego ? 'Llegó ' + r.llego : (r.solicitada ? 'Solicitada ' + r.solicitada : '')}</div></div>
       <div>${_dashPlazo(r)}</div>
+      <div>${_dashInventario(r)}</div>
       <div>${_dashAcciones(r)}</div></div>`;
   }).join('') : '<div style="color:var(--hint);font-size:12px;text-align:center;padding:36px;">Sin devoluciones en esta etapa</div>';
 
@@ -7097,35 +7145,87 @@ function dashListar(){
     f ? f + ' abiertas fuera del rango de fechas' : '';
 }
 
-// Revisar = el alta DEV que ya existia, con la orden puesta y la busqueda
-// hecha. Ahi se decide si vuelve a stock o se da de baja. Lusync NO acepta ni
-// rechaza ante el canal: eso se hace en el portal de cada marketplace.
-function dashRevisar(orden){
-  abrirModalNuevaDevolucion();
-  if(orden){
-    const inp = document.getElementById('devOcInput');
-    if(inp){ inp.value = orden; buscarOC(); }
-  }
+// ── Procesar: que pasa con el producto ──────────────────────────────────
+// La devolucion ya existe —la trajo la API—; aca solo se decide el
+// inventario. Antes de confirmar se muestra a que bodega volveria y por que,
+// y cuanto queda por devolver de esa orden.
+function dashProcesar(canal, return_id){
+  const r = ((_dashDatos && _dashDatos.lista) || []).find(x => x.canal === canal && x.return_id === return_id);
+  _procActual = {canal, return_id, destino: null};
+  document.getElementById('procProducto').textContent =
+    (r ? (r.producto || r.sku) : return_id) + (r && r.orden ? ' · OC ' + r.orden : '');
+  document.getElementById('procCantidad').value = (r && r.cantidad) || 1;
+  document.getElementById('procMotivo').value = '';
+  document.getElementById('procInfo').textContent = 'Cargando…';
+  document.getElementById('procOpciones').innerHTML = DASH_DESTINOS.map(o =>
+    `<label style="display:flex;gap:10px;align-items:flex-start;padding:9px 11px;border:0.5px solid var(--border);border-radius:8px;cursor:pointer;">
+       <input type="radio" name="procDestino" value="${o.k}" onchange="_procActual.destino='${o.k}'" style="margin-top:2px;">
+       <span><span style="font-size:12px;color:var(--text);">${o.t}</span>
+       <span style="display:block;font-size:11px;color:var(--muted);margin-top:1px;">${o.d}</span></span></label>`).join('');
+  document.getElementById('modalProcesarDev').style.display = 'flex';
+
+  fetch('/devoluciones-mkt/procesar-info?canal=' + encodeURIComponent(canal) +
+        '&return_id=' + encodeURIComponent(return_id))
+    .then(x => x.json()).then(d => {
+      if(!d.ok){ document.getElementById('procInfo').textContent = d.error || 'No se pudo cargar'; return; }
+      const cupo = d.cupo || {};
+      const lineaCupo = (cupo.disponible === null || cupo.disponible === undefined)
+        ? 'No pude verificar cuánto se vendió de esta orden.'
+        : `Se vendieron ${cupo.vendido}, ya hay ${cupo.ya_devuelto} devuelta(s): quedan ${cupo.disponible} por devolver.`;
+      if(cupo.disponible !== null && cupo.disponible !== undefined)
+        document.getElementById('procCantidad').max = cupo.disponible;
+      document.getElementById('procInfo').innerHTML =
+        `Si se reintegra, vuelve a <b style="font-weight:500;color:var(--text);">${d.bodega}</b>: ${d.bodega_motivo}.<br>${lineaCupo}` +
+        (!d.llego && d.bodega === 'CENTRAL'
+          ? '<br><span style="color:#854F0B;">Todavía no llega a tu bodega: pistoléala al recibirla antes de reintegrarla.</span>' : '');
+    }).catch(e => { document.getElementById('procInfo').textContent = 'Error: ' + e.message; });
+}
+
+function cerrarProcesarDev(){
+  document.getElementById('modalProcesarDev').style.display = 'none';
+  _procActual = null;
+}
+
+function confirmarProcesarDev(){
+  if(!_procActual || !_procActual.destino){ toast('Elige qué hacemos con el producto', 'warn'); return; }
+  const op = DASH_DESTINOS.find(o => o.k === _procActual.destino);
+  const motivo = document.getElementById('procMotivo').value.trim();
+  if(op && op.dev && !motivo){ toast('Cuenta qué tiene el producto: queda en la etiqueta DEV', 'warn'); return; }
+  const btn = document.getElementById('procConfirmar');
+  btn.disabled = true;
+  fetch('/devoluciones-mkt/procesar', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({canal:_procActual.canal, return_id:_procActual.return_id,
+                          destino:_procActual.destino, motivo,
+                          cantidad: parseInt(document.getElementById('procCantidad').value, 10)})
+  }).then(x => x.json()).then(d => {
+    btn.disabled = false;
+    if(!d.ok){ toast(d.error || 'No se pudo procesar', 'error'); return; }
+    cerrarProcesarDev();
+    toast(d.destino_t + (d.codigo ? ' · ' + d.codigo : '') + ' · ' + d.impacto);
+    if(d.codigo && d.dev_id) window.open('/devoluciones/' + d.dev_id + '/etiqueta_pdf', '_blank');
+    dashCargar();
+  }).catch(e => { btn.disabled = false; toast('Error: ' + e.message, 'error'); });
 }
 
 function dashExportar(){
   const filas = dashFilas();
   if(!filas.length){ toast('No hay nada que exportar en esta etapa', 'warn'); return; }
-  const cab = ['DEV','Canal','Orden','SKU','Producto','Cantidad','Modelo','Razon','Etapa',
-               'Llego','Vence','Fuente del plazo','Horas restantes','Autoaceptada','NC'];
+  const cab = ['Canal','Orden','SKU','Producto','Cantidad','Modelo','Razon','Etapa','Llego',
+               'Vence','Fuente del plazo','Horas restantes','Autoaceptada','Inventario','DEV','NC'];
   const esc = v => '"' + String(v === null || v === undefined ? '' : v).replace(/"/g,'""') + '"';
   const csv = [cab.join(';')].concat(filas.map(r => [
-    r.dev_codigo || '', r.canal, r.orden, r.sku, r.producto, r.cantidad, r.modelo, r.motivo,
-    _dashTab, r.llego || '', r.vence || '',
+    r.canal, r.orden, r.sku, r.producto, r.cantidad, r.modelo, r.motivo, _dashTab,
+    r.llego || '', r.vence || '',
     r.plazo_fuente === 'api' ? 'API del canal' : (r.plazo_fuente === 'regla' ? (r.plazo_regla || 'regla del canal') : ''),
-    r.horas_restantes === null ? '' : r.horas_restantes,
-    r.autoaceptada ? 'Si' : '', r.nc_folio || ''
+    r.horas_restantes === null ? '' : r.horas_restantes, r.autoaceptada ? 'Si' : '',
+    r.destino_t || '', r.dev_codigo || '', r.nc_folio || ''
   ].map(esc).join(';'))).join('\n');
   // BOM para que Excel en español no rompa los acentos
   const blob = new Blob(['\ufeff' + csv], {type:'text/csv;charset=utf-8;'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'devoluciones_' + _dashTab + '_' + _dashIso(new Date()) + '.csv';
+  a.download = 'devoluciones_' + _dashCanalSel + '_' + _dashTab + '_' + _dashIso(new Date()) + '.csv';
   a.click();
   URL.revokeObjectURL(a.href);
 }
