@@ -227,8 +227,13 @@ def _norm_estado(canal, estado_crudo):
     e = (str(estado_crudo) or "").lower()
     if any(k in e for k in ("cancel", "rejected", "closed_cancel")):
         return "cancelada"
-    if any(k in e for k in ("refund", "completed", "resolved", "closed", "received", "store_received", "delivered_after")):
+    if any(k in e for k in ("refund", "completed", "resolved", "closed", "store_received", "delivered_after")):
         return "resuelta"
+    # "received" es que el producto volvio, no que el caso se cerro: es justo
+    # cuando hay que revisarlo. Antes se contaba como "resuelta" y la
+    # devolucion saltaba a Completadas sin que nadie la mirara.
+    if "received" in e:
+        return "recibida"
     if any(k in e for k in ("transit", "shipped", "on_the_way", "intransit")):
         return "en_transito"
     if any(k in e for k in ("pending", "opened", "open", "created", "requested", "waiting", "review")):

@@ -880,7 +880,7 @@ def _diagnostico_orden(movimientos, marcas, devoluciones=None):
     return balance, resumen, veredicto
 
 
-RASTREADOR_VERSION = "v13-2026-09-28"
+RASTREADOR_VERSION = "v14-2026-09-29"
 
 
 def _rastrear_ordenes(conn, ordenes):
@@ -971,6 +971,86 @@ def _rastrear_ordenes(conn, ordenes):
         resultado.append(info)
 
     return resultado
+
+
+@app.route("/admin/lusync/devoluciones/estados")
+def admin_diag_devoluciones_estados():
+    """Que estados y fechas informa cada canal en sus devoluciones guardadas.
+
+    Uso: /admin/lusync/devoluciones/estados?canal=mercadolibre
+
+    Sirve para decidir que dato significa "llego a NUESTRA bodega" antes de
+    usarlo para marcar la llegada sola. Por cada estado del canal muestra
+    cuantas hay y dos ejemplos con los campos del JSON crudo que hablan de
+    estado, fechas, destino o envio.
+
+    SOLO LEE lo que ya esta guardado. No llama a la API del canal.
+    """
+    import json
+    import re as _re
+    bypass_token = _admin_bypass_token()
+    token = request.args.get("token", "")
+    if not (session.get("logged") or session.get("is_lusync_admin")
+            or (token and token == bypass_token)):
+        return redirect("/admin/lusync/login")
+
+    canal = (request.args.get("canal") or "mercadolibre").strip().lower()
+    interesa = _re.compile(r"status|state|date|deliver|receiv|arriv|destin|warehouse|"
+                           r"tracking|type|logistic|fulfil|shipment|return_to|address|"
+                           r"location|node|facility", _re.I)
+
+    def aplanar(obj, ruta="", out=None):
+        out = {} if out is None else out
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                aplanar(v, f"{ruta}.{k}" if ruta else str(k), out)
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj[:2]):
+                aplanar(v, f"{ruta}[{i}]", out)
+        elif interesa.search(ruta.rsplit(".", 1)[-1]) and obj not in (None, "", []):
+            out[ruta] = str(obj)[:120]
+        return out
+
+    salida = {"version": RASTREADOR_VERSION, "canal": canal, "generado": str(now_chile())}
+    conn = None
+    try:
+        conn = get_conn(tenant_id=1)
+        cur = conn.cursor()
+        cur.execute("""SELECT COALESCE(estado_canal,''), COALESCE(estado,''), COUNT(*),
+                              COUNT(fecha_llegada_bodega), COUNT(fecha_limite)
+                         FROM devoluciones_marketplace WHERE canal = %s
+                        GROUP BY 1, 2 ORDER BY 3 DESC""", (canal,))
+        estados = []
+        for est_canal, est, n, con_llegada, con_plazo in cur.fetchall():
+            cur.execute("""SELECT return_id, order_id, fecha_solicitud, fecha_llegada_bodega,
+                                  fecha_limite, raw_json
+                             FROM devoluciones_marketplace
+                            WHERE canal = %s AND COALESCE(estado_canal,'') = %s
+                            ORDER BY fecha_solicitud DESC NULLS LAST LIMIT 2""",
+                        (canal, est_canal))
+            ejemplos = []
+            for rid, oid, fsol, fll, flim, raw in cur.fetchall():
+                try:
+                    campos = aplanar(json.loads(raw)) if raw else {}
+                except Exception as e:
+                    campos = {"_error_json": str(e)[:100]}
+                ejemplos.append({"return_id": rid, "orden": oid,
+                                 "solicitada": str(fsol) if fsol else None,
+                                 "llegada_guardada": str(fll) if fll else None,
+                                 "plazo_guardado": str(flim) if flim else None,
+                                 "campos": campos})
+            estados.append({"estado_canal": est_canal, "estado_lusync": est, "cantidad": n,
+                            "con_llegada": con_llegada, "con_plazo": con_plazo,
+                            "ejemplos": ejemplos})
+        cur.close()
+        salida["estados"] = estados
+        salida["total"] = sum(e["cantidad"] for e in estados)
+    except Exception as e:
+        salida["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        if conn:
+            release_conn(conn)
+    return jsonify(salida)
 
 
 @app.route("/admin/lusync/devoluciones/diagnostico")
@@ -7401,7 +7481,8 @@ def _etapa_devolucion(estado, fecha_solicitud, vence, llegada, autoaceptada,
         # Completada = se decidio el inventario Y se anulo la boleta.
         if procesada and nc_folio:
             grupo = "lista"
-        elif llegada or autoaceptada or procesada or estado == "resuelta":
+        elif (llegada or autoaceptada or procesada
+              or estado in ("resuelta", "recibida")):
             grupo = "bodega"
         else:
             grupo = "camino"
@@ -7412,6 +7493,11 @@ def _etapa_devolucion(estado, fecha_solicitud, vence, llegada, autoaceptada,
         vencida_antes = vence is not None and vence < corte
         if estado == "resuelta" or procesada or vencida_antes:
             grupo = "lista"
+        elif estado == "recibida":
+            # Recibida antes del corte: se revisa si el canal todavia da un
+            # plazo abierto. Sin plazo quedaria abierta para siempre, y el
+            # historico no se reabre en masa (ya paso con Walmart).
+            grupo = "bodega" if vence is not None else "lista"
         elif llegada or autoaceptada:
             grupo = "bodega"
         else:
@@ -7519,11 +7605,14 @@ def _devoluciones_consolidadas(desde=None, hasta=None, buscar=""):
             estado, fsol, vence, llegada, autoaceptada, procesada, nc)
 
         resumen[grupo] += 1
+        # El plazo de la API corre aunque el producto no haya llegado: cuenta
+        # tambien lo que esta en camino.
+        if (grupo != "lista" and not autoaceptada and not procesada
+                and horas is not None and horas < 24):
+            resumen["vencen_24h"] += 1
         if grupo == "bodega":
             if autoaceptada:
                 resumen["autoaceptadas"] += 1
-            elif horas is not None and horas < 24 and not procesada:
-                resumen["vencen_24h"] += 1
             if por_anular:
                 resumen["por_anular"] += 1
         if grupo != "lista":
@@ -7840,8 +7929,10 @@ def devoluciones_por_vencer():
     if not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
     lista, resumen, _ = _devoluciones_consolidadas()
+    # En camino tambien: MercadoLibre, Walmart y Ripley dan el plazo por API
+    # y corre aunque el paquete no se haya pistoleado.
     urgentes = sorted(
-        [x for x in lista if x["grupo"] == "bodega" and not x["autoaceptada"]
+        [x for x in lista if x["grupo"] in ("bodega", "camino") and not x["autoaceptada"]
          and not x["procesada"] and x["horas_restantes"] is not None
          and x["horas_restantes"] < 24],
         key=lambda x: x["horas_restantes"])
@@ -7849,7 +7940,8 @@ def devoluciones_por_vencer():
         "vencen_24h": len(urgentes),
         "autoaceptadas_por_anular": sum(1 for x in lista if x["autoaceptada"] and x["por_anular"]),
         "detalle": [{"canal": x["canal"], "orden": x["orden"], "producto": x["producto"],
-                     "horas_restantes": x["horas_restantes"]} for x in urgentes[:5]],
+                     "horas_restantes": x["horas_restantes"],
+                     "en_camino": x["grupo"] == "camino"} for x in urgentes[:5]],
     })
 
 
@@ -29732,6 +29824,7 @@ def facturacion_boleta_xml_receptor(boleta_id):
     tenant_id = session.get("tenant_id") or 1
     from inventario import get_conn, release_conn
     from flask import Response
+    import json
     import re as _re
     conn = get_conn()
     try:
@@ -31431,6 +31524,7 @@ def facturacion_diagnostico_sii(boleta_id):
     if not session.get("logged"):
         return jsonify({"ok": False, "error": "no autenticado"}), 401
     tenant_id = session.get("tenant_id") or 1
+    import json
     import re as _re
     from inventario import get_conn, release_conn
     conn = get_conn()

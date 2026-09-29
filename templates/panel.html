@@ -7094,7 +7094,10 @@ function _dashPlazo(r){
     if(r.nc_folio) return `<span style="font-size:11px;padding:3px 9px;border-radius:999px;background:var(--success-bg);color:var(--success);white-space:nowrap;">NC ${r.nc_folio}</span>`;
     return '<span style="font-size:11px;color:var(--muted);">Completada</span>';
   }
-  if(r.grupo === 'camino') return '<span style="font-size:11px;color:var(--hint);">—</span>';
+  // En camino se muestra igual si la API dio plazo: corre aunque el
+  // paquete no haya llegado (MercadoLibre, Walmart, Ripley).
+  if(r.grupo === 'camino' && (r.horas_restantes === null || r.horas_restantes === undefined))
+    return '<span style="font-size:11px;color:var(--hint);">—</span>';
   // Vencido el plazo, el canal acepta solo: "X horas tarde" sugeria que
   // todavia se podia hacer algo.
   if(r.autoaceptada)
@@ -7178,7 +7181,7 @@ function dashListar(){
       <div style="font-size:11px;color:var(--muted);">${r.modelo||'—'}</div>
       <div style="min-width:0;">
         <div style="font-size:11px;color:var(--text);line-height:1.35;">${r.motivo||'<span style="color:var(--hint);">El canal no informa la razón</span>'}</div>
-        <div style="font-size:10px;color:var(--hint);margin-top:2px;">${r.llego ? 'Llegó ' + r.llego : (r.solicitada ? 'Solicitada ' + r.solicitada : '')}</div></div>
+        <div style="font-size:10px;color:var(--hint);margin-top:2px;">${r.llego ? 'Llegó ' + r.llego : (r.estado === 'recibida' ? 'Recibida según el canal' : (r.solicitada ? 'Solicitada ' + r.solicitada : ''))}</div></div>
       <div>${_dashPlazo(r)}</div>
       <div>${_dashAcciones(r)}</div></div>`;
   }).join('') : '<div style="color:var(--hint);font-size:12px;text-align:center;padding:36px;">Sin devoluciones en esta etapa</div>';
@@ -10152,10 +10155,10 @@ async function cargarAvisoDevoluciones(){
     const CN = {falabella:'Falabella', paris:'París', walmart:'Walmart',
                 mercadolibre:'MercadoLibre', ripley:'Ripley'};
     document.getElementById('avisoDevTitulo').textContent = n
-      ? `Tienes ${n} devolución${n>1?'es':''} por procesar · ${n>1?'vencen':'vence'} en menos de 24 h`
+      ? `Tienes ${n} devolución${n>1?'es':''} con plazo por vencer · menos de 24 h`
       : `${a} devolución${a>1?'es':''} autoaceptada${a>1?'s':''} con la boleta sin anular`;
     const partes = (d.detalle || []).map(x =>
-      `${CN[x.canal]||x.canal} · OC ${x.orden} · quedan ${x.horas_restantes} h`);
+      `${CN[x.canal]||x.canal} · OC ${x.orden} · quedan ${x.horas_restantes} h${x.en_camino ? ' (aún no llega)' : ''}`);
     if(n && a) partes.push(`y ${a} autoaceptada${a>1?'s':''} sin anular boleta`);
     document.getElementById('avisoDevDetalle').textContent = partes.join('   ·   ');
     el.style.display = 'flex';
