@@ -7778,6 +7778,56 @@ def devoluciones_mkt_procesar():
                     "bodega": bodega, "bodega_motivo": razon})
 
 
+@app.route("/devoluciones-mkt/anular-boleta", methods=["POST"])
+def devoluciones_mkt_anular_boleta():
+    """Registra que la boleta o DT de una devolucion ya se anulo.
+
+    Mientras la emision de NC no este conectada, la nota de credito se emite
+    fuera de Lusync y aca se anota su folio. Es lo que lleva la devolucion a
+    Completadas: sin folio, una devolucion desde DEV_NC_DESDE no se cierra.
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+
+    from inventario import get_conn, release_conn
+    datos = request.json or {}
+    canal = (datos.get("canal") or "").strip()
+    rid = (datos.get("return_id") or "").strip()
+    folio = (str(datos.get("folio") or "")).strip()
+    usuario = session.get("usuario", "Sistema")
+
+    if not folio.isdigit() or len(folio) > 12:
+        return jsonify({"ok": False, "error": "El folio de la NC son solo números"}), 400
+
+    conn = get_conn(tenant_id=1); cur = conn.cursor()
+    try:
+        cur.execute("""SELECT COALESCE(nc_folio,'') FROM devoluciones_marketplace
+                        WHERE canal = %s AND return_id = %s FOR UPDATE""", (canal, rid))
+        f = cur.fetchone()
+        if not f:
+            conn.rollback()
+            return jsonify({"ok": False, "error": "No existe esa devolución"}), 404
+        # Un folio anotado no se pisa: cambiarlo esconderia cual NC anulo la venta.
+        if f[0]:
+            conn.rollback()
+            return jsonify({"ok": False,
+                            "error": f"Esta devolución ya tiene la NC {f[0]}"}), 409
+        cur.execute("""UPDATE devoluciones_marketplace SET nc_folio = %s
+                        WHERE canal = %s AND return_id = %s""", (folio, canal, rid))
+        conn.commit()
+    finally:
+        cur.close(); release_conn(conn)
+
+    try:
+        registrar_audit(usuario, request.remote_addr, "anular_boleta_devolucion_mkt",
+                        entidad="devoluciones_marketplace",
+                        detalle=f"{canal}/{rid} · NC {folio}")
+    except Exception as e:
+        print(f"[Devoluciones] no pude auditar la NC de {rid}: {e}")
+
+    return jsonify({"ok": True, "folio": folio})
+
+
 @app.route("/devoluciones/por-vencer")
 def devoluciones_por_vencer():
     """Lo que alimenta el aviso del Inicio.
