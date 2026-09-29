@@ -105,7 +105,16 @@ def _admin_bypass_token():
     return _ADMIN_BYPASS_TOKEN
 
 
-app.secret_key = "clave_super_segura"
+# La clave que firma las sesiones. Estaba escrita en el codigo: con ella
+# cualquiera puede fabricar una cookie de sesion de cualquier cliente, o de
+# super-admin. Se lee del entorno; el valor viejo queda SOLO como respaldo
+# para no cerrar todas las sesiones mientras no se configure FLASK_SECRET_KEY,
+# y hay que darlo por comprometido.
+_SECRET_KEY_ENTORNO = (os.environ.get("FLASK_SECRET_KEY") or "").strip()
+app.secret_key = _SECRET_KEY_ENTORNO or "clave_super_segura"
+if not _SECRET_KEY_ENTORNO:
+    print("[Lusync] ATENCION: FLASK_SECRET_KEY no esta configurada. Las sesiones "
+          "se firman con una clave conocida: configurala en el entorno.")
 
 init_db()
 init_devoluciones()
@@ -1010,6 +1019,61 @@ def _acceso_equipo_lusync():
     if token and token == _admin_bypass_token():
         return True
     return bool(session.get("logged")) and _tenant_sesion() == TENANT_INTEGRACIONES
+
+
+# ── Puerta de entrada: quien puede pedir que ─────────────────────────────
+# Antes cada ruta revisaba (o no) la sesion por su cuenta, y ~50 no revisaban
+# nada: /agregar creaba productos, /admin/lusync/stock/set-bodega escribia
+# stock, /pos/documentos listaba compras, sin login. Ahora se decide aca,
+# antes de llegar a la ruta, con tres reglas:
+#
+#   1. Sin sesion solo se entra a lo publico: login, webhooks de los canales,
+#      la verificacion publica de boletas y archivos estaticos.
+#   2. /admin/* es del equipo Lusync (_acceso_equipo_lusync).
+#   3. Las rutas de canales usan las credenciales del cliente dueño de las
+#      integraciones: otro cliente no entra, porque veria o tocaria las
+#      ordenes, publicaciones y stock de ese cliente.
+#
+# Las reglas propias de cada ruta siguen corriendo despues; esto solo agrega.
+_RUTAS_PUBLICAS = {
+    "/", "/login_check", "/logout", "/hora_servidor",
+    "/admin/lusync/login", "/admin/lusync/logout",
+    # Webhooks: los llama el canal, sin sesion.
+    "/mercadolibre/webhook", "/mercadolibre/webhook_fbm", "/falabella/webhook",
+    # Verificacion publica de documentos tributarios.
+    "/consultadte", "/consultadte/verificar",
+    "/favicon.ico", "/robots.txt",
+}
+_PREFIJOS_PUBLICOS = ("/static/",)
+_PREFIJOS_CANALES = (
+    "/mercadolibre", "/walmart", "/paris", "/ripley", "/falabella", "/woo",
+    "/debug", "/stock-fulfillment", "/sync_ordenes", "/importar_woo",
+    "/debug_woo_ordenes", "/sincronizar_precios_woo",
+)
+
+
+@app.before_request
+def _puerta_de_entrada():
+    p = request.path or "/"
+    if p in _RUTAS_PUBLICAS or p.startswith(_PREFIJOS_PUBLICOS):
+        return None
+    token = request.args.get("token", "")
+    if token and token == _admin_bypass_token():
+        return None
+    if session.get("is_lusync_admin"):
+        return None
+
+    if not session.get("logged"):
+        if request.method == "GET" and "text/html" in (request.headers.get("Accept") or ""):
+            return redirect("/")
+        return jsonify({"error": "no autorizado"}), 401
+
+    if p.startswith("/admin") and not _acceso_equipo_lusync():
+        return jsonify({"error": "Solo el equipo Lusync"}), 403
+    if (_tenant_sesion() != TENANT_INTEGRACIONES
+            and p.startswith(_PREFIJOS_CANALES)):
+        return jsonify({"error": "Tu cuenta no tiene este canal conectado"}), 403
+    return None
 
 
 @app.route("/admin/lusync/devoluciones/estados")
@@ -2960,6 +3024,11 @@ def con_tenant_default(func):
         finally:
             release_conn(conn)
 
+        # Todos los jobs con este decorador hablan con los canales usando las
+        # credenciales del entorno, que son de UN cliente. Correrlos para otro
+        # cliente le escribia las ventas de ese: la primera iteracion que
+        # alcanzaba una orden se la quedaba y le descontaba el stock.
+        tenant_ids = [t for t in tenant_ids if t == TENANT_INTEGRACIONES] or [TENANT_INTEGRACIONES]
         for tid in tenant_ids:
             # Misma red que en las peticiones web: los sync tambien dejaban
             # conexiones sin devolver cuando algo fallaba a mitad.
