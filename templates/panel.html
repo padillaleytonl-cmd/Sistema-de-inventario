@@ -1992,6 +1992,17 @@ tbody td {
       </div>
     </div>
 
+    <!-- Aviso: devoluciones cuyo plazo del canal vence en menos de 24 h -->
+    <div id="avisoDevVencer" role="button" tabindex="0" onclick="showSection('devoluciones')"
+      style="display:none;align-items:center;gap:12px;background:var(--warn-bg);border:1px solid #F5D9A8;border-radius:var(--radius-lg);padding:12px 16px;margin-bottom:16px;cursor:pointer;">
+      <span style="width:9px;height:9px;border-radius:50%;background:#BA7517;flex:none;"></span>
+      <div style="flex:1;min-width:0;">
+        <div id="avisoDevTitulo" style="font-size:13px;font-weight:600;color:#633806;"></div>
+        <div id="avisoDevDetalle" style="font-size:11px;color:#854F0B;margin-top:3px;"></div>
+      </div>
+      <span style="font-size:12px;color:#633806;font-weight:500;white-space:nowrap;">Procesar →</span>
+    </div>
+
     <!-- KPIs -->
     <div class="metrics-grid" data-modulo="kpis">
       <div class="metric-card" role="button" tabindex="0" style="border-top:3px solid #2563eb;cursor:pointer;"
@@ -3047,7 +3058,7 @@ tbody td {
 
       <div style="display:flex;align-items:center;gap:8px;background:var(--info-bg);border-radius:var(--radius);padding:9px 12px;font-size:12px;color:var(--muted);margin-bottom:12px;">
         <span style="color:#185FA5;">ⓘ</span>
-        <span>El plazo que ves es <b style="font-weight:500;">el que informa cada canal</b>. Si el canal no lo entrega, no se muestra uno calculado por nosotros.</span>
+        <span>El plazo es <b style="font-weight:500;">el de cada canal</b>: el que informa su API, o la regla que el canal publica si no lo entrega (París y Falabella: 3 días hábiles desde que llega). Vencido, el canal la acepta solo.</span>
       </div>
 
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
@@ -3068,9 +3079,9 @@ tbody td {
       </div>
 
       <div class="card" style="padding:0;overflow:hidden;">
-        <div style="display:grid;grid-template-columns:minmax(0,2fr) 44px 108px 96px 96px minmax(0,1.3fr) 112px 132px;gap:10px;padding:8px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);font-size:10px;color:var(--muted);">
-          <span>PRODUCTO</span><span>CANT.</span><span>N° DE ORDEN</span><span>CANAL</span>
-          <span>MODELO LOG.</span><span>RAZÓN</span><span>RECEPCIÓN</span><span>¿DE ACUERDO?</span>
+        <div style="display:grid;grid-template-columns:132px minmax(0,2fr) 40px 104px 92px 80px minmax(0,1.2fr) 126px 140px;gap:10px;padding:8px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);font-size:10px;color:var(--muted);">
+          <span>DEV</span><span>PRODUCTO</span><span>CANT.</span><span>N° DE ORDEN</span><span>CANAL</span>
+          <span>MODELO</span><span>RAZÓN</span><span>PLAZO</span><span>ACCIÓN</span>
         </div>
         <div id="dashLista"></div>
         <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 14px;font-size:11px;color:var(--muted);">
@@ -7011,40 +7022,59 @@ function dashRender(){
 function dashTab(k){ _dashTab = k; dashRender(); }
 
 function _dashPlazo(r){
+  if(r.grupo === 'lista'){
+    return r.nc_folio
+      ? `<span style="font-size:11px;padding:3px 9px;border-radius:999px;background:var(--success-bg);color:var(--success);white-space:nowrap;">NC ${r.nc_folio}</span>`
+      : '<span style="font-size:11px;color:var(--muted);">Cerrada por el canal</span>';
+  }
+  if(r.grupo === 'camino') return '<span style="font-size:11px;color:var(--hint);">—</span>';
+  // Vencido el plazo, el canal acepta solo. "X horas tarde" sugeria que
+  // todavia se podia hacer algo, y no.
+  if(r.autoaceptada)
+    return '<span style="font-size:11px;padding:3px 9px;border-radius:999px;background:var(--warn-bg);color:#854F0B;white-space:nowrap;">Autoaceptado</span>';
   const h = r.horas_restantes;
-  // Sin plazo de la API no se muestra ninguno: un reloj que el canal no
-  // respalda da seguridad falsa.
   if(h === null || h === undefined)
+    return '<span style="font-size:11px;color:var(--muted);">El canal no informa plazo</span>';
+  const urg = h < 24;
+  // De donde sale el plazo: la API del canal, o la regla que el canal publica
+  // (Paris y Falabella no lo entregan por API).
+  const fuente = r.plazo_fuente === 'api' ? 'según la API' : 'regla del canal';
+  return `<span title="${(r.plazo_regla||'Plazo informado por la API del canal').replace(/"/g,'')}" style="font-size:11px;padding:3px 9px;border-radius:999px;white-space:nowrap;background:${urg?'var(--warn-bg)':'var(--bg2)'};color:${urg?'#854F0B':'var(--muted)'};">quedan ${h} h</span>
+    <div style="font-size:10px;color:var(--hint);margin-top:3px;">${fuente}</div>`;
+}
+
+function _dashDev(r){
+  if(!r.dev_codigo)
     return r.grupo === 'bodega'
-      ? '<span style="font-size:11px;color:var(--muted);">El canal no informa plazo</span>'
+      ? '<span style="font-size:11px;color:var(--hint);">Sin revisar</span>'
       : '<span style="font-size:11px;color:var(--hint);">—</span>';
-  if(h < 0)
-    return `<span style="font-size:11px;padding:3px 9px;border-radius:999px;background:var(--danger-bg);color:#A32D2D;white-space:nowrap;">${Math.abs(h)} h tarde</span>`;
-  const bg = h < 24 ? 'var(--warn-bg)' : 'var(--bg2)', co = h < 24 ? '#854F0B' : 'var(--muted)';
-  return `<span style="font-size:11px;padding:3px 9px;border-radius:999px;background:${bg};color:${co};white-space:nowrap;">quedan ${h} h</span>`;
+  const eb = (typeof DEV_ESTADO_BADGE !== 'undefined' && DEV_ESTADO_BADGE[r.dev_estado]) || null;
+  const cod = r.dev_codigo.replace(/'/g,'');
+  return `<a href="#" onclick="lookupPistoleoDev('${cod}');return false;" style="font-size:11px;font-family:'DM Mono',monospace;color:var(--violet);text-decoration:none;">${r.dev_codigo}</a>
+    <div style="font-size:10px;color:var(--muted);margin-top:2px;">${eb ? eb.label : (r.dev_estado||'')}</div>`;
 }
 
 function _dashAcciones(r){
-  const id = `${r.canal}|${r.return_id}`;
-  if(r.decision){
-    const ok = r.decision === 'aceptada';
-    return `<div style="font-size:11px;color:${ok?'var(--success)':'var(--danger)'};">
-        ${ok?'Aceptada':'Rechazada'}<div style="color:var(--hint);font-size:10px;margin-top:2px;">${r.decision_por||''} ${r.decision_fecha||''}</div></div>
-      <button onclick="dashDecidir('${id}','')" style="margin-top:4px;background:transparent;border:0.5px solid var(--border);border-radius:6px;padding:3px 8px;font-size:10px;cursor:pointer;color:var(--muted);">Deshacer</button>`;
+  if(r.grupo !== 'bodega') return '';
+  const partes = [];
+  if(!r.dev_codigo)
+    partes.push(`<button onclick="dashRevisar('${(r.orden||'').replace(/'/g,'')}')" style="background:var(--text);color:var(--bg);border:none;border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;">Revisar</button>`);
+  if(r.por_anular){
+    partes.push('<div style="font-size:10px;line-height:1.3;padding:5px 7px;border-radius:6px;background:var(--warn-bg);color:#854F0B;">No olvides anular la Boleta o DT</div>');
+    partes.push('<button disabled title="La emisión de nota de crédito todavía no está conectada" style="background:var(--bg2);border:0.5px solid var(--border);border-radius:6px;padding:4px 8px;font-size:11px;color:var(--hint);cursor:not-allowed;">Emitir NC</button>');
   }
-  return `<div style="display:flex;flex-direction:column;gap:4px;">
-      <button onclick="dashDecidir('${id}','aceptada')" style="background:var(--text);color:var(--bg);border:none;border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;">Sí, aceptar</button>
-      <button onclick="dashDecidir('${id}','rechazada')" style="background:transparent;border:0.5px solid var(--border);border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;color:var(--text);">No, rechazar</button>
-      <button disabled title="La emisión de nota de crédito todavía no está conectada"
-        style="background:var(--bg2);border:0.5px solid var(--border);border-radius:6px;padding:4px 8px;font-size:11px;color:var(--hint);cursor:not-allowed;">Emitir NC</button>
-    </div>`;
+  return `<div style="display:flex;flex-direction:column;gap:4px;">${partes.join('')}</div>`;
 }
 
 function dashListar(){
   const filas = dashFilas();
+  // Primero lo que exige algo: boleta por anular, despues lo que vence antes.
+  filas.sort((a,b) => (b.por_anular?1:0) - (a.por_anular?1:0) ||
+    ((a.horas_restantes ?? 1e9) - (b.horas_restantes ?? 1e9)));
   document.getElementById('dashLista').innerHTML = filas.length ? filas.slice(0,100).map(r => {
     const cn = DASH_CANAL[r.canal] || {t:r.canal, c:'#888780'};
-    return `<div style="display:grid;grid-template-columns:minmax(0,2fr) 44px 108px 96px 96px minmax(0,1.3fr) 112px 132px;gap:10px;align-items:center;padding:11px 14px;border-bottom:0.5px solid var(--border);">
+    return `<div style="display:grid;grid-template-columns:132px minmax(0,2fr) 40px 104px 92px 80px minmax(0,1.2fr) 126px 140px;gap:10px;align-items:center;padding:11px 14px;border-bottom:0.5px solid var(--border);">
+      <div>${_dashDev(r)}</div>
       <div style="min-width:0;">
         <div style="font-size:12px;color:var(--text);line-height:1.35;">${r.producto||'(sin nombre)'}</div>
         <div style="font-size:11px;color:var(--hint);font-family:'DM Mono',monospace;margin-top:3px;">${r.sku||'—'}</div></div>
@@ -7054,8 +7084,8 @@ function dashListar(){
         <span style="width:7px;height:7px;border-radius:2px;background:${cn.c};"></span>${cn.t}</span></div>
       <div style="font-size:11px;color:var(--muted);">${r.modelo||'—'}</div>
       <div style="min-width:0;">
-        <div style="font-size:11px;color:var(--text);line-height:1.35;">${r.motivo||'<span style="color:var(--hint);">Sin razón informada</span>'}</div>
-        <div style="font-size:10px;color:var(--hint);margin-top:2px;">${r.llego ? 'Recibido ' + r.llego : (r.solicitada||'')}</div></div>
+        <div style="font-size:11px;color:var(--text);line-height:1.35;">${r.motivo||'<span style="color:var(--hint);">El canal no informa la razón</span>'}</div>
+        <div style="font-size:10px;color:var(--hint);margin-top:2px;">${r.llego ? 'Llegó ' + r.llego : (r.solicitada ? 'Solicitada ' + r.solicitada : '')}</div></div>
       <div>${_dashPlazo(r)}</div>
       <div>${_dashAcciones(r)}</div></div>`;
   }).join('') : '<div style="color:var(--hint);font-size:12px;text-align:center;padding:36px;">Sin devoluciones en esta etapa</div>';
@@ -7067,32 +7097,29 @@ function dashListar(){
     f ? f + ' abiertas fuera del rango de fechas' : '';
 }
 
-// La decision se guarda en Lusync y NO se escribe al canal: aceptar o
-// rechazar alla es irreversible y tiene plata detras. La confirmacion se
-// sigue haciendo en el portal del marketplace.
-function dashDecidir(id, decision){
-  const [canal, return_id] = id.split('|');
-  fetch('/devoluciones-mkt/decision', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({canal, return_id, decision})
-  }).then(r => r.json()).then(d => {
-    if(!d.ok){ toast(d.error || 'No se pudo registrar', 'error'); return; }
-    toast(decision ? ('Registrado: ' + decision + ' · confirma en el portal del canal')
-                   : 'Decisión deshecha');
-    dashCargar();
-  }).catch(e => toast('Error: ' + e.message, 'error'));
+// Revisar = el alta DEV que ya existia, con la orden puesta y la busqueda
+// hecha. Ahi se decide si vuelve a stock o se da de baja. Lusync NO acepta ni
+// rechaza ante el canal: eso se hace en el portal de cada marketplace.
+function dashRevisar(orden){
+  abrirModalNuevaDevolucion();
+  if(orden){
+    const inp = document.getElementById('devOcInput');
+    if(inp){ inp.value = orden; buscarOC(); }
+  }
 }
 
 function dashExportar(){
   const filas = dashFilas();
   if(!filas.length){ toast('No hay nada que exportar en esta etapa', 'warn'); return; }
-  const cab = ['Canal','Orden','SKU','Producto','Cantidad','Modelo','Razon','Etapa',
-               'Recibido','Horas restantes','Decision','Decidio','Fecha decision'];
+  const cab = ['DEV','Canal','Orden','SKU','Producto','Cantidad','Modelo','Razon','Etapa',
+               'Llego','Vence','Fuente del plazo','Horas restantes','Autoaceptada','NC'];
   const esc = v => '"' + String(v === null || v === undefined ? '' : v).replace(/"/g,'""') + '"';
   const csv = [cab.join(';')].concat(filas.map(r => [
-    r.canal, r.orden, r.sku, r.producto, r.cantidad, r.modelo, r.motivo,
-    _dashTab, r.llego || '', r.horas_restantes === null ? '' : r.horas_restantes,
-    r.decision || '', r.decision_por || '', r.decision_fecha || ''
+    r.dev_codigo || '', r.canal, r.orden, r.sku, r.producto, r.cantidad, r.modelo, r.motivo,
+    _dashTab, r.llego || '', r.vence || '',
+    r.plazo_fuente === 'api' ? 'API del canal' : (r.plazo_fuente === 'regla' ? (r.plazo_regla || 'regla del canal') : ''),
+    r.horas_restantes === null ? '' : r.horas_restantes,
+    r.autoaceptada ? 'Si' : '', r.nc_folio || ''
   ].map(esc).join(';'))).join('\n');
   // BOM para que Excel en español no rompa los acentos
   const blob = new Blob(['\ufeff' + csv], {type:'text/csv;charset=utf-8;'});
@@ -9966,7 +9993,32 @@ async function cargarDashboardCompleto() {
 }
 
 // ─── CARD: Devoluciones por revisar ───────────────
+// Aviso del Inicio: devoluciones en nuestra bodega, sin revisar, cuyo plazo
+// —el de la API del canal o la regla que el canal publica— vence en menos de
+// 24 horas. Y las que ya vencieron: el canal las acepto solo y la boleta
+// sigue sin anular.
+async function cargarAvisoDevoluciones(){
+  const el = document.getElementById('avisoDevVencer');
+  if(!el) return;
+  try {
+    const d = await (await fetch('/devoluciones/por-vencer')).json();
+    const n = (d && d.vencen_24h) || 0, a = (d && d.autoaceptadas_por_anular) || 0;
+    if(d.error || (!n && !a)){ el.style.display = 'none'; return; }
+    const CN = {falabella:'Falabella', paris:'París', walmart:'Walmart',
+                mercadolibre:'MercadoLibre', ripley:'Ripley'};
+    document.getElementById('avisoDevTitulo').textContent = n
+      ? `Tienes ${n} devolución${n>1?'es':''} por procesar · ${n>1?'vencen':'vence'} en menos de 24 h`
+      : `${a} devolución${a>1?'es':''} autoaceptada${a>1?'s':''} con la boleta sin anular`;
+    const partes = (d.detalle || []).map(x =>
+      `${CN[x.canal]||x.canal} · OC ${x.orden} · quedan ${x.horas_restantes} h`);
+    if(n && a) partes.push(`y ${a} autoaceptada${a>1?'s':''} sin anular boleta`);
+    document.getElementById('avisoDevDetalle').textContent = partes.join('   ·   ');
+    el.style.display = 'flex';
+  } catch(e){ el.style.display = 'none'; }
+}
+
 async function cargarDevolucionesPanel(){
+  cargarAvisoDevoluciones();
   try {
     const res = await fetch('/stats/devoluciones_estado');
     const d = await res.json();

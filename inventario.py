@@ -1514,16 +1514,39 @@ def init_devoluciones_mkt():
     release_conn(conn)
 
 
-def generar_codigo_dev():
+# Abreviatura de canal para el codigo DEV. Las mismas que ya usa el panel en
+# el historial de movimientos (ML, PA, WM, FA...), para no tener dos.
+_ABREV_CANAL = {
+    "mercadolibre": "ML", "meli": "ML", "paris": "PA", "parís": "PA",
+    "walmart": "WM", "falabella": "FA", "ripley": "RP", "hites": "HT",
+    "woocommerce": "WC", "woo": "WC", "web": "WC", "manual": "MAN",
+}
+
+
+def abrev_canal(canal):
+    c = (canal or "").strip().lower()
+    return _ABREV_CANAL.get(c, "")
+
+
+def generar_codigo_dev(canal=None):
+    """Codigo de la revision de una devolucion: DEV-FA-20260928-0001.
+
+    Lleva el canal para que se sepa de donde viene sin abrir la ficha —en la
+    tabla, en la etiqueta y al pistolear—. Sin canal conocido queda en el
+    formato anterior, DEV-20260928-0001. Siempre empieza con DEV-, que es lo
+    que el pistoleo usa para reconocerlo.
+    """
     from datetime import datetime
     conn = get_conn()
     cur = conn.cursor()
     hoy = datetime.now().strftime('%Y%m%d')
-    cur.execute("SELECT COUNT(*) FROM devoluciones WHERE codigo LIKE %s", (f'DEV-{hoy}-%',))
+    ab = abrev_canal(canal)
+    prefijo = f"DEV-{ab}-{hoy}-" if ab else f"DEV-{hoy}-"
+    cur.execute("SELECT COUNT(*) FROM devoluciones WHERE codigo LIKE %s", (prefijo + '%',))
     count = cur.fetchone()[0] + 1
     cur.close()
     release_conn(conn)
-    return f"DEV-{hoy}-{str(count).zfill(4)}"
+    return f"{prefijo}{str(count).zfill(4)}"
 
 def crear_devolucion(data):
     conn = get_conn()

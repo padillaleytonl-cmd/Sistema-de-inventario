@@ -6683,7 +6683,8 @@ def devoluciones_registrar_avanzado():
 
         ahora = datetime.now()
         deadline = calcular_deadline_habil(ahora, dias_habiles=3)
-        codigo = generar_codigo_dev()
+        # Con el canal en el codigo: DEV-FA-20260928-0001.
+        codigo = generar_codigo_dev(marketplace)
 
         # Snapshot de la orden (por si después se necesita)
         orden_snapshot = json.dumps({
@@ -7283,7 +7284,7 @@ def devoluciones_generar_codigo(dev_id):
         return {"error": "no encontrada"}, 404
     if dev.get("codigo"):
         return {"ok": True, "codigo": dev["codigo"]}
-    codigo = generar_codigo_dev()
+    codigo = generar_codigo_dev(dev.get("canal"))
     asignar_codigo_dev(dev_id, codigo)
     registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
                     "generar_codigo_dev", entidad="devoluciones", entidad_id=str(dev_id),
@@ -7344,19 +7345,136 @@ def devoluciones_mkt_sync():
     return {"ok": True, "resumen": resumen}
 
 
+def _devoluciones_consolidadas(desde=None, hasta=None, buscar=""):
+    """Las devoluciones de los canales, clasificadas y con su plazo real.
+
+    Lo usan el dashboard y el aviso del Inicio, asi que los dos cuentan igual.
+    Sin rango de fechas trae todas las abiertas.
+
+    Tres etapas: "bodega" (llego y se puede reclamar), "camino" (todavia no
+    llega) y "lista" (completada). No existe "solicitada": lo pedido que no
+    llega esta en camino.
+
+    Completada NO es "el canal la cerro". Es: rechazada por el canal, o con la
+    boleta ya anulada (nc_folio). Una devolucion aceptada —a mano o por
+    vencimiento— sigue abierta hasta que se anula el documento tributario,
+    porque ese es el control que tiene que llevar Lusync.
+    """
+    from returns import plazo_efectivo, REGLA_PLAZO_CANAL
+    ahora = now_chile().replace(tzinfo=None)
+
+    conn = get_conn(tenant_id=1)
+    try:
+        cur = conn.cursor()
+        q = """SELECT canal, return_id, COALESCE(order_id,''), COALESCE(sku,''),
+                      COALESCE(sku_canal,''), COALESCE(producto_nombre,''),
+                      COALESCE(cantidad,1), COALESCE(estado,'abierta'),
+                      COALESCE(estado_canal,''), COALESCE(motivo,''),
+                      monto_reembolso, fecha_solicitud, fecha_limite,
+                      COALESCE(url_gestion,''), COALESCE(tipo,''),
+                      fecha_llegada_bodega, COALESCE(nc_folio,'')
+                 FROM devoluciones_marketplace WHERE 1=1"""
+        params = []
+        if desde and hasta:
+            q += " AND fecha_solicitud BETWEEN %s AND %s"
+            params += [desde, hasta]
+        if buscar:
+            q += """ AND (order_id ILIKE %s OR return_id ILIKE %s
+                          OR COALESCE(sku,'') ILIKE %s OR COALESCE(sku_canal,'') ILIKE %s
+                          OR COALESCE(producto_nombre,'') ILIKE %s)"""
+            params += ["%%%s%%" % buscar] * 5
+        q += " ORDER BY fecha_solicitud DESC NULLS LAST LIMIT 1000"
+        cur.execute(q, params)
+        filas = cur.fetchall()
+
+        # La revision interna de cada una: su DEV. Viven en otra tabla y nada
+        # las unia; se cruzan por lo que las dos tienen, orden y SKU.
+        ordenes = sorted({f[2] for f in filas if f[2]})
+        revisiones = {}
+        if ordenes:
+            cur.execute("""SELECT oc_origen, COALESCE(sku,''), COALESCE(codigo,''),
+                                  COALESCE(estado,''), COALESCE(tipificacion,'')
+                             FROM devoluciones
+                            WHERE oc_origen = ANY(%s)
+                            ORDER BY id DESC""", (ordenes,))
+            for oc, sk, cod, est, tip in cur.fetchall():
+                revisiones.setdefault((oc, sk), (cod, est, tip))
+                revisiones.setdefault((oc, ""), (cod, est, tip))
+        cur.close()
+    finally:
+        release_conn(conn)
+
+    lista = []
+    resumen = {"bodega": 0, "camino": 0, "lista": 0,
+               "vencen_24h": 0, "autoaceptadas": 0, "por_anular": 0}
+    por_canal = {}
+    for (canal, rid, oid, sku, skuc, nombre, cant, estado, estadoc, motivo,
+         monto, fsol, flim, url, tipo, llegada, nc) in filas:
+
+        rev = (revisiones.get((oid, sku)) or revisiones.get((oid, skuc))
+               or revisiones.get((oid, "")))
+        dev_codigo, dev_estado, dev_tip = rev if rev else ("", "", "")
+
+        vence, fuente = plazo_efectivo(canal, flim, llegada)
+        horas = int((vence - ahora).total_seconds() // 3600) if vence else None
+        # Vencido el plazo, el canal acepta solo. Paris lo dice textual.
+        autoaceptada = horas is not None and horas < 0
+
+        if nc or estado == "cancelada":
+            grupo = "lista"
+        elif llegada or autoaceptada:
+            grupo = "bodega"
+        else:
+            grupo = "camino"
+
+        # Con la devolucion aceptada —por el canal o por vencimiento— lo que
+        # queda pendiente es anular la boleta.
+        por_anular = grupo == "bodega" and not nc and (autoaceptada or estado == "resuelta")
+
+        resumen[grupo] += 1
+        if grupo == "bodega":
+            if autoaceptada:
+                resumen["autoaceptadas"] += 1
+            elif horas is not None and horas < 24 and not dev_codigo:
+                resumen["vencen_24h"] += 1
+            if por_anular:
+                resumen["por_anular"] += 1
+        if grupo != "lista":
+            c = por_canal.setdefault(canal, {"canal": canal, "bodega": 0, "camino": 0, "total": 0})
+            c[grupo] += 1
+            c["total"] += 1
+
+        regla = REGLA_PLAZO_CANAL.get((canal or "").lower())
+        lista.append({
+            "canal": canal, "return_id": rid, "orden": oid,
+            "sku": sku or skuc, "producto": nombre, "cantidad": int(cant or 1),
+            "grupo": grupo, "estado": estado, "estado_canal": estadoc,
+            "motivo": motivo, "monto": float(monto) if monto is not None else None,
+            "url": url,
+            "modelo": ("Fulfillment" if "fulfillment" in (tipo or "").lower()
+                       else ("Propio" if tipo else "")),
+            "solicitada": fsol.strftime("%d/%m/%Y") if fsol else "",
+            "llego": llegada.strftime("%d/%m/%Y %H:%M") if llegada else None,
+            "vence": vence.strftime("%d/%m/%Y %H:%M") if vence else None,
+            "horas_restantes": horas,
+            "plazo_fuente": fuente,
+            "plazo_regla": regla["fuente"] if (fuente == "regla" and regla) else None,
+            "autoaceptada": autoaceptada,
+            "por_anular": por_anular,
+            "nc_folio": nc or None,
+            "dev_codigo": dev_codigo or None,
+            "dev_estado": dev_estado or None,
+            "dev_tipificacion": dev_tip or None,
+        })
+
+    return lista, resumen, por_canal
+
+
 @app.route("/devoluciones/dashboard")
 def devoluciones_dashboard():
     """Datos del dashboard de devoluciones para un rango de fechas.
 
-    Uso: /devoluciones/dashboard?desde=2026-08-29&hasta=2026-09-28
-
-    Devuelve el resumen, el desglose por canal y la lista en una sola
-    respuesta, para que las tres partes de la pantalla no puedan
-    contradecirse.
-
-    Las horas restantes se calculan acá y no se leen de dias_restantes: esa
-    columna guarda días enteros congelados en el último sync, y un plazo de
-    72 horas no se mide en días ni tolera estar media hora desactualizado.
+    Uso: /devoluciones/dashboard?desde=2026-08-29&hasta=2026-09-28&q=...
     """
     if not session.get("logged"):
         return jsonify({"error": "no autorizado"}), 401
@@ -7370,102 +7488,21 @@ def devoluciones_dashboard():
         except Exception:
             return por_defecto
 
-    hasta = _fecha(request.args.get("hasta", ""), ahora)
-    desde = _fecha(request.args.get("desde", ""), ahora - _td(days=30))
-    hasta_fin = hasta.replace(hour=23, minute=59, second=59)
-    desde_ini = desde.replace(hour=0, minute=0, second=0)
+    hasta = _fecha(request.args.get("hasta", ""), ahora).replace(hour=23, minute=59, second=59)
+    desde = _fecha(request.args.get("desde", ""), ahora - _td(days=30)).replace(hour=0, minute=0, second=0)
     buscar = (request.args.get("q") or "").strip()
 
-    conn = get_conn(tenant_id=1)
+    lista, resumen, por_canal = _devoluciones_consolidadas(desde, hasta, buscar)
+
+    # Abiertas fuera del rango: que el filtro no las esconda en silencio.
+    fuera = 0
     try:
-        cur = conn.cursor()
-        q = """SELECT canal, return_id, COALESCE(order_id,''), COALESCE(sku,''),
-                      COALESCE(sku_canal,''), COALESCE(producto_nombre,''),
-                      COALESCE(cantidad,1), COALESCE(estado,'abierta'),
-                      COALESCE(estado_canal,''), COALESCE(motivo,''),
-                      monto_reembolso, COALESCE(tracking_number,''),
-                      fecha_solicitud, fecha_limite, COALESCE(url_gestion,''),
-                      COALESCE(tipo,''), COALESCE(decision,''),
-                      COALESCE(decision_usuario,''), decision_fecha,
-                      fecha_llegada_bodega
-                 FROM devoluciones_marketplace
-                WHERE fecha_solicitud IS NOT NULL
-                  AND fecha_solicitud BETWEEN %s AND %s"""
-        params = [desde_ini, hasta_fin]
-        if buscar:
-            # Una sola caja que busca por orden, SKU, producto o n° de
-            # devolución: quien tiene el papel en la mano no sabe cuál de esos
-            # cuatro le tocó.
-            q += """ AND (order_id ILIKE %s OR return_id ILIKE %s
-                          OR COALESCE(sku,'') ILIKE %s OR COALESCE(sku_canal,'') ILIKE %s
-                          OR COALESCE(producto_nombre,'') ILIKE %s)"""
-            params += ["%%%s%%" % buscar] * 5
-        q += " ORDER BY (fecha_limite IS NULL), fecha_limite ASC, fecha_solicitud DESC LIMIT 500"
-        cur.execute(q, params)
-        filas = cur.fetchall()
-
-        # Abiertas que quedan FUERA del rango: se cuentan aparte para que el
-        # filtro no las esconda en silencio.
-        cur.execute("""SELECT COUNT(*) FROM devoluciones_marketplace
-                        WHERE COALESCE(estado,'abierta') NOT IN ('resuelta','cancelada')
-                          AND (fecha_solicitud IS NULL
-                               OR fecha_solicitud NOT BETWEEN %s AND %s)""",
-                    (desde_ini, hasta_fin))
-        fuera = int((cur.fetchone() or [0])[0] or 0)
-        cur.close()
-    finally:
-        release_conn(conn)
-
-    def _clasificar(estado, llegada):
-        # Tres etapas. "Solicitada" no existe como etapa: una devolucion
-        # pedida que todavia no llega esta "En camino". Lo que decide si esta
-        # en nuestra bodega es la LLEGADA —que informa la API o se pistolea—,
-        # no si hay plazo: hay canales que no dan plazo y el producto igual
-        # esta aca.
-        if estado in ("resuelta", "cancelada"):
-            return "lista"
-        return "bodega" if llegada else "camino"
-
-    lista, resumen = [], {"bodega": 0, "camino": 0, "lista": 0,
-                          "vencidas": 0, "vencen_hoy": 0, "bodega_sin_plazo": 0}
-    por_canal = {}
-    for (canal, rid, oid, sku, skuc, nombre, cant, estado, estadoc, motivo,
-         monto, track, fsol, flim, url, tipo, decision, dec_user, dec_fecha,
-         llegada) in filas:
-        grupo = _clasificar(estado, llegada)
-        horas = None
-        if flim:
-            horas = int((flim - ahora).total_seconds() // 3600)
-        resumen[grupo] += 1
-        if grupo == "bodega":
-            if horas is None:
-                resumen["bodega_sin_plazo"] += 1
-            elif horas < 0:
-                resumen["vencidas"] += 1
-            elif horas < 24:
-                resumen["vencen_hoy"] += 1
-        if grupo != "lista":
-            c = por_canal.setdefault(canal, {"canal": canal, "bodega": 0,
-                                             "camino": 0, "total": 0})
-            c[grupo] += 1
-            c["total"] += 1
-        lista.append({
-            "canal": canal, "return_id": rid, "orden": oid,
-            "sku": sku or skuc, "producto": nombre, "cantidad": int(cant or 1),
-            "grupo": grupo, "estado": estado, "estado_canal": estadoc,
-            "motivo": motivo, "monto": float(monto) if monto is not None else None,
-            "tracking": track, "url": url,
-            "solicitada": fsol.strftime("%d/%m/%Y") if fsol else "",
-            "dias": (ahora - fsol).days if fsol else None,
-            "horas_restantes": horas,
-            # "fulfillment" = salio de la bodega del canal, asi que ahi vuelve.
-            "modelo": ("Fulfillment" if "fulfillment" in (tipo or "").lower()
-                       else ("Propio" if tipo else "")),
-            "decision": decision or None,
-            "decision_por": dec_user or None,
-            "decision_fecha": dec_fecha.strftime("%d/%m/%Y %H:%M") if dec_fecha else None,
-            "llego": llegada.strftime("%d/%m/%Y %H:%M") if llegada else None,
-        })
+        todas, _, _ = _devoluciones_consolidadas()
+        claves = {(x["canal"], x["return_id"]) for x in lista}
+        fuera = sum(1 for x in todas
+                    if x["grupo"] != "lista" and (x["canal"], x["return_id"]) not in claves)
+    except Exception as e:
+        print(f"[Devoluciones] no pude contar las de fuera del rango: {e}")
 
     return jsonify({
         "rango": {"desde": desde.strftime("%Y-%m-%d"), "hasta": hasta.strftime("%Y-%m-%d")},
@@ -7474,6 +7511,31 @@ def devoluciones_dashboard():
         "lista": lista,
         "abiertas_fuera_del_rango": fuera,
         "total": len(lista),
+    })
+
+
+@app.route("/devoluciones/por-vencer")
+def devoluciones_por_vencer():
+    """Lo que alimenta el aviso del Inicio.
+
+    Devoluciones en nuestra bodega, sin revisar, cuyo plazo vence en menos de
+    24 horas; y las que ya vencieron y quedaron autoaceptadas con la boleta
+    sin anular. Se calcula con la misma funcion que el dashboard, asi que los
+    dos cuentan igual.
+    """
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    lista, resumen, _ = _devoluciones_consolidadas()
+    urgentes = sorted(
+        [x for x in lista if x["grupo"] == "bodega" and not x["autoaceptada"]
+         and not x["dev_codigo"] and x["horas_restantes"] is not None
+         and x["horas_restantes"] < 24],
+        key=lambda x: x["horas_restantes"])
+    return jsonify({
+        "vencen_24h": len(urgentes),
+        "autoaceptadas_por_anular": sum(1 for x in lista if x["autoaceptada"] and x["por_anular"]),
+        "detalle": [{"canal": x["canal"], "orden": x["orden"], "producto": x["producto"],
+                     "horas_restantes": x["horas_restantes"]} for x in urgentes[:5]],
     })
 
 
@@ -7549,6 +7611,10 @@ def devoluciones_mkt_llegada():
     finally:
         release_conn(conn)
 
+    # El plazo que corre desde ahora: el de la API, o la regla que publica el
+    # canal contada desde esta llegada (Falabella: 72 horas habiles).
+    from returns import plazo_efectivo
+    nuevo_limite, _fuente = plazo_efectivo(canal, nuevo_limite, ahora)
     horas = int((nuevo_limite - ahora).total_seconds() // 3600) if nuevo_limite else None
     return jsonify({"ok": True, "encontrada": True, "ya_estaba": False,
                     "canal": canal, "orden": oid, "producto": nombre, "sku": skuc,

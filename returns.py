@@ -186,6 +186,42 @@ def _plazo_reclamo(plazo_del_canal, llegada_a_bodega=None):
     return plazo_del_canal or None
 
 
+# Plazo que PUBLICA cada canal que no lo entrega por API. Son sus reglas, no
+# las nuestras; cada una cita de donde sale. Se cuentan en dias habiles
+# (lunes a viernes, sin feriados) desde la llegada real a nuestra bodega.
+REGLA_PLAZO_CANAL = {
+    "paris": {
+        "dias_habiles": 3,
+        "fuente": "Paris: 3 días hábiles desde que el producto llega a tu bodega",
+    },
+    "falabella": {
+        "dias_habiles": 3,
+        "fuente": "Falabella: 72 horas hábiles desde que recibes el producto",
+    },
+}
+
+
+def plazo_efectivo(canal, plazo_api, llegada):
+    """Cuando vence el plazo y de donde salio. Devuelve (datetime|None, fuente).
+
+    fuente = "api"    el canal lo informo por su API; manda siempre.
+             "regla"  el canal no lo informa, y se aplica la regla que el
+                      propio canal publica, desde la llegada real.
+             None     no hay con que calcularlo (todavia no llega, o el canal
+                      no publica regla). No se inventa.
+
+    El de regla no se guarda: se calcula al leer, para que fecha_limite siga
+    siendo solo lo que dice la API.
+    """
+    if plazo_api:
+        return plazo_api, "api"
+    regla = REGLA_PLAZO_CANAL.get((canal or "").strip().lower())
+    if regla and llegada:
+        from feriados import calcular_deadline_habil
+        return calcular_deadline_habil(llegada, dias_habiles=regla["dias_habiles"]), "regla"
+    return None, None
+
+
 def _norm_estado(canal, estado_crudo):
     """Mapea el estado crudo de cada canal a un estado normalizado común."""
     e = (str(estado_crudo) or "").lower()
