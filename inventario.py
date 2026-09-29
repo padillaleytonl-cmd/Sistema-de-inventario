@@ -1477,6 +1477,82 @@ def asegurar_llegada_bodega():
         cur.close(); release_conn(conn)
 
 
+# El cliente de una fila nueva cuando el INSERT no lo indica: el de la
+# conexion, que get_conn toma de la sesion o del hilo. Si la conexion no trae
+# cliente (0 = super-admin sin cliente, o vacio) cae en 1, que es lo mismo que
+# hacia el DEFAULT anterior.
+EXPR_TENANT_CONTEXTO = ("COALESCE(NULLIF(NULLIF(current_setting('app.tenant_id', true), ''), "
+                        "'0')::integer, 1)")
+RESULTADO_TENANT_CONTEXTO = {}
+
+
+def asegurar_tenant_por_contexto():
+    """Cambia DEFAULT 1 por EXPR_TENANT_CONTEXTO en toda columna tenant_id.
+
+    Unas 40 sentencias INSERT no indican tenant_id (productos, movimientos,
+    stock_bodega, alertas, audit_log...) y la columna tomaba 1 por defecto: lo
+    que guardara otro cliente quedaba como del cliente 1. Corregir cada INSERT
+    deja la puerta abierta al proximo que se escriba; el DEFAULT la cierra
+    para todos.
+
+    Hoy, con un solo cliente, no cambia nada: toda conexion trae 1, 0 o nada,
+    y los tres dan 1.
+
+    Solo toca columnas cuyo DEFAULT es exactamente 1. Cambiar un DEFAULT es
+    solo metadata —no reescribe filas—, pero toma un lock exclusivo un
+    instante: cada tabla va en su transaccion, con lock_timeout, y si una
+    esta ocupada se salta y queda para el proximo arranque.
+    """
+    global RESULTADO_TENANT_CONTEXTO
+    res = {"cambiadas": [], "ya_estaban": [], "no_aplica": [], "errores": []}
+    conn = get_conn(is_admin=True)
+    cur = conn.cursor()
+    try:
+        cur.execute("""SELECT c.table_name, COALESCE(c.column_default, '')
+                         FROM information_schema.columns c
+                         JOIN information_schema.tables t
+                           ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+                        WHERE c.table_schema = 'public' AND c.column_name = 'tenant_id'
+                          AND t.table_type = 'BASE TABLE'
+                        ORDER BY 1""")
+        filas = cur.fetchall()
+        conn.commit()
+        for tabla, default in filas:
+            d = default.strip()
+            if "current_setting" in d:
+                res["ya_estaban"].append(tabla)
+                continue
+            if d != "1":
+                res["no_aplica"].append({"tabla": tabla, "default": d or None})
+                continue
+            try:
+                cur.execute("SET LOCAL lock_timeout = '3s'")
+                cur.execute('ALTER TABLE "%s" ALTER COLUMN tenant_id SET DEFAULT %s'
+                            % (tabla.replace('"', ''), EXPR_TENANT_CONTEXTO))
+                conn.commit()
+                res["cambiadas"].append(tabla)
+            except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                res["errores"].append({"tabla": tabla, "error": str(e)[:160]})
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        res["errores"].append({"tabla": "*", "error": str(e)[:160]})
+    finally:
+        cur.close()
+        release_conn(conn)
+    RESULTADO_TENANT_CONTEXTO = res
+    print("[tenant_por_contexto] cambiadas=%d ya_estaban=%d no_aplica=%d errores=%d"
+          % (len(res["cambiadas"]), len(res["ya_estaban"]), len(res["no_aplica"]),
+             len(res["errores"])))
+    return res
+
+
 def init_devoluciones_mkt():
     """Tabla de trazabilidad de devoluciones traídas automáticamente desde las
     APIs de cada marketplace (separada de 'devoluciones', que es el registro

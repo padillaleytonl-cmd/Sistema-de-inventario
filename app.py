@@ -143,6 +143,11 @@ except Exception as e:
 try:
     from tenancy import init_multitenancy
     init_multitenancy()
+    try:
+        from inventario import asegurar_tenant_por_contexto
+        asegurar_tenant_por_contexto()
+    except Exception as _e:
+        print(f"[tenant_por_contexto] {_e}")
 except Exception as e:
     import traceback
     print(f"[init_multitenancy] ERROR: {e}")
@@ -887,7 +892,7 @@ def _diagnostico_orden(movimientos, marcas, devoluciones=None):
     return balance, resumen, veredicto
 
 
-RASTREADOR_VERSION = "v14-2026-09-29"
+RASTREADOR_VERSION = "v15-2026-09-29"
 
 
 def _rastrear_ordenes(conn, ordenes):
@@ -1074,6 +1079,87 @@ def _puerta_de_entrada():
             and p.startswith(_PREFIJOS_CANALES)):
         return jsonify({"error": "Tu cuenta no tiene este canal conectado"}), 403
     return None
+
+
+@app.route("/admin/lusync/base/estructura")
+def admin_base_estructura():
+    """Foto de la base para planificar el aislamiento entre clientes. SOLO LEE.
+
+    Por tabla: si tiene tenant_id, su DEFAULT, si RLS esta activado y forzado,
+    y cuantas filas tiene cada cliente. Ademas las claves unicas y las llaves
+    foraneas, que son las que hay que llevar a (tenant_id, ...) sin romper los
+    ON CONFLICT que las usan.
+    """
+    if not _acceso_equipo_lusync():
+        return jsonify({"error": "no autorizado"}), 401
+    from inventario import get_conn, release_conn, RESULTADO_TENANT_CONTEXTO
+    salida = {"version": RASTREADOR_VERSION, "generado": str(now_chile()),
+              "migracion_default": RESULTADO_TENANT_CONTEXTO}
+    conn = None
+    try:
+        conn = get_conn(tenant_id=TENANT_INTEGRACIONES, is_admin=True)
+        cur = conn.cursor()
+        cur.execute("SET statement_timeout = '25s'")
+        cur.execute("SELECT id, COALESCE(estado,''), COALESCE(nombre,'') FROM tenants ORDER BY id")
+        salida["tenants"] = [{"id": r[0], "estado": r[1], "nombre": r[2]} for r in cur.fetchall()]
+
+        cur.execute("""SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity,
+                              c.reltuples::bigint,
+                              (SELECT COALESCE(a.column_default,'') || '|' || a.is_nullable
+                                 FROM information_schema.columns a
+                                WHERE a.table_schema='public' AND a.table_name=c.relname
+                                  AND a.column_name='tenant_id')
+                         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                        WHERE n.nspname = 'public' AND c.relkind = 'r'
+                        ORDER BY c.relname""")
+        tablas = []
+        for nombre, rls, forzado, filas_aprox, col in cur.fetchall():
+            t = {"tabla": nombre, "rls": rls, "rls_forzado": forzado,
+                 "filas_aprox": filas_aprox, "tiene_tenant_id": col is not None}
+            if col is not None:
+                d, nul = col.rsplit("|", 1)
+                t["default"] = d or None
+                t["acepta_null"] = nul == "YES"
+            tablas.append(t)
+        for t in tablas:
+            if not t["tiene_tenant_id"]:
+                continue
+            try:
+                cur.execute('SELECT tenant_id, COUNT(*) FROM "%s" GROUP BY 1 ORDER BY 1'
+                            % t["tabla"].replace('"', ''))
+                t["filas_por_tenant"] = {str(r[0]): r[1] for r in cur.fetchall()}
+            except Exception as e:
+                conn.rollback()
+                cur.execute("SET statement_timeout = '25s'")
+                t["filas_por_tenant"] = {"error": str(e)[:120]}
+        salida["tablas"] = tablas
+
+        cur.execute("""SELECT t.relname, i.relname, pg_get_indexdef(ix.indexrelid),
+                              ix.indisprimary
+                         FROM pg_index ix
+                         JOIN pg_class i ON i.oid = ix.indexrelid
+                         JOIN pg_class t ON t.oid = ix.indrelid
+                         JOIN pg_namespace n ON n.oid = t.relnamespace
+                        WHERE n.nspname = 'public' AND ix.indisunique
+                        ORDER BY 1, 2""")
+        salida["unicos"] = [{"tabla": r[0], "indice": r[1], "def": r[2], "pk": r[3]}
+                            for r in cur.fetchall() if not r[3]]
+
+        cur.execute("""SELECT cl.relname, co.conname, pg_get_constraintdef(co.oid)
+                         FROM pg_constraint co
+                         JOIN pg_class cl ON cl.oid = co.conrelid
+                         JOIN pg_namespace n ON n.oid = cl.relnamespace
+                        WHERE n.nspname = 'public' AND co.contype = 'f'
+                        ORDER BY 1, 2""")
+        salida["foraneas"] = [{"tabla": r[0], "nombre": r[1], "def": r[2]}
+                              for r in cur.fetchall()]
+        cur.close()
+    except Exception as e:
+        salida["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        if conn:
+            release_conn(conn)
+    return jsonify(salida)
 
 
 @app.route("/admin/lusync/devoluciones/estados")
