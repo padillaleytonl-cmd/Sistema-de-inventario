@@ -206,8 +206,7 @@ def ver_sync_log():
     import os
     bypass_token = _admin_bypass_token()
     token = request.args.get("token", "")
-    if not (session.get("logged") or session.get("is_lusync_admin")
-            or (token and token == bypass_token)):
+    if not _acceso_equipo_lusync():
         return redirect("/admin/lusync/login")
 
     sku_filtro = (request.args.get("sku", "") or "").strip()
@@ -315,7 +314,7 @@ def admin_stock_fijar_conteo():
 
     Uso: /admin/lusync/stock/fijar-conteo
     """
-    if not (session.get("logged") or session.get("is_lusync_admin")):
+    if not _acceso_equipo_lusync():
         return jsonify({"error": "no autorizado"}), 401
 
     from inventario import (get_conn, release_conn, get_stock_bodega,
@@ -530,7 +529,7 @@ def admin_stock_sin_movimiento():
     Uso: /admin/lusync/stock/sin-movimiento
          &solo_bajadas=1  para ver unicamente lo que perdio unidades
     """
-    if not (session.get("logged") or session.get("is_lusync_admin")):
+    if not _acceso_equipo_lusync():
         return jsonify({"error": "no autorizado"}), 401
 
     from inventario import get_conn, release_conn
@@ -644,7 +643,7 @@ def admin_stock_en_cero():
 
     Uso: /admin/lusync/stock/en-cero
     """
-    if not (session.get("logged") or session.get("is_lusync_admin")):
+    if not _acceso_equipo_lusync():
         return jsonify({"error": "no autorizado"}), 401
 
     from inventario import get_conn, release_conn
@@ -741,8 +740,7 @@ def trazar_ajuste_stock():
     import os
     bypass_token = _admin_bypass_token()
     token = request.args.get("token", "")
-    if not (session.get("logged") or session.get("is_lusync_admin")
-            or (token and token == bypass_token)):
+    if not _acceso_equipo_lusync():
         return redirect("/admin/lusync/login")
 
     sku = (request.args.get("sku", "") or "").strip()
@@ -973,6 +971,47 @@ def _rastrear_ordenes(conn, ordenes):
     return resultado
 
 
+# ── Aislamiento entre clientes ───────────────────────────────────────────
+# Las consultas de devoluciones filtran por cliente EN EL WHERE, con el
+# cliente que get_conn deja en la conexion (el de la sesion):
+#
+#     WHERE ... AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int
+#
+# No alcanza con RLS: devoluciones_marketplace no lo tiene, y varias consultas
+# abren la conexion con is_admin=True, que se salta RLS en todas las tablas.
+# Antes todo esto estaba fijo en tenant_id=1, y un segundo cliente habria
+# visto las devoluciones, ventas y stock del primero. Sin cliente en la
+# conexion el filtro da NULL y no devuelve nada: falla cerrado.
+
+# Las credenciales de los canales (MercadoLibre, Walmart, Paris, Ripley,
+# Falabella) estan en variables de entorno: son de UN cliente. Lo que se trae
+# de esos canales —sincronizaciones y webhooks— se escribe a ese cliente, y
+# solo el puede dispararlo.
+TENANT_INTEGRACIONES = int(os.environ.get("LUSYNC_TENANT_INTEGRACIONES", "1"))
+
+
+def _tenant_sesion():
+    """El cliente del usuario logueado, o None."""
+    try:
+        tid = session.get("tenant_id")
+        return int(tid) if tid else None
+    except Exception:
+        return None
+
+
+def _acceso_equipo_lusync():
+    """Herramientas internas /admin/lusync/*: miran y a veces corrigen datos
+    con permisos de administrador. Entra el equipo Lusync —super-admin o
+    token de bypass— o una sesion del cliente dueño de las integraciones.
+    Antes bastaba con tener sesion, de cualquier cliente."""
+    if session.get("is_lusync_admin"):
+        return True
+    token = request.args.get("token", "")
+    if token and token == _admin_bypass_token():
+        return True
+    return bool(session.get("logged")) and _tenant_sesion() == TENANT_INTEGRACIONES
+
+
 @app.route("/admin/lusync/devoluciones/estados")
 def admin_diag_devoluciones_estados():
     """Que estados y fechas informa cada canal en sus devoluciones guardadas.
@@ -990,8 +1029,7 @@ def admin_diag_devoluciones_estados():
     import re as _re
     bypass_token = _admin_bypass_token()
     token = request.args.get("token", "")
-    if not (session.get("logged") or session.get("is_lusync_admin")
-            or (token and token == bypass_token)):
+    if not _acceso_equipo_lusync():
         return redirect("/admin/lusync/login")
 
     canal = (request.args.get("canal") or "mercadolibre").strip().lower()
@@ -1068,8 +1106,7 @@ def admin_diag_devoluciones():
     """
     bypass_token = _admin_bypass_token()
     token = request.args.get("token", "")
-    if not (session.get("logged") or session.get("is_lusync_admin")
-            or (token and token == bypass_token)):
+    if not _acceso_equipo_lusync():
         return redirect("/admin/lusync/login")
 
     canal = (request.args.get("canal") or "paris").strip().lower()
@@ -1376,8 +1413,7 @@ def admin_rastrear_orden():
     """
     bypass_token = _admin_bypass_token()
     token = request.args.get("token", "")
-    if not (session.get("logged") or session.get("is_lusync_admin")
-            or (token and token == bypass_token)):
+    if not _acceso_equipo_lusync():
         return redirect("/admin/lusync/login")
 
     conn = None
@@ -1440,8 +1476,7 @@ def admin_ventas_faltantes():
     """
     bypass_token = _admin_bypass_token()
     token = request.args.get("token", "")
-    if not (session.get("logged") or session.get("is_lusync_admin")
-            or (token and token == bypass_token)):
+    if not _acceso_equipo_lusync():
         return redirect("/admin/lusync/login")
 
     from inventario import get_conn, release_conn, get_stock_bodega, ajustar_stock_bodega
@@ -1532,8 +1567,7 @@ def auditoria_ordenes_limbo():
     import os
     bypass_token = _admin_bypass_token()
     token = request.args.get("token", "")
-    if not (session.get("logged") or session.get("is_lusync_admin")
-            or (token and token == bypass_token)):
+    if not _acceso_equipo_lusync():
         return redirect("/admin/lusync/login")
 
     from inventario import get_conn, release_conn
@@ -1709,7 +1743,7 @@ def admin_perf_bloqueos():
 
     Uso: /admin/lusync/perf/bloqueos
     """
-    if not (session.get("logged") or session.get("is_lusync_admin")):
+    if not _acceso_equipo_lusync():
         return jsonify({"error": "no autorizado"}), 401
 
     from inventario import get_conn, release_conn
@@ -1861,7 +1895,7 @@ def admin_alertas_limpiar():
       /admin/lusync/alertas/limpiar?modo=repetidas&aplicar=1     BORRA
       /admin/lusync/alertas/limpiar?modo=viejas&dias=30          simula
     """
-    if not (session.get("logged") or session.get("is_lusync_admin")):
+    if not _acceso_equipo_lusync():
         return jsonify({"error": "no autorizado"}), 401
 
     import time as _t
@@ -2044,7 +2078,7 @@ def admin_perf_tablas():
 
     Uso: /admin/lusync/perf/tablas
     """
-    if not (session.get("logged") or session.get("is_lusync_admin")):
+    if not _acceso_equipo_lusync():
         return jsonify({"error": "no autorizado"}), 401
 
     import time as _t
@@ -2170,7 +2204,7 @@ def admin_perf_pool():
 
     Uso: /admin/lusync/perf/pool
     """
-    if not (session.get("logged") or session.get("is_lusync_admin")):
+    if not _acceso_equipo_lusync():
         return jsonify({"error": "no autorizado"}), 401
 
     import time as _t
@@ -2307,8 +2341,7 @@ def health_check_stock_fix():
     import os
     bypass_token = _admin_bypass_token()
     token = request.args.get("token", "")
-    if not (session.get("logged") or session.get("is_lusync_admin")
-            or (token and token == bypass_token)):
+    if not _acceso_equipo_lusync():
         return redirect("/admin/lusync/login")
 
     from inventario import get_conn
@@ -2368,8 +2401,7 @@ def recuperar_stock_lote():
     import os
     bypass_token = _admin_bypass_token()
     token = request.args.get("token", "")
-    if not (session.get("logged") or session.get("is_lusync_admin")
-            or (token and token == bypass_token)):
+    if not _acceso_equipo_lusync():
         return redirect("/admin/lusync/login")
 
     # Parsear los datos (de query string o JSON)
@@ -2447,8 +2479,7 @@ def reparar_central_stock():
     import os
     bypass_token = _admin_bypass_token()
     token = request.args.get("token", "")
-    if not (session.get("logged") or session.get("is_lusync_admin")
-            or (token and token == bypass_token)):
+    if not _acceso_equipo_lusync():
         return redirect("/admin/lusync/login")
 
     sku = (request.args.get("sku", "") or "").strip()
@@ -6513,7 +6544,7 @@ def devoluciones_get(dev_id):
         from returns import buscar_devolucion_mkt
         cands = buscar_devolucion_mkt(
             oc_origen=dev.get("oc_origen"), sku=dev.get("sku"),
-            canal=(dev.get("canal") or "").lower(), tenant_id=1)
+            canal=(dev.get("canal") or "").lower(), tenant_id=_tenant_sesion())
         if cands:
             mkt = cands[0]
     except Exception as _e:
@@ -6539,7 +6570,7 @@ def devoluciones_lookup_oc():
     oc = request.args.get("oc", "").strip()
     if not oc:
         return {"error": "OC requerida"}, 400
-    conn = get_conn(tenant_id=1, is_admin=True)
+    conn = get_conn(tenant_id=_tenant_sesion(), is_admin=True)
     cur = conn.cursor()
     cur.execute("""
         SELECT DISTINCT m.sku, m.nombre, m.canal,
@@ -6551,6 +6582,7 @@ def devoluciones_lookup_oc():
                  END, 'DD/MM/YYYY HH24:MI') as fecha
         FROM movimientos m
         WHERE m.orden_id = %s AND m.tipo = 'salida'
+          AND m.tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int
         ORDER BY m.sku
     """, (oc,))
     rows = cur.fetchall()
@@ -6576,7 +6608,7 @@ def devoluciones_mkt_match():
     if not oc and not sku:
         return {"error": "oc o sku requerido"}, 400
     from returns import buscar_devolucion_mkt
-    cands = buscar_devolucion_mkt(oc_origen=oc, sku=sku, canal=canal, tenant_id=1)
+    cands = buscar_devolucion_mkt(oc_origen=oc, sku=sku, canal=canal, tenant_id=_tenant_sesion())
     return {"encontradas": len(cands), "devoluciones_mkt": cands}
 
 
@@ -6607,7 +6639,7 @@ def devoluciones_buscar_orden():
             break
 
     # ── Paso 1: Buscar en BD local ─────────────────────────────────
-    conn = get_conn(tenant_id=1, is_admin=True)
+    conn = get_conn(tenant_id=_tenant_sesion(), is_admin=True)
     cur = conn.cursor()
     # Se suma por SKU: una orden puede tener el mismo producto en varias lineas,
     # y el cupo se cuenta por SKU, no por linea.
@@ -6618,6 +6650,7 @@ def devoluciones_buscar_orden():
                MAX(m.bodega_codigo) as bodega_codigo, MAX(m.orden_id) as orden_id
         FROM movimientos m
         WHERE m.orden_id = %s AND m.tipo = 'salida'
+          AND m.tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int
         GROUP BY m.sku
         ORDER BY m.sku
     """, (numero_limpio,))
@@ -6869,7 +6902,7 @@ def devoluciones_registrar_avanzado():
                 estado = %s,
                 bodega_destino = %s,
                 impacto_stock_reingresado = %s
-            WHERE id = %s
+            WHERE id = %s AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int
         """, (codigo, tipificacion, motivo_texto, responsable,
               deadline, ahora, orden_snapshot,
               dev_data["estado"], bodega_destino, hubo_reintegro, dev_id))
@@ -6938,7 +6971,7 @@ def _cupo_devolucion(orden_id, sku):
         # Mismo acceso que devoluciones_buscar_orden, para que el cupo cuente
         # exactamente las ventas que el usuario ve en el formulario. Si miran
         # cosas distintas, el tope no significa nada.
-        conn = get_conn(tenant_id=1, is_admin=True)
+        conn = get_conn(tenant_id=_tenant_sesion(), is_admin=True)
         cur = conn.cursor()
         # Se cuentan las LINEAS ademas de las unidades, y la diferencia importa:
         # hay ventas de MercadoLibre Full registradas con cantidad 0. La linea
@@ -6949,12 +6982,14 @@ def _cupo_devolucion(orden_id, sku):
         # legitimas; darlo por bueno dejaria reponer sin tope. Se distingue.
         cur.execute("""SELECT COALESCE(SUM(ABS(cantidad)), 0), COUNT(*)
                          FROM movimientos
-                        WHERE orden_id = %s AND sku = %s AND tipo = 'salida'""",
+                        WHERE orden_id = %s AND sku = %s AND tipo = 'salida'
+                          AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int""",
                     (str(orden_id), sku))
         _f = cur.fetchone()
         vendido, lineas = int(_f[0] or 0), int(_f[1] or 0)
         cur.execute("""SELECT COALESCE(SUM(cantidad), 0) FROM devoluciones
-                        WHERE oc_origen = %s AND sku = %s""",
+                        WHERE oc_origen = %s AND sku = %s
+                          AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int""",
                     (str(orden_id), sku))
         devuelto = int(cur.fetchone()[0] or 0)
         cur.close()
@@ -6998,12 +7033,13 @@ def _bodega_para_reintegro(orden_id, sku):
         # Mismo acceso que buscar_orden por la misma razon que en
         # _cupo_devolucion: si no ve el movimiento, deduce CENTRAL por defecto
         # y mandaria a nuestra bodega una unidad que se quedo en el marketplace.
-        conn = get_conn(tenant_id=1, is_admin=True)
+        conn = get_conn(tenant_id=_tenant_sesion(), is_admin=True)
         cur = conn.cursor()
         cur.execute("""SELECT m.bodega_codigo, COALESCE(b.tipo, 'propia')
                          FROM movimientos m
-                    LEFT JOIN bodegas b ON b.codigo = m.bodega_codigo
+                    LEFT JOIN bodegas b ON b.codigo = m.bodega_codigo AND b.tenant_id = m.tenant_id
                         WHERE m.orden_id = %s AND m.sku = %s AND m.tipo = 'salida'
+                          AND m.tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int
                      ORDER BY m.id DESC LIMIT 1""",
                     (str(orden_id), sku))
         fila = cur.fetchone()
@@ -7206,7 +7242,7 @@ def devoluciones_etiqueta_pdf(dev_id):
         try:
             from inventario import get_conn
             conn = get_conn(); cur = conn.cursor()
-            cur.execute("UPDATE devoluciones SET etiqueta_generada=TRUE WHERE id=%s", (dev_id,))
+            cur.execute("UPDATE devoluciones SET etiqueta_generada=TRUE WHERE id=%s AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int", (dev_id,))
             conn.commit()
             cur.close(); release_conn(conn)
         except: pass
@@ -7237,6 +7273,7 @@ def devoluciones_pendientes_revision():
                    etiqueta_generada, estado
             FROM devoluciones
             WHERE estado IN ('pendiente', 'en_reparacion')
+              AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int
               AND fecha_deadline IS NOT NULL
             ORDER BY fecha_deadline ASC
             LIMIT 100
@@ -7315,15 +7352,19 @@ def devoluciones_eliminar(dev_id):
                         "intento_eliminar_devolucion", entidad="devoluciones", entidad_id=str(dev_id),
                         resultado="fallido", detalle="Clave admin incorrecta")
         return {"error": "Clave incorrecta"}, 403
-    conn = get_conn(tenant_id=1, is_admin=True)
+    conn = get_conn(tenant_id=_tenant_sesion(), is_admin=True)
     cur = conn.cursor()
     cur.execute("""SELECT codigo, oc_origen, nombre, sku, cantidad,
                           COALESCE(bodega_destino, 'CENTRAL'),
                           COALESCE(impacto_stock_reingresado, FALSE)
-                     FROM devoluciones WHERE id = %s""", (dev_id,))
+                     FROM devoluciones WHERE id = %s AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int""", (dev_id,))
     row = cur.fetchone()
-    detalle_dev = str(row) if row else str(dev_id)
-    cur.execute("DELETE FROM devoluciones WHERE id = %s", (dev_id,))
+    if not row:
+        # No existe, o es de otro cliente: para el que pregunta es lo mismo.
+        cur.close(); release_conn(conn)
+        return {"error": "no encontrada"}, 404
+    detalle_dev = str(row)
+    cur.execute("DELETE FROM devoluciones WHERE id = %s AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int", (dev_id,))
     conn.commit()
     cur.close(); release_conn(conn)
 
@@ -7398,9 +7439,9 @@ def falabella_webhook():
         # futuro hay más, se puede mapear por seller. Por ahora, tenant 1.
         if "return" in str(evento).lower() or "Return" in str(evento):
             from returns import procesar_webhook_falabella_return
-            set_thread_tenant(1, is_admin=False)
+            set_thread_tenant(TENANT_INTEGRACIONES, is_admin=False)
             try:
-                res = procesar_webhook_falabella_return(payload, tenant_id=1)
+                res = procesar_webhook_falabella_return(payload, tenant_id=TENANT_INTEGRACIONES)
             finally:
                 clear_thread_tenant()
             print(f"[Falabella webhook] return procesado: {res}")
@@ -7418,13 +7459,17 @@ def devoluciones_mkt_sync():
     """Dispara manualmente el sync de devoluciones de los canales de pull."""
     if not session.get("logged"):
         return {"error": "no autorizado"}, 401
+    # Trae con las credenciales de los canales, que son de un solo cliente.
+    # Otro cliente no puede dispararlo: escribiria devoluciones ajenas.
+    if _tenant_sesion() != TENANT_INTEGRACIONES:
+        return {"ok": False, "error": "Tu cuenta no tiene canales conectados"}, 403
     from returns import sincronizar_devoluciones
     dias = int(request.args.get("dias", 30))
     canales = request.args.get("canales")
     canales = canales.split(",") if canales else None
-    set_thread_tenant(1, is_admin=False)
+    set_thread_tenant(TENANT_INTEGRACIONES, is_admin=False)
     try:
-        resumen = sincronizar_devoluciones(tenant_id=1, dias=dias, canales=canales)
+        resumen = sincronizar_devoluciones(tenant_id=TENANT_INTEGRACIONES, dias=dias, canales=canales)
     finally:
         clear_thread_tenant()
     return {"ok": True, "resumen": resumen}
@@ -7528,7 +7573,7 @@ def _devoluciones_consolidadas(desde=None, hasta=None, buscar=""):
     from returns import plazo_efectivo, REGLA_PLAZO_CANAL
     ahora = now_chile().replace(tzinfo=None)
 
-    conn = get_conn(tenant_id=1)
+    conn = get_conn(tenant_id=_tenant_sesion())
     try:
         cur = conn.cursor()
         q = """SELECT canal, return_id, COALESCE(order_id,''), COALESCE(sku,''),
@@ -7540,7 +7585,7 @@ def _devoluciones_consolidadas(desde=None, hasta=None, buscar=""):
                       fecha_llegada_bodega, COALESCE(nc_folio,''),
                       COALESCE(destino_inventario,''), COALESCE(destino_usuario,''),
                       destino_fecha, dev_id
-                 FROM devoluciones_marketplace WHERE 1=1"""
+                 FROM devoluciones_marketplace WHERE tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int"""
         params = []
         if desde and hasta:
             q += " AND fecha_solicitud BETWEEN %s AND %s"
@@ -7562,7 +7607,7 @@ def _devoluciones_consolidadas(desde=None, hasta=None, buscar=""):
         if ids:
             cur.execute("""SELECT id, COALESCE(codigo,''), COALESCE(estado,''),
                                   COALESCE(tipificacion,''), COALESCE(bodega_destino,'')
-                             FROM devoluciones WHERE id = ANY(%s)""", (ids,))
+                             FROM devoluciones WHERE id = ANY(%s) AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int""", (ids,))
             for did, cod, est, tip, bod in cur.fetchall():
                 por_id[did] = (cod, est, tip, bod)
         ordenes = sorted({f[2] for f in filas if f[2]})
@@ -7571,7 +7616,7 @@ def _devoluciones_consolidadas(desde=None, hasta=None, buscar=""):
             cur.execute("""SELECT oc_origen, COALESCE(sku,''), COALESCE(codigo,''),
                                   COALESCE(estado,''), COALESCE(tipificacion,'')
                              FROM devoluciones
-                            WHERE oc_origen = ANY(%s)
+                            WHERE oc_origen = ANY(%s) AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int
                             ORDER BY id DESC""", (ordenes,))
             for oc, sk, cod, est, tip in cur.fetchall():
                 revisiones.setdefault((oc, sk), (cod, est, tip))
@@ -7722,7 +7767,7 @@ def devoluciones_mkt_procesar_info():
 
 def _fila_devolucion_mkt(canal, rid):
     from inventario import get_conn, release_conn
-    conn = get_conn(tenant_id=1)
+    conn = get_conn(tenant_id=_tenant_sesion())
     try:
         cur = conn.cursor()
         cur.execute("""SELECT COALESCE(order_id,''), COALESCE(sku,''), COALESCE(sku_canal,''),
@@ -7730,7 +7775,8 @@ def _fila_devolucion_mkt(canal, rid):
                               fecha_llegada_bodega, COALESCE(destino_inventario,''),
                               COALESCE(motivo,'')
                          FROM devoluciones_marketplace
-                        WHERE canal = %s AND return_id = %s""", (canal, rid))
+                        WHERE canal = %s AND return_id = %s
+                          AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int""", (canal, rid))
         f = cur.fetchone()
         cur.close()
     finally:
@@ -7834,7 +7880,7 @@ def devoluciones_mkt_procesar():
                               usuario_revisor = %s, fecha_recepcion = %s,
                               origen_datos = 'marketplace', estado = %s,
                               bodega_destino = %s, impacto_stock_reingresado = %s
-                            WHERE id = %s""",
+                            WHERE id = %s AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int""",
                         (codigo, conf["tipif"], motivo or None, usuario,
                          fila["llegada"] or ahora, _estado_segun_tipificacion(conf["tipif"]),
                          bodega, destino == "reintegrado", dev_id))
@@ -7844,12 +7890,12 @@ def devoluciones_mkt_procesar():
 
         impacto = _aplicar_impacto_devolucion(conf["tipif"], sku, cantidad, dev_id, bodega=bodega)
 
-    conn = get_conn(tenant_id=1); cur = conn.cursor()
+    conn = get_conn(tenant_id=_tenant_sesion()); cur = conn.cursor()
     try:
         cur.execute("""UPDATE devoluciones_marketplace
                           SET destino_inventario = %s, destino_usuario = %s,
                               destino_fecha = %s, dev_id = %s
-                        WHERE canal = %s AND return_id = %s""",
+                        WHERE canal = %s AND return_id = %s AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int""",
                     (destino, usuario, ahora, dev_id, canal, rid))
         conn.commit()
     finally:
@@ -7888,10 +7934,11 @@ def devoluciones_mkt_anular_boleta():
     if not folio.isdigit() or len(folio) > 12:
         return jsonify({"ok": False, "error": "El folio de la NC son solo números"}), 400
 
-    conn = get_conn(tenant_id=1); cur = conn.cursor()
+    conn = get_conn(tenant_id=_tenant_sesion()); cur = conn.cursor()
     try:
         cur.execute("""SELECT COALESCE(nc_folio,'') FROM devoluciones_marketplace
-                        WHERE canal = %s AND return_id = %s FOR UPDATE""", (canal, rid))
+                        WHERE canal = %s AND return_id = %s AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int
+                        FOR UPDATE""", (canal, rid))
         f = cur.fetchone()
         if not f:
             conn.rollback()
@@ -7902,7 +7949,7 @@ def devoluciones_mkt_anular_boleta():
             return jsonify({"ok": False,
                             "error": f"Esta devolución ya tiene la NC {f[0]}"}), 409
         cur.execute("""UPDATE devoluciones_marketplace SET nc_folio = %s
-                        WHERE canal = %s AND return_id = %s""", (folio, canal, rid))
+                        WHERE canal = %s AND return_id = %s AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int""", (folio, canal, rid))
         conn.commit()
     finally:
         cur.close(); release_conn(conn)
@@ -7972,16 +8019,17 @@ def devoluciones_mkt_llegada():
 
     ahora = now_chile().replace(tzinfo=None)
 
-    conn = get_conn(tenant_id=1)
+    conn = get_conn(tenant_id=_tenant_sesion())
     try:
         cur = conn.cursor()
         cur.execute("""SELECT canal, return_id, COALESCE(order_id,''),
                               COALESCE(producto_nombre,''), COALESCE(sku_canal,''),
                               fecha_llegada_bodega, fecha_limite, COALESCE(estado,'')
                          FROM devoluciones_marketplace
-                        WHERE order_id = %s OR return_id = %s
-                           OR COALESCE(tracking_number,'') = %s
-                           OR COALESCE(sku_canal,'') = %s OR COALESCE(sku,'') = %s
+                        WHERE (order_id = %s OR return_id = %s
+                               OR COALESCE(tracking_number,'') = %s
+                               OR COALESCE(sku_canal,'') = %s OR COALESCE(sku,'') = %s)
+                          AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int
                         ORDER BY (fecha_llegada_bodega IS NOT NULL),
                                  fecha_solicitud DESC
                         LIMIT 1""",
@@ -8008,7 +8056,7 @@ def devoluciones_mkt_llegada():
         # informa ninguno, no se inventa. Antes se ponia ahora + 72 horas.
         cur.execute("""UPDATE devoluciones_marketplace
                           SET fecha_llegada_bodega = %s
-                        WHERE canal = %s AND return_id = %s
+                        WHERE canal = %s AND return_id = %s AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int
                     RETURNING fecha_limite""",
                     (ahora, canal, rid))
         nuevo_limite = (cur.fetchone() or [None])[0]
@@ -8060,14 +8108,14 @@ def devoluciones_mkt_decision():
     usuario = session.get("usuario", "Sistema")
     ahora = now_chile().replace(tzinfo=None)
 
-    conn = get_conn(tenant_id=1)
+    conn = get_conn(tenant_id=_tenant_sesion())
     try:
         cur = conn.cursor()
         cur.execute("""UPDATE devoluciones_marketplace
                           SET decision = %s,
                               decision_usuario = %s,
                               decision_fecha = %s
-                        WHERE canal = %s AND return_id = %s
+                        WHERE canal = %s AND return_id = %s AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int
                     RETURNING COALESCE(order_id,''), COALESCE(producto_nombre,'')""",
                     (decision or None, usuario if decision else None,
                      ahora if decision else None, canal, rid))
@@ -8101,14 +8149,14 @@ def devoluciones_mkt_list():
     canal = request.args.get("canal")
     estado = request.args.get("estado")
     solo_accion = request.args.get("requiere_accion")
-    conn = get_conn(tenant_id=1)
+    conn = get_conn(tenant_id=_tenant_sesion())
     try:
         cur = conn.cursor()
         q = """SELECT canal, return_id, order_id, sku, sku_canal, producto_nombre,
                       cantidad, estado, estado_canal, motivo, tipo, monto_reembolso,
                       moneda, tracking_number, fecha_solicitud, fecha_limite,
                       fecha_resolucion, dias_restantes, requiere_accion, url_gestion
-               FROM devoluciones_marketplace WHERE 1=1"""
+               FROM devoluciones_marketplace WHERE tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int"""
         params = []
         if canal:
             q += " AND canal=%s"; params.append(canal)
@@ -8135,7 +8183,7 @@ def devoluciones_mkt_list():
             COUNT(*) FILTER (WHERE requiere_accion AND dias_restantes IS NOT NULL AND dias_restantes < 0) AS vencidas,
             COUNT(*) FILTER (WHERE requiere_accion AND dias_restantes IS NOT NULL AND dias_restantes BETWEEN 0 AND 2) AS por_vencer,
             COUNT(*) FILTER (WHERE requiere_accion) AS abiertas
-            FROM devoluciones_marketplace""")
+            FROM devoluciones_marketplace WHERE tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int""")
         a = cur.fetchone()
         cur.close()
         alertas = {"vencidas": a[0], "por_vencer_2d": a[1], "abiertas": a[2]}
@@ -8158,7 +8206,7 @@ def devoluciones_unificadas():
     from returns import traducir_estado_canal
     from datetime import datetime
     hoy = now_chile().replace(tzinfo=None)
-    conn = get_conn(tenant_id=1, is_admin=True)
+    conn = get_conn(tenant_id=_tenant_sesion(), is_admin=True)
     unificadas = []
     try:
         cur = conn.cursor()
@@ -8167,7 +8215,8 @@ def devoluciones_unificadas():
         # Estados que requieren trabajo: pendiente (sin procesar). Los demás ya se accionaron.
         cur.execute("""SELECT id, codigo, oc_origen, canal, sku, nombre, estado,
                               fecha_solicitud, motivo_cliente
-                       FROM devoluciones ORDER BY fecha_solicitud DESC""")
+                       FROM devoluciones WHERE tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int
+                       ORDER BY fecha_solicitud DESC""")
         for r in cur.fetchall():
             (did, codigo, oc, canal, sku, nombre, estado, fsol, motivo) = r
             dias_bodega = None
@@ -8200,6 +8249,7 @@ def devoluciones_unificadas():
                               estado, estado_canal, motivo, fecha_solicitud, fecha_limite,
                               dias_restantes, url_gestion
                        FROM devoluciones_marketplace
+                      WHERE tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int
                        ORDER BY fecha_solicitud DESC""")
         for r in cur.fetchall():
             (canal, rid, oid, sku, sku_canal, nombre, estado, estado_canal,
@@ -8260,7 +8310,7 @@ def devoluciones_mkt_panel():
     """Panel visual de devoluciones con estados, plazos y links directos al MKT."""
     if not session.get("logged"):
         return redirect("/login")
-    conn = get_conn(tenant_id=1)
+    conn = get_conn(tenant_id=_tenant_sesion())
     try:
         cur = conn.cursor()
         cur.execute("""SELECT
@@ -8268,13 +8318,14 @@ def devoluciones_mkt_panel():
             COUNT(*) FILTER (WHERE requiere_accion AND dias_restantes IS NOT NULL AND dias_restantes BETWEEN 0 AND 2),
             COUNT(*) FILTER (WHERE requiere_accion),
             COUNT(*)
-            FROM devoluciones_marketplace""")
+            FROM devoluciones_marketplace WHERE tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int""")
         venc, porv, abiertas, total = cur.fetchone()
         cur.execute("""SELECT canal, return_id, order_id, producto_nombre, sku_canal,
                           estado, estado_canal, motivo, monto_reembolso, moneda,
                           tracking_number, fecha_solicitud, fecha_limite, dias_restantes,
                           requiere_accion, url_gestion
                    FROM devoluciones_marketplace
+                  WHERE tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int
                    ORDER BY (fecha_limite IS NULL), fecha_limite ASC, fecha_solicitud DESC
                    LIMIT 300""")
         rows = cur.fetchall()
@@ -8396,19 +8447,10 @@ def _sync_devoluciones_automatico():
     _sync_devoluciones_automatico._running = True
     try:
         from returns import sincronizar_devoluciones
-        from inventario import get_conn as _gc, release_conn as _rc
-        conn = None
-        try:
-            conn = _gc(is_admin=True)
-            cur = conn.cursor()
-            cur.execute("SELECT id FROM tenants WHERE estado = 'activo' ORDER BY id ASC")
-            tenant_ids = [r[0] for r in cur.fetchall()]
-            cur.close(); _rc(conn)
-        except Exception:
-            tenant_ids = [1]
-        finally:
-            release_conn(conn)
-        for tid in tenant_ids:
+        # Solo el cliente dueño de las credenciales. Antes corria para cada
+        # cliente activo con las MISMAS credenciales: un segundo cliente
+        # habria recibido las devoluciones del primero.
+        for tid in [TENANT_INTEGRACIONES]:
             try:
                 set_thread_tenant(tid, is_admin=False)
                 sincronizar_devoluciones(tenant_id=tid, dias=30)
@@ -8462,7 +8504,7 @@ def admin_meli_inspeccionar_item(item_id):
 
     Uso: /admin/lusync/meli/inspeccionar-item/MLC2709952404
     """
-    if not (session.get("logged") or session.get("is_lusync_admin")):
+    if not _acceso_equipo_lusync():
         return jsonify({"error": "no autorizado"}), 401
     try:
         import requests as _rq
@@ -15867,6 +15909,7 @@ def ruta_stats_devoluciones_estado():
         # Conteo por estado
         cur.execute("""
             SELECT estado, COUNT(*) FROM devoluciones
+            WHERE tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int
             GROUP BY estado
         """)
         por_estado = {r[0] or 'sin_estado': int(r[1]) for r in cur.fetchall()}
@@ -15874,7 +15917,7 @@ def ruta_stats_devoluciones_estado():
         # Conteo por canal
         cur.execute("""
             SELECT canal, COUNT(*) FROM devoluciones
-            WHERE canal IS NOT NULL AND canal <> ''
+            WHERE canal IS NOT NULL AND canal <> '' AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int
             GROUP BY canal
         """)
         por_canal = [{"canal": r[0], "count": int(r[1])} for r in cur.fetchall()]
@@ -15885,6 +15928,7 @@ def ruta_stats_devoluciones_estado():
                    fecha_solicitud, fecha_deadline
             FROM devoluciones
             WHERE estado IN ('pendiente', 'recibida', 'en_transito', 'en_revision')
+              AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int
             ORDER BY fecha_deadline ASC NULLS LAST
         """)
         pendientes = []
@@ -15895,7 +15939,7 @@ def ruta_stats_devoluciones_estado():
             if not fd and fs:
                 fd = calcular_deadline_72h_habiles(fs)
                 # Persistir el deadline calculado
-                cur.execute("UPDATE devoluciones SET fecha_deadline = %s WHERE id = %s", (fd, id_))
+                cur.execute("UPDATE devoluciones SET fecha_deadline = %s WHERE id = %s AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int", (fd, id_))
 
             horas = horas_habiles_restantes(fd) if fd else None
             if horas is None:

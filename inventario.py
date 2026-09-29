@@ -1460,6 +1460,12 @@ def asegurar_llegada_bodega():
         # registraron con el OrderId interno.
         cur.execute("""ALTER TABLE devoluciones_marketplace
                        ADD COLUMN IF NOT EXISTS dev_id INTEGER""")
+        # Filas sin cliente: hasta que existio el filtro por cliente eran todas
+        # del cliente dueño de las integraciones. Sin esto el filtro nuevo las
+        # esconderia.
+        cur.execute("""UPDATE devoluciones_marketplace SET tenant_id = %s
+                        WHERE tenant_id IS NULL""",
+                    (int(os.environ.get("LUSYNC_TENANT_INTEGRACIONES", "1")),))
         conn.commit()
     except Exception as e:
         try:
@@ -1565,8 +1571,13 @@ def crear_devolucion(data):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO devoluciones (oc_origen, canal, sku, nombre, cantidad, motivo_cliente, responsable, estado, fecha_solicitud)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, 'pendiente', NOW())
+        INSERT INTO devoluciones (oc_origen, canal, sku, nombre, cantidad, motivo_cliente, responsable, estado, fecha_solicitud,
+                                  tenant_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, 'pendiente', NOW(),
+                -- El cliente de la conexion. Antes no se indicaba y la columna
+                -- toma 1 por defecto: la devolucion de otro cliente quedaba
+                -- guardada como del cliente 1.
+                COALESCE(NULLIF(NULLIF(current_setting('app.tenant_id', true), ''), '0')::int, 1))
         RETURNING id
     """, (data.get('oc_origen'), data.get('canal'), data.get('sku'), data.get('nombre'),
           data.get('cantidad', 1), data.get('motivo_cliente'), data.get('responsable', 'Sistema')))
@@ -1579,7 +1590,7 @@ def crear_devolucion(data):
 def asignar_codigo_dev(dev_id, codigo):
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("UPDATE devoluciones SET codigo = %s WHERE id = %s", (codigo, dev_id))
+    cur.execute("UPDATE devoluciones SET codigo = %s WHERE id = %s AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int", (codigo, dev_id))
     conn.commit()
     cur.close()
     release_conn(conn)
@@ -1603,7 +1614,7 @@ def actualizar_devolucion(dev_id, data):
     if not fields:
         return
     vals.append(dev_id)
-    cur.execute(f"UPDATE devoluciones SET {', '.join(fields)} WHERE id = %s", vals)
+    cur.execute(f"UPDATE devoluciones SET {', '.join(fields)} WHERE id = %s AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int", vals)
     conn.commit()
     cur.close()
     release_conn(conn)
@@ -1619,7 +1630,7 @@ def listar_devoluciones(estado=None):
                    TO_CHAR(fecha_recepcion, 'DD/MM/YYYY HH24:MI') as fecha_rec,
                    TO_CHAR(fecha_resolucion, 'DD/MM/YYYY HH24:MI') as fecha_res,
                    impacto_stock_reingresado
-            FROM devoluciones WHERE estado = %s ORDER BY fecha_solicitud DESC
+            FROM devoluciones WHERE estado = %s AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int ORDER BY fecha_solicitud DESC
         """, (estado,))
     else:
         cur.execute("""
@@ -1629,7 +1640,7 @@ def listar_devoluciones(estado=None):
                    TO_CHAR(fecha_recepcion, 'DD/MM/YYYY HH24:MI') as fecha_rec,
                    TO_CHAR(fecha_resolucion, 'DD/MM/YYYY HH24:MI') as fecha_res,
                    impacto_stock_reingresado
-            FROM devoluciones ORDER BY fecha_solicitud DESC
+            FROM devoluciones WHERE tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int ORDER BY fecha_solicitud DESC
         """)
     rows = cur.fetchall()
     cur.close()
@@ -1643,9 +1654,9 @@ def get_devolucion(dev_id=None, codigo=None):
     conn = get_conn()
     cur = conn.cursor()
     if codigo:
-        cur.execute("SELECT * FROM devoluciones WHERE codigo = %s", (codigo,))
+        cur.execute("SELECT * FROM devoluciones WHERE codigo = %s AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int", (codigo,))
     else:
-        cur.execute("SELECT * FROM devoluciones WHERE id = %s", (dev_id,))
+        cur.execute("SELECT * FROM devoluciones WHERE id = %s AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int", (dev_id,))
     row = cur.fetchone()
     if not row:
         cur.close(); release_conn(conn); return None

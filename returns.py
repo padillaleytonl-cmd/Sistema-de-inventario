@@ -935,6 +935,9 @@ def upsert_devolucion(dev, tenant_id=None):
                 raw_json = EXCLUDED.raw_json,
                 url_gestion = COALESCE(EXCLUDED.url_gestion, devoluciones_marketplace.url_gestion),
                 ultima_sincronizacion = NOW()
+            -- La unicidad es (canal, return_id), sin cliente: nunca se pisa la
+            -- fila de otro cliente.
+            WHERE devoluciones_marketplace.tenant_id IS NOT DISTINCT FROM EXCLUDED.tenant_id
         """, (
             dev["canal"], dev["return_id"], dev.get("claim_id"), dev.get("order_id"),
             sku_lusync, dev.get("sku_canal"), dev.get("producto_nombre"),
@@ -1056,7 +1059,11 @@ def buscar_devolucion_mkt(oc_origen=None, sku=None, canal=None, tenant_id=None):
     """
     if not any([oc_origen, sku]):
         return []
-    conn = get_conn(tenant_id=tenant_id) if tenant_id else get_conn()
+    # Sin cliente no se busca: devoluciones_marketplace no tiene RLS y
+    # devolveria las de todos.
+    if not tenant_id:
+        return []
+    conn = get_conn(tenant_id=tenant_id)
     try:
         cur = conn.cursor()
         cols = """id, canal, return_id, claim_id, order_id, sku, sku_canal,
@@ -1066,8 +1073,9 @@ def buscar_devolucion_mkt(oc_origen=None, sku=None, canal=None, tenant_id=None):
                   acciones_disponibles, url_gestion"""
 
         def _run(where, params):
-            cur.execute(f"SELECT {cols} FROM devoluciones_marketplace WHERE {where} "
-                        f"ORDER BY fecha_solicitud DESC LIMIT 10", params)
+            cur.execute(f"SELECT {cols} FROM devoluciones_marketplace "
+                        f"WHERE ({where}) AND tenant_id = %s "
+                        f"ORDER BY fecha_solicitud DESC LIMIT 10", list(params) + [tenant_id])
             rows = cur.fetchall()
             names = [d[0] for d in cur.description]
             return [dict(zip(names, r)) for r in rows]
