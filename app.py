@@ -1086,6 +1086,53 @@ _PREFIJOS_CANALES = (
 )
 
 
+# Herramientas /admin que administran la PLATAFORMA (clientes, planes, cobro,
+# aislamiento, certificados y folios de cada cliente). Solo super-admin o
+# token: una sesion del cliente dueño de los canales no entra.
+_ADMIN_SOLO_SUPERADMIN = (
+    "/admin/tenancy", "/admin/rls", "/admin/lusync/tenant/", "/admin/lusync/uso",
+    "/admin/lusync/planes", "/admin/lusync/plan/", "/admin/lusync/marketplaces",
+    "/admin/lusync/marketplace/", "/admin/lusync/nuevo_cliente", "/admin/lusync/fernet_key",
+    "/admin/lusync/facturacion", "/admin/lusync/impersonate",
+)
+
+
+def _admin_pide_otro_cliente(p):
+    """True si una sesion de cliente pide, en una herramienta /admin, algo de
+    la plataforma o de OTRO cliente: por prefijo, por /tenant/<id>/ en la ruta,
+    o por tenant_id en la URL, el formulario o el JSON.
+
+    Varias herramientas eligen el cliente por parametro (?tenant_id=3). Con la
+    sesion del dueño, un usuario suyo podia ver datos de otro cliente o firmar
+    documentos con su certificado del SII.
+    """
+    import re as _re_p
+    if p == "/admin/lusync" or p.startswith(_ADMIN_SOLO_SUPERADMIN):
+        return True
+    propio = _tenant_sesion()
+    pedidos = []
+    m = _re_p.search(r"/tenant/(\d+)(?:/|$)", p)
+    if m:
+        pedidos.append(m.group(1))
+    for fuente in (request.args, request.form):
+        try:
+            if fuente.get("tenant_id"):
+                pedidos.append(fuente.get("tenant_id"))
+        except Exception:
+            pass
+    if request.is_json:
+        cuerpo = request.get_json(silent=True)
+        if isinstance(cuerpo, dict) and cuerpo.get("tenant_id") not in (None, ""):
+            pedidos.append(cuerpo.get("tenant_id"))
+    for t in pedidos:
+        try:
+            if int(t) != propio:
+                return True
+        except (TypeError, ValueError):
+            return True
+    return False
+
+
 @app.before_request
 def _puerta_de_entrada():
     p = request.path or "/"
@@ -1108,6 +1155,11 @@ def _puerta_de_entrada():
 
     if p.startswith("/admin") and not _acceso_equipo_lusync():
         return jsonify({"error": "Solo el equipo Lusync"}), 403
+    # Llegar aca con sesion de cliente (no super-admin, no token) en /admin:
+    # solo sobre los datos propios.
+    if p.startswith("/admin") and _admin_pide_otro_cliente(p):
+        return jsonify({"error": "Esa herramienta es de otro cliente o de la plataforma. "
+                                 "Entra como super-admin en /admin/lusync/login"}), 403
     if (_tenant_sesion() != TENANT_INTEGRACIONES
             and p.startswith(_PREFIJOS_CANALES)):
         return jsonify({"error": "Tu cuenta no tiene este canal conectado"}), 403
@@ -31994,15 +32046,9 @@ def facturacion_diagnostico_sii(boleta_id):
                            FROM facturacion_dtes WHERE id=%s AND tenant_id=%s""",
                         (boleta_id, tenant_id))
             row = cur.fetchone()
-            if not row:
-                # Buscar sin filtro de tenant para diagnosticar si es un problema de tenant_id
-                cur.execute("""SELECT tenant_id FROM facturacion_dtes WHERE id=%s""", (boleta_id,))
-                otra = cur.fetchone()
-                if otra:
-                    return jsonify({"ok": False,
-                                    "error": "Boleta %s existe pero pertenece al tenant %s, y tu sesión es tenant %s. "
-                                             "Por eso no la encuentra. Esto NO afecta la consulta desde el panel." % (
-                                             boleta_id, otra[0], tenant_id)}), 404
+            # Si no es del cliente de la sesion, se responde igual que si no
+            # existiera. Antes se buscaba sin filtro y se decia a que cliente
+            # pertenecia: eso revela datos de otro cliente.
     finally:
         release_conn(conn)
     if not row:
