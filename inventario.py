@@ -580,32 +580,10 @@ def _init_db_cuerpo(conn, cur):
 
     # UNIQUE constraint en order_id_texto — previene FÍSICAMENTE duplicados en BD
     cur.execute("ALTER TABLE ordenes_procesadas ADD COLUMN IF NOT EXISTS order_id_texto TEXT")
-    # Intentar crear el constraint de forma segura — si hay duplicados existentes lo omite
-    try:
-        cur.execute("""
-            DO $$
-            BEGIN
-                IF NOT EXISTS (
-                    SELECT 1 FROM pg_constraint
-                    WHERE conname = 'ordenes_procesadas_order_id_texto_unique'
-                ) THEN
-                    -- Limpiar duplicados antes de crear el constraint
-                    DELETE FROM ordenes_procesadas a
-                    USING ordenes_procesadas b
-                    WHERE a.id > b.id
-                    AND a.order_id_texto = b.order_id_texto
-                    AND a.order_id_texto IS NOT NULL;
-                    -- Crear constraint solo si no existe
-                    ALTER TABLE ordenes_procesadas
-                    ADD CONSTRAINT ordenes_procesadas_order_id_texto_unique
-                    UNIQUE (order_id_texto);
-                END IF;
-            END $$;
-        """)
-        conn.commit()
-    except Exception as _e_unique:
-        conn.rollback()
-        print(f"[init_db] UNIQUE constraint omitido (no crítico): {_e_unique}")
+    # La unica de order_id_texto ahora es POR CLIENTE (uq_t_ordenes_texto, en
+    # asegurar_unicos_por_cliente). Aca se creaba una global, y antes de
+    # crearla borraba "duplicados" comparando entre TODOS los clientes: dos
+    # clientes con el mismo numero de orden perdian una marca.
     cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS fecha_importacion TIMESTAMP")
     cur.execute("CREATE TABLE IF NOT EXISTS configuracion (clave TEXT PRIMARY KEY, valor TEXT)")
     cur.execute("ALTER TABLE productos ADD COLUMN IF NOT EXISTS lead_time INTEGER DEFAULT 45")
@@ -712,45 +690,15 @@ def _init_db_cuerpo(conn, cur):
     cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS documento_compra_id INTEGER REFERENCES documentos_compra(id) ON DELETE SET NULL")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_mov_doc_compra ON movimientos(documento_compra_id)")
 
-    # ── Protección definitiva contra duplicados de ventas ──────────────────
-    # Un índice único parcial sobre (orden_id, sku, tipo) hace físicamente
-    # imposible insertar dos veces la misma venta, incluso si varios procesos
-    # del scheduler corren en paralelo (la idempotencia por código no basta
-    # porque el SELECT+INSERT no es atómico entre procesos distintos).
-    # Antes de crear el índice hay que eliminar duplicados preexistentes.
-    try:
-        cur.execute("""SELECT 1 FROM pg_indexes
-                       WHERE indexname='uniq_venta_orden_sku_tipo' LIMIT 1""")
-        if not cur.fetchone():
-            # Limpiar duplicados dejando el registro más antiguo (MIN id) de cada grupo
-            borrado_total = 0
-            while True:
-                cur.execute("""
-                    DELETE FROM movimientos WHERE id IN (
-                      SELECT id FROM (
-                        SELECT id, ROW_NUMBER() OVER (
-                          PARTITION BY orden_id, sku, tipo ORDER BY id) AS rn
-                        FROM movimientos
-                        WHERE tipo IN ('salida','ajuste') AND orden_id IS NOT NULL
-                      ) x WHERE x.rn > 1 LIMIT 5000)
-                """)
-                n = cur.rowcount
-                conn.commit()
-                borrado_total += n
-                if n == 0:
-                    break
-            if borrado_total:
-                print(f"[init_db] Duplicados de ventas eliminados: {borrado_total}")
-            cur.execute("""
-                CREATE UNIQUE INDEX IF NOT EXISTS uniq_venta_orden_sku_tipo
-                ON movimientos (orden_id, sku, tipo)
-                WHERE tipo IN ('salida','ajuste') AND orden_id IS NOT NULL
-            """)
-            conn.commit()
-            print("[init_db] Índice único uniq_venta_orden_sku_tipo creado (anti-duplicados)")
-    except Exception as e:
-        conn.rollback()
-        print(f"[init_db] No se pudo crear índice anti-duplicados: {e}")
+    # ── Proteccion contra ventas duplicadas ────────────────────────────────
+    # La da uq_t_mov_venta (tenant_id, orden_id, sku, tipo), que crea
+    # asegurar_unicos_por_cliente al arrancar y sin la cual el arranque falla.
+    #
+    # Aca vivia la version global, uniq_venta_orden_sku_tipo. Si no la
+    # encontraba, BORRABA movimientos "duplicados" agrupando por orden, SKU y
+    # tipo SIN mirar el cliente: con la global retirada, cada arranque habria
+    # borrado ventas legitimas de un cliente que coincidieran en numero de
+    # orden y SKU con las de otro.
 
 
     conn.commit()
@@ -1631,6 +1579,100 @@ def asegurar_unicos_por_cliente():
         release_conn(conn)
 
 
+# Fase 2: las claves unicas globales que reemplazan las de UNICOS_POR_CLIENTE.
+# (tabla, nombre). Cada una puede existir como constraint o como indice suelto.
+UNICOS_GLOBALES = [
+    ("bodegas", "bodegas_codigo_key"),
+    ("stock_bodega", "stock_bodega_sku_bodega_codigo_key"),
+    ("movimientos", "uniq_venta_orden_sku_tipo"),
+    ("ordenes_procesadas", "ordenes_procesadas_order_id_texto_unique"),
+    ("ordenes_procesadas", "idx_op_order_id_texto"),
+    ("ordenes_procesadas", "idx_ord_proc_texto_unique"),
+    ("ordenes_procesadas", "idx_ordenes_procesadas_texto"),
+    ("documentos_compra", "documentos_compra_numero_doc_tipo_doc_key"),
+    ("sku_mapeo_canal", "idx_smc_unique_item_lusync"),
+    ("sku_mapeo_canal", "idx_smc_unique_sku"),
+    ("devoluciones_marketplace", "devoluciones_marketplace_canal_return_id_key"),
+]
+RESULTADO_UNICOS_GLOBALES = {}
+
+
+def retirar_unicos_globales():
+    """Borra las claves unicas globales y pasa la llave primaria de productos
+    de (sku) a (tenant_id, sku). Idempotente: corre en cada arranque y lo que
+    ya no existe lo salta.
+
+    Solo si TODAS las claves por cliente existen: sin ellas, retirar las
+    globales dejaria tablas sin proteccion contra duplicados.
+
+    No levanta: si algo no se puede retirar, la global queda y el sistema
+    sigue funcionando igual que en la fase 1. Se reintenta al proximo
+    arranque.
+    """
+    global RESULTADO_UNICOS_GLOBALES
+    res = {"retiradas": [], "no_estaban": [], "errores": [], "productos_pk": None}
+    conn = get_conn(is_admin=True)
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT indexname FROM pg_indexes WHERE schemaname='public' "
+                    "AND indexname = ANY(%s)", ([n for n, _, _, _ in UNICOS_POR_CLIENTE],))
+        existentes = {r[0] for r in cur.fetchall()}
+        conn.commit()
+        faltan = [n for n, _, _, _ in UNICOS_POR_CLIENTE if n not in existentes]
+        if faltan:
+            res["errores"].append({"nombre": "*", "error": "faltan claves por cliente: %s" % faltan})
+            RESULTADO_UNICOS_GLOBALES = res
+            print("[unicos_globales] no se retira nada, faltan: %s" % faltan)
+            return res
+
+        for tabla, nombre in UNICOS_GLOBALES:
+            try:
+                cur.execute("SET LOCAL lock_timeout = '5s'")
+                cur.execute("SELECT 1 FROM pg_constraint WHERE conname = %s", (nombre,))
+                es_constraint = cur.fetchone() is not None
+                cur.execute("SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname = %s",
+                            (nombre,))
+                es_indice = cur.fetchone() is not None
+                if es_constraint:
+                    cur.execute('ALTER TABLE "%s" DROP CONSTRAINT "%s"' % (tabla, nombre))
+                elif es_indice:
+                    cur.execute('DROP INDEX "%s"' % nombre)
+                conn.commit()
+                (res["retiradas"] if (es_constraint or es_indice) else res["no_estaban"]).append(nombre)
+            except Exception as e:
+                conn.rollback()
+                res["errores"].append({"nombre": nombre, "error": str(e)[:160]})
+
+        # Llave primaria de productos: (sku) -> (tenant_id, sku)
+        try:
+            cur.execute("SET LOCAL lock_timeout = '5s'")
+            cur.execute("""SELECT array_agg(a.attname::text ORDER BY a.attnum)
+                             FROM pg_index i
+                             JOIN pg_attribute a ON a.attrelid = i.indrelid
+                                                AND a.attnum = ANY(i.indkey)
+                            WHERE i.indrelid = 'productos'::regclass AND i.indisprimary""")
+            cols = (cur.fetchone() or [None])[0] or []
+            if cols == ["sku"]:
+                cur.execute("ALTER TABLE productos DROP CONSTRAINT productos_pkey")
+                cur.execute("ALTER TABLE productos ADD CONSTRAINT productos_pkey "
+                            "PRIMARY KEY (tenant_id, sku)")
+                res["productos_pk"] = "cambiada a (tenant_id, sku)"
+            else:
+                res["productos_pk"] = "ya estaba: %s" % cols
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            res["errores"].append({"nombre": "productos_pkey", "error": str(e)[:160]})
+    finally:
+        cur.close()
+        release_conn(conn)
+    RESULTADO_UNICOS_GLOBALES = res
+    print("[unicos_globales] retiradas=%d no_estaban=%d errores=%d productos_pk=%s"
+          % (len(res["retiradas"]), len(res["no_estaban"]), len(res["errores"]),
+             res["productos_pk"]))
+    return res
+
+
 def init_devoluciones_mkt():
     """Tabla de trazabilidad de devoluciones traídas automáticamente desde las
     APIs de cada marketplace (separada de 'devoluciones', que es el registro
@@ -1964,7 +2006,7 @@ def limpiar_movimientos_duplicados():
     conn = get_conn(is_admin=True); cur = conn.cursor()
     cur.execute("""DELETE FROM movimientos WHERE id IN (
         SELECT id FROM (SELECT id, ROW_NUMBER() OVER (
-            PARTITION BY orden_id,sku,canal,tipo ORDER BY fecha ASC,id ASC
+            PARTITION BY tenant_id,orden_id,sku,canal,tipo ORDER BY fecha ASC,id ASC
         ) AS rn FROM movimientos WHERE orden_id IS NOT NULL AND orden_id!=\'\') t WHERE rn>1)""")
     n = cur.rowcount; conn.commit(); cur.close(); release_conn(conn); return n
 
@@ -2031,17 +2073,9 @@ def init_sku_mapeo_canal():
         cur.execute("DROP INDEX IF EXISTS idx_smc_unique_item")
     except Exception:
         pass
-    cur.execute("""
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_smc_unique_item_lusync
-        ON sku_mapeo_canal(canal, item_id_canal, sku_lusync)
-        WHERE item_id_canal IS NOT NULL
-    """)
-    # Si no hay item_id, prevenimos duplicados por (canal, sku_canal, sku_lusync)
-    cur.execute("""
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_smc_unique_sku
-        ON sku_mapeo_canal(canal, sku_canal, sku_lusync)
-        WHERE item_id_canal IS NULL
-    """)
+    # Las unicas son POR CLIENTE: uq_t_smc_item y uq_t_smc_sku, en
+    # asegurar_unicos_por_cliente. Las globales idx_smc_unique_item_lusync e
+    # idx_smc_unique_sku se retiran en retirar_unicos_globales.
     cur.execute("CREATE INDEX IF NOT EXISTS idx_smc_lusync ON sku_mapeo_canal(sku_lusync, canal)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_smc_sku_canal ON sku_mapeo_canal(canal, sku_canal)")
     conn.commit(); cur.close(); release_conn(conn)

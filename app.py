@@ -157,6 +157,13 @@ except Exception as e:
 # no se pueden crear, el arranque falla y Render sigue con la version anterior.
 from inventario import asegurar_unicos_por_cliente
 asegurar_unicos_por_cliente()
+# Fase 2: retirar las globales. No levanta: si algo queda, el sistema sigue
+# como en la fase 1 y se reintenta en el proximo arranque.
+try:
+    from inventario import retirar_unicos_globales
+    retirar_unicos_globales()
+except Exception as _e:
+    print(f"[unicos_globales] {_e}")
 try:
     from tenant_rls import init_rls_policies
     init_rls_policies()
@@ -897,7 +904,7 @@ def _diagnostico_orden(movimientos, marcas, devoluciones=None):
     return balance, resumen, veredicto
 
 
-RASTREADOR_VERSION = "v18-2026-09-30"
+RASTREADOR_VERSION = "v19-2026-09-30"
 
 
 def _rastrear_ordenes(conn, ordenes):
@@ -1097,9 +1104,11 @@ def admin_base_estructura():
     """
     if not _acceso_equipo_lusync():
         return jsonify({"error": "no autorizado"}), 401
-    from inventario import get_conn, release_conn, RESULTADO_TENANT_CONTEXTO
+    from inventario import (get_conn, release_conn, RESULTADO_TENANT_CONTEXTO,
+                            RESULTADO_UNICOS_GLOBALES)
     salida = {"version": RASTREADOR_VERSION, "generado": str(now_chile()),
-              "migracion_default": RESULTADO_TENANT_CONTEXTO}
+              "migracion_default": RESULTADO_TENANT_CONTEXTO,
+              "unicos_globales": RESULTADO_UNICOS_GLOBALES}
     conn = None
     try:
         conn = get_conn(tenant_id=TENANT_INTEGRACIONES, is_admin=True)
@@ -21165,9 +21174,10 @@ def admin_diagnostico_bd():
     try:
         from inventario import get_conn as _gc
         conn = _gc(); cur = conn.cursor()
-        cur.execute("SELECT conname FROM pg_constraint WHERE conname='ordenes_procesadas_order_id_texto_unique'")
+        # La proteccion es por cliente desde el 30/09/2026 (uq_t_ordenes_texto).
+        cur.execute("SELECT indexname FROM pg_indexes WHERE indexname='uq_t_ordenes_texto'")
         constraint = cur.fetchone()
-        cur.execute("SELECT order_id_texto,COUNT(*) FROM ordenes_procesadas WHERE order_id_texto IS NOT NULL GROUP BY order_id_texto HAVING COUNT(*)>1 LIMIT 10")
+        cur.execute("SELECT order_id_texto,COUNT(*) FROM ordenes_procesadas WHERE order_id_texto IS NOT NULL GROUP BY tenant_id, order_id_texto HAVING COUNT(*)>1 LIMIT 10")
         duplicados = [{"order_id":r[0],"count":r[1]} for r in cur.fetchall()]
         cur.execute("SELECT order_id_texto,fecha FROM ordenes_procesadas WHERE order_id_texto IS NOT NULL ORDER BY fecha DESC LIMIT 10")
         ultimas = [{"orden":r[0],"fecha":r[1].isoformat() if r[1] else None} for r in cur.fetchall()]
