@@ -892,7 +892,7 @@ def _diagnostico_orden(movimientos, marcas, devoluciones=None):
     return balance, resumen, veredicto
 
 
-RASTREADOR_VERSION = "v16-2026-09-29"
+RASTREADOR_VERSION = "v17-2026-09-30"
 
 
 def _rastrear_ordenes(conn, ordenes):
@@ -1239,6 +1239,97 @@ def admin_base_ordenes_otro_cliente():
         salida.update({"resumen_por_tenant": resumen, "sin_venta_por_mes": por_mes,
                        "sin_venta": sin_venta[:400], "total_sin_venta": len(sin_venta)})
     except Exception as e:
+        salida["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        if conn:
+            release_conn(conn)
+    return jsonify(salida)
+
+
+@app.route("/admin/lusync/base/reparar-cliente-cruzado")
+def admin_base_reparar_cliente_cruzado():
+    """Devuelve al dueño de los canales lo que quedo a nombre de otro cliente.
+
+    Uso:
+      /admin/lusync/base/reparar-cliente-cruzado            -> vista previa
+      /admin/lusync/base/reparar-cliente-cruzado?aplicar=1  -> aplica
+
+    Que se mueve, y por que es seguro:
+      - Marcas de ordenes procesadas cuya venta esta registrada en movimientos
+        del dueño, o que son de cancelacion (CANCEL-). Verificado el
+        29/09/2026: 335 con venta + 11 cancelaciones, ninguna sin venta.
+      - Devoluciones de marketplace de clientes SIN canales propios
+        (sin filas en credenciales_marketplace): solo pudieron venir de las
+        credenciales del dueño.
+    Lo que no calce queda donde esta y se informa.
+
+    Hay que hacerlo ANTES de volver las claves unicas por cliente: con las
+    marcas en otro cliente, la sincronizacion del dueño dejaria de verlas y
+    volveria a descontar esas ventas.
+    """
+    if not _acceso_equipo_lusync():
+        return jsonify({"error": "no autorizado"}), 401
+    import re as _re
+    from inventario import get_conn, release_conn
+    aplicar = request.args.get("aplicar") == "1"
+    dueno = TENANT_INTEGRACIONES
+    salida = {"version": RASTREADOR_VERSION, "aplicado": False, "dueno": dueno}
+    conn = None
+    try:
+        conn = get_conn(tenant_id=dueno, is_admin=True)
+        cur = conn.cursor()
+        cur.execute("SET statement_timeout = '50s'")
+
+        cur.execute("""SELECT orden_id, tenant_id, COALESCE(order_id_texto, orden_id::text)
+                         FROM ordenes_procesadas WHERE tenant_id <> %s""", (dueno,))
+        marcas = cur.fetchall()
+        cur.execute("""SELECT COALESCE(orden_id::text,''), COALESCE(numero_orden,'')
+                         FROM movimientos WHERE tipo = 'salida' AND tenant_id = %s""", (dueno,))
+        ventas = set()
+        for oid, nro in cur.fetchall():
+            ventas.update(k for k in (oid, nro) if k)
+        mover, quedan = [], []
+        for pk, tid, clave in marcas:
+            num = _re.sub(r"^([A-Z]+-)+", "", clave or "")
+            if "CANCEL-" in (clave or "") or num in ventas or (clave or "") in ventas:
+                mover.append(pk)
+            else:
+                quedan.append({"tenant": tid, "orden": clave})
+
+        cur.execute("""SELECT d.id, d.tenant_id, d.canal, d.return_id
+                         FROM devoluciones_marketplace d
+                        WHERE d.tenant_id IS DISTINCT FROM %s
+                          AND NOT EXISTS (SELECT 1 FROM credenciales_marketplace c
+                                           WHERE c.tenant_id = d.tenant_id)""", (dueno,))
+        devs = cur.fetchall()
+
+        salida["marcas"] = {"a_mover": len(mover), "quedan": quedan}
+        salida["devoluciones"] = {"a_mover": len(devs),
+                                  "detalle": [{"tenant": r[1], "canal": r[2], "return_id": r[3]}
+                                              for r in devs]}
+        if aplicar:
+            if mover:
+                cur.execute("UPDATE ordenes_procesadas SET tenant_id = %s WHERE orden_id = ANY(%s)",
+                            (dueno, mover))
+                salida["marcas"]["movidas"] = cur.rowcount
+            if devs:
+                cur.execute("UPDATE devoluciones_marketplace SET tenant_id = %s WHERE id = ANY(%s)",
+                            (dueno, [r[0] for r in devs]))
+                salida["devoluciones"]["movidas"] = cur.rowcount
+            conn.commit()
+            salida["aplicado"] = True
+            try:
+                registrar_audit(session.get("usuario", "Lusync"), request.remote_addr,
+                                "reparar_cliente_cruzado", entidad="ordenes_procesadas",
+                                detalle=f"marcas={len(mover)} devoluciones={len(devs)} -> tenant {dueno}")
+            except Exception as e:
+                print(f"[reparar_cliente_cruzado] no pude auditar: {e}")
+        cur.close()
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         salida["error"] = f"{type(e).__name__}: {e}"
     finally:
         if conn:
