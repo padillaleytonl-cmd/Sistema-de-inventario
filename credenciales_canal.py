@@ -126,3 +126,7 @@ class CachePorCliente:
 
     def get(self, k, defecto=None):
         return self._d().get(k, defecto)
+
+    def limpiar(self, tenant_id):
+        """Olvida lo de un cliente (por ejemplo, al cambiar sus credenciales)."""
+        self._por_cliente.pop(tenant_id, None)

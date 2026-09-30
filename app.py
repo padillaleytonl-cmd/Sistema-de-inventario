@@ -1184,6 +1184,186 @@ def _soltar_tenant_webhook(exc=None):
             pass
 
 
+# ══════════════════════════════════════════════════════════════════════
+# CANALES DEL CLIENTE — cada cliente guarda y prueba sus credenciales
+# ══════════════════════════════════════════════════════════════════════
+# Se guardan cifradas en credenciales_marketplace (tenancy). Nunca vuelven al
+# navegador: /canales/estado solo dice que campos estan cargados, con los
+# secretos enmascarados.
+#
+# El cliente dueño de las integraciones usa las credenciales del servidor
+# (variables de entorno): para el esta pantalla solo muestra el estado y
+# permite probar, no editar.
+CANALES_CREDENCIALES = {
+    "walmart": {"t": "Walmart Chile", "campos": [
+        ("client_id", "Client ID", True), ("client_secret", "Client Secret", True)]},
+    "paris": {"t": "París (Cencosud)", "campos": [("api_key", "API Key", True)]},
+    "ripley": {"t": "Ripley (Mirakl)", "campos": [("api_key", "API Key", True)]},
+    "falabella": {"t": "Falabella Seller Center", "campos": [
+        ("api_key", "User ID (correo de Seller Center)", False), ("api_secret", "API Key", True)]},
+    "web": {"t": "WooCommerce", "campos": [
+        ("site_url", "URL del sitio", False), ("consumer_key", "Consumer Key", True),
+        ("consumer_secret", "Consumer Secret", True)]},
+}
+
+
+def _enmascarar(valor):
+    v = str(valor or "")
+    if not v:
+        return ""
+    return "••••" + v[-4:] if len(v) > 6 else "••••"
+
+
+def _olvidar_credenciales(tid, canal):
+    from credenciales_canal import olvidar
+    olvidar(tid, canal)
+    try:
+        if canal == "walmart":
+            import walmart
+            walmart._token_cache.limpiar(tid)
+        elif canal == "paris":
+            import paris
+            paris._paris_cache.limpiar(tid)
+    except Exception as e:
+        print(f"[canales] no pude limpiar el token de {canal}: {e}")
+
+
+@app.route("/canales/estado")
+def canales_estado():
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    from credenciales_canal import credencial
+    from tenancy import obtener_credenciales_canal
+    tid = _tenant_sesion()
+    dueno = tid == TENANT_INTEGRACIONES
+    salida = []
+    for canal, conf in CANALES_CREDENCIALES.items():
+        fila = {"canal": canal, "titulo": conf["t"], "servidor": dueno,
+                "campos": [{"nombre": n, "label": l, "secreto": s} for n, l, s in conf["campos"]]}
+        if dueno:
+            internos = {"walmart": ["client_id", "client_secret"], "paris": ["api_key"],
+                        "ripley": ["api_key"], "falabella": ["user_id", "api_key"],
+                        "web": ["consumer_key", "consumer_secret"]}[canal]
+            fila["conectado"] = all(bool(credencial(canal, x)) for x in internos)
+            fila["datos"] = {}
+        else:
+            creds = obtener_credenciales_canal(tid, canal) or {}
+            fila["conectado"] = bool(creds) and all(bool(creds.get(n)) for n, _, _ in conf["campos"])
+            fila["datos"] = {n: (_enmascarar(creds.get(n)) if s else (creds.get(n) or ""))
+                             for n, _, s in conf["campos"]}
+        salida.append(fila)
+    try:
+        from inventario import get_meli_auth
+        meli = bool((get_meli_auth() or {}).get("access_token"))
+    except Exception:
+        meli = False
+    return jsonify({"canales": salida, "dueno": dueno,
+                    "mercadolibre": {"conectado": meli, "disponible": dueno}})
+
+
+@app.route("/canales/guardar", methods=["POST"])
+def canales_guardar():
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    from tenancy import guardar_credenciales_canal, obtener_credenciales_canal
+    tid = _tenant_sesion()
+    datos = request.json or {}
+    canal = (datos.get("canal") or "").strip()
+    conf = CANALES_CREDENCIALES.get(canal)
+    if not conf:
+        return jsonify({"ok": False, "error": "Canal no válido"}), 400
+    if tid == TENANT_INTEGRACIONES:
+        return jsonify({"ok": False, "error": "Tu cuenta usa las credenciales configuradas en el "
+                                              "servidor. Se cambian en Render → Environment."}), 400
+    nuevos = datos.get("campos") or {}
+    # Un campo secreto que se deja vacio conserva el valor guardado: asi se
+    # puede cambiar uno sin volver a escribir todos.
+    actuales = obtener_credenciales_canal(tid, canal) or {}
+    final = {}
+    for n, l, _s in conf["campos"]:
+        v = str(nuevos.get(n) or "").strip() or str(actuales.get(n) or "").strip()
+        if not v:
+            return jsonify({"ok": False, "error": f"Falta {l}"}), 400
+        final[n] = v
+    if canal == "web":
+        url = final["site_url"].rstrip("/")
+        if not url.startswith("http"):
+            url = "https://" + url
+        final["site_url"] = url
+    guardar_credenciales_canal(tid, canal, final)
+    _olvidar_credenciales(tid, canal)
+    try:
+        registrar_audit(session.get("usuario", "?"), request.remote_addr, "guardar_credenciales_canal",
+                        entidad="credenciales_marketplace", detalle=f"{canal} (valores no se registran)")
+    except Exception:
+        pass
+    return jsonify({"ok": True})
+
+
+@app.route("/canales/probar", methods=["POST"])
+def canales_probar():
+    """Prueba las credenciales del cliente de la sesion contra el canal."""
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    canal = ((request.json or {}).get("canal") or "").strip()
+    if canal not in CANALES_CREDENCIALES:
+        return jsonify({"ok": False, "error": "Canal no válido"}), 400
+    tid = _tenant_sesion()
+    _olvidar_credenciales(tid, canal)
+    try:
+        if canal == "walmart":
+            from walmart import get_token
+            ok, detalle = bool(get_token()), "Token obtenido"
+        elif canal == "paris":
+            from paris import get_paris_token, _paris_cache
+            get_paris_token()
+            ok, detalle = True, "Seller: %s" % (_paris_cache.get("seller_name") or "?")
+        elif canal == "ripley":
+            from ripley import verificar_conexion_ripley
+            r = verificar_conexion_ripley() or {}
+            ok, detalle = bool(r.get("ok")), r.get("mensaje") or r.get("error") or ""
+        elif canal == "falabella":
+            from falabella import verificar_conexion_falabella
+            r = verificar_conexion_falabella() or {}
+            ok, detalle = bool(r.get("ok")), r.get("mensaje") or r.get("error") or ""
+        else:
+            r = requests.get(_woo_api() + "/products",
+                             params={"consumer_key": credencial("web", "consumer_key"),
+                                     "consumer_secret": credencial("web", "consumer_secret"),
+                                     "per_page": 1}, timeout=15)
+            ok, detalle = r.status_code == 200, "HTTP %s" % r.status_code
+    except Exception as e:
+        ok, detalle = False, str(e)[:200]
+    return jsonify({"ok": ok, "detalle": detalle})
+
+
+@app.route("/canales/desconectar", methods=["POST"])
+def canales_desconectar():
+    if not session.get("logged"):
+        return jsonify({"error": "no autorizado"}), 401
+    canal = ((request.json or {}).get("canal") or "").strip()
+    if canal not in CANALES_CREDENCIALES:
+        return jsonify({"ok": False, "error": "Canal no válido"}), 400
+    tid = _tenant_sesion()
+    if tid == TENANT_INTEGRACIONES:
+        return jsonify({"ok": False, "error": "Tu cuenta usa las credenciales del servidor."}), 400
+    from inventario import get_conn, release_conn
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("""UPDATE credenciales_marketplace SET activo = FALSE
+                        WHERE tenant_id = %s AND canal = %s""", (tid, canal))
+        conn.commit()
+    finally:
+        cur.close(); release_conn(conn)
+    _olvidar_credenciales(tid, canal)
+    try:
+        registrar_audit(session.get("usuario", "?"), request.remote_addr, "desconectar_canal",
+                        entidad="credenciales_marketplace", detalle=canal)
+    except Exception:
+        pass
+    return jsonify({"ok": True})
+
+
 @app.route("/admin/lusync/base/estructura")
 def admin_base_estructura():
     """Foto de la base para planificar el aislamiento entre clientes. SOLO LEE.
@@ -17522,8 +17702,7 @@ def admin_lusync_conectar_marketplace(tenant_id):
                     {{nombre: 'api_secret', label: 'API Key', placeholder: 'tu_api_key_aqui'}}
                 ],
                 'paris': [
-                    {{nombre: 'usuario', label: 'Usuario', placeholder: 'usuario_paris'}},
-                    {{nombre: 'password', label: 'Password Paris', placeholder: '••••••••'}}
+                    {{nombre: 'api_key', label: 'API Key', placeholder: 'API Key de Cencosud'}}
                 ],
                 'walmart': [
                     {{nombre: 'client_id', label: 'Client ID', placeholder: 'Walmart Partner Client ID'}},

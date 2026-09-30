@@ -4211,64 +4211,8 @@ tbody td {
         <div id="cfg-integraciones" style="display:none;">
           <div class="card" style="margin-bottom:14px;">
             <div class="card-title" style="margin-bottom:16px;">Canales de venta</div>
-
-            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);">
-              <div style="width:36px;height:36px;background:var(--info-bg);border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--navy);flex-shrink:0;">WC</div>
-              <div style="flex:1;"><div style="font-size:13px;font-weight:500;">WooCommerce</div><div style="font-size:11px;color:var(--muted);">babymine.cl · Sincronización activa</div></div>
-              <span style="font-size:11px;background:var(--success-bg);color:var(--success);padding:3px 10px;border-radius:20px;font-weight:500;">● Conectado</span>
-              <button class="btn-secondary" style="padding:6px 12px;font-size:12px;">Gestionar</button>
-            </div>
-
-
-            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);">
-              <div style="width:36px;height:36px;background:#fff7e6;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#f59e0b;flex-shrink:0;">ML</div>
-              <div style="flex:1;"><div style="font-size:13px;font-weight:500;">MercadoLibre</div><div style="font-size:11px;color:var(--muted);">No conectado · Próximamente disponible</div></div>
-              <span style="font-size:11px;background:var(--warn-bg);color:var(--warn);padding:3px 10px;border-radius:20px;font-weight:500;">⏳ Próximo</span>
-              <button class="btn-primary" style="padding:6px 12px;font-size:12px;opacity:0.5;" disabled>Conectar</button>
-            </div>
-            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);">
-              <div style="width:36px;height:36px;background:#fff0f0;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#e94560;flex-shrink:0;">FA</div>
-              <div style="flex:1;"><div style="font-size:13px;font-weight:500;">Falabella Seller</div><div style="font-size:11px;color:var(--muted);">No conectado · Próximamente disponible</div></div>
-              <span style="font-size:11px;background:var(--warn-bg);color:var(--warn);padding:3px 10px;border-radius:20px;font-weight:500;">⏳ Próximo</span>
-              <button class="btn-primary" style="padding:6px 12px;font-size:12px;opacity:0.5;" disabled>Conectar</button>
-            </div>
-            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);" id="walmart-row">
-              <div style="width:36px;height:36px;background:#f0fff4;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#059669;flex-shrink:0;">WM</div>
-              <div style="flex:1;">
-                <div style="font-size:13px;font-weight:500;">Walmart Chile</div>
-                <div style="font-size:11px;color:var(--muted);" id="walmart-desc">Credenciales en Render · Listo para conectar</div>
-              </div>
-              <span id="walmart-badge" style="font-size:11px;background:var(--warn-bg);color:var(--warn);padding:3px 10px;border-radius:20px;font-weight:500;">⏳ Verificando...</span>
-              <div style="display:flex;gap:6px;">
-                <button onclick="walmartSyncStock()" class="btn-secondary" style="padding:6px 12px;font-size:12px;">↑ Stock</button>
-                <button onclick="walmartSyncPrecios()" class="btn-secondary" style="padding:6px 12px;font-size:12px;">$ Precios</button>
-                <button onclick="walmartSyncOrdenes()" class="btn-primary" style="padding:6px 12px;font-size:12px;">↓ Órdenes</button>
-              </div>
-            </div>
-            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);">
-              <div style="width:36px;height:36px;background:#f5f0ff;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#7c3aed;flex-shrink:0;">RP</div>
-              <div style="flex:1;"><div style="font-size:13px;font-weight:500;">Ripley</div><div style="font-size:11px;color:var(--muted);">No conectado · Próximamente disponible</div></div>
-              <span style="font-size:11px;background:var(--warn-bg);color:var(--warn);padding:3px 10px;border-radius:20px;font-weight:500;">⏳ Próximo</span>
-              <button class="btn-primary" style="padding:6px 12px;font-size:12px;opacity:0.5;" disabled>Conectar</button>
-            </div>
-            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);">
-              <div style="width:36px;height:36px;background:#e8f4fd;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#0284c7;flex-shrink:0;">JS</div>
-              <div style="flex:1;"><div style="font-size:13px;font-weight:500;">Jumpseller</div><div style="font-size:11px;color:var(--muted);">No conectado · Próximamente disponible</div></div>
-              <span style="font-size:11px;background:var(--warn-bg);color:var(--warn);padding:3px 10px;border-radius:20px;font-weight:500;">⏳ Próximo</span>
-              <button class="btn-primary" style="padding:6px 12px;font-size:12px;opacity:0.5;" disabled>Conectar</button>
-            </div>
-            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);">
-              <div style="width:36px;height:36px;background:#f0f9ff;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#0369a1;flex-shrink:0;">SH</div>
-              <div style="flex:1;"><div style="font-size:13px;font-weight:500;">Shopify</div><div style="font-size:11px;color:var(--muted);">No conectado · Próximamente disponible</div></div>
-              <span style="font-size:11px;background:var(--warn-bg);color:var(--warn);padding:3px 10px;border-radius:20px;font-weight:500;">⏳ Próximo</span>
-              <button class="btn-primary" style="padding:6px 12px;font-size:12px;opacity:0.5;" disabled>Conectar</button>
-            </div>
-            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;">
-              <div style="width:36px;height:36px;background:#fdf4ff;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#9333ea;flex-shrink:0;">VT</div>
-              <div style="flex:1;"><div style="font-size:13px;font-weight:500;">Vtex</div><div style="font-size:11px;color:var(--muted);">No conectado · Próximamente disponible</div></div>
-              <span style="font-size:11px;background:var(--warn-bg);color:var(--warn);padding:3px 10px;border-radius:20px;font-weight:500;">⏳ Próximo</span>
-              <button class="btn-primary" style="padding:6px 12px;font-size:12px;opacity:0.5;" disabled>Conectar</button>
-            </div>
+            <div id="canalesLista" style="font-size:12px;color:var(--muted);">Cargando canales…</div>
+            <div style="font-size:11px;color:var(--hint);margin-top:12px;">Jumpseller, Shopify y Vtex: próximamente.</div>
           </div>
 
           <div class="card">
@@ -5477,6 +5421,7 @@ function cargarMovimientosFull(){
 // ── CONFIGURACIÓN
 function showCfgTab(tab, el){
   if (tab === 'tipificaciones') cargarTipificaciones();
+  if (tab === 'integraciones') cargarCanalesCliente();
   ['negocio','restock','bodegas','integraciones','usuarios'].forEach(t => {
     const el2 = document.getElementById('cfg-'+t);
     if(el2) el2.style.display = t===tab ? '' : 'none';
@@ -5485,6 +5430,109 @@ function showCfgTab(tab, el){
   if(el) el.classList.add('active');
   if(tab === 'restock') cargarLeadTimes();
   if(tab === 'usuarios') cargarUsuarios();
+}
+
+// ── Canales del cliente ─────────────────────────────────────────────
+// Cada cliente guarda y prueba sus credenciales. Se guardan cifradas y no
+// vuelven al navegador: se ven enmascaradas.
+const CANAL_ESTILO = {walmart:['WM','#f0fff4','#059669'], paris:['PA','#fff0f6','#db2777'],
+  ripley:['RP','#f5f0ff','#7c3aed'], falabella:['FA','#fff0f0','#e94560'], web:['WC','var(--info-bg)','#378ADD']};
+let _canales = null;
+
+function cargarCanalesCliente(){
+  fetch('/canales/estado').then(r=>r.json()).then(d=>{ _canales = d; pintarCanales(); })
+    .catch(()=>{ document.getElementById('canalesLista').textContent = 'No se pudo cargar'; });
+}
+
+function _chipCanal(ok){
+  return ok
+    ? '<span style="font-size:11px;background:var(--success-bg);color:var(--success);padding:3px 10px;border-radius:20px;font-weight:500;white-space:nowrap;">● Conectado</span>'
+    : '<span style="font-size:11px;background:var(--bg2);color:var(--muted);padding:3px 10px;border-radius:20px;font-weight:500;white-space:nowrap;">Sin conectar</span>';
+}
+
+function pintarCanales(){
+  const d = _canales; if(!d) return;
+  const filas = [];
+  const ml = d.mercadolibre || {};
+  filas.push(`<div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);">
+    <div style="width:36px;height:36px;background:#fff7e6;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#f59e0b;">ML</div>
+    <div style="flex:1;"><div style="font-size:13px;font-weight:500;color:var(--text);">MercadoLibre</div>
+      <div style="font-size:11px;color:var(--muted);">${ml.disponible ? 'Se conecta con tu cuenta de MercadoLibre' : 'Conexión con tu cuenta de MercadoLibre: próximamente'}</div></div>
+    ${_chipCanal(ml.conectado)}</div>`);
+  (d.canales || []).forEach(c => {
+    const [ini, bg, col] = CANAL_ESTILO[c.canal] || ['··','var(--bg2)','var(--muted)'];
+    let desc, acciones;
+    if(c.servidor){
+      desc = c.conectado ? 'Credenciales configuradas por Lusync en el servidor' : 'Sin credenciales en el servidor';
+      acciones = `<button class="btn-secondary" style="padding:6px 12px;font-size:12px;" onclick="probarCanal('${c.canal}',this)">Probar</button>`;
+      if(c.canal === 'walmart' && c.conectado)
+        acciones = `<button onclick="walmartSyncStock()" class="btn-secondary" style="padding:6px 12px;font-size:12px;">↑ Stock</button>
+          <button onclick="walmartSyncPrecios()" class="btn-secondary" style="padding:6px 12px;font-size:12px;">$ Precios</button>
+          <button onclick="walmartSyncOrdenes()" class="btn-primary" style="padding:6px 12px;font-size:12px;">↓ Órdenes</button>` + acciones;
+    } else {
+      const vis = c.campos.filter(f => !f.secreto && c.datos[f.nombre]).map(f => c.datos[f.nombre]);
+      desc = c.conectado ? ('Conectado' + (vis.length ? ' · ' + vis.join(' · ') : '')) : 'Sin conectar';
+      acciones = `<button class="btn-${c.conectado ? 'secondary' : 'primary'}" style="padding:6px 12px;font-size:12px;" onclick="editarCanal('${c.canal}')">${c.conectado ? 'Editar' : 'Conectar'}</button>`
+        + (c.conectado ? `<button class="btn-secondary" style="padding:6px 12px;font-size:12px;" onclick="probarCanal('${c.canal}',this)">Probar</button>
+          <button class="btn-secondary" style="padding:6px 12px;font-size:12px;color:var(--danger);" onclick="desconectarCanal('${c.canal}')">Desconectar</button>` : '');
+    }
+    filas.push(`<div style="padding:12px 0;border-bottom:1px solid var(--border);">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <div style="width:36px;height:36px;background:${bg};border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:${col};">${ini}</div>
+        <div style="flex:1;min-width:160px;"><div style="font-size:13px;font-weight:500;color:var(--text);">${c.titulo}</div>
+          <div style="font-size:11px;color:var(--muted);" id="canalDesc_${c.canal}">${desc}</div></div>
+        ${_chipCanal(c.conectado)}
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">${acciones}</div>
+      </div>
+      <div id="canalForm_${c.canal}"></div></div>`);
+  });
+  document.getElementById('canalesLista').innerHTML = filas.join('');
+}
+
+function editarCanal(canal){
+  const c = (_canales.canales || []).find(x => x.canal === canal); if(!c) return;
+  const cont = document.getElementById('canalForm_' + canal);
+  if(cont.innerHTML){ cont.innerHTML = ''; return; }
+  cont.innerHTML = `<div style="display:flex;flex-direction:column;gap:8px;margin:10px 0 0 48px;max-width:420px;">
+    ${c.campos.map(f => `<label style="font-size:11px;color:var(--muted);">${f.label}
+      <input id="canal_${canal}_${f.nombre}" type="${f.secreto ? 'password' : 'text'}" autocomplete="off"
+        placeholder="${f.secreto && c.datos[f.nombre] ? 'Guardado (' + c.datos[f.nombre] + ') — déjalo vacío para mantenerlo' : ''}"
+        value="${!f.secreto && c.datos[f.nombre] ? c.datos[f.nombre] : ''}"
+        style="display:block;width:100%;margin-top:4px;padding:7px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);box-sizing:border-box;"></label>`).join('')}
+    <div style="display:flex;gap:8px;"><button class="btn-primary" style="padding:6px 14px;font-size:12px;" onclick="guardarCanal('${canal}',this)">Guardar</button>
+      <button class="btn-secondary" style="padding:6px 14px;font-size:12px;" onclick="editarCanal('${canal}')">Cancelar</button></div>
+    <div style="font-size:11px;color:var(--hint);">Se guardan cifradas. Después de guardar, usa "Probar" para confirmar que funcionan.</div></div>`;
+}
+
+function guardarCanal(canal, btn){
+  const c = (_canales.canales || []).find(x => x.canal === canal); if(!c) return;
+  const campos = {};
+  c.campos.forEach(f => { campos[f.nombre] = (document.getElementById(`canal_${canal}_${f.nombre}`).value || '').trim(); });
+  btn.disabled = true;
+  fetch('/canales/guardar', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({canal, campos})}).then(r=>r.json()).then(d=>{
+      btn.disabled = false;
+      if(!d.ok){ toast(d.error || 'No se pudo guardar', 'error'); return; }
+      toast('Credenciales guardadas'); cargarCanalesCliente();
+    }).catch(e => { btn.disabled = false; toast('Error: ' + e.message, 'error'); });
+}
+
+function probarCanal(canal, btn){
+  const t = btn.textContent; btn.disabled = true; btn.textContent = 'Probando…';
+  fetch('/canales/probar', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({canal})}).then(r=>r.json()).then(d=>{
+      btn.disabled = false; btn.textContent = t;
+      toast((d.ok ? 'Conexión OK' : 'No conecta') + (d.detalle ? ' · ' + d.detalle : ''), d.ok ? undefined : 'error');
+    }).catch(e => { btn.disabled = false; btn.textContent = t; toast('Error: ' + e.message, 'error'); });
+}
+
+function desconectarCanal(canal){
+  if(!confirm('¿Desconectar este canal? Se dejan de usar sus credenciales.')) return;
+  fetch('/canales/desconectar', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({canal})}).then(r=>r.json()).then(d=>{
+      if(!d.ok){ toast(d.error || 'No se pudo desconectar', 'error'); return; }
+      toast('Canal desconectado'); cargarCanalesCliente();
+    });
 }
 
 function cargarConfiguracion(){
