@@ -1185,28 +1185,37 @@ def admin_base_ordenes_otro_cliente():
         conn = get_conn(tenant_id=TENANT_INTEGRACIONES, is_admin=True)
         cur = conn.cursor()
         cur.execute("SET statement_timeout = '50s'")
-        cur.execute("""
-            WITH m AS (
-                SELECT op.tenant_id, COALESCE(op.order_id_texto, op.orden_id::text) AS clave,
-                       op.fecha,
-                       regexp_replace(COALESCE(op.order_id_texto, op.orden_id::text),
-                                      '^([A-Z]+-)+', '') AS num
-                  FROM ordenes_procesadas op
-                 WHERE op.tenant_id <> %s)
-            SELECT m.tenant_id, m.clave, TO_CHAR(m.fecha, 'YYYY-MM-DD HH24:MI'), m.num,
-                   (SELECT COUNT(*) FROM movimientos mv
-                     WHERE mv.tipo = 'salida'
-                       AND (COALESCE(mv.orden_id::text,'') = m.num
-                            OR COALESCE(mv.numero_orden,'') IN (m.clave, m.num))),
-                   (SELECT string_agg(DISTINCT mv.tenant_id::text, ',') FROM movimientos mv
-                     WHERE mv.tipo = 'salida'
-                       AND (COALESCE(mv.orden_id::text,'') = m.num
-                            OR COALESCE(mv.numero_orden,'') IN (m.clave, m.num))),
-                   (SELECT string_agg(DISTINCT a.tipo, ',') FROM alertas a
-                     WHERE COALESCE(a.orden_id::text,'') = m.num)
-              FROM m ORDER BY m.fecha""", (TENANT_INTEGRACIONES,))
-        filas = cur.fetchall()
+        # Tres lecturas simples y el cruce en Python. La version con
+        # subconsultas por marca (346 x 4.500 movimientos, con casteo) se
+        # pasaba del statement_timeout.
+        cur.execute("""SELECT tenant_id, COALESCE(order_id_texto, orden_id::text),
+                              TO_CHAR(fecha, 'YYYY-MM-DD HH24:MI')
+                         FROM ordenes_procesadas WHERE tenant_id <> %s
+                        ORDER BY fecha""", (TENANT_INTEGRACIONES,))
+        marcas = cur.fetchall()
+        cur.execute("""SELECT COALESCE(orden_id::text,''), COALESCE(numero_orden,''), tenant_id
+                         FROM movimientos WHERE tipo = 'salida'""")
+        ventas = {}
+        for oid, nro, tid_m in cur.fetchall():
+            for k in (oid, nro):
+                if k:
+                    ventas.setdefault(k, set()).add(str(tid_m))
+        import re as _re
+        nums = []
+        for tid, clave, fecha in marcas:
+            nums.append(_re.sub(r"^([A-Z]+-)+", "", clave or ""))
+        alertas_por = {}
+        if nums:
+            cur.execute("""SELECT orden_id::text, string_agg(DISTINCT tipo, ',')
+                             FROM alertas WHERE orden_id::text = ANY(%s)
+                            GROUP BY 1""", (list(set(nums)),))
+            alertas_por = dict(cur.fetchall())
         cur.close()
+        filas = []
+        for (tid, clave, fecha), num in zip(marcas, nums):
+            t_mov = ventas.get(num, set()) | ventas.get(clave or "", set())
+            filas.append((tid, clave, fecha, num, len(t_mov),
+                          ",".join(sorted(t_mov)) or None, alertas_por.get(num)))
         resumen, sin_venta, por_mes = {}, [], {}
         for tid, clave, fecha, num, n_mov, tenants_mov, alertas in filas:
             cancel = "CANCEL-" in (clave or "")
