@@ -890,10 +890,10 @@ def asegurar_configuracion_por_cliente():
     clave de la API del proveedor— y los parametros de reposicion. Cualquier
     cliente que abriera Configuracion veia y podia pisar los del dueño.
 
-    Fase 1 (esta): tenant_id + unica (tenant_id, clave), y el codigo usa esa.
-    La llave primaria vieja (clave) se retira en la fase 2, en otro
-    despliegue: mientras Render despliega, la version anterior sigue
-    atendiendo y escribe con ON CONFLICT (clave).
+    tenant_id + unica (tenant_id, clave), y el codigo usa esa. La llave
+    primaria vieja (clave) se retiro en un despliegue aparte: mientras Render
+    despliega, la version anterior sigue atendiendo, y la anterior a la fase 1
+    escribia con ON CONFLICT (clave).
     """
     dueno = int(os.environ.get("LUSYNC_TENANT_INTEGRACIONES", "1"))
     conn = get_conn(is_admin=True); cur = conn.cursor()
@@ -906,6 +906,18 @@ def asegurar_configuracion_por_cliente():
         cur.execute("ALTER TABLE configuracion ALTER COLUMN tenant_id SET NOT NULL")
         cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS uq_t_configuracion
                        ON configuracion (tenant_id, clave)""")
+        # Fase 2: la llave primaria (clave) impide que dos clientes tengan el
+        # mismo parametro. Se retira; la unicidad queda en uq_t_configuracion.
+        # Desde la fase 1 ningun codigo escribe con ON CONFLICT (clave).
+        cur.execute("""SELECT array_agg(a.attname::text ORDER BY a.attnum)
+                         FROM pg_index i
+                         JOIN pg_attribute a ON a.attrelid = i.indrelid
+                                            AND a.attnum = ANY(i.indkey)
+                        WHERE i.indrelid = 'configuracion'::regclass AND i.indisprimary""")
+        pk = (cur.fetchone() or [None])[0] or []
+        if pk == ["clave"]:
+            cur.execute("ALTER TABLE configuracion DROP CONSTRAINT configuracion_pkey")
+            print("[configuracion] llave primaria (clave) retirada")
         conn.commit()
         print("[configuracion] por cliente")
     except Exception as e:
