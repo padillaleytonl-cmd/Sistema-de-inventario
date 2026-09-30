@@ -2427,9 +2427,33 @@ def init_alertas():
         )""")
         cur.execute("""CREATE TABLE IF NOT EXISTS alertas_config (
             id SERIAL PRIMARY KEY,
-            clave TEXT UNIQUE NOT NULL,
+            clave TEXT NOT NULL,
             valor TEXT
         )""")
+        conn.commit()
+        # La configuracion de alertas es POR CLIENTE. Era una sola para todo
+        # el sistema: servidor SMTP, usuario, clave y destinatarios. Cualquier
+        # cliente que la guardara pasaba a recibir las alertas de todos —
+        # cancelaciones, ventas sin stock, errores de canal— y a mandarlas con
+        # su propio servidor.
+        #
+        # Las filas que habia son del cliente dueño de las integraciones (el
+        # unico que la uso). La unica pasa de (clave) a (tenant_id, clave).
+        try:
+            cur.execute("SET LOCAL lock_timeout = '5s'")
+            cur.execute("ALTER TABLE alertas_config ADD COLUMN IF NOT EXISTS tenant_id INTEGER")
+            cur.execute("UPDATE alertas_config SET tenant_id = %s WHERE tenant_id IS NULL",
+                        (int(os.environ.get("LUSYNC_TENANT_INTEGRACIONES", "1")),))
+            cur.execute("ALTER TABLE alertas_config ALTER COLUMN tenant_id SET DEFAULT "
+                        + EXPR_TENANT_CONTEXTO)
+            cur.execute("ALTER TABLE alertas_config ALTER COLUMN tenant_id SET NOT NULL")
+            cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS uq_t_alertas_config
+                           ON alertas_config (tenant_id, clave)""")
+            cur.execute("ALTER TABLE alertas_config DROP CONSTRAINT IF EXISTS alertas_config_clave_key")
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            print(f"[Alertas] config por cliente: {e}")
         # Defaults de configuración SMTP (vacíos hasta que el usuario los configure)
         for clave, valor in [
             ("smtp_host", ""),
@@ -2441,7 +2465,8 @@ def init_alertas():
             ("notif_cancelaciones", "true"),
             ("notif_errores_api", "false")
         ]:
-            cur.execute("INSERT INTO alertas_config (clave, valor) VALUES (%s, %s) ON CONFLICT (clave) DO NOTHING",
+            cur.execute("INSERT INTO alertas_config (clave, valor) VALUES (%s, %s) "
+                        "ON CONFLICT (tenant_id, clave) DO NOTHING",
                         (clave, valor))
         conn.commit()
     except Exception as e:
@@ -2619,21 +2644,34 @@ def marcar_todas_leidas():
 
 
 def get_alertas_config():
+    """La configuracion de alertas del cliente de la conexion.
+
+    Se filtra con la misma expresion que el DEFAULT de tenant_id: la alerta
+    que se acaba de guardar y el correo que la avisa quedan siempre en el
+    mismo cliente, aunque la conexion no traiga uno (ahi los dos caen en 1).
+    """
     conn = get_conn(); cur = conn.cursor()
     try:
-        cur.execute("SELECT clave, valor FROM alertas_config")
+        cur.execute("SELECT clave, valor FROM alertas_config WHERE tenant_id = "
+                    + EXPR_TENANT_CONTEXTO)
         rows = cur.fetchall()
-    except: rows = []
+    except Exception as e:
+        print(f"[Alertas] get config: {e}")
+        try: conn.rollback()
+        except Exception: pass
+        rows = []
     cur.close(); release_conn(conn)
     return {r[0]: (r[1] or "") for r in rows}
 
 
 def set_alertas_config(data):
+    """Guarda en la configuracion del cliente de la conexion (tenant_id lo
+    pone el DEFAULT)."""
     conn = get_conn(); cur = conn.cursor()
     try:
         for clave, valor in data.items():
             cur.execute("""INSERT INTO alertas_config (clave, valor) VALUES (%s, %s)
-                           ON CONFLICT (clave) DO UPDATE SET valor=EXCLUDED.valor""",
+                           ON CONFLICT (tenant_id, clave) DO UPDATE SET valor=EXCLUDED.valor""",
                         (clave, str(valor) if valor is not None else ""))
         conn.commit()
     except Exception as e:
