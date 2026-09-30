@@ -359,6 +359,51 @@ def precalentar_pool():
     except Exception as e:
         print(f"[Perf] precalentar_pool: {e}")
 
+def tenant_actual():
+    """(tenant_id, is_admin) de quien esta corriendo: la sesion si hay una
+    peticion con cliente, si no el hilo (schedulers, webhooks). None si no hay
+    ninguno de los dos."""
+    try:
+        from flask import session, has_request_context
+        if has_request_context():
+            tid = session.get("tenant_id")
+            if tid:
+                adm = bool(session.get("is_lusync_admin")) and not bool(session.get("impersonating"))
+                return int(tid), adm
+    except Exception:
+        pass
+    try:
+        from app import get_thread_tenant, _thread_tenant
+        tid = get_thread_tenant()
+        if tid:
+            return int(tid), bool(getattr(_thread_tenant, "is_admin", False))
+    except Exception:
+        pass
+    return None
+
+
+def con_tenant_del_llamador(fn):
+    """Envuelve fn para correrla en OTRO hilo con el cliente de quien la lanza.
+
+    El cliente de get_conn vive en la sesion o en el hilo. Un hilo nuevo no
+    tiene ninguno de los dos, asi que sus conexiones usaban el cliente que
+    hubiera dejado el prestamo anterior del pool: cualquiera. Aca se captura el
+    cliente AL ENVOLVER (en el hilo que lanza) y se fija en el hilo nuevo.
+    """
+    ctx = tenant_actual()
+
+    def _envuelta(*args, **kwargs):
+        if ctx is None:
+            return fn(*args, **kwargs)
+        from app import set_thread_tenant, clear_thread_tenant
+        set_thread_tenant(ctx[0], is_admin=ctx[1])
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            clear_thread_tenant()
+    return _envuelta
+
+
 def get_conn(tenant_id=None, is_admin=False):
     """Obtiene una conexión del pool. Usar con try/finally para devolverla.
 
@@ -995,7 +1040,7 @@ def registrar_movimiento(tipo, sku, nombre, cantidad, motivo="", usuario="Sistem
             finally:
                 release_conn(conn2)
 
-        threading.Thread(target=_sync_bg, daemon=True).start()
+        threading.Thread(target=con_tenant_del_llamador(_sync_bg), daemon=True).start()
     except Exception:
         pass
 

@@ -156,6 +156,8 @@ except Exception as e:
 # SIN try a proposito: los ON CONFLICT del codigo apuntan a estas claves. Si
 # no se pueden crear, el arranque falla y Render sigue con la version anterior.
 from inventario import asegurar_unicos_por_cliente
+# Para lanzar hilos con el cliente de quien los lanza (ver inventario).
+from inventario import con_tenant_del_llamador
 asegurar_unicos_por_cliente()
 # Fase 2: retirar las globales. No levanta: si algo queda, el sistema sigue
 # como en la fase 1 y se reintenta en el proximo arranque.
@@ -3059,7 +3061,7 @@ from collections import deque as _deque_sync
 _SYNC_TRACE_LOG = _deque_sync(maxlen=50)
 
 
-def sincronizar_stock_marketplaces(sku, stock=None, contexto="manual"):
+def _sincronizar_stock_marketplaces_cuerpo(sku, stock=None, contexto="manual"):
     """Sincroniza el stock de un SKU con TODOS los marketplaces conectados.
 
     Args:
@@ -3273,6 +3275,32 @@ def sincronizar_stock_marketplaces(sku, stock=None, contexto="manual"):
         pass
 
     return resultado
+
+
+def sincronizar_stock_marketplaces(sku, stock=None, contexto="manual"):
+    """Publica el stock propio de un SKU en los canales conectados.
+
+    Los canales son del cliente dueño de las credenciales. Antes esto corria
+    igual para cualquier cliente: si otro registraba un movimiento de un SKU
+    que se llamara igual que uno del dueño, podia terminar publicando el stock
+    de ese otro cliente en las publicaciones del dueño (el mapeo se buscaba con
+    el cliente que hubiera dejado la conexion del pool).
+
+    - Otro cliente: no se publica nada.
+    - Sin cliente conocido (codigo viejo que no lo propaga): se corre como el
+      dueño, que es de quien son los canales.
+    """
+    from inventario import tenant_actual
+    ctx = tenant_actual()
+    if ctx is not None and ctx[0] != TENANT_INTEGRACIONES:
+        return {"omitido": "el cliente %s no tiene canales conectados" % ctx[0]}
+    if ctx is not None:
+        return _sincronizar_stock_marketplaces_cuerpo(sku, stock, contexto=contexto)
+    set_thread_tenant(TENANT_INTEGRACIONES, is_admin=False)
+    try:
+        return _sincronizar_stock_marketplaces_cuerpo(sku, stock, contexto=contexto)
+    finally:
+        clear_thread_tenant()
 
 # ════════════════════════════════════════════════════════════════════════════
 # DECORADOR: con_tenant_default
@@ -11169,8 +11197,9 @@ def ruta_bodegas_set_stock():
         except Exception:
             stock_total = get_stock_bodega(sku, "CENTRAL") or 0
         import threading
+        from inventario import con_tenant_del_llamador
         threading.Thread(
-            target=sincronizar_stock_marketplaces,
+            target=con_tenant_del_llamador(sincronizar_stock_marketplaces),
             args=(sku, stock_total),
             kwargs={"contexto": f"ajuste_bodega_{bodega}"},
             daemon=True
@@ -27438,7 +27467,7 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
             return resultados
         from concurrent.futures import ThreadPoolExecutor, as_completed
         with ThreadPoolExecutor(max_workers=min(hilos, len(claves))) as pool:
-            futuros = {pool.submit(funcion, c): c for c in claves}
+            futuros = {pool.submit(con_tenant_del_llamador(funcion), c): c for c in claves}
             for fut in as_completed(futuros):
                 clave = futuros[fut]
                 try:
@@ -28484,7 +28513,7 @@ def _en_paralelo_valores(funcion, elementos, hilos=6):
         return []
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=min(hilos, len(elementos))) as pool:
-        return list(pool.map(funcion, elementos))
+        return list(pool.map(con_tenant_del_llamador(funcion), elementos))
 
 
 def _en_paralelo(funcion, claves, hilos=8):
@@ -28499,7 +28528,7 @@ def _en_paralelo(funcion, claves, hilos=8):
         return resultados
     from concurrent.futures import ThreadPoolExecutor, as_completed
     with ThreadPoolExecutor(max_workers=min(hilos, len(claves))) as pool:
-        futuros = {pool.submit(funcion, c): c for c in claves}
+        futuros = {pool.submit(con_tenant_del_llamador(funcion), c): c for c in claves}
         for fut in as_completed(futuros):
             clave = futuros[fut]
             try:
