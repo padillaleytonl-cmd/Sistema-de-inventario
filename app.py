@@ -892,7 +892,7 @@ def _diagnostico_orden(movimientos, marcas, devoluciones=None):
     return balance, resumen, veredicto
 
 
-RASTREADOR_VERSION = "v15-2026-09-29"
+RASTREADOR_VERSION = "v16-2026-09-29"
 
 
 def _rastrear_ordenes(conn, ordenes):
@@ -1154,6 +1154,81 @@ def admin_base_estructura():
         salida["foraneas"] = [{"tabla": r[0], "nombre": r[1], "def": r[2]}
                               for r in cur.fetchall()]
         cur.close()
+    except Exception as e:
+        salida["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        if conn:
+            release_conn(conn)
+    return jsonify(salida)
+
+
+@app.route("/admin/lusync/base/ordenes-de-otro-cliente")
+def admin_base_ordenes_otro_cliente():
+    """Ordenes del cliente dueño de los canales que quedaron marcadas como
+    procesadas por OTRO cliente. SOLO LEE.
+
+    Paso hasta el 29/09/2026: los jobs de canales corrian una vez por cada
+    cliente activo con las mismas credenciales, y la vuelta de otro cliente se
+    quedaba con las ordenes que llegaban en ese momento. La marca es unica
+    para todo el sistema, asi que despues la vuelta del dueño las daba por
+    hechas. La pregunta es si la venta igual quedo registrada.
+
+    Por marca: si hay movimiento de salida de esa orden (venta registrada),
+    o no. Las marcas CANCEL- son de cancelaciones: ahi no se espera venta.
+    """
+    if not _acceso_equipo_lusync():
+        return jsonify({"error": "no autorizado"}), 401
+    from inventario import get_conn, release_conn
+    salida = {"version": RASTREADOR_VERSION, "generado": str(now_chile())}
+    conn = None
+    try:
+        conn = get_conn(tenant_id=TENANT_INTEGRACIONES, is_admin=True)
+        cur = conn.cursor()
+        cur.execute("SET statement_timeout = '50s'")
+        cur.execute("""
+            WITH m AS (
+                SELECT op.tenant_id, COALESCE(op.order_id_texto, op.orden_id::text) AS clave,
+                       op.fecha,
+                       regexp_replace(COALESCE(op.order_id_texto, op.orden_id::text),
+                                      '^([A-Z]+-)+', '') AS num
+                  FROM ordenes_procesadas op
+                 WHERE op.tenant_id <> %s)
+            SELECT m.tenant_id, m.clave, TO_CHAR(m.fecha, 'YYYY-MM-DD HH24:MI'), m.num,
+                   (SELECT COUNT(*) FROM movimientos mv
+                     WHERE mv.tipo = 'salida'
+                       AND (COALESCE(mv.orden_id::text,'') = m.num
+                            OR COALESCE(mv.numero_orden,'') IN (m.clave, m.num))),
+                   (SELECT string_agg(DISTINCT mv.tenant_id::text, ',') FROM movimientos mv
+                     WHERE mv.tipo = 'salida'
+                       AND (COALESCE(mv.orden_id::text,'') = m.num
+                            OR COALESCE(mv.numero_orden,'') IN (m.clave, m.num))),
+                   (SELECT string_agg(DISTINCT a.tipo, ',') FROM alertas a
+                     WHERE COALESCE(a.orden_id::text,'') = m.num)
+              FROM m ORDER BY m.fecha""", (TENANT_INTEGRACIONES,))
+        filas = cur.fetchall()
+        cur.close()
+        resumen, sin_venta, por_mes = {}, [], {}
+        for tid, clave, fecha, num, n_mov, tenants_mov, alertas in filas:
+            cancel = "CANCEL-" in (clave or "")
+            prefijo = (clave or "")[: len(clave or "") - len(num or "")] or "(sin prefijo)"
+            r = resumen.setdefault(str(tid), {"marcas": 0, "con_venta": 0, "sin_venta": 0,
+                                              "cancelaciones": 0, "por_prefijo": {}})
+            r["marcas"] += 1
+            r["por_prefijo"][prefijo] = r["por_prefijo"].get(prefijo, 0) + 1
+            if cancel:
+                r["cancelaciones"] += 1
+            elif n_mov:
+                r["con_venta"] += 1
+            else:
+                r["sin_venta"] += 1
+                mes = (fecha or "")[:7]
+                por_mes[mes] = por_mes.get(mes, 0) + 1
+                sin_venta.append({"tenant": tid, "orden": clave, "marcada": fecha,
+                                  "alertas": alertas})
+            if n_mov and tenants_mov and tenants_mov != str(TENANT_INTEGRACIONES):
+                r.setdefault("venta_en_otro_cliente", []).append(clave)
+        salida.update({"resumen_por_tenant": resumen, "sin_venta_por_mes": por_mes,
+                       "sin_venta": sin_venta[:400], "total_sin_venta": len(sin_venta)})
     except Exception as e:
         salida["error"] = f"{type(e).__name__}: {e}"
     finally:
