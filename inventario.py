@@ -882,20 +882,59 @@ def listar_documentos_compra(limite=50, offset=0, tipo_doc=None):
     finally:
         cur.close(); release_conn(conn)
 
+def asegurar_configuracion_por_cliente():
+    """La configuracion general pasa a ser POR CLIENTE. Corre al arrancar.
+
+    Era una sola para todo el sistema, con los datos de la empresa: nombre,
+    RUT, razon social, direccion, correo, datos de facturacion —incluida la
+    clave de la API del proveedor— y los parametros de reposicion. Cualquier
+    cliente que abriera Configuracion veia y podia pisar los del dueño.
+
+    Fase 1 (esta): tenant_id + unica (tenant_id, clave), y el codigo usa esa.
+    La llave primaria vieja (clave) se retira en la fase 2, en otro
+    despliegue: mientras Render despliega, la version anterior sigue
+    atendiendo y escribe con ON CONFLICT (clave).
+    """
+    dueno = int(os.environ.get("LUSYNC_TENANT_INTEGRACIONES", "1"))
+    conn = get_conn(is_admin=True); cur = conn.cursor()
+    try:
+        cur.execute("SET LOCAL lock_timeout = '5s'")
+        cur.execute("ALTER TABLE configuracion ADD COLUMN IF NOT EXISTS tenant_id INTEGER")
+        cur.execute("UPDATE configuracion SET tenant_id = %s WHERE tenant_id IS NULL", (dueno,))
+        cur.execute("ALTER TABLE configuracion ALTER COLUMN tenant_id SET DEFAULT "
+                    + EXPR_TENANT_CONTEXTO)
+        cur.execute("ALTER TABLE configuracion ALTER COLUMN tenant_id SET NOT NULL")
+        cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS uq_t_configuracion
+                       ON configuracion (tenant_id, clave)""")
+        conn.commit()
+        print("[configuracion] por cliente")
+    except Exception as e:
+        conn.rollback()
+        print(f"[configuracion] por cliente: {e}")
+    finally:
+        cur.close(); release_conn(conn)
+
+
 def get_configuracion():
+    """La configuracion general del cliente de la conexion."""
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT clave, valor FROM configuracion")
+    cur.execute("SELECT clave, valor FROM configuracion WHERE tenant_id = "
+                + EXPR_TENANT_CONTEXTO)
     rows = cur.fetchall()
     cur.close()
     release_conn(conn)
     return {r[0]: r[1] for r in rows}
 
 def set_configuracion(data):
+    """Guarda en la configuracion del cliente de la conexion (tenant_id lo
+    pone el DEFAULT)."""
     conn = get_conn()
     cur = conn.cursor()
     for clave, valor in data.items():
-        cur.execute("INSERT INTO configuracion (clave, valor) VALUES (%s, %s) ON CONFLICT (clave) DO UPDATE SET valor = EXCLUDED.valor", (clave, str(valor)))
+        cur.execute("INSERT INTO configuracion (clave, valor) VALUES (%s, %s) "
+                    "ON CONFLICT (tenant_id, clave) DO UPDATE SET valor = EXCLUDED.valor",
+                    (clave, str(valor)))
     conn.commit()
     cur.close()
     release_conn(conn)
@@ -2076,7 +2115,10 @@ def init_sku_mapeo():
     for col in ["sku_web","sku_walmart","sku_paris","sku_falabella","sku_ripley","sku_mercadolibre","sku_hites"]:
         try: cur.execute(f"ALTER TABLE sku_mapeo ADD COLUMN IF NOT EXISTS {col} TEXT")
         except: pass
-    cur.execute("INSERT INTO configuracion (clave,valor) VALUES ('plataforma_web','WooCommerce') ON CONFLICT (clave) DO NOTHING")
+    # Aca se insertaba plataforma_web = WooCommerce en configuracion en CADA
+    # llamada (listar_sku_mapeo lo invoca). get_plataforma_web ya devuelve
+    # WooCommerce si no esta, asi que no hace falta, y escribir en una tabla
+    # por cliente desde aca lo ataba al cliente de turno.
     conn.commit(); cur.close(); release_conn(conn)
 
 
@@ -2456,10 +2498,12 @@ def get_sku_canal(sku_lusync, canal):
     return row[0].strip() if row and row[0] and row[0].strip() else sku_lusync
 
 def get_plataforma_web():
-    return get_configuracion("plataforma_web") or "WooCommerce"
+    # Antes llamaba get_configuracion("plataforma_web"), que no recibe
+    # argumentos: la ruta /sku_mapeo/plataforma_web respondia error siempre.
+    return get_configuracion().get("plataforma_web") or "WooCommerce"
 
 def set_plataforma_web(p):
-    set_configuracion("plataforma_web", p)
+    set_configuracion({"plataforma_web": p})
 
 def registrar_importacion_mapeo(usuario, archivo, importados, errores):
     conn = get_conn(); cur = conn.cursor()

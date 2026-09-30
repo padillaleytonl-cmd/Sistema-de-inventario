@@ -178,6 +178,8 @@ init_sku_mapeo()
 try:
     from inventario import asegurar_sku_mapeo_por_cliente
     asegurar_sku_mapeo_por_cliente()
+    from inventario import asegurar_configuracion_por_cliente
+    asegurar_configuracion_por_cliente()
 except Exception as _e:
     print(f"[sku_mapeo] {_e}")
 init_alertas()
