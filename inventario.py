@@ -927,6 +927,43 @@ def asegurar_configuracion_por_cliente():
         cur.close(); release_conn(conn)
 
 
+def asegurar_tablas_por_cliente_restantes():
+    """Las ultimas tablas que eran de todo el sistema pasan a ser POR CLIENTE:
+    historial de importaciones de bodega, motivos de movimiento y el token de
+    MercadoLibre. Corre al arrancar; las filas existentes quedan en el cliente
+    dueño de las integraciones, el unico que las uso.
+    """
+    dueno = int(os.environ.get("LUSYNC_TENANT_INTEGRACIONES", "1"))
+    conn = get_conn(is_admin=True); cur = conn.cursor()
+    try:
+        cur.execute("SET LOCAL lock_timeout = '5s'")
+        # motivos de movimiento se creaba recien al abrir la pantalla
+        cur.execute("""CREATE TABLE IF NOT EXISTS tipificaciones_movimiento (
+            id SERIAL PRIMARY KEY,
+            tipo TEXT NOT NULL CHECK (tipo IN ('entrada','salida')),
+            nombre TEXT NOT NULL,
+            descripcion TEXT,
+            activo BOOLEAN DEFAULT TRUE,
+            es_sistema BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT NOW())""")
+        for tabla in ("bodegas_imports", "tipificaciones_movimiento", "mercadolibre_auth"):
+            cur.execute("SELECT to_regclass(%s)", (tabla,))
+            if not cur.fetchone()[0]:
+                continue
+            cur.execute("ALTER TABLE %s ADD COLUMN IF NOT EXISTS tenant_id INTEGER" % tabla)
+            cur.execute("UPDATE %s SET tenant_id = %%s WHERE tenant_id IS NULL" % tabla, (dueno,))
+            cur.execute("ALTER TABLE %s ALTER COLUMN tenant_id SET DEFAULT %s"
+                        % (tabla, EXPR_TENANT_CONTEXTO))
+            cur.execute("ALTER TABLE %s ALTER COLUMN tenant_id SET NOT NULL" % tabla)
+        conn.commit()
+        print("[tablas por cliente] importaciones, motivos y token MELI por cliente")
+    except Exception as e:
+        conn.rollback()
+        print(f"[tablas por cliente] {e}")
+    finally:
+        cur.close(); release_conn(conn)
+
+
 def get_configuracion():
     """La configuracion general del cliente de la conexion."""
     conn = get_conn()
@@ -2846,8 +2883,12 @@ def get_meli_auth():
     conn = get_conn(); cur = conn.cursor()
     auth = None
     try:
+        # Del cliente de la conexion. Era uno solo para todo el sistema: el
+        # ultimo que conectaba su cuenta de MercadoLibre reemplazaba la de
+        # todos (set_meli_auth borraba la tabla entera).
         cur.execute("""SELECT user_id, access_token, refresh_token, expires_at
-                       FROM mercadolibre_auth ORDER BY id DESC LIMIT 1""")
+                       FROM mercadolibre_auth WHERE tenant_id = """ + EXPR_TENANT_CONTEXTO + """
+                       ORDER BY id DESC LIMIT 1""")
         row = cur.fetchone()
         if row:
             auth = {"user_id": row[0], "access_token": row[1],
@@ -2862,8 +2903,8 @@ def set_meli_auth(data):
     """Guarda/actualiza el token. Si hay registros previos, los reemplaza con uno nuevo."""
     conn = get_conn(); cur = conn.cursor()
     try:
-        # Limpiar registros viejos para mantener solo el más reciente
-        cur.execute("DELETE FROM mercadolibre_auth")
+        # Limpiar los registros viejos DE ESTE CLIENTE (antes borraba los de todos)
+        cur.execute("DELETE FROM mercadolibre_auth WHERE tenant_id = " + EXPR_TENANT_CONTEXTO)
         cur.execute("""INSERT INTO mercadolibre_auth (user_id, access_token, refresh_token, expires_at)
                        VALUES (%s, %s, %s, %s)""",
                     (data.get("user_id"), data.get("access_token"),
@@ -2875,10 +2916,10 @@ def set_meli_auth(data):
 
 
 def borrar_meli_auth():
-    """Borra el token guardado (desconectar)."""
+    """Borra el token guardado del cliente (desconectar)."""
     conn = get_conn(); cur = conn.cursor()
     try:
-        cur.execute("DELETE FROM mercadolibre_auth")
+        cur.execute("DELETE FROM mercadolibre_auth WHERE tenant_id = " + EXPR_TENANT_CONTEXTO)
         conn.commit()
     except Exception as e:
         print(f"[MELI] borrar_meli_auth error: {e}"); conn.rollback()
@@ -3537,9 +3578,14 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
             _cn_idem = (get_conn(tenant_id=_tid_idem, is_admin=True) if _tid_idem
                         else get_conn(is_admin=True))
             with _cn_idem.cursor() as _c_idem:
+                # La conexion es admin (se salta RLS): el cliente va en el
+                # WHERE. Sin el, una venta de otro cliente con el mismo numero
+                # de orden y SKU hacia que esta se diera por registrada.
                 _c_idem.execute("""SELECT 1 FROM movimientos
                                     WHERE orden_id = %s AND sku = %s
-                                      AND tipo IN ('salida','ajuste') LIMIT 1""",
+                                      AND tipo IN ('salida','ajuste')
+                                      AND tenant_id = """ + EXPR_TENANT_CONTEXTO + """
+                                    LIMIT 1""",
                                 (str(orden_id), sku))
                 if _c_idem.fetchone():
                     _actual = get_stock_bodega(sku, bodega)
@@ -3630,7 +3676,8 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
         # y ALTER+COMMIT resetea app.tenant_id de sesión PG (rompe RLS para INSERT).
 
         # Buscar nombre del producto
-        cur.execute("SELECT nombre FROM productos WHERE sku=%s LIMIT 1", (sku,))
+        cur.execute("SELECT nombre FROM productos WHERE sku=%s AND tenant_id = "
+                    + EXPR_TENANT_CONTEXTO + " LIMIT 1", (sku,))
         r = cur.fetchone()
         nombre = r[0] if r else sku
 
@@ -3649,7 +3696,9 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
         if orden_id:
             cur.execute("""SELECT 1 FROM movimientos
                            WHERE orden_id = %s AND sku = %s
-                             AND tipo IN ('salida','ajuste') LIMIT 1""",
+                             AND tipo IN ('salida','ajuste')
+                             AND tenant_id = """ + EXPR_TENANT_CONTEXTO + """
+                           LIMIT 1""",
                         (str(orden_id), sku))
             if cur.fetchone():
                 cur.close(); release_conn(conn)
@@ -4158,7 +4207,8 @@ def actualizar_import_log(import_id, procesados=None, advertencias=None,
             sets.append("finalizado_at=NOW()")
         if sets:
             vals.append(import_id)
-            cur.execute(f"UPDATE bodegas_imports SET {', '.join(sets)} WHERE id=%s", tuple(vals))
+            cur.execute(f"UPDATE bodegas_imports SET {', '.join(sets)} WHERE id=%s AND tenant_id = "
+                        + EXPR_TENANT_CONTEXTO, tuple(vals))
             conn.commit()
     except Exception as e:
         print(f"[bodegas_imports] update error: {e}"); conn.rollback()
@@ -4172,7 +4222,7 @@ def listar_imports_recientes(limit=20):
     try:
         cur.execute("""SELECT id, archivo, usuario, estado, total_filas,
                               procesados, advertencias, errores, created_at, finalizado_at
-                       FROM bodegas_imports
+                       FROM bodegas_imports WHERE tenant_id = """ + EXPR_TENANT_CONTEXTO + """
                        ORDER BY id DESC LIMIT %s""", (limit,))
         rows = cur.fetchall()
         return [{
@@ -4195,7 +4245,7 @@ def obtener_import_log(import_id):
         cur.execute("""SELECT id, archivo, usuario, estado, total_filas,
                               procesados, advertencias, errores, log,
                               created_at, finalizado_at
-                       FROM bodegas_imports WHERE id=%s""", (import_id,))
+                       FROM bodegas_imports WHERE id=%s AND tenant_id = """ + EXPR_TENANT_CONTEXTO, (import_id,))
         r = cur.fetchone()
         if not r: return None
         return {

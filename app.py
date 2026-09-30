@@ -180,6 +180,8 @@ try:
     asegurar_sku_mapeo_por_cliente()
     from inventario import asegurar_configuracion_por_cliente
     asegurar_configuracion_por_cliente()
+    from inventario import asegurar_tablas_por_cliente_restantes
+    asegurar_tablas_por_cliente_restantes()
 except Exception as _e:
     print(f"[sku_mapeo] {_e}")
 init_alertas()
@@ -5032,19 +5034,24 @@ def _sync_autocorreccion():
         print("[AutoCorrección] Iniciando detección de desvíos...")
 
         # 1) Stock CENTRAL por SKU (subquery agregada — no multiplica)
-        conn = get_conn(tenant_id=1, is_admin=True); cur = conn.cursor()
+        # La conexion es admin (se salta RLS): el cliente va en el WHERE. Sin
+        # el, el stock "propio" sumaba el de cualquier cliente con el mismo
+        # SKU y esa cifra se publicaba en los canales del dueño.
+        conn = get_conn(tenant_id=TENANT_INTEGRACIONES, is_admin=True); cur = conn.cursor()
         cur.execute("""
             SELECT m.sku_lusync, COALESCE(st.central,0) AS central
             FROM sku_mapeo_canal m
             LEFT JOIN (
                 SELECT sb.sku, SUM(sb.cantidad) AS central
-                FROM stock_bodega sb LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo
+                FROM stock_bodega sb
+                LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo AND b.tenant_id = sb.tenant_id
                 WHERE (b.tipo='propia' OR b.tipo IS NULL OR sb.bodega_codigo='CENTRAL')
+                  AND sb.tenant_id = %s
                 GROUP BY sb.sku
             ) st ON st.sku = m.sku_lusync
-            WHERE m.activo=TRUE
+            WHERE m.activo=TRUE AND m.tenant_id = %s
             GROUP BY m.sku_lusync, st.central
-        """)
+        """, (TENANT_INTEGRACIONES, TENANT_INTEGRACIONES))
         central_por_sku = {r[0]: int(r[1] or 0) for r in cur.fetchall()}
         cur.close()
         try: _get_pool().putconn(conn)
@@ -24594,7 +24601,9 @@ def config_tipificaciones_listar():
             )
         """)
         # Insertar tipificaciones default si la tabla está vacía
-        cur.execute("SELECT COUNT(*) FROM tipificaciones_movimiento")
+        # Por cliente: cada uno tiene sus motivos, y los de fabrica se crean
+        # para el que todavia no tiene ninguno.
+        cur.execute("SELECT COUNT(*) FROM tipificaciones_movimiento WHERE tenant_id = COALESCE(NULLIF(NULLIF(current_setting('app.tenant_id', true), ''), '0')::integer, 1)")
         if cur.fetchone()[0] == 0:
             defaults = [
                 ('entrada', 'Compra a proveedor', 'Ingreso de mercadería desde proveedor', True),
@@ -24614,7 +24623,8 @@ def config_tipificaciones_listar():
                     VALUES (%s, %s, %s, %s, FALSE)
                 """, (tipo, nombre, desc, activo))
         conn.commit()
-        cur.execute("SELECT id, tipo, nombre, descripcion, activo, es_sistema FROM tipificaciones_movimiento ORDER BY tipo, nombre")
+        cur.execute("SELECT id, tipo, nombre, descripcion, activo, es_sistema FROM tipificaciones_movimiento "
+                    "WHERE tenant_id = COALESCE(NULLIF(NULLIF(current_setting('app.tenant_id', true), ''), '0')::integer, 1) ORDER BY tipo, nombre")
         rows = cur.fetchall()
         cur.close(); release_conn(conn)
         return jsonify([{
@@ -24649,6 +24659,7 @@ def config_tipificaciones_guardar():
                 UPDATE tipificaciones_movimiento
                 SET nombre=%s, descripcion=%s, activo=%s
                 WHERE id=%s AND es_sistema=FALSE
+                  AND tenant_id = COALESCE(NULLIF(NULLIF(current_setting('app.tenant_id', true), ''), '0')::integer, 1)
                 RETURNING id
             """, (nombre, desc, activo, tid))
             if cur.fetchone() is None:
@@ -24677,7 +24688,8 @@ def config_tipificaciones_eliminar():
     try:
         from inventario import get_conn
         conn = get_conn(); cur = conn.cursor()
-        cur.execute("DELETE FROM tipificaciones_movimiento WHERE id=%s AND es_sistema=FALSE RETURNING id", (tid,))
+        cur.execute("DELETE FROM tipificaciones_movimiento WHERE id=%s AND es_sistema=FALSE "
+                    "AND tenant_id = COALESCE(NULLIF(NULLIF(current_setting('app.tenant_id', true), ''), '0')::integer, 1) RETURNING id", (tid,))
         deleted = cur.fetchone()
         conn.commit(); cur.close(); release_conn(conn)
         if not deleted:

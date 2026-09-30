@@ -389,9 +389,16 @@ def reconciliar_stock_full(canal):
     # Agregar los que Lusync tiene en la bodega Full aunque el canal reporte 0
     try:
         from inventario import get_conn, release_conn
-        conn = get_conn(tenant_id=1, is_admin=True)
+        # Los canales son del cliente dueño de las credenciales. La conexion
+        # es admin (se salta RLS), asi que el cliente va en el WHERE: sin el,
+        # la conciliacion sumaba el stock Full de cualquier cliente que usara
+        # el mismo SKU.
+        import os as _os
+        _dueno = int(_os.environ.get("LUSYNC_TENANT_INTEGRACIONES", "1"))
+        conn = get_conn(tenant_id=_dueno, is_admin=True)
         cur = conn.cursor()
-        cur.execute("SELECT sku, cantidad FROM stock_bodega WHERE bodega_codigo=%s AND cantidad<>0", (bodega,))
+        cur.execute("SELECT sku, cantidad FROM stock_bodega "
+                    "WHERE bodega_codigo=%s AND cantidad<>0 AND tenant_id=%s", (bodega, _dueno))
         lusync_bodega = {str(r[0]): int(r[1] or 0) for r in cur.fetchall()}
         cur.close(); release_conn(conn)
     except Exception as e:
