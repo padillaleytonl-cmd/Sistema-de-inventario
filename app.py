@@ -173,6 +173,11 @@ except Exception as e:
     traceback.print_exc()
 init_audit()
 init_sku_mapeo()
+try:
+    from inventario import asegurar_sku_mapeo_por_cliente
+    asegurar_sku_mapeo_por_cliente()
+except Exception as _e:
+    print(f"[sku_mapeo] {_e}")
 init_alertas()
 init_meli_auth()
 init_bodegas()
@@ -1062,6 +1067,12 @@ _RUTAS_PUBLICAS = {
     "/favicon.ico", "/robots.txt",
 }
 _PREFIJOS_PUBLICOS = ("/static/",)
+# Webhooks de los canales. Llegan sin sesion, asi que get_conn no sabia de que
+# cliente eran y la conexion del pool conservaba el cliente de quien la uso
+# antes: con otro cliente activo, una venta de MercadoLibre podia procesarse
+# viendo los productos de ese otro cliente (o ninguno) y no registrarse. Son
+# del cliente dueño de las credenciales: se fija el suyo en el hilo.
+_WEBHOOKS_CANALES = {"/mercadolibre/webhook", "/mercadolibre/webhook_fbm", "/falabella/webhook"}
 _PREFIJOS_CANALES = (
     "/mercadolibre", "/walmart", "/paris", "/ripley", "/falabella", "/woo",
     "/debug", "/stock-fulfillment", "/sync_ordenes", "/importar_woo",
@@ -1072,6 +1083,10 @@ _PREFIJOS_CANALES = (
 @app.before_request
 def _puerta_de_entrada():
     p = request.path or "/"
+    if p in _WEBHOOKS_CANALES:
+        set_thread_tenant(TENANT_INTEGRACIONES, is_admin=False)
+        g._tenant_webhook = True
+        return None
     if p in _RUTAS_PUBLICAS or p.startswith(_PREFIJOS_PUBLICOS):
         return None
     token = request.args.get("token", "")
@@ -1091,6 +1106,17 @@ def _puerta_de_entrada():
             and p.startswith(_PREFIJOS_CANALES)):
         return jsonify({"error": "Tu cuenta no tiene este canal conectado"}), 403
     return None
+
+
+@app.teardown_request
+def _soltar_tenant_webhook(exc=None):
+    # Los hilos de gunicorn se reusan: el cliente fijado para un webhook no
+    # puede quedar pegado para la proxima peticion.
+    if getattr(g, "_tenant_webhook", False):
+        try:
+            clear_thread_tenant()
+        except Exception:
+            pass
 
 
 @app.route("/admin/lusync/base/estructura")
@@ -23694,7 +23720,7 @@ def admin_importar_excel_meli():
 
             # Tabla legacy: sku_mapeo (aliases manuales por sku_mercadolibre)
             try:
-                cur.execute("SELECT sku_lusync, sku_mercadolibre FROM sku_mapeo WHERE sku_mercadolibre IS NOT NULL AND sku_mercadolibre != ''")
+                cur.execute("SELECT sku_lusync, sku_mercadolibre FROM sku_mapeo WHERE tenant_id = COALESCE(NULLIF(NULLIF(current_setting('app.tenant_id', true), ''), '0')::integer, 1) AND sku_mercadolibre IS NOT NULL AND sku_mercadolibre != ''")
                 for (sl, sc_meli) in cur.fetchall():
                     if sc_meli:
                         mapeados_existentes[sc_meli.upper().strip()] = {"sku_lusync": sl, "item_id": None}
@@ -23866,7 +23892,7 @@ def admin_validar_meli():
 
         # 3. Cargar alias de sku_mapeo
         try:
-            cur.execute("SELECT sku_lusync, sku_mercadolibre FROM sku_mapeo WHERE sku_mercadolibre IS NOT NULL AND sku_mercadolibre != ''")
+            cur.execute("SELECT sku_lusync, sku_mercadolibre FROM sku_mapeo WHERE tenant_id = COALESCE(NULLIF(NULLIF(current_setting('app.tenant_id', true), ''), '0')::integer, 1) AND sku_mercadolibre IS NOT NULL AND sku_mercadolibre != ''")
             for (sl, sc) in cur.fetchall():
                 if sc: mapeos[sc.upper().strip()] = {"sku_lusync": sl, "via": "sku_mapeo"}
         except Exception:
@@ -23987,7 +24013,7 @@ def admin_importar_csv_walmart():
                 if sl: sku_real[sl.upper().strip()] = sl
             # Alias de sku_mapeo legacy
             try:
-                cur.execute("SELECT sku_lusync, sku_walmart FROM sku_mapeo WHERE sku_walmart IS NOT NULL AND sku_walmart != ''")
+                cur.execute("SELECT sku_lusync, sku_walmart FROM sku_mapeo WHERE tenant_id = COALESCE(NULLIF(NULLIF(current_setting('app.tenant_id', true), ''), '0')::integer, 1) AND sku_walmart IS NOT NULL AND sku_walmart != ''")
                 for (sl, sc) in cur.fetchall():
                     if sc: mapeados_existentes[sc.upper().strip()] = {"sku_lusync": sl, "item_id": None}
             except Exception:
@@ -24147,7 +24173,7 @@ def admin_importar_csv_ripley():
                 if sc: mapeados_existentes[sc.upper().strip()] = {"sku_lusync": sl, "item_id": iid}
                 if sl: sku_real[sl.upper().strip()] = sl
             try:
-                cur.execute("SELECT sku_lusync, sku_ripley FROM sku_mapeo WHERE sku_ripley IS NOT NULL AND sku_ripley != ''")
+                cur.execute("SELECT sku_lusync, sku_ripley FROM sku_mapeo WHERE tenant_id = COALESCE(NULLIF(NULLIF(current_setting('app.tenant_id', true), ''), '0')::integer, 1) AND sku_ripley IS NOT NULL AND sku_ripley != ''")
                 for (sl, sc) in cur.fetchall():
                     if sc: mapeados_existentes[sc.upper().strip()] = {"sku_lusync": sl}
             except Exception:
@@ -24280,7 +24306,7 @@ def admin_importar_excel_falabella():
                 if sc: mapeados_existentes[sc.upper().strip()] = {"sku_lusync": sl, "item_id": iid}
                 if sl: sku_real[sl.upper().strip()] = sl
             try:
-                cur.execute("SELECT sku_lusync, sku_falabella FROM sku_mapeo WHERE sku_falabella IS NOT NULL AND sku_falabella != ''")
+                cur.execute("SELECT sku_lusync, sku_falabella FROM sku_mapeo WHERE tenant_id = COALESCE(NULLIF(NULLIF(current_setting('app.tenant_id', true), ''), '0')::integer, 1) AND sku_falabella IS NOT NULL AND sku_falabella != ''")
                 for (sl, sc) in cur.fetchall():
                     if sc: mapeados_existentes[sc.upper().strip()] = {"sku_lusync": sl}
             except Exception: pass
@@ -24425,7 +24451,7 @@ def admin_importar_excel_paris():
                 if sc: mapeados_existentes[sc.upper().strip()] = {"sku_lusync": sl, "item_id": iid}
                 if sl: sku_real[sl.upper().strip()] = sl
             try:
-                cur.execute("SELECT sku_lusync, sku_paris FROM sku_mapeo WHERE sku_paris IS NOT NULL AND sku_paris != ''")
+                cur.execute("SELECT sku_lusync, sku_paris FROM sku_mapeo WHERE tenant_id = COALESCE(NULLIF(NULLIF(current_setting('app.tenant_id', true), ''), '0')::integer, 1) AND sku_paris IS NOT NULL AND sku_paris != ''")
                 for (sl, sc) in cur.fetchall():
                     if sc: mapeados_existentes[sc.upper().strip()] = {"sku_lusync": sl}
             except Exception: pass

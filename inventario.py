@@ -2324,6 +2324,42 @@ try:
 except Exception as e:
     print(f"[inventario] No se pudo inicializar sku_mapeo_canal: {e}")
 
+def asegurar_sku_mapeo_por_cliente():
+    """El mapeo antiguo de SKUs (sku_mapeo) y su historial pasan a ser POR
+    CLIENTE. Corre una vez al arrancar.
+
+    Eran una sola tabla para todo el sistema. El webhook de MercadoLibre y los
+    sync de Walmart y Paris traducen el SKU del canal con ella: otro cliente
+    que guardara un mapeo cambiaba a que producto se descontaban las ventas
+    del primero. Las filas existentes son del cliente dueño de las
+    integraciones, el unico que la uso.
+    """
+    dueno = int(os.environ.get("LUSYNC_TENANT_INTEGRACIONES", "1"))
+    conn = get_conn(is_admin=True); cur = conn.cursor()
+    try:
+        cur.execute("SET LOCAL lock_timeout = '5s'")
+        cur.execute("""CREATE TABLE IF NOT EXISTS sku_mapeo_historial (
+            id SERIAL PRIMARY KEY, fecha TIMESTAMP DEFAULT NOW(),
+            usuario TEXT, archivo TEXT, importados INTEGER, errores INTEGER, detalle_errores TEXT)""")
+        for tabla in ("sku_mapeo", "sku_mapeo_historial"):
+            cur.execute("ALTER TABLE %s ADD COLUMN IF NOT EXISTS tenant_id INTEGER" % tabla)
+            cur.execute("UPDATE %s SET tenant_id = %%s WHERE tenant_id IS NULL" % tabla, (dueno,))
+            cur.execute("ALTER TABLE %s ALTER COLUMN tenant_id SET DEFAULT %s"
+                        % (tabla, EXPR_TENANT_CONTEXTO))
+            cur.execute("ALTER TABLE %s ALTER COLUMN tenant_id SET NOT NULL" % tabla)
+        cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS uq_t_sku_mapeo
+                       ON sku_mapeo (tenant_id, sku_lusync)""")
+        cur.execute("DROP INDEX IF EXISTS idx_sku_mapeo_lusync")
+        cur.execute("ALTER TABLE sku_mapeo DROP CONSTRAINT IF EXISTS sku_mapeo_sku_lusync_key")
+        conn.commit()
+        print("[sku_mapeo] por cliente")
+    except Exception as e:
+        conn.rollback()
+        print(f"[sku_mapeo] por cliente: {e}")
+    finally:
+        cur.close(); release_conn(conn)
+
+
 def listar_sku_mapeo():
     init_sku_mapeo()
     conn = get_conn(); cur = conn.cursor()
@@ -2331,7 +2367,9 @@ def listar_sku_mapeo():
         COALESCE(m.sku_web,''), COALESCE(m.sku_walmart,''), COALESCE(m.sku_paris,''),
         COALESCE(m.sku_falabella,''), COALESCE(m.sku_ripley,''),
         COALESCE(m.sku_mercadolibre,''), COALESCE(m.sku_hites,'')
-        FROM productos p LEFT JOIN sku_mapeo m ON m.sku_lusync=p.sku ORDER BY p.nombre""")
+        FROM productos p LEFT JOIN sku_mapeo m
+          ON m.sku_lusync=p.sku AND m.tenant_id=p.tenant_id  -- el mapeo es del cliente del producto
+        ORDER BY p.nombre""")
     rows = cur.fetchall(); cur.close(); release_conn(conn)
     return [{"sku_lusync":r[0],"nombre":r[1],"sku_web":r[2],"sku_walmart":r[3],
              "sku_paris":r[4],"sku_falabella":r[5],"sku_ripley":r[6],
@@ -2343,7 +2381,7 @@ def guardar_sku_mapeo_fila(sku_lusync, skus):
     cur.execute("""INSERT INTO sku_mapeo
         (sku_lusync,sku_web,sku_walmart,sku_paris,sku_falabella,sku_ripley,sku_mercadolibre,sku_hites)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-        ON CONFLICT (sku_lusync) DO UPDATE SET
+        ON CONFLICT (tenant_id, sku_lusync) DO UPDATE SET
             sku_web=EXCLUDED.sku_web, sku_walmart=EXCLUDED.sku_walmart,
             sku_paris=EXCLUDED.sku_paris, sku_falabella=EXCLUDED.sku_falabella,
             sku_ripley=EXCLUDED.sku_ripley, sku_mercadolibre=EXCLUDED.sku_mercadolibre,
@@ -2367,7 +2405,8 @@ def get_sku_canal(sku_lusync, canal):
     elif c in ["walmart","paris","falabella","ripley","hites"]: col = f"sku_{c}"
     else: return sku_lusync
     conn = get_conn(); cur = conn.cursor()
-    cur.execute(f"SELECT {col} FROM sku_mapeo WHERE sku_lusync=%s", (sku_lusync,))
+    cur.execute(f"SELECT {col} FROM sku_mapeo WHERE sku_lusync=%s AND tenant_id = "
+                + EXPR_TENANT_CONTEXTO, (sku_lusync,))
     row = cur.fetchone(); cur.close(); release_conn(conn)
     return row[0].strip() if row and row[0] and row[0].strip() else sku_lusync
 
@@ -2400,7 +2439,8 @@ def listar_historial_mapeo(limite=10):
             usuario TEXT, archivo TEXT, importados INTEGER, errores INTEGER, detalle_errores TEXT)""")
         cur.execute("""SELECT id, TO_CHAR(fecha,'DD/MM/YYYY HH24:MI'),
             usuario, archivo, importados, errores, detalle_errores
-            FROM sku_mapeo_historial ORDER BY fecha DESC LIMIT %s""", (limite,))
+            FROM sku_mapeo_historial WHERE tenant_id = """ + EXPR_TENANT_CONTEXTO + """
+            ORDER BY fecha DESC LIMIT %s""", (limite,))
         rows = cur.fetchall(); conn.commit()
     except: rows = []
     cur.close(); release_conn(conn)
