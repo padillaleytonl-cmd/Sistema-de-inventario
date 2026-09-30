@@ -152,6 +152,11 @@ except Exception as e:
     import traceback
     print(f"[init_multitenancy] ERROR: {e}")
     traceback.print_exc()
+
+# SIN try a proposito: los ON CONFLICT del codigo apuntan a estas claves. Si
+# no se pueden crear, el arranque falla y Render sigue con la version anterior.
+from inventario import asegurar_unicos_por_cliente
+asegurar_unicos_por_cliente()
 try:
     from tenant_rls import init_rls_policies
     init_rls_policies()
@@ -892,7 +897,7 @@ def _diagnostico_orden(movimientos, marcas, devoluciones=None):
     return balance, resumen, veredicto
 
 
-RASTREADOR_VERSION = "v17-2026-09-30"
+RASTREADOR_VERSION = "v18-2026-09-30"
 
 
 def _rastrear_ordenes(conn, ordenes):
@@ -1143,7 +1148,7 @@ def admin_base_estructura():
                         WHERE n.nspname = 'public' AND ix.indisunique
                         ORDER BY 1, 2""")
         salida["unicos"] = [{"tabla": r[0], "indice": r[1], "def": r[2], "pk": r[3]}
-                            for r in cur.fetchall() if not r[3]]
+                            for r in cur.fetchall()]
 
         cur.execute("""SELECT cl.relname, co.conname, pg_get_constraintdef(co.oid)
                          FROM pg_constraint co

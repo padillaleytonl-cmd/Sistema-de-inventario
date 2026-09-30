@@ -856,7 +856,13 @@ def upsert_devolucion(dev, tenant_id=None):
     """Inserta o actualiza una devolución normalizada. Calcula dias_restantes y
     requiere_accion. Resuelve el SKU Lusync si es posible. Devuelve 'insert'/'update'/'error'.
     """
-    conn = get_conn(tenant_id=tenant_id) if tenant_id else get_conn()
+    # Las devoluciones solo llegan con las credenciales de canales del cliente
+    # dueño: sin cliente explicito, es el. tenant_id es NOT NULL y va en la
+    # clave unica.
+    if not tenant_id:
+        import os as _os
+        tenant_id = int(_os.environ.get("LUSYNC_TENANT_INTEGRACIONES", "1"))
+    conn = get_conn(tenant_id=tenant_id)
     try:
         cur = conn.cursor()
 
@@ -905,7 +911,7 @@ def upsert_devolucion(dev, tenant_id=None):
                  fecha_llegada_bodega)
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
                     NOW(), NOW(), %s, %s, %s)
-            ON CONFLICT (canal, return_id) DO UPDATE SET
+            ON CONFLICT (tenant_id, canal, return_id) DO UPDATE SET
                 order_id = EXCLUDED.order_id,
                 sku = COALESCE(EXCLUDED.sku, devoluciones_marketplace.sku),
                 sku_canal = EXCLUDED.sku_canal,

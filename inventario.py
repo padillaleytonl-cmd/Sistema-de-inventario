@@ -771,7 +771,7 @@ def crear_documento_compra(numero_doc, tipo_doc, proveedor, fecha_doc, moneda,
                 (numero_doc, tipo_doc, proveedor, fecha_doc, moneda,
                  monto_total, monto_neto, iva, notas, usuario)
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (numero_doc, tipo_doc) DO UPDATE
+            ON CONFLICT (tenant_id, numero_doc, tipo_doc) DO UPDATE
                 SET proveedor=EXCLUDED.proveedor,
                     monto_total=COALESCE(EXCLUDED.monto_total, documentos_compra.monto_total),
                     notas=COALESCE(EXCLUDED.notas, documentos_compra.notas)
@@ -931,7 +931,7 @@ def guardar_producto(p):
     cur.execute("""
         INSERT INTO productos (sku, nombre, stock, precio_normal, precio_oferta)
         VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT (sku) DO UPDATE SET
+        ON CONFLICT (tenant_id, sku) DO UPDATE SET
             stock = EXCLUDED.stock,
             precio_normal = EXCLUDED.precio_normal,
             precio_oferta = EXCLUDED.precio_oferta
@@ -1553,6 +1553,84 @@ def asegurar_tenant_por_contexto():
     return res
 
 
+# Claves unicas POR CLIENTE. Las globales —SKU, codigo de bodega, SKU+bodega,
+# orden+SKU+tipo...— hacian chocar a dos clientes que usan el mismo SKU o el
+# mismo codigo de bodega: el segundo pisaba o no podia guardar lo suyo.
+#
+# Fase 1: se crean estas al lado de las globales y el codigo las usa en sus
+# ON CONFLICT. Con las dos presentes, una fila que choca en la global choca
+# tambien en esta (mismo cliente), asi que nada cambia de comportamiento.
+# Fase 2 —otro despliegue— borra las globales. No van juntas: mientras Render
+# despliega, la version vieja sigue atendiendo y sus ON CONFLICT apuntan a
+# las globales.
+UNICOS_POR_CLIENTE = [
+    ("uq_t_productos_sku", "productos", "(tenant_id, sku)", None),
+    ("uq_t_bodegas_codigo", "bodegas", "(tenant_id, codigo)", None),
+    ("uq_t_stock_bodega", "stock_bodega", "(tenant_id, sku, bodega_codigo)", None),
+    ("uq_t_mov_venta", "movimientos", "(tenant_id, orden_id, sku, tipo)",
+     "tipo IN ('salida','ajuste') AND orden_id IS NOT NULL"),
+    ("uq_t_ordenes_texto", "ordenes_procesadas", "(tenant_id, order_id_texto)", None),
+    ("uq_t_doc_compra", "documentos_compra", "(tenant_id, numero_doc, tipo_doc)", None),
+    ("uq_t_smc_item", "sku_mapeo_canal", "(tenant_id, canal, item_id_canal, sku_lusync)",
+     "item_id_canal IS NOT NULL"),
+    ("uq_t_smc_sku", "sku_mapeo_canal", "(tenant_id, canal, sku_canal, sku_lusync)",
+     "item_id_canal IS NULL"),
+    ("uq_t_devmkt", "devoluciones_marketplace", "(tenant_id, canal, return_id)", None),
+]
+
+
+def asegurar_unicos_por_cliente():
+    """Crea las claves unicas por cliente. Si alguna no se puede crear,
+    LEVANTA: el codigo nuevo ya usa estas claves en sus ON CONFLICT, y sin la
+    clave cada venta fallaria. Que falle el arranque deja a Render sirviendo
+    la version anterior, que es lo seguro.
+
+    Antes, devoluciones_marketplace.tenant_id pasa a NOT NULL con el DEFAULT
+    por contexto: una clave unica con NULL no impide duplicados.
+    """
+    import time as _time
+    conn = get_conn(is_admin=True)
+    cur = conn.cursor()
+    try:
+        cur.execute("SET lock_timeout = '10s'")
+        conn.commit()
+        cur.execute("""UPDATE devoluciones_marketplace SET tenant_id = %s
+                        WHERE tenant_id IS NULL""",
+                    (int(os.environ.get("LUSYNC_TENANT_INTEGRACIONES", "1")),))
+        cur.execute("ALTER TABLE devoluciones_marketplace ALTER COLUMN tenant_id SET DEFAULT "
+                    + EXPR_TENANT_CONTEXTO)
+        cur.execute("ALTER TABLE devoluciones_marketplace ALTER COLUMN tenant_id SET NOT NULL")
+        conn.commit()
+
+        faltan = []
+        for nombre, tabla, cols, donde in UNICOS_POR_CLIENTE:
+            sql = "CREATE UNIQUE INDEX IF NOT EXISTS %s ON %s %s%s" % (
+                nombre, tabla, cols, (" WHERE " + donde) if donde else "")
+            for intento in range(3):
+                try:
+                    cur.execute(sql)
+                    conn.commit()
+                    break
+                except Exception as e:
+                    conn.rollback()
+                    if intento == 2:
+                        faltan.append("%s: %s" % (nombre, str(e)[:160]))
+                    else:
+                        _time.sleep(2)
+        if faltan:
+            raise RuntimeError("No se pudieron crear claves unicas por cliente: "
+                               + " | ".join(faltan))
+        print("[unicos_por_cliente] %d claves listas" % len(UNICOS_POR_CLIENTE))
+    finally:
+        try:
+            cur.execute("RESET lock_timeout")
+            conn.commit()
+        except Exception:
+            pass
+        cur.close()
+        release_conn(conn)
+
+
 def init_devoluciones_mkt():
     """Tabla de trazabilidad de devoluciones traídas automáticamente desde las
     APIs de cada marketplace (separada de 'devoluciones', que es el registro
@@ -1844,7 +1922,7 @@ def intentar_marcar_orden_atomic(order_id_texto):
         cur.execute("""
             INSERT INTO ordenes_procesadas (orden_id, order_id_texto, tenant_id)
             VALUES (%s, %s, %s)
-            ON CONFLICT (order_id_texto) DO NOTHING
+            ON CONFLICT (tenant_id, order_id_texto) DO NOTHING
         """, (random.randint(1, 9007199254740991), str(order_id_texto), int(tid)))
         insertado = cur.rowcount  # 1 = nuevo, 0 = ya existía
         conn.commit()
@@ -2809,7 +2887,7 @@ def init_bodegas():
         for i, (codigo, nombre, tipo, canal) in enumerate(BODEGAS_DEFAULT):
             cur.execute("""INSERT INTO bodegas (codigo, nombre, tipo, canal, orden)
                            VALUES (%s, %s, %s, %s, %s)
-                           ON CONFLICT (codigo) DO UPDATE SET
+                           ON CONFLICT (tenant_id, codigo) DO UPDATE SET
                                tipo = EXCLUDED.tipo,
                                canal = EXCLUDED.canal""",
                         (codigo, nombre, tipo, canal, i))
@@ -2841,7 +2919,7 @@ def init_bodegas():
         for sku, stock in productos:
             cur.execute("""INSERT INTO stock_bodega (sku, bodega_codigo, cantidad)
                            VALUES (%s, 'CENTRAL', %s)
-                           ON CONFLICT (sku, bodega_codigo) DO NOTHING""",
+                           ON CONFLICT (tenant_id, sku, bodega_codigo) DO NOTHING""",
                         (sku, stock or 0))
             if cur.rowcount > 0:
                 migrados += 1
@@ -2938,7 +3016,7 @@ def set_stock_bodega(sku, bodega_codigo, cantidad, usuario="Sistema", motivo=Non
 
         cur.execute("""INSERT INTO stock_bodega (sku, bodega_codigo, cantidad, actualizado_at)
                        VALUES (%s, %s, %s, NOW())
-                       ON CONFLICT (sku, bodega_codigo)
+                       ON CONFLICT (tenant_id, sku, bodega_codigo)
                        DO UPDATE SET cantidad=EXCLUDED.cantidad, actualizado_at=NOW()""",
                     (sku, bodega_codigo, nuevo_valor))
 
@@ -2997,7 +3075,7 @@ def ajustar_stock_bodega(sku, bodega_codigo, delta):
         cur.execute("""
             INSERT INTO stock_bodega (sku, bodega_codigo, cantidad, actualizado_at)
             VALUES (%s, %s, %s, NOW())
-            ON CONFLICT (sku, bodega_codigo)
+            ON CONFLICT (tenant_id, sku, bodega_codigo)
             DO UPDATE SET cantidad = GREATEST(0, stock_bodega.cantidad + %s),
                           actualizado_at = NOW()
             RETURNING cantidad
@@ -3392,7 +3470,7 @@ def descontar_venta_inteligente(sku, cantidad, canal, fulfillment, orden_id=None
              bodega_codigo, fecha_importacion, fecha_compra_marketplace,
              origen_registro, stock_antes, stock_despues, faltante)
             VALUES ('salida', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (orden_id, sku, tipo)
+            ON CONFLICT (tenant_id, orden_id, sku, tipo)
                 WHERE tipo IN ('salida','ajuste') AND orden_id IS NOT NULL
                 DO NOTHING""",
             (sku, nombre, cantidad, motivo_final, usuario, canal_normalizado,
@@ -3559,7 +3637,7 @@ def transferir_stock_bodega(sku, desde, hasta, cantidad, usuario="Sistema", moti
                     (cantidad, sku, desde))
         cur.execute("""INSERT INTO stock_bodega (sku, bodega_codigo, cantidad, actualizado_at)
                        VALUES (%s, %s, %s, NOW())
-                       ON CONFLICT (sku, bodega_codigo)
+                       ON CONFLICT (tenant_id, sku, bodega_codigo)
                        DO UPDATE SET cantidad = stock_bodega.cantidad + EXCLUDED.cantidad,
                                      actualizado_at = NOW()""",
                     (sku, hasta, cantidad))
@@ -3790,7 +3868,7 @@ def sincronizar_stock_a_bodega_central(sku):
             central = max(0, stock_total - otras)
             cur.execute("""INSERT INTO stock_bodega (sku, bodega_codigo, cantidad, actualizado_at)
                           VALUES (%s, 'CENTRAL', %s, NOW())
-                          ON CONFLICT (sku, bodega_codigo)
+                          ON CONFLICT (tenant_id, sku, bodega_codigo)
                           DO UPDATE SET cantidad=EXCLUDED.cantidad, actualizado_at=NOW()""",
                        (sku, central))
             conn.commit()
