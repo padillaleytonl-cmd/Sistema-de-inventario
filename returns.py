@@ -456,8 +456,8 @@ def obtener_devoluciones_walmart(dias=30):
 # RIPLEY (Mirakl)
 # ─────────────────────────────────────────────────────────────────────────────
 def obtener_devoluciones_ripley(dias=30):
-    from ripley import RIPLEY_BASE_URL, RIPLEY_API_KEY
-    headers = {"Authorization": RIPLEY_API_KEY, "Accept": "application/json"}
+    from ripley import RIPLEY_BASE_URL, ripley_headers
+    headers = ripley_headers()
     salida = []
     try:
         page_token = None

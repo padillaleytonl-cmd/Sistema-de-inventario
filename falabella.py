@@ -31,6 +31,19 @@ FALABELLA_API_KEY = os.environ.get("FALABELLA_API_KEY", "")
 FALABELLA_BASE_URL = os.environ.get("FALABELLA_BASE_URL", "https://sellercenter-api.falabella.com")
 FALABELLA_VERSION = "1.0"
 
+# Las credenciales son del cliente que opera (credenciales_canal).
+# FALABELLA_USER_ID / FALABELLA_API_KEY quedan como las del dueño, para
+# quien las importe.
+from credenciales_canal import credencial as _credencial
+
+
+def _fal_user_id():
+    return _credencial("falabella", "user_id")
+
+
+def _fal_api_key():
+    return _credencial("falabella", "api_key")
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # AUTENTICACIÓN - Firma HMAC-SHA256
@@ -47,7 +60,7 @@ def generar_firma_falabella(parameters, api_key=None):
     5. Devolver el hash en hexadecimal
     """
     if api_key is None:
-        api_key = FALABELLA_API_KEY
+        api_key = _fal_api_key()
     sorted_params = sorted(parameters.items())
     concatenated = urllib.parse.urlencode(sorted_params, quote_via=urllib.parse.quote)
     signature = HMAC(
@@ -67,7 +80,7 @@ def construir_parametros_base(action, formato="JSON"):
     """
     from datetime import timezone
     return {
-        "UserID": FALABELLA_USER_ID,
+        "UserID": _fal_user_id(),
         "Version": FALABELLA_VERSION,
         "Action": action,
         "Format": formato,
@@ -90,7 +103,7 @@ def llamar_api_falabella(action, params_extra=None, body_xml=None,
     Returns:
         dict con {ok, status_code, data, error}
     """
-    if not FALABELLA_USER_ID or not FALABELLA_API_KEY:
+    if not _fal_user_id() or not _fal_api_key():
         return {
             "ok": False,
             "error": "FALABELLA_USER_ID o FALABELLA_API_KEY no configuradas en variables de entorno"
@@ -160,7 +173,7 @@ def llamar_api_falabella(action, params_extra=None, body_xml=None,
 
 def verificar_conexion_falabella():
     """Hace ping a GetSellerByUser para validar credenciales y conexión."""
-    if not FALABELLA_USER_ID or not FALABELLA_API_KEY:
+    if not _fal_user_id() or not _fal_api_key():
         return {
             "ok": False,
             "error": "Credenciales no configuradas",
@@ -563,7 +576,7 @@ def falabella_estado():
         "conectado": bool(conn.get("ok")),
         "conexion": conn,
         "productos_visibles": len(productos),
-        "credenciales_configuradas": bool(FALABELLA_USER_ID and FALABELLA_API_KEY),
+        "credenciales_configuradas": bool(_fal_user_id() and _fal_api_key()),
         "base_url": FALABELLA_BASE_URL
     })
 

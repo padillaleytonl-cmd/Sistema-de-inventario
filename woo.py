@@ -1,5 +1,10 @@
 import requests
-from config import WC_KEY, WC_SECRET
+from credenciales_canal import credencial
+
+
+def _woo_api():
+    # El sitio y las claves son del cliente que opera (credenciales_canal).
+    return (credencial("web", "site_url") or "").rstrip("/") + "/wp-json/wc/v3"
 
 # 🔥 ACTUALIZAR STOCK
 def actualizar_stock_woo(sku, stock):
@@ -12,10 +17,10 @@ def actualizar_stock_woo(sku, stock):
         except Exception:
             sku_web = sku
         res = requests.get(
-            "https://www.babymine.cl/wp-json/wc/v3/products",
+            _woo_api() + "/products",
             params={
-                "consumer_key": WC_KEY,
-                "consumer_secret": WC_SECRET,
+                "consumer_key": credencial("web", "consumer_key"),
+                "consumer_secret": credencial("web", "consumer_secret"),
                 "sku": sku_web
             }
         )
@@ -32,10 +37,10 @@ def actualizar_stock_woo(sku, stock):
         # simple
         if producto["type"] == "simple":
             requests.put(
-                f"https://www.babymine.cl/wp-json/wc/v3/products/{producto['id']}",
+                f"{_woo_api()}/products/{producto['id']}",
                 params={
-                    "consumer_key": WC_KEY,
-                    "consumer_secret": WC_SECRET
+                    "consumer_key": credencial("web", "consumer_key"),
+                    "consumer_secret": credencial("web", "consumer_secret")
                 },
                 json={"stock_quantity": stock}
             )
@@ -45,10 +50,10 @@ def actualizar_stock_woo(sku, stock):
             parent_id = producto["parent_id"]
 
             requests.put(
-                f"https://www.babymine.cl/wp-json/wc/v3/products/{parent_id}/variations/{producto['id']}",
+                f"{_woo_api()}/products/{parent_id}/variations/{producto['id']}",
                 params={
-                    "consumer_key": WC_KEY,
-                    "consumer_secret": WC_SECRET
+                    "consumer_key": credencial("web", "consumer_key"),
+                    "consumer_secret": credencial("web", "consumer_secret")
                 },
                 json={"stock_quantity": stock}
             )

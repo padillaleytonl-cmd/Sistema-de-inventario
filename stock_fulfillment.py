@@ -184,18 +184,18 @@ def leer_stock_falabella():
     from datetime import datetime
     from hashlib import sha256
     from hmac import HMAC
-    from falabella import FALABELLA_USER_ID, FALABELLA_API_KEY, FALABELLA_BASE_URL
+    from falabella import FALABELLA_BASE_URL, _fal_user_id, _fal_api_key
 
     def _call(offset):
         params = {
-            "Action": "GetStock", "Format": "JSON", "UserID": FALABELLA_USER_ID,
+            "Action": "GetStock", "Format": "JSON", "UserID": _fal_user_id(),
             "Version": "1.0",
             "Timestamp": datetime.now().astimezone().replace(microsecond=0).isoformat(),
             "Limit": 1000, "Offset": offset,
         }
         q = "&".join("%s=%s" % (k, urllib.parse.quote(str(params[k]), safe=""))
                      for k in sorted(params))
-        params["Signature"] = HMAC(FALABELLA_API_KEY.encode(), q.encode(), sha256).hexdigest()
+        params["Signature"] = HMAC(_fal_api_key().encode(), q.encode(), sha256).hexdigest()
         return requests.get(FALABELLA_BASE_URL, params=params, timeout=30).json()
 
     resultado = {}

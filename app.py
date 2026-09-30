@@ -158,6 +158,13 @@ except Exception as e:
 from inventario import asegurar_unicos_por_cliente
 # Para lanzar hilos con el cliente de quien los lanza (ver inventario).
 from inventario import con_tenant_del_llamador
+# Credenciales de canales del cliente que opera (ver credenciales_canal.py).
+from credenciales_canal import credencial
+
+
+def _woo_api():
+    """URL de la API de WooCommerce del cliente que opera."""
+    return (credencial("web", "site_url") or "").rstrip("/") + "/wp-json/wc/v3"
 asegurar_unicos_por_cliente()
 # Fase 2: retirar las globales. No levanta: si algo queda, el sistema sigue
 # como en la fase 1 y se reintenta en el proximo arranque.
@@ -4881,9 +4888,9 @@ def _sync_woo_automatico():
         ordenes_nuevas = []
         try:
             res = requests.get(
-                "https://www.babymine.cl/wp-json/wc/v3/orders",
+                _woo_api() + "/orders",
                 params={
-                    "consumer_key": WC_KEY, "consumer_secret": WC_SECRET,
+                    "consumer_key": credencial("web", "consumer_key"), "consumer_secret": credencial("web", "consumer_secret"),
                     "status": "processing,completed", "per_page": 50,
                     "after": fecha_corte
                 },
@@ -4971,9 +4978,9 @@ def _sync_woo_automatico():
         ordenes_canc = []
         try:
             res_c = requests.get(
-                "https://www.babymine.cl/wp-json/wc/v3/orders",
+                _woo_api() + "/orders",
                 params={
-                    "consumer_key": WC_KEY, "consumer_secret": WC_SECRET,
+                    "consumer_key": credencial("web", "consumer_key"), "consumer_secret": credencial("web", "consumer_secret"),
                     "status": "cancelled,refunded,failed", "per_page": 50,
                     "after": fecha_corte
                 },
@@ -5686,10 +5693,10 @@ def importar():
     while True:
         try:
             res = requests.get(
-                "https://www.babymine.cl/wp-json/wc/v3/products",
+                _woo_api() + "/products",
                 params={
-                    "consumer_key": WC_KEY,
-                    "consumer_secret": WC_SECRET,
+                    "consumer_key": credencial("web", "consumer_key"),
+                    "consumer_secret": credencial("web", "consumer_secret"),
                     "per_page": 100,
                     "page": page,
                     "status": "publish"  # solo productos publicados
@@ -5795,10 +5802,10 @@ def importar():
 
             try:
                 res_var = requests.get(
-                    f"https://www.babymine.cl/wp-json/wc/v3/products/{p['id']}/variations",
+                    f"{_woo_api()}/products/{p['id']}/variations",
                     params={
-                        "consumer_key": WC_KEY,
-                        "consumer_secret": WC_SECRET,
+                        "consumer_key": credencial("web", "consumer_key"),
+                        "consumer_secret": credencial("web", "consumer_secret"),
                         "per_page": 100
                     },
                     timeout=30
@@ -5895,8 +5902,8 @@ def sincronizar_precios_woo():
     registrar_audit(session.get("usuario","Sistema"), request.remote_addr, "sincronizar_precios", entidad="productos", detalle="Sincronización de precios WooCommerce")
     actualizados = 0
     res = requests.get(
-        "https://www.babymine.cl/wp-json/wc/v3/products",
-        params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET, "per_page": 100}
+        _woo_api() + "/products",
+        params={"consumer_key": credencial("web", "consumer_key"), "consumer_secret": credencial("web", "consumer_secret"), "per_page": 100}
     )
     if res.status_code != 200:
         return {"error": "Woo error"}
@@ -5913,8 +5920,8 @@ def sincronizar_precios_woo():
 
         if p["type"] == "variable":
             res_var = requests.get(
-                f"https://www.babymine.cl/wp-json/wc/v3/products/{p['id']}/variations",
-                params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET, "per_page": 100}
+                f"{_woo_api()}/products/{p['id']}/variations",
+                params={"consumer_key": credencial("web", "consumer_key"), "consumer_secret": credencial("web", "consumer_secret"), "per_page": 100}
             )
             if res_var.status_code != 200:
                 continue
@@ -5943,8 +5950,8 @@ def actualizar_precios_route():
     # Buscar el producto en WooCommerce por SKU
     try:
         res = requests.get(
-            "https://www.babymine.cl/wp-json/wc/v3/products",
-            params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET, "sku": sku}
+            _woo_api() + "/products",
+            params={"consumer_key": credencial("web", "consumer_key"), "consumer_secret": credencial("web", "consumer_secret"), "sku": sku}
         )
         if res.status_code == 200 and res.json():
             producto = res.json()[0]
@@ -5954,14 +5961,14 @@ def actualizar_precios_route():
             }
             if producto["type"] == "simple":
                 requests.put(
-                    f"https://www.babymine.cl/wp-json/wc/v3/products/{producto['id']}",
-                    params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET},
+                    f"{_woo_api()}/products/{producto['id']}",
+                    params={"consumer_key": credencial("web", "consumer_key"), "consumer_secret": credencial("web", "consumer_secret")},
                     json=payload
                 )
             elif producto["type"] == "variation":
                 requests.put(
-                    f"https://www.babymine.cl/wp-json/wc/v3/products/{producto['parent_id']}/variations/{producto['id']}",
-                    params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET},
+                    f"{_woo_api()}/products/{producto['parent_id']}/variations/{producto['id']}",
+                    params={"consumer_key": credencial("web", "consumer_key"), "consumer_secret": credencial("web", "consumer_secret")},
                     json=payload
                 )
     except:
@@ -6135,8 +6142,8 @@ def salida():
 def sync_ordenes():
     try:
         res = requests.get(
-            "https://www.babymine.cl/wp-json/wc/v3/orders",
-            params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET, "status": "processing"},
+            _woo_api() + "/orders",
+            params={"consumer_key": credencial("web", "consumer_key"), "consumer_secret": credencial("web", "consumer_secret"), "status": "processing"},
             timeout=15
         )
     except requests.exceptions.Timeout:
@@ -6252,9 +6259,9 @@ def walmart_test():
     if not session.get("logged"):
         return {"error": "no autorizado"}, 401
     try:
-        from walmart import get_token, WALMART_CLIENT_ID
+        from walmart import get_token
         token = get_token()
-        return {"conectado": True, "client_id": WALMART_CLIENT_ID[:8]+"..."}
+        return {"conectado": True, "client_id": (credencial("walmart", "client_id") or "")[:8]+"..."}
     except Exception as e:
         return {"conectado": False, "error": str(e)}
 
@@ -6460,8 +6467,8 @@ def fix_woo_limpiar_duplicados():
 
     # 2. Volver a registrar desde WooCommerce con fecha real de compra
     res = requests.get(
-        "https://www.babymine.cl/wp-json/wc/v3/orders",
-        params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET,
+        _woo_api() + "/orders",
+        params={"consumer_key": credencial("web", "consumer_key"), "consumer_secret": credencial("web", "consumer_secret"),
                 "status": "processing", "per_page": 100}
     )
     if res.status_code != 200:
@@ -6523,8 +6530,8 @@ def fix_woo_movimientos():
         return {"error": "no autorizado"}, 401
 
     res = requests.get(
-        "https://www.babymine.cl/wp-json/wc/v3/orders",
-        params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET,
+        _woo_api() + "/orders",
+        params={"consumer_key": credencial("web", "consumer_key"), "consumer_secret": credencial("web", "consumer_secret"),
                 "status": "processing", "per_page": 50}
     )
     if res.status_code != 200:
@@ -6590,8 +6597,8 @@ def debug_woo_ordenes():
     # esperando detras de ella.
     try:
         res = requests.get(
-            "https://www.babymine.cl/wp-json/wc/v3/orders",
-            params={"consumer_key": WC_KEY, "consumer_secret": WC_SECRET, "status": "processing", "per_page": 10},
+            _woo_api() + "/orders",
+            params={"consumer_key": credencial("web", "consumer_key"), "consumer_secret": credencial("web", "consumer_secret"), "status": "processing", "per_page": 10},
             timeout=8,
         )
     except requests.RequestException as e:
@@ -17761,9 +17768,9 @@ def admin_rls_forzar_sync_woo():
         log.append(f"=== Consultando órdenes processing,completed desde {fecha_corte}...")
         try:
             res = requests.get(
-                "https://www.babymine.cl/wp-json/wc/v3/orders",
+                _woo_api() + "/orders",
                 params={
-                    "consumer_key": WC_KEY, "consumer_secret": WC_SECRET,
+                    "consumer_key": credencial("web", "consumer_key"), "consumer_secret": credencial("web", "consumer_secret"),
                     "status": "processing,completed", "per_page": 50,
                     "after": fecha_corte
                 },
@@ -17852,9 +17859,9 @@ def admin_rls_forzar_sync_woo():
         log.append(f"=== Consultando órdenes cancelled,refunded...")
         try:
             res_c = requests.get(
-                "https://www.babymine.cl/wp-json/wc/v3/orders",
+                _woo_api() + "/orders",
                 params={
-                    "consumer_key": WC_KEY, "consumer_secret": WC_SECRET,
+                    "consumer_key": credencial("web", "consumer_key"), "consumer_secret": credencial("web", "consumer_secret"),
                     "status": "cancelled,refunded", "per_page": 30,
                     "after": fecha_corte
                 },
@@ -17957,9 +17964,9 @@ def admin_rls_debug_woo_completadas():
         fecha_corte = (datetime.now(_tz.utc) - timedelta(days=dias)).isoformat()
 
         res = requests.get(
-            "https://www.babymine.cl/wp-json/wc/v3/orders",
+            _woo_api() + "/orders",
             params={
-                "consumer_key": WC_KEY, "consumer_secret": WC_SECRET,
+                "consumer_key": credencial("web", "consumer_key"), "consumer_secret": credencial("web", "consumer_secret"),
                 "status": "processing,completed",
                 "per_page": 100,
                 "after": fecha_corte
@@ -18053,9 +18060,9 @@ def admin_rls_debug_woo_canceladas():
 
         # Traer canceladas/refunded/failed
         res_c = requests.get(
-            "https://www.babymine.cl/wp-json/wc/v3/orders",
+            _woo_api() + "/orders",
             params={
-                "consumer_key": WC_KEY, "consumer_secret": WC_SECRET,
+                "consumer_key": credencial("web", "consumer_key"), "consumer_secret": credencial("web", "consumer_secret"),
                 "status": "cancelled,refunded,failed",
                 "per_page": 30,
                 "after": fecha_corte
@@ -28256,7 +28263,7 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                 dt_woo = f"{fecha_hasta}T23:59:59" if fecha_hasta else ""
 
                 params_woo = {
-                    "consumer_key": WC_KEY, "consumer_secret": WC_SECRET,
+                    "consumer_key": credencial("web", "consumer_key"), "consumer_secret": credencial("web", "consumer_secret"),
                     "status": "processing,completed",  # solo ventas reales
                     "per_page": 100
                 }
@@ -28269,7 +28276,7 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                 for _pag_woo in range(1, 21):
                     params_woo["page"] = _pag_woo
                     r_woo = requests.get(
-                        "https://www.babymine.cl/wp-json/wc/v3/orders",
+                        _woo_api() + "/orders",
                         params=params_woo, timeout=20
                     )
                     if r_woo.status_code != 200:

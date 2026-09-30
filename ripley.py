@@ -27,11 +27,19 @@ from flask import Blueprint, jsonify, request, session
 RIPLEY_API_KEY = os.environ.get("RIPLEY_API_KEY", "")
 RIPLEY_BASE_URL = os.environ.get("RIPLEY_BASE_URL", "https://ripley-prod.mirakl.net")
 
+# La API key es del cliente que opera (credenciales_canal); RIPLEY_API_KEY
+# queda como la del dueño, para quien la importe.
+from credenciales_canal import credencial as _credencial
+
+
+def _ripley_api_key():
+    return _credencial("ripley", "api_key")
+
 
 def ripley_headers():
     """Headers estándar para llamadas a la API Mirakl de Ripley."""
     return {
-        "Authorization": RIPLEY_API_KEY,
+        "Authorization": _ripley_api_key(),
         "Accept": "application/json",
         "Content-Type": "application/json"
     }
@@ -39,7 +47,7 @@ def ripley_headers():
 
 def verificar_conexion_ripley():
     """Hace un ping a la API para confirmar que la conexión y el API Key funcionan."""
-    if not RIPLEY_API_KEY:
+    if not _ripley_api_key():
         return {
             "ok": False,
             "error": "RIPLEY_API_KEY no configurada en variables de entorno",
@@ -845,7 +853,7 @@ def ripley_estado():
         "conectado": bool(conn.get("ok")),
         "conexion": conn,
         "ofertas_visibles": ofertas_count,
-        "api_key_configurada": bool(RIPLEY_API_KEY),
+        "api_key_configurada": bool(_ripley_api_key()),
         "base_url": RIPLEY_BASE_URL
     })
 
@@ -994,7 +1002,7 @@ def ripley_debug_stock(sku):
         resultados = []
 
         headers_auth = {
-            "Authorization": RIPLEY_API_KEY,
+            "Authorization": _ripley_api_key(),
             "Accept": "application/json"
         }
 

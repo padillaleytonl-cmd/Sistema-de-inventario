@@ -7,7 +7,9 @@ WALMART_CLIENT_ID = os.environ.get("WALMART_CLIENT_ID")
 WALMART_CLIENT_SECRET = os.environ.get("WALMART_CLIENT_SECRET")
 WALMART_BASE_URL = "https://marketplace.walmartapis.com"
 
-_token_cache = {"token": None, "expires_at": 0}
+# Un token por cliente (antes uno solo para todo el sistema).
+from credenciales_canal import CachePorCliente, credencial
+_token_cache = CachePorCliente({"token": None, "expires_at": 0})
 
 def get_token():
     now = time.time()
@@ -15,7 +17,7 @@ def get_token():
         return _token_cache["token"]
 
     import base64, uuid
-    credentials = base64.b64encode(f"{WALMART_CLIENT_ID}:{WALMART_CLIENT_SECRET}".encode()).decode()
+    credentials = base64.b64encode((str(credencial("walmart", "client_id")) + ":" + str(credencial("walmart", "client_secret"))).encode()).decode()
     res = requests.post(
         "https://marketplace.walmartapis.com/v3/token",
         headers={

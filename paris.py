@@ -8,7 +8,9 @@ from datetime import datetime, timedelta
 PARIS_API_KEY = os.environ.get("PARIS_API_KEY")
 PARIS_BASE_URL = "https://api-developers.ecomm.cencosud.com"
 
-_paris_cache = {"token": None, "expires_at": 0, "seller_id": None, "seller_name": None}
+# Token y seller por cliente (antes uno solo para todo el sistema).
+from credenciales_canal import CachePorCliente, credencial
+_paris_cache = CachePorCliente({"token": None, "expires_at": 0, "seller_id": None, "seller_name": None})
 
 
 def get_paris_token():
@@ -17,14 +19,15 @@ def get_paris_token():
     if _paris_cache["token"] and now < _paris_cache["expires_at"] - 300:
         return _paris_cache["token"]
 
-    if not PARIS_API_KEY:
+    api_key = credencial("paris", "api_key")
+    if not api_key:
         raise Exception("PARIS_API_KEY no configurada")
 
     res = requests.post(
         f"{PARIS_BASE_URL}/v1/auth/apiKey",
         headers={
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {PARIS_API_KEY}"
+            "Authorization": f"Bearer {api_key}"
         },
         timeout=15
     )
