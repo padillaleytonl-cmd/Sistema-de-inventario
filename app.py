@@ -3510,7 +3510,7 @@ def _sincronizar_stock_marketplaces_cuerpo(sku, stock=None, contexto="manual"):
         _cn.rollback()
         _cur.close()
         try:
-            _get_pool().putconn(_cn)
+            release_conn(_cn)
         except Exception:
             release_conn(_cn)
     except Exception as e:
@@ -5441,7 +5441,7 @@ def _sync_autocorreccion():
         """, (TENANT_INTEGRACIONES, TENANT_INTEGRACIONES))
         central_por_sku = {r[0]: int(r[1] or 0) for r in cur.fetchall()}
         cur.close()
-        try: _get_pool().putconn(conn)
+        try: release_conn(conn)
         except Exception: release_conn(conn)
 
         desvios = []  # (sku, canal, stock_canal, central)
@@ -25164,7 +25164,7 @@ def admin_stock_autocorregir():
     """)
     central_por_sku = {r[0]: int(r[1] or 0) for r in cur.fetchall()}
     cur.close()
-    try: _get_pool().putconn(conn)
+    try: release_conn(conn)
     except Exception: release_conn(conn)
 
     desvios = []
@@ -25258,7 +25258,7 @@ def admin_stock_sin_mapear():
     for sku_l, can in cur.fetchall():
         mapeos.setdefault(sku_l, set()).add(can)
     cur.close()
-    try: _get_pool().putconn(conn)
+    try: release_conn(conn)
     except Exception: release_conn(conn)
 
     # Para cada producto con stock, ver qué canales le faltan
@@ -25427,7 +25427,7 @@ def admin_stock_verificar_skus():
             "mapeos": maps,
         })
     cur.close()
-    try: _get_pool().putconn(conn)
+    try: release_conn(conn)
     except Exception: release_conn(conn)
     return jsonify({"tenant_id": tenant_id, "skus": resultado})
 
@@ -25501,7 +25501,7 @@ def admin_stock_corregir_mapeo():
 
     if dry_run:
         cur.close()
-        try: _get_pool().putconn(conn)
+        try: release_conn(conn)
         except Exception: release_conn(conn)
         return jsonify({"dry_run": True, "sku_lusync": sku_lusync, "canal": canal,
                         "mapeos_actuales": actuales, "sku_canal_nuevo": sku_nuevo,
@@ -25512,7 +25512,7 @@ def admin_stock_corregir_mapeo():
     filas = cur.rowcount
     conn.commit()
     cur.close()
-    try: _get_pool().putconn(conn)
+    try: release_conn(conn)
     except Exception: release_conn(conn)
     return jsonify({"ok": True, "sku_lusync": sku_lusync, "canal": canal,
                     "mapeos_actualizados": filas,
@@ -25556,7 +25556,7 @@ def admin_stock_reactivar_ripley():
     """)
     info = {r[0]: (r[1], int(r[2] or 0)) for r in cur.fetchall()}
     cur.close()
-    try: _get_pool().putconn(conn)
+    try: release_conn(conn)
     except Exception: release_conn(conn)
 
     # 3) Filtrar: inactivas CON stock > 0 (resolver sku_lusync)
@@ -25776,7 +25776,7 @@ def admin_stock_auditar_todos():
             "canal": canal, "sku_canal": sku_c,
             "item_id_canal": item_id, "activo": activo})
     cur.close()
-    try: _get_pool().putconn(conn)
+    try: release_conn(conn)
     except Exception: release_conn(conn)
 
     SELLER = {"woocommerce","web","walmart","paris","falabella","ripley","hites","mercadolibre"}
@@ -25836,7 +25836,7 @@ def admin_stock_diagnostico_central():
     """)
     filas = cur.fetchall()
     cur.close()
-    try: _get_pool().putconn(conn)
+    try: release_conn(conn)
     except Exception: release_conn(conn)
 
     items = []; reparados = 0
@@ -25895,7 +25895,7 @@ def admin_stock_auditar_sku():
     except Exception as e:
         movs = [{"error_leyendo_movimientos": str(e)[:100]}]
     cur.close()
-    try: _get_pool().putconn(conn)
+    try: release_conn(conn)
     except Exception: release_conn(conn)
     total_bod = sum(b["cantidad"] for b in bodegas)
     return jsonify({"tenant_id": tenant_id, "sku": sku,
@@ -25957,7 +25957,7 @@ def admin_sync_masivo_todos():
     filas = cur.fetchall()
     cur.close()
     try:
-        _get_pool().putconn(conn)
+        release_conn(conn)
     except Exception:
         release_conn(conn)
 
