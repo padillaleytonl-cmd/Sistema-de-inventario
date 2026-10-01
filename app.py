@@ -32,6 +32,16 @@ import sys as _sys
 if __name__ == "__main__":
     _sys.modules.setdefault("app", _sys.modules["__main__"])
 
+# Los print salen a Render en el momento, linea por linea. Sin esto, como la
+# salida no es una terminal, Python los junta en bloques y Render los recibe
+# cada tantos minutos con la misma hora: los logs no servian para saber cuando
+# paso algo ni si un sync ya corrio.
+try:
+    _sys.stdout.reconfigure(line_buffering=True)
+    _sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass
+
 from flask import Flask, request, render_template, session, redirect, jsonify, send_file, g
 import requests
 import os
