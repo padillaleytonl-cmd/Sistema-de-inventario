@@ -195,8 +195,37 @@ def _anotar_prestamo(conn):
             # cerrar_conexiones_al_salir; la hora y la pila, para el diagnostico.
             _PRESTAMOS[id(conn)] = (_t.time(), pila[-6:],
                                     threading.get_ident(), conn)
+            # Historial que NO se borra al devolverla: cuando una conexion sale
+            # rota, dice quien la uso antes. Diagnostico de los "SSL bad record
+            # mac" que aparecen los primeros minutos despues de cada despliegue.
+            ant = _HISTORIAL_CONEXION.get(id(conn))
+            _HISTORIAL_CONEXION[id(conn)] = {
+                "creada": ant["creada"] if ant else _t.time(),
+                "usos": (ant["usos"] + 1) if ant else 1,
+                "anterior": ant["ultimo"] if ant else None,
+                "ultimo": {"t": _t.time(), "hilo": threading.current_thread().name,
+                           "pila": pila[-4:]},
+            }
     except Exception:
         pass
+
+
+_HISTORIAL_CONEXION = {}
+
+
+def describir_conexion(conn):
+    """Quien uso esta conexion y hace cuanto (para loguear cuando falla)."""
+    import time as _t
+    h = _HISTORIAL_CONEXION.get(id(conn))
+    if not h:
+        return "sin historial"
+    ahora = _t.time()
+    def _u(u):
+        if not u:
+            return "-"
+        return "%s hace %.0fs en %s" % (" > ".join(u["pila"]) or "?", ahora - u["t"], u["hilo"])
+    return ("creada hace %.0fs, %d usos; uso anterior: %s; este uso: %s"
+            % (ahora - h["creada"], h["usos"], _u(h["anterior"]), _u(h["ultimo"])))
 
 
 def _olvidar_prestamo(conn):
@@ -550,7 +579,7 @@ def _sacar_conexion_sana():
             conn.rollback()
             return conn
         except Exception as e:
-            print(f"[pool] conexion rota descartada: {str(e)[:120]}")
+            print(f"[pool] conexion rota descartada: {str(e)[:120]} | {describir_conexion(conn)}")
             _descartar_conexion(conn)
     return psycopg2.connect(os.environ.get("DATABASE_URL"))
 
@@ -593,7 +622,7 @@ def _set_rls_context(conn, tenant_id, is_admin=False):
             cur.close()
             conn.commit()
         except Exception:
-            print(f"[_set_rls_context] Error: {e}")
+            print(f"[_set_rls_context] Error: {e} | {describir_conexion(conn)}")
             with _ULTIMO_USO_LOCK:
                 _FALLO_AL_FIJAR.add(id(conn))
 
