@@ -413,7 +413,10 @@ def get_conn(tenant_id=None, is_admin=False):
     la pidio fallaba con "connection already closed".
     """
     conn = _get_conn_una_vez(tenant_id, is_admin)
-    if conn is not None and conn.closed:
+    with _ULTIMO_USO_LOCK:
+        fallo_al_fijar = id(conn) in _FALLO_AL_FIJAR
+        _FALLO_AL_FIJAR.discard(id(conn))
+    if conn is not None and (conn.closed or fallo_al_fijar):
         _olvidar_prestamo(conn)
         _descartar_conexion(conn)
         print("[pool] conexion rota al fijar el cliente; se pide otra")
@@ -495,6 +498,9 @@ def _get_conn_una_vez(tenant_id=None, is_admin=False):
 
 # Cuando se devolvio cada conexion al pool (id -> time.time()).
 _ULTIMO_USO = {}
+# Conexiones en las que fallo fijar el cliente: estan rotas aunque psycopg2 no
+# siempre las marque como cerradas (pasa con los errores SSL).
+_FALLO_AL_FIJAR = set()
 _ULTIMO_USO_LOCK = threading.Lock()
 _SEGUNDOS_PARA_REVISAR = 30
 
@@ -588,6 +594,8 @@ def _set_rls_context(conn, tenant_id, is_admin=False):
             conn.commit()
         except Exception:
             print(f"[_set_rls_context] Error: {e}")
+            with _ULTIMO_USO_LOCK:
+                _FALLO_AL_FIJAR.add(id(conn))
 
 def release_conn(conn):
     """Devuelve la conexion al pool. Llamarla dos veces no hace dano.
