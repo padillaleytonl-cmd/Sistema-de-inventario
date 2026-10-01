@@ -418,10 +418,7 @@ def get_conn(tenant_id=None, is_admin=False):
 
     Esta función es 100% retrocompatible: get_conn() sin args funciona igual que antes.
     """
-    try:
-        conn = _get_pool().getconn()
-    except Exception:
-        conn = psycopg2.connect(os.environ.get("DATABASE_URL"))
+    conn = _sacar_conexion_sana()
     _anotar_prestamo(conn)
 
     try:
@@ -478,6 +475,62 @@ def get_conn(tenant_id=None, is_admin=False):
         print(f"[get_conn] Warning: no se pudo setear tenant context: {e}")
 
     return conn
+
+
+# Cuando se devolvio cada conexion al pool (id -> time.time()).
+_ULTIMO_USO = {}
+_ULTIMO_USO_LOCK = threading.Lock()
+_SEGUNDOS_PARA_REVISAR = 30
+
+
+def _descartar_conexion(conn):
+    """Saca una conexion rota del pool para siempre."""
+    try:
+        _get_pool().putconn(conn, close=True)
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _sacar_conexion_sana():
+    """Una conexion del pool que funcione.
+
+    Las conexiones que pasan un rato quietas en el pool pueden volver rotas: la
+    base o la red las cierra por su lado y el pool igual las entrega. El primer
+    uso fallaba con "SSL error: decryption failed or bad record mac" o
+    "connection already closed", y ese error lo veia una pagina del panel o
+    un sync. Se vio en produccion desde el 30/09.
+
+    Las que llevan mas de 30 segundos quietas se prueban con un SELECT 1 antes
+    de entregarlas; si fallan se descartan y se saca otra. Las que van y
+    vienen seguido no se prueban: no se agrega una ida y vuelta a la base en
+    cada consulta.
+    """
+    import time as _t
+    for _ in range(4):
+        try:
+            conn = _get_pool().getconn()
+        except Exception:
+            return psycopg2.connect(os.environ.get("DATABASE_URL"))
+        with _ULTIMO_USO_LOCK:
+            ultimo = _ULTIMO_USO.pop(id(conn), None)
+        if conn.closed:
+            _descartar_conexion(conn)
+            continue
+        if ultimo is not None and _t.time() - ultimo < _SEGUNDOS_PARA_REVISAR:
+            return conn
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.close()
+            conn.rollback()
+            return conn
+        except Exception as e:
+            print(f"[pool] conexion rota descartada: {str(e)[:120]}")
+            _descartar_conexion(conn)
+    return psycopg2.connect(os.environ.get("DATABASE_URL"))
 
 
 def _set_rls_context(conn, tenant_id, is_admin=False):
@@ -537,6 +590,9 @@ def release_conn(conn):
     try:
         if not conn.closed:
             _get_pool().putconn(conn)
+            import time as _t
+            with _ULTIMO_USO_LOCK:
+                _ULTIMO_USO[id(conn)] = _t.time()
     except Exception:
         try: conn.close()
         except: pass
