@@ -5604,6 +5604,51 @@ scheduler.add_job(_sync_woo_automatico, "interval", minutes=10, id="woo_sync",
                   next_run_time=(datetime.now() + timedelta(seconds=600)),
                   max_instances=1, coalesce=True, misfire_grace_time=60)
 
+def _republicar_skus_con_stock_solo_en_full():
+    """Republica el stock propio de los SKU con 0 propio y stock en Full.
+
+    Son los que la "proteccion anti-cero" (retirada el 01/10/2026) publicaba
+    con el total, Full incluido: los canales podian seguir mostrando unidades
+    que no hay para despachar. Se publica de nuevo el stock propio real, que
+    es lo mismo que pasa despues de cada venta. Corre una vez al arrancar;
+    repetirlo no hace dano.
+    """
+    set_thread_tenant(TENANT_INTEGRACIONES, is_admin=False)
+    try:
+        from inventario import get_conn as _gcr, release_conn as _rcr
+        cn = _gcr(tenant_id=TENANT_INTEGRACIONES, is_admin=True)
+        try:
+            with cn.cursor() as c:
+                c.execute("""
+                    SELECT sb.sku,
+                           COALESCE(SUM(CASE WHEN b.tipo = 'propia' THEN sb.cantidad END), 0) AS propio,
+                           COALESCE(SUM(sb.cantidad), 0) AS total
+                      FROM stock_bodega sb
+                      LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo AND b.tenant_id = sb.tenant_id
+                     WHERE sb.tenant_id = %s
+                     GROUP BY sb.sku
+                    HAVING COALESCE(SUM(CASE WHEN b.tipo = 'propia' THEN sb.cantidad END), 0) <= 0
+                       AND COALESCE(SUM(sb.cantidad), 0) > 0""", (TENANT_INTEGRACIONES,))
+                skus = [(r[0], int(r[2] or 0)) for r in c.fetchall()]
+        finally:
+            _rcr(cn)
+        print(f"[Correccion Full] {len(skus)} SKU con 0 propio y stock en Full: se republican")
+        for sku, total in skus:
+            try:
+                res = sincronizar_stock_marketplaces(sku, None, contexto="correccion_full")
+                print(f"[Correccion Full] {sku} (Full={total}) -> {res}")
+            except Exception as e:
+                print(f"[Correccion Full] {sku}: {e}")
+            time.sleep(1)
+    except Exception as e:
+        print(f"[Correccion Full] error: {e}")
+    finally:
+        clear_thread_tenant()
+
+
+scheduler.add_job(_republicar_skus_con_stock_solo_en_full, "date",
+                  run_date=datetime.now() + timedelta(seconds=180), id="correccion_full")
+
 # RED DE SEGURIDAD: auto-corrección de stock desincronizado cada 60 min.
 # Detecta SKU cuyo stock en un canal no coincide con CENTRAL y los re-sincroniza.
 # Arranca a los 15 min de levantar (para no competir con los syncs iniciales).
