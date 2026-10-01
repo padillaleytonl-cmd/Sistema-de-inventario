@@ -3391,6 +3391,25 @@ from collections import deque as _deque_sync
 _SYNC_TRACE_LOG = _deque_sync(maxlen=50)
 
 
+def _stock_propio(sku):
+    """Stock que se puede publicar: la suma de las bodegas propias del cliente
+    en curso. Nunca el de Full: ese lo despacha el marketplace y no cubre una
+    venta que despachamos nosotros."""
+    from inventario import get_conn as _gcp, release_conn as _rcp, tenant_actual as _tap
+    ctx = _tap()
+    tid = int(ctx[0]) if ctx else TENANT_INTEGRACIONES
+    cn = _gcp(tenant_id=tid, is_admin=True)
+    try:
+        with cn.cursor() as c:
+            c.execute("""SELECT COALESCE(SUM(sb.cantidad), 0)
+                           FROM stock_bodega sb
+                           JOIN bodegas b ON b.codigo = sb.bodega_codigo AND b.tenant_id = sb.tenant_id
+                          WHERE sb.sku = %s AND sb.tenant_id = %s AND b.tipo = 'propia'""", (sku, tid))
+            return max(0, int((c.fetchone() or [0])[0] or 0))
+    finally:
+        _rcp(cn)
+
+
 def _sincronizar_stock_marketplaces_cuerpo(sku, stock=None, contexto="manual"):
     """Sincroniza el stock de un SKU con TODOS los marketplaces conectados.
 
@@ -3491,30 +3510,18 @@ def _sincronizar_stock_marketplaces_cuerpo(sku, stock=None, contexto="manual"):
             stock_publicar = 0
         _trace["stock_calculado"] = stock_publicar
 
-        # Guard anti-cero (respaldo; el bypass local sigue activo en esta transacción):
-        # nunca publicar 0 si existe stock real en CENTRAL o en productos.stock.
-        if stock_publicar == 0:
-            _cur.execute("""
-                SELECT COALESCE(SUM(cantidad), 0)
-                FROM stock_bodega
-                WHERE sku = %s AND bodega_codigo = 'CENTRAL' AND tenant_id = %s
-            """, (sku, _tid_push))
-            central_real = int((_cur.fetchone() or [0])[0] or 0)
-            if central_real > 0:
-                print(f"[Sync][{contexto}] GUARD anti-cero (CENTRAL) para {sku}: "
-                      f"cálculo=0 pero CENTRAL={central_real}. Publico {central_real}.")
-                _trace["guard_central"] = central_real
-                stock_publicar = central_real
-            else:
-                _cur.execute("SELECT COALESCE(MAX(stock), 0) FROM productos "
-                             "WHERE sku = %s AND tenant_id = %s", (sku, _tid_push))
-                row_prod = _cur.fetchone()
-                prod_stock = int(row_prod[0]) if row_prod and row_prod[0] is not None else 0
-                if prod_stock > 0:
-                    print(f"[Sync][{contexto}] GUARD anti-cero (productos.stock) para {sku}: "
-                          f"CENTRAL=0 pero productos.stock={prod_stock}. Publico {prod_stock}.")
-                    _trace["guard_productos_stock"] = prod_stock
-                    stock_publicar = prod_stock
+        # Si el stock propio da 0, se publica 0.
+        #
+        # Aca habia una "proteccion anti-cero": si el calculo daba 0, publicaba
+        # CENTRAL y, si CENTRAL tambien era 0, productos.stock, que es el TOTAL
+        # del producto con las bodegas Full incluidas. Un producto con 0 propio
+        # y 4 en Full se publicaba con 4 en las publicaciones propias y se
+        # sobrevendia: paso con la silla rosa (SDCMR001), ODJ3NB001 (80),
+        # CCCN001 (35), CDBRWD001 y CDBRSVG001, el 30/09/2026.
+        #
+        # Se habia puesto para lecturas "ciegas" por RLS, que devolvian 0 sin
+        # serlo. La lectura de arriba ya va con bypass y el cliente en el WHERE:
+        # no puede quedar ciega, y si falla cae al except de abajo.
         # Cerrar la transacción: limpia el set_config local (bypass) antes de
         # devolver la conexión al pool.
         _cn.rollback()
@@ -3524,13 +3531,21 @@ def _sincronizar_stock_marketplaces_cuerpo(sku, stock=None, contexto="manual"):
         except Exception:
             release_conn(_cn)
     except Exception as e:
-        # Fallback defensivo: si no se pudo leer CENTRAL, usar el valor recibido
-        # (comportamiento legacy) en vez de fallar el sync por completo.
-        print(f"[Sync][{contexto}] no pude leer CENTRAL de {sku}: {e}; "
-              f"uso valor recibido={stock}")
+        # Si no se pudo leer el stock propio, NO se publica nada.
+        #
+        # Antes se publicaba "el valor recibido", y varios llamadores pasan
+        # productos.stock: el total con Full incluido. Una conexion rota al
+        # leer terminaba publicando stock de Full en las publicaciones propias.
+        # Saltarse una publicacion se corrige en la siguiente; un numero de
+        # mas se vende.
+        print(f"[Sync][{contexto}] no pude leer el stock propio de {sku}: {e}; "
+              f"no se publica en esta vuelta")
         _trace["fallback_except"] = str(e)[:200]
-        _trace["stock_recibido_usado"] = stock
-        stock_publicar = int(stock) if stock is not None else 0
+        try:
+            _SYNC_TRACE_LOG.append(_trace)
+        except Exception:
+            pass
+        return {"omitido": "no se pudo leer el stock propio"}
     finally:
         release_conn(_cn)
 
@@ -10110,7 +10125,8 @@ def debug_paris_stock():
             if not sku_paris:
                 continue
             prod = productos.get(sku_lusync)
-            stock_actual = prod.get("stock", 0) if prod else 0
+            # Stock propio, no productos.stock (que incluye Full).
+            stock_actual = _stock_propio(sku_lusync) if prod else 0
 
             ok = actualizar_stock_paris(sku_lusync, stock_actual)
             resultados.append({
@@ -10408,8 +10424,10 @@ def ruta_paris_forzar_sync():
         prod = next((p for p in cargar_productos() if p["sku"] == sku), None)
         if not prod:
             return jsonify({"ok": False, "error": f"SKU {sku} no existe en inventario"})
-        ok = actualizar_stock_paris(sku, prod["stock"])
-        return jsonify({"ok": ok, "sku": sku, "stock_enviado": prod["stock"]})
+        # Stock propio, no productos.stock (que incluye Full).
+        _st = _stock_propio(sku)
+        ok = actualizar_stock_paris(sku, _st)
+        return jsonify({"ok": ok, "sku": sku, "stock_enviado": _st})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -12699,7 +12717,8 @@ def ruta_meli_forzar_todos():
             sku_meli = (fila.get("sku_mercadolibre", "") or "").strip()
             if not sku_meli or sku_lusync not in productos:
                 continue
-            stock = productos[sku_lusync]["stock"]
+            # Stock propio, no productos.stock (que incluye Full).
+            stock = _stock_propio(sku_lusync)
             if actualizar_stock_meli(sku_lusync, stock):
                 enviados += 1
             else:
