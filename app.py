@@ -26062,6 +26062,44 @@ def admin_stock_auditar_sku():
         "movimientos_recientes": movs})
 
 
+@app.route("/admin/lusync/stock/republicar")
+def admin_stock_republicar():
+    """Republica el stock propio de algunos SKU en todos sus canales.
+
+    Uso:
+      /admin/lusync/stock/republicar?skus=A,B,C            -> vista previa
+      /admin/lusync/stock/republicar?skus=A,B,C&aplicar=1  -> publica
+
+    Usa la misma publicacion central que corre despues de cada venta (stock
+    propio del cliente, nunca Full). Sirve para corregir canales que quedaron
+    con un numero distinto al de Lusync sin recorrer todo el catalogo.
+    """
+    if not _acceso_equipo_lusync():
+        return jsonify({"error": "no autorizado"}), 401
+    skus = [s.strip() for s in (request.args.get("skus") or "").split(",") if s.strip()][:60]
+    if not skus:
+        return jsonify({"error": "Indica los SKU: ?skus=A,B,C"}), 400
+    aplicar = request.args.get("aplicar") == "1"
+    salida = {"modo": "APLICADO" if aplicar else "vista previa", "skus": []}
+    for sku in skus:
+        fila = {"sku": sku, "stock_propio": _stock_propio(sku)}
+        if aplicar:
+            try:
+                fila["resultado"] = sincronizar_stock_marketplaces(sku, None, contexto="republicar_manual")
+            except Exception as e:
+                fila["resultado"] = {"error": str(e)[:200]}
+        salida["skus"].append(fila)
+    if not aplicar:
+        salida["nota"] = "Vista previa: no se publico nada. Agrega &aplicar=1 para publicar."
+    try:
+        if aplicar:
+            registrar_audit(session.get("usuario", "?"), request.remote_addr, "republicar_stock",
+                            entidad="productos", detalle=",".join(skus)[:400])
+    except Exception:
+        pass
+    return jsonify(salida)
+
+
 @app.route("/admin/lusync/stock/sync-masivo-todos", methods=["GET"])
 def admin_sync_masivo_todos():
     """Sincroniza el stock de TODOS los SKU a TODOS los canales y devuelve un
