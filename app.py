@@ -2158,6 +2158,11 @@ def admin_ventas_faltantes():
       /admin/lusync/ventas/faltantes                    lista lo pendiente
       /admin/lusync/ventas/faltantes?aplicar=1          salda TODO lo que se pueda
       /admin/lusync/ventas/faltantes?mov=123&aplicar=1  salda solo ese movimiento
+      /admin/lusync/ventas/faltantes?mov=123,456&cubierto=1&aplicar=1
+          cierra esas ventas SIN mover stock: se despacharon con unidades que
+          habia en la bodega pero no estaban en Lusync. El stock que muestra
+          Lusync ya es el real (esas unidades ya no estan), asi que no se
+          descuenta nada; solo se borra la deuda y queda registrado quien lo hizo.
 
     Sin &aplicar=1 solo simula: dice cuánto se saldaría y no toca nada.
 
@@ -2175,22 +2180,29 @@ def admin_ventas_faltantes():
 
     aplicar = request.args.get("aplicar") == "1"
     solo_mov = request.args.get("mov", "").strip()
+    cubierto = request.args.get("cubierto") == "1"
+    movs = [int(x) for x in solo_mov.replace(" ", "").split(",") if x.isdigit()]
+    if cubierto and not movs:
+        # Cerrar sin descontar es a mano y por venta: nunca "todo lo pendiente".
+        return jsonify({"error": "cubierto=1 exige mov=<id>[,<id>...] con las ventas a cerrar"}), 400
+    tid = TENANT_INTEGRACIONES
 
     salida = {"generado": str(now_chile()), "modo": "APLICADO" if aplicar else "simulacion",
               "pendientes": [], "saldado": 0, "sigue_pendiente": 0}
 
-    conn = get_conn(tenant_id=1, is_admin=True)
+    conn = get_conn(tenant_id=tid, is_admin=True)
     try:
         with conn.cursor() as cur:
+            # La conexion se salta RLS: el cliente va en el WHERE.
             sql = """SELECT id, sku, nombre, COALESCE(bodega_codigo,'CENTRAL'),
                             cantidad, COALESCE(faltante,0), COALESCE(canal,''),
                             COALESCE(orden_id,''), TO_CHAR(fecha,'DD/MM/YYYY HH24:MI')
                        FROM movimientos
-                      WHERE COALESCE(faltante,0) > 0"""
-            params = []
-            if solo_mov:
-                sql += " AND id = %s"
-                params.append(int(solo_mov))
+                      WHERE COALESCE(faltante,0) > 0 AND tenant_id = %s"""
+            params = [tid]
+            if movs:
+                sql += " AND id = ANY(%s)"
+                params.append(movs)
             sql += " ORDER BY fecha ASC"
             cur.execute(sql, params)
             filas = cur.fetchall()
@@ -2203,15 +2215,53 @@ def admin_ventas_faltantes():
                     "fecha": fecha, "vendidas": cant, "faltante": int(falta),
                     "hay_en_bodega": int(disponible), "se_puede_saldar": puede}
 
+            if cubierto:
+                fila["se_cierra_sin_mover_stock"] = int(falta)
+                if aplicar:
+                    try:
+                        cn2 = get_conn(tenant_id=tid, is_admin=True)
+                        try:
+                            with cn2.cursor() as c2:
+                                c2.execute("""UPDATE movimientos SET faltante = 0
+                                               WHERE id = %s AND tenant_id = %s""", (mid, tid))
+                                # Linea visible en movimientos, con cantidad 0:
+                                # el stock no cambia, pero tiene que quedar por
+                                # que la venta dejo de figurar como deuda.
+                                c2.execute("""INSERT INTO movimientos
+                                    (tipo, sku, nombre, cantidad, motivo, usuario, canal,
+                                     fecha, bodega_codigo, fecha_importacion,
+                                     origen_registro, stock_antes, stock_despues)
+                                    VALUES ('ajuste', %s, %s, 0, %s, %s, 'Manual', NOW(),
+                                            %s, NOW(), 'manual', %s, %s)""",
+                                    (sku, nombre,
+                                     "Venta cubierta con stock que no estaba en Lusync — "
+                                     "orden %s (mov %s), %s u." % (orden or "s/n", mid, int(falta)),
+                                     session.get("usuario", "Sistema"), bodega,
+                                     disponible, disponible))
+                            cn2.commit()
+                        finally:
+                            release_conn(cn2)
+                        registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
+                                        "faltante_cubierto_fuera_de_lusync", entidad="movimientos",
+                                        entidad_id=str(mid),
+                                        detalle="sku=%s orden=%s faltante=%s" % (sku, orden, int(falta)))
+                        fila["cerrado"] = int(falta)
+                        fila["faltante"] = 0
+                    except Exception as e:
+                        fila["error"] = str(e)[:150]
+                salida["sigue_pendiente"] += fila["faltante"]
+                salida["pendientes"].append(fila)
+                continue
+
             if aplicar and puede > 0:
                 try:
                     ajustar_stock_bodega(sku, bodega, -puede)
-                    cn2 = get_conn(tenant_id=1, is_admin=True)
+                    cn2 = get_conn(tenant_id=tid, is_admin=True)
                     try:
                         with cn2.cursor() as c2:
                             c2.execute("""UPDATE movimientos
                                              SET faltante = GREATEST(0, COALESCE(faltante,0) - %s)
-                                           WHERE id = %s""", (puede, mid))
+                                           WHERE id = %s AND tenant_id = %s""", (puede, mid, tid))
                             # El saldo deja su propia linea: cambia stock, tiene
                             # que verse. Va como 'ajuste' y no como 'salida'
                             # para no contarse como una venta nueva — la venta
@@ -2242,8 +2292,10 @@ def admin_ventas_faltantes():
 
     salida["total_movimientos"] = len(salida["pendientes"])
     if not aplicar and salida["pendientes"]:
-        salida["nota"] = ("Esto es una simulacion. Agrega &aplicar=1 para descontar "
-                          "de verdad lo que aparece en se_puede_saldar.")
+        salida["nota"] = (("Esto es una simulacion. Agrega &aplicar=1 para cerrar estas "
+                           "ventas sin mover el stock.") if cubierto else
+                          ("Esto es una simulacion. Agrega &aplicar=1 para descontar "
+                           "de verdad lo que aparece en se_puede_saldar."))
     return jsonify(salida)
 
 
