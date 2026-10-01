@@ -4098,6 +4098,9 @@ def _sync_meli_automatico():
 
                     es_full = detectar_fulfillment_meli(o)
                     items_descontados = []
+                    # Igual que Falabella: con una linea sin registrar, la
+                    # orden no se marca y se reintenta.
+                    lineas_fallidas = []
 
                     for item in o.get("order_items", []):
                         item_data = item.get("item", {})
@@ -4117,6 +4120,24 @@ def _sync_meli_automatico():
                         except Exception:
                             sku_lusync = sku_seller
 
+                        # El SKU tiene que existir en Lusync. Antes no se
+                        # revisaba: la venta se registraba con el SKU del
+                        # canal, el stock del producto real no se descontaba
+                        # y la orden quedaba marcada.
+                        if not any(pp["sku"] == sku_lusync for pp in cargar_productos()):
+                            print(f"[Scheduler MELI] SKU '{sku_lusync}' no encontrado")
+                            lineas_fallidas.append(sku_seller)
+                            crear_alerta(
+                                tipo="sku_sin_mapeo",
+                                titulo=f"SKU sin mapeo — MercadoLibre: {sku_seller}",
+                                mensaje=(f"La orden <b>{order_id}</b> de MercadoLibre contiene el SKU "
+                                         f"<b>{sku_seller}</b> que no está registrado en Lusync. "
+                                         "El stock <b>NO fue descontado</b>. La orden se vuelve a "
+                                         "intentar sola cuando lo registres en Mapeo SKUs."),
+                                canal="MercadoLibre", orden_id=str(order_id), sku=sku_seller,
+                                enviar_email=True)
+                            continue
+
                         # Descuento inteligente (Full vs Central)
                         try:
                             _res_ml = descontar_venta_inteligente(
@@ -4133,6 +4154,7 @@ def _sync_meli_automatico():
                             if _res_ml and _res_ml.get("ok"):
                                 items_descontados.append((sku_lusync, cantidad))
                             else:
+                                lineas_fallidas.append(sku_seller)
                                 errores.append(f"MELI {order_id}/{sku_lusync}: no registrado")
 
                             # Sync a otros canales SOLO si fue Seller (Full no afecta otras bodegas)
@@ -4144,14 +4166,18 @@ def _sync_meli_automatico():
                                         contexto="meli_orden_bg"
                                     )
                         except Exception as e:
+                            lineas_fallidas.append(sku_seller)
                             errores.append(f"MELI {order_id}/{sku_seller}→{sku_lusync}: {e}")
 
-                    if items_descontados:
-                        # Registro exitoso: AHORA marcamos (registrar primero, marcar
-                        # después). Si el descuento falla, no se marca y se reintenta.
-                        # La idempotencia evita duplicados al reprocesar.
+                    if items_descontados and not lineas_fallidas:
+                        # Registro exitoso de TODAS las lineas: AHORA marcamos.
+                        # Si alguna falla, no se marca y se reintenta; la
+                        # idempotencia evita duplicar las que ya quedaron.
                         intentar_marcar_orden_atomic(meli_key)
                         nuevas += 1
+                    elif lineas_fallidas:
+                        print(f"[Scheduler MELI] {order_id}: no se marca, faltan "
+                              f"{', '.join(lineas_fallidas)}; se reintenta en el próximo ciclo")
 
                 # ── Órdenes canceladas ──
                 elif estado in ("cancelled", "canceled"):
@@ -4372,6 +4398,11 @@ def _sync_falabella_automatico():
                     es_fbf = detectar_fulfillment_falabella(o)
                     tipo_str = "FBF" if es_fbf else "FBS"
                     items_descontados = []
+                    # Lineas que no se pudieron registrar. Con una sola, la
+                    # orden NO se marca: se reintenta en el proximo ciclo. Las
+                    # que ya quedaron registradas no se descuentan otra vez
+                    # (la venta se reconoce por orden y SKU).
+                    lineas_fallidas = []
 
                     # Parsear fecha real de compra (Falabella: CreatedAt = "2026-05-05 23:57:15" sin tz)
                     fecha_compra_fa = None
@@ -4409,7 +4440,19 @@ def _sync_falabella_automatico():
                         productos = cargar_productos()
                         prod = next((p for p in productos if p["sku"] == sku_lusync), None)
                         if not prod:
+                            # Antes se saltaba en silencio y la orden se marcaba
+                            # igual: la venta no se descontaba nunca.
                             print(f"[Scheduler Falabella] SKU '{sku_lusync}' no encontrado")
+                            lineas_fallidas.append(seller_sku)
+                            crear_alerta(
+                                tipo="sku_sin_mapeo",
+                                titulo=f"SKU sin mapeo — Falabella: {seller_sku}",
+                                mensaje=(f"La orden <b>{order_number}</b> de Falabella contiene el SKU "
+                                         f"<b>{seller_sku}</b> que no está registrado en Lusync. "
+                                         "El stock <b>NO fue descontado</b>. La orden se vuelve a "
+                                         "intentar sola cuando lo registres en Mapeo SKUs."),
+                                canal="Falabella", orden_id=str(order_id), sku=seller_sku,
+                                enviar_email=True)
                             continue
 
                         resultado = descontar_venta(
@@ -4439,17 +4482,32 @@ def _sync_falabella_automatico():
                             _c_fan.commit(); _cur_fan.close(); release_conn(_c_fan)
                         except Exception as e_no:
                             print(f"[Scheduler Falabella] no pude setear numero_orden: {e_no}")
-                        sincronizar_stock_marketplaces(
-                            sku_lusync, resultado.get("stock_despues", 0),
-                            contexto="falabella_orden_bg"
-                        )
+                        # Solo si la venta quedo registrada. Antes se contaba
+                        # siempre, y la orden se marcaba aunque el registro
+                        # hubiera fallado: venta perdida sin reintento.
+                        if not resultado.get("ok"):
+                            lineas_fallidas.append(seller_sku)
+                            errores.append(f"Falabella {order_id}/{sku_lusync}: "
+                                           f"{resultado.get('advertencia') or resultado.get('error') or 'no registrado'}")
+                            continue
+                        # Ya registrada en una vuelta anterior: el stock no
+                        # cambio ahora, no hay nada que publicar.
+                        if resultado.get("advertencia") != "ya_registrada":
+                            sincronizar_stock_marketplaces(
+                                sku_lusync, resultado.get("stock_despues", 0),
+                                contexto="falabella_orden_bg"
+                            )
                         items_descontados.append(f"{seller_sku} x{cantidad}")
                         print(f"[Scheduler Falabella] {order_id} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado.get('bodega','?')}")
 
-                    if items_descontados:
-                        # Registrar primero, marcar después.
+                    if items_descontados and not lineas_fallidas:
+                        # Registrar primero, marcar después; y solo si TODAS las
+                        # lineas quedaron registradas.
                         intentar_marcar_orden_atomic(fa_key)
                         nuevas += 1
+                    elif lineas_fallidas:
+                        print(f"[Scheduler Falabella] {order_id}: no se marca, faltan "
+                              f"{', '.join(lineas_fallidas)}; se reintenta en el próximo ciclo")
 
                 # ── Órdenes canceladas ──
                 elif estado_orden in ("canceled", "cancelled"):
@@ -12381,6 +12439,7 @@ def ruta_meli_sync_ordenes():
                     if not intentar_marcar_orden_atomic(meli_key):
                         continue
                     items_registrados = []
+                    lineas_fallidas = []
 
                     # ── Extraer fecha real de compra del marketplace ────────
                     # MELI devuelve date_created en ISO con timezone (ej: 2026-05-03T18:32:15.000-04:00)
@@ -12464,6 +12523,7 @@ def ruta_meli_sync_ordenes():
 
                         if not sku_lusync or sku_lusync not in productos_dict:
                             log.append(f"Orden {order_id}: SKU '{sku_lusync or item_id}' no encontrado")
+                            lineas_fallidas.append(sku_seller or item_id)
                             continue
 
                         resultado = descontar_venta_inteligente(
@@ -12480,6 +12540,8 @@ def ruta_meli_sync_ordenes():
                         log.append(f"{order_id} {tipo_str}: {sku_lusync} -{qty} desde {resultado['bodega']}")
                         if resultado.get("ok"):
                             items_registrados.append(sku_lusync)
+                        else:
+                            lineas_fallidas.append(sku_lusync)
 
                         # Sync a otros canales SOLO si fue Seller (afectó Central)
                         if not es_full:
@@ -12488,11 +12550,17 @@ def ruta_meli_sync_ordenes():
                                 sincronizar_stock_a_marketplaces(sku_lusync, excepto=["mercadolibre"])
                             except Exception as e:
                                 log.append(f"  Sync cruzado falló: {e}")
-                    if items_registrados:
+                    if items_registrados and not lineas_fallidas:
                         nuevas += 1
                     else:
+                        # Con una sola linea sin registrar se suelta la marca:
+                        # antes solo se soltaba si no se registraba NINGUNA, y
+                        # una orden a medias quedaba marcada con lineas sin
+                        # descontar para siempre. Las ya registradas no se
+                        # duplican al reintentar (orden + SKU).
                         desmarcar_orden_procesada_texto(meli_key)
-                        log.append(f"Orden {order_id}: no se registro ninguna linea; se suelta la marca para reintentarla")
+                        log.append(f"Orden {order_id}: faltan {', '.join(lineas_fallidas) or 'todas las lineas'}; "
+                                   "se suelta la marca para reintentarla")
 
                 # Liberar memoria entre páginas
                 del ordenes
@@ -16127,59 +16195,61 @@ def admin_sync_meli_rango():
     autorizado = session.get("logged") or (token_recibido and token_recibido == bypass_token)
     if not autorizado:
         return jsonify({"error": "no autorizado"}), 401
-    
+
     desde = request.args.get("desde", "")  # YYYY-MM-DD
     hasta = request.args.get("hasta", "")  # YYYY-MM-DD
-    
+
     if not desde or not hasta:
         return jsonify({
             "error": "Faltan desde/hasta (formato YYYY-MM-DD)",
             "ejemplo": "/admin/sync_meli_rango?desde=2026-05-01&hasta=2026-05-06&token=XXX"
         }), 400
-    
+
     # Convertir a formato MELI (ISO con timezone Chile UTC-4)
     date_from = f"{desde}T00:00:00.000-04:00"
     date_to = f"{hasta}T23:59:59.999-04:00"
-    
+
     try:
         from mercadolibre import obtener_todas_ordenes_meli_rango
         from inventario import descontar_venta_inteligente, detectar_fulfillment_meli, intentar_marcar_orden_atomic, orden_ya_procesada_texto, marcar_orden_procesada_texto, obtener_sku_lusync_por_canal
         from datetime import datetime
-        
+
         # Traer todas las órdenes del rango (con paginación)
         print(f"[Sync MELI Rango] Trayendo órdenes desde {date_from} hasta {date_to}")
         ordenes = obtener_todas_ordenes_meli_rango(date_from, date_to, max_paginas=20)
         print(f"[Sync MELI Rango] Total órdenes obtenidas: {len(ordenes)}")
-        
+
         nuevas = 0
         ya_procesadas = 0
         canceladas = 0
         errores = []
         ordenes_procesadas_ids = []
-        
+
         for o in ordenes:
             try:
                 order_id = str(o.get("id", ""))
                 estado = o.get("status", "")
                 meli_key = f"MELI-{order_id}"
                 cancel_key = f"MELI-CANCEL-{order_id}"
-                
+
                 # ── Órdenes pagadas ──
                 if estado in ("paid", "confirmed"):
                     if orden_ya_procesada_texto(meli_key):
                         ya_procesadas += 1
                         continue
-                    
+
                     fecha_compra = None
                     try:
                         ds = (o.get("date_created", "") or "").replace("Z", "+00:00")
                         if ds:
                             fecha_compra = datetime.fromisoformat(ds)
                     except: pass
-                    
+
                     es_full = detectar_fulfillment_meli(o)
                     items_descontados = []
-                    
+                    lineas_fallidas = []
+                    _skus_lusync = {pp["sku"] for pp in cargar_productos()}
+
                     for item in o.get("order_items", []):
                         item_data = item.get("item", {})
                         item_id = item_data.get("id", "")
@@ -16190,13 +16260,21 @@ def admin_sync_meli_rango():
                         cantidad = _cantidad_de_linea(item.get("quantity"))
                         if not sku_seller:
                             continue
-                        
+
                         # Traducir SKU canal a Lusync
                         try:
                             sku_lusync = obtener_sku_lusync_por_canal("mercadolibre", sku_canal=sku_seller, item_id_canal=item_id) or sku_seller
                         except Exception:
                             sku_lusync = sku_seller
-                        
+
+                        # El SKU tiene que existir: si no, la venta quedaba
+                        # registrada con el SKU del canal y el producto real
+                        # no se descontaba.
+                        if sku_lusync not in _skus_lusync:
+                            lineas_fallidas.append(sku_seller)
+                            errores.append(f"{order_id}/{sku_seller}: SKU no registrado en Lusync")
+                            continue
+
                         try:
                             _res_rango = descontar_venta_inteligente(
                                 sku=sku_lusync,
@@ -16210,16 +16288,21 @@ def admin_sync_meli_rango():
                             if _res_rango and _res_rango.get("ok"):
                                 items_descontados.append({"sku_canal": sku_seller, "sku_lusync": sku_lusync, "cantidad": cantidad})
                             else:
+                                lineas_fallidas.append(sku_seller)
                                 errores.append(f"{order_id}/{sku_seller}: "
                                                f"{(_res_rango or {}).get('advertencia') or 'no registrado'}")
                         except Exception as e:
+                            lineas_fallidas.append(sku_seller)
                             errores.append(f"{order_id}/{sku_seller}→{sku_lusync}: {str(e)[:100]}")
-                    
-                    if items_descontados:
-                        # [atomic] orden marcada al inicio — no remarcar
+
+                    if items_descontados and not lineas_fallidas:
+                        # El comentario decia que la orden se marcaba al inicio,
+                        # pero no se marcaba nunca. Se marca ahora, solo si TODAS
+                        # las lineas quedaron registradas.
+                        intentar_marcar_orden_atomic(meli_key)
                         nuevas += 1
                         ordenes_procesadas_ids.append({"id": order_id, "items": items_descontados, "full": es_full})
-                
+
                 # ── Órdenes canceladas ──
                 elif estado in ("cancelled", "canceled"):
                     if not intentar_marcar_orden_atomic(cancel_key):
@@ -16232,7 +16315,7 @@ def admin_sync_meli_rango():
                     # [atomic] orden marcada al inicio — no remarcar
             except Exception as e:
                 errores.append(f"Orden {order_id}: {str(e)[:100]}")
-        
+
         return jsonify({
             "rango": {"desde": desde, "hasta": hasta},
             "total_ordenes_meli": len(ordenes),

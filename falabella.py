@@ -989,7 +989,10 @@ def falabella_webhook():
     try:
         payload = request.get_json(silent=True) or {}
         evento = payload.get("event", "desconocido")
-        data = payload.get("data", {})
+        # Falabella manda los datos en "payload" ({"event": ..., "payload":
+        # {"OrderId": ...}}). Se leian de "data", que no viene: toda orden
+        # nueva llegaba "sin OrderId" y el aviso no servia.
+        data = payload.get("payload") or payload.get("data") or {}
 
         print(f"[Falabella WEBHOOK] Evento: {evento} · payload: {str(payload)[:300]}")
 
@@ -1020,10 +1023,23 @@ def falabella_webhook():
 
 
 def procesar_webhook_orden_creada(data):
-    """Cuando llega una orden nueva, descontar stock automáticamente."""
+    """Orden nueva: registrar la venta apenas avisa Falabella.
+
+    Mismas reglas que el sync cada 10 minutos (app._sync_falabella_automatico),
+    con la misma marca FALABELLA-{OrderId}, asi que no se pisan:
+      - SKU con el mapeo actual (sku_mapeo_canal).
+      - La orden se marca DESPUES de registrar, y solo si TODAS sus lineas
+        quedaron registradas. Si algo falla no se marca y el sync la reintenta.
+      - Una venta ya registrada no se descuenta otra vez (orden + SKU).
+
+    Este codigo nunca habia corrido: el aviso se leia mal y llegaba siempre
+    "sin OrderId". La version anterior marcaba la orden ANTES de registrar y
+    buscaba el SKU en el mapeo antiguo: con cualquier falla, la venta se
+    perdia, porque el sync despues la daba por procesada.
+    """
     try:
         from inventario import (cargar_productos, orden_ya_procesada_texto,
-                                marcar_orden_procesada_texto, listar_sku_mapeo)
+                                intentar_marcar_orden_atomic, obtener_sku_lusync_por_canal)
         from bodegas_logic import descontar_venta, sincronizar_stock_a_marketplaces, detectar_fulfillment_falabella
 
         order_id = str(data.get("OrderId") or data.get("OrderNumber") or "")
@@ -1031,55 +1047,52 @@ def procesar_webhook_orden_creada(data):
             print("[Falabella WEBHOOK] order_created sin OrderId")
             return
 
-        # Idempotencia
         fb_key = f"FALABELLA-{order_id}"
         if orden_ya_procesada_texto(fb_key):
             print(f"[Falabella WEBHOOK] Orden {order_id} ya procesada, skip")
             return
-        marcar_orden_procesada_texto(fb_key)
 
-        # ── Extraer fecha real de compra del marketplace ────────
         fecha_compra_falabella = None
         try:
             import pytz as _pytz
             date_str = (data.get("CreatedAt") or data.get("created_at") or "")
             if date_str:
                 try:
-                    date_str_clean = date_str.replace("Z", "+00:00")
-                    fecha_compra_falabella = datetime.fromisoformat(date_str_clean)
+                    fecha_compra_falabella = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
                 except ValueError:
                     fecha_naive = datetime.strptime(date_str.strip(), "%Y-%m-%d %H:%M:%S")
                     fecha_compra_falabella = _pytz.utc.localize(fecha_naive)
         except Exception as e:
             print(f"[Falabella WEBHOOK] No se pudo parsear CreatedAt: {e}")
 
-        # Si el payload no trae items, los obtenemos por API
         items = data.get("Items") or data.get("OrderItems")
         if not items:
             items = obtener_items_orden_falabella(order_id)
         if isinstance(items, dict):
             items = [items]
+        if not items:
+            print(f"[Falabella WEBHOOK] {order_id}: sin items; queda para el sync")
+            return
 
-        # Detectar fulfillment (FBF si Falabella maneja la logística)
         es_fbf = detectar_fulfillment_falabella(data)
         tipo_str = "FBF" if es_fbf else "FBS"
 
-        productos_dict = {p["sku"]: p for p in cargar_productos()}
-        for item in items or []:
-            sku_falabella = item.get("SellerSku") or item.get("ShopSku") or ""
-            cantidad = int(item.get("Quantity", 1) or 1)
+        skus_existentes = {p["sku"] for p in cargar_productos()}
+        registradas, fallidas = 0, []
+        for item in items:
+            sku_falabella = (item.get("SellerSku") or item.get("Sku") or item.get("ShopSku") or "").strip()
             if not sku_falabella:
                 continue
+            q = item.get("Quantity")
+            try:
+                cantidad = int(q) if q not in (None, "") else 1
+            except (TypeError, ValueError):
+                cantidad = 0  # descontar_venta no registra cantidades invalidas
 
-            # Buscar SKU Lusync en mapeo
-            sku_lusync = sku_falabella
-            for fila in listar_sku_mapeo():
-                if fila.get("sku_falabella") == sku_falabella:
-                    sku_lusync = fila.get("sku_lusync")
-                    break
-
-            if sku_lusync not in productos_dict:
+            sku_lusync = obtener_sku_lusync_por_canal("falabella", sku_falabella) or sku_falabella
+            if sku_lusync not in skus_existentes:
                 print(f"[Falabella WEBHOOK] {order_id}: SKU '{sku_lusync}' no encontrado")
+                fallidas.append(sku_falabella)
                 continue
 
             resultado = descontar_venta(
@@ -1092,14 +1105,22 @@ def procesar_webhook_orden_creada(data):
                 fecha_compra_marketplace=fecha_compra_falabella,
                 origen_registro="webhook"
             )
+            if not resultado.get("ok"):
+                fallidas.append(sku_falabella)
+                continue
+            registradas += 1
             print(f"[Falabella WEBHOOK] {order_id} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado.get('bodega')}")
-
-            # Sync cruzado solo si fue Seller (afectó CENTRAL)
-            if not es_fbf:
+            if not es_fbf and resultado.get("advertencia") != "ya_registrada":
                 try:
                     sincronizar_stock_a_marketplaces(sku_lusync, excepto=["falabella"])
                 except Exception as e:
                     print(f"[Falabella WEBHOOK] Sync cruzado falló: {e}")
+
+        if registradas and not fallidas:
+            intentar_marcar_orden_atomic(fb_key)
+        elif fallidas:
+            print(f"[Falabella WEBHOOK] {order_id}: no se marca, faltan {', '.join(fallidas)}; "
+                  "la reintenta el sync")
     except Exception as e:
         import traceback
         print(f"[Falabella WEBHOOK] procesar_orden_creada ERROR: {e}")
@@ -1120,45 +1141,17 @@ def procesar_webhook_estado_orden(data):
 
 
 def procesar_webhook_orden_cancelada(data):
-    """Cuando se cancela una orden, reintegrar el stock que se había descontado."""
+    """Cancelacion: solo se registra en el log.
+
+    Las cancelaciones las procesa el sync cada 10 minutos, con su marca
+    FALABELLA-CANCEL-{OrderId} y revisando que la venta se haya registrado.
+    Este aviso reintegraba el stock por su cuenta, sin ninguna de las dos
+    cosas: con el sync, la misma cancelacion se reintegraba dos veces (stock
+    fantasma y sobreventa). Nunca habia corrido porque el aviso se leia mal.
+    """
     try:
-        from inventario import listar_sku_mapeo
-        from bodegas_logic import reintegrar_venta
-
         order_id = str(data.get("OrderId") or "")
-        if not order_id:
-            return
-
-        items = data.get("Items") or data.get("OrderItems") or []
-        if not items:
-            items = obtener_items_orden_falabella(order_id)
-        if isinstance(items, dict):
-            items = [items]
-
-        for item in items:
-            sku_falabella = item.get("SellerSku") or ""
-            cantidad = int(item.get("Quantity", 1) or 1)
-            if not sku_falabella:
-                continue
-
-            # Mapear a SKU Lusync
-            sku_lusync = sku_falabella
-            for fila in listar_sku_mapeo():
-                if fila.get("sku_falabella") == sku_falabella:
-                    sku_lusync = fila.get("sku_lusync")
-                    break
-
-            try:
-                reintegrar_venta(
-                    sku=sku_lusync,
-                    cantidad=cantidad,
-                    canal="Falabella",
-                    orden_id=order_id,
-                    motivo="Cancelación Falabella (webhook)"
-                )
-                print(f"[Falabella WEBHOOK] Reintegrado {sku_lusync} +{cantidad} de orden {order_id}")
-            except Exception as e:
-                print(f"[Falabella WEBHOOK] Reintegro falló: {e}")
+        print(f"[Falabella WEBHOOK] Orden {order_id} cancelada; la procesa el sync")
     except Exception as e:
         print(f"[Falabella WEBHOOK] procesar_cancelacion ERROR: {e}")
 
