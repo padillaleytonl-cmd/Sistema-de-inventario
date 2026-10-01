@@ -230,6 +230,7 @@ def anotar_error_venta(sku, orden_id, canal, error, contexto=None):
                 "tipo": type(error).__name__,
                 # Que tenant y que is_admin tenia la conexion al fallar
                 "contexto_rls": contexto or {},
+                "tenant": (tenant_actual() or (None,))[0],
             })
             del _ERRORES_VENTA[:-30]   # solo los ultimos 30
     except Exception:
@@ -3101,6 +3102,28 @@ BODEGAS_DEFAULT = [
 ]
 
 
+def asegurar_bodegas_cliente(tenant_id):
+    """Crea las bodegas estandar de un cliente si le faltan. Idempotente.
+
+    init_bodegas corre al arrancar, sin cliente, y solo deja las del cliente
+    dueño. Un cliente nuevo que conecta un canal no tenia ninguna: sus ventas
+    no sabian de que bodega descontar ni cual es propia y cual fulfillment.
+    """
+    conn = get_conn(tenant_id=int(tenant_id)); cur = conn.cursor()
+    try:
+        for i, (codigo, nombre, tipo, canal) in enumerate(BODEGAS_DEFAULT):
+            cur.execute("""INSERT INTO bodegas (codigo, nombre, tipo, canal, orden, tenant_id)
+                           VALUES (%s, %s, %s, %s, %s, %s)
+                           ON CONFLICT (tenant_id, codigo) DO NOTHING""",
+                        (codigo, nombre, tipo, canal, i, int(tenant_id)))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"[bodegas] no pude crear las bodegas del cliente {tenant_id}: {e}")
+    finally:
+        cur.close(); release_conn(conn)
+
+
 @cerrar_conexiones_al_salir
 def init_bodegas():
     """Crea tablas bodegas + stock_bodega y migra el stock actual a Bodega Central.
@@ -3398,7 +3421,7 @@ def _recalcular_stock_total(sku):
 
         if filas_vistas == 0:
             import datetime as _dt_rec
-            aviso = {"sku": sku,
+            aviso = {"sku": sku, "tenant": (tenant_actual() or (None,))[0],
                      "cuando": _dt_rec.datetime.now().isoformat(timespec="seconds")}
             _RECALCULOS_OMITIDOS.append(aviso)
             print(f"[Bodegas] GUARD recalculo {sku}: no vi ninguna fila de bodega. "

@@ -255,6 +255,10 @@ def ver_sync_log():
 
     sku_filtro = (request.args.get("sku", "") or "").strip()
     entradas = list(_SYNC_TRACE_LOG)
+    # El registro es de todos los clientes: una sesion de cliente ve solo lo
+    # suyo; el super-admin ve todo.
+    if not session.get("is_lusync_admin"):
+        entradas = [e for e in entradas if e.get("tenant") in (None, _tenant_sesion())]
     if sku_filtro:
         entradas = [e for e in entradas if e.get("sku") == sku_filtro]
     entradas.reverse()  # más recientes primero
@@ -1144,7 +1148,7 @@ def _admin_pide_otro_cliente(p):
 def _puerta_de_entrada():
     p = request.path or "/"
     if p in _WEBHOOKS_CANALES:
-        set_thread_tenant(TENANT_INTEGRACIONES, is_admin=False)
+        set_thread_tenant(_cliente_del_webhook(p), is_admin=False)
         g._tenant_webhook = True
         return None
     if p in _RUTAS_PUBLICAS or p.startswith(_PREFIJOS_PUBLICOS):
@@ -1168,9 +1172,72 @@ def _puerta_de_entrada():
         return jsonify({"error": "Esa herramienta es de otro cliente o de la plataforma. "
                                  "Entra como super-admin en /admin/lusync/login"}), 403
     if (_tenant_sesion() != TENANT_INTEGRACIONES
-            and p.startswith(_PREFIJOS_CANALES)):
+            and p.startswith(_PREFIJOS_CANALES)
+            and not _cliente_puede_usar_ruta_de_canal(p)):
         return jsonify({"error": "Tu cuenta no tiene este canal conectado"}), 403
     return None
+
+
+# Ruta de canal -> canal. Lo que no esta aca (diagnosticos /debug, Full
+# /stock-fulfillment) queda solo para el cliente dueño.
+_RUTA_A_CANAL = (
+    ("/mercadolibre", "mercadolibre"), ("/walmart", "walmart"), ("/paris", "paris"),
+    ("/ripley", "ripley"), ("/falabella", "falabella"), ("/woo", "web"),
+    ("/sync_ordenes", "web"), ("/importar_woo", "web"), ("/debug_woo_ordenes", "web"),
+    ("/sincronizar_precios_woo", "web"),
+)
+# MercadoLibre se conecta desde estas: tienen que estar abiertas ANTES de
+# tener el canal conectado.
+_RUTAS_CONECTAR_MELI = {"/mercadolibre/conectar", "/mercadolibre/callback", "/mercadolibre/estado"}
+
+
+def _cliente_puede_usar_ruta_de_canal(p):
+    """Un cliente que no es el dueño entra a las rutas de un canal solo si lo
+    tiene conectado con SUS credenciales (credenciales_canal)."""
+    if p in _RUTAS_CONECTAR_MELI:
+        return True
+    canal = next((c for pref, c in _RUTA_A_CANAL if p == pref or p.startswith(pref + "/")
+                  or p.startswith(pref + "_")), None)
+    if not canal:
+        return False
+    try:
+        from credenciales_canal import tiene_canal
+        return tiene_canal(canal, _tenant_sesion())
+    except Exception as e:
+        print(f"[puerta] no pude revisar el canal {canal}: {e}")
+        return False
+
+
+def _cliente_del_webhook(p):
+    """De que cliente es un webhook.
+
+    MercadoLibre: la app es una sola para todos los clientes, asi que todos
+    sus avisos llegan a esta misma URL. El aviso trae el user_id del vendedor;
+    se busca que cliente conecto esa cuenta. Si nadie la conecto, el dueño,
+    como siempre.
+
+    Falabella: su aviso no identifica la cuenta, asi que queda en el dueño.
+    Los demas clientes reciben sus ordenes de Falabella por la sincronizacion
+    cada 10 minutos.
+    """
+    if p.startswith("/mercadolibre/"):
+        try:
+            uid = (request.get_json(silent=True) or {}).get("user_id")
+            if uid:
+                from inventario import get_conn as _gcw, release_conn as _rcw
+                cn = _gcw(tenant_id=TENANT_INTEGRACIONES, is_admin=True)
+                try:
+                    with cn.cursor() as c:
+                        c.execute("""SELECT tenant_id FROM mercadolibre_auth
+                                      WHERE user_id = %s ORDER BY id DESC LIMIT 1""", (int(uid),))
+                        f = c.fetchone()
+                finally:
+                    _rcw(cn)
+                if f and f[0]:
+                    return int(f[0])
+        except Exception as e:
+            print(f"[webhook] no pude identificar al cliente de MercadoLibre: {e}")
+    return TENANT_INTEGRACIONES
 
 
 @app.teardown_request
@@ -1292,6 +1359,11 @@ def canales_guardar():
         final["site_url"] = url
     guardar_credenciales_canal(tid, canal, final)
     _olvidar_credenciales(tid, canal)
+    try:
+        from inventario import asegurar_bodegas_cliente
+        asegurar_bodegas_cliente(tid)
+    except Exception as e:
+        print(f"[canales] no pude crear las bodegas del cliente {tid}: {e}")
     try:
         registrar_audit(session.get("usuario", "?"), request.remote_addr, "guardar_credenciales_canal",
                         entidad="credenciales_marketplace", detalle=f"{canal} (valores no se registran)")
@@ -2891,6 +2963,9 @@ def admin_perf_pool():
         # si esta lanzando excepcion.
         try:
             fallas = errores_venta()
+            # De todos los clientes: una sesion de cliente ve solo lo suyo.
+            if not session.get("is_lusync_admin"):
+                fallas = [f for f in fallas if f.get("tenant") in (None, _tenant_sesion())]
             info["ventas_no_registradas"] = fallas[:15]
             info["ventas_no_registradas_total"] = len(fallas)
             if fallas:
@@ -2983,6 +3058,8 @@ def health_check_stock_fix():
     try:
         from inventario import _RECALCULOS_OMITIDOS
         omitidos = list(_RECALCULOS_OMITIDOS)
+        if not session.get("is_lusync_admin"):
+            omitidos = [o for o in omitidos if o.get("tenant") in (None, _tenant_sesion())]
         info["recalculos_omitidos"] = omitidos[-20:][::-1]
         info["recalculos_omitidos_total"] = len(omitidos)
         info["nota_recalculo"] = (
@@ -3359,17 +3436,24 @@ def _sincronizar_stock_marketplaces_cuerpo(sku, stock=None, contexto="manual"):
         # set_config(..., true) es transacción-local y el rollback final lo
         # limpia: NO contamina la conexión al volver al pool.
         _cur.execute("SELECT set_config('app.is_admin', 'true', true)")
-        # Stock propio por tenant (JOIN también por tenant para no mezclar ni
-        # duplicar filas de bodegas homónimas de otros tenants).
+        # El bypass admin se salta RLS: el cliente va en el WHERE. Antes no
+        # iba y se sumaba el stock de cualquier cliente con el mismo SKU; con
+        # dos clientes, las publicaciones de uno podian llevar el stock del
+        # otro. El cliente es el que publica (sesion o hilo); sin ninguno, el
+        # dueño de las integraciones, como siempre.
+        from inventario import tenant_actual as _tact
+        _ctx_push = _tact()
+        _tid_push = int(_ctx_push[0]) if _ctx_push else TENANT_INTEGRACIONES
+        _trace["tenant"] = _tid_push
         _cur.execute("""
             SELECT sb.tenant_id, COALESCE(SUM(sb.cantidad), 0)
             FROM stock_bodega sb
             LEFT JOIN bodegas b
               ON b.codigo = sb.bodega_codigo AND b.tenant_id = sb.tenant_id
-            WHERE sb.sku = %s
+            WHERE sb.sku = %s AND sb.tenant_id = %s
               AND (b.tipo = 'propia' OR b.tipo IS NULL OR sb.bodega_codigo = 'CENTRAL')
             GROUP BY sb.tenant_id
-        """, (sku,))
+        """, (sku, _tid_push))
         _por_tenant = {int(r[0]): int(r[1] or 0) for r in _cur.fetchall()
                        if r and r[0] is not None}
         _trace["stock_por_tenant"] = dict(_por_tenant)
@@ -3403,8 +3487,8 @@ def _sincronizar_stock_marketplaces_cuerpo(sku, stock=None, contexto="manual"):
             _cur.execute("""
                 SELECT COALESCE(SUM(cantidad), 0)
                 FROM stock_bodega
-                WHERE sku = %s AND bodega_codigo = 'CENTRAL'
-            """, (sku,))
+                WHERE sku = %s AND bodega_codigo = 'CENTRAL' AND tenant_id = %s
+            """, (sku, _tid_push))
             central_real = int((_cur.fetchone() or [0])[0] or 0)
             if central_real > 0:
                 print(f"[Sync][{contexto}] GUARD anti-cero (CENTRAL) para {sku}: "
@@ -3412,7 +3496,8 @@ def _sincronizar_stock_marketplaces_cuerpo(sku, stock=None, contexto="manual"):
                 _trace["guard_central"] = central_real
                 stock_publicar = central_real
             else:
-                _cur.execute("SELECT COALESCE(MAX(stock), 0) FROM productos WHERE sku = %s", (sku,))
+                _cur.execute("SELECT COALESCE(MAX(stock), 0) FROM productos "
+                             "WHERE sku = %s AND tenant_id = %s", (sku, _tid_push))
                 row_prod = _cur.fetchone()
                 prod_stock = int(row_prod[0]) if row_prod and row_prod[0] is not None else 0
                 if prod_stock > 0:
@@ -3451,7 +3536,14 @@ def _sincronizar_stock_marketplaces_cuerpo(sku, stock=None, contexto="manual"):
         ("ripley",       actualizar_stock_ripley),
     ]
     stock = stock_publicar  # las llamadas internas de abajo usan `stock`
+    # Solo los canales que el cliente tiene conectados. El dueño los tiene
+    # todos (credenciales del servidor), asi que para el nada cambia.
+    from credenciales_canal import tiene_canal as _tiene_canal
+    _canal_cred = {"woo": "web"}
     for nombre_canal, fn in canales:
+        if not _tiene_canal(_canal_cred.get(nombre_canal, nombre_canal)):
+            resultado[nombre_canal] = "sin_conectar"
+            continue
         try:
             ret = fn(sku, stock)
             # Inspeccionar el retorno con detalle
@@ -3523,20 +3615,23 @@ def _sincronizar_stock_marketplaces_cuerpo(sku, stock=None, contexto="manual"):
 def sincronizar_stock_marketplaces(sku, stock=None, contexto="manual"):
     """Publica el stock propio de un SKU en los canales conectados.
 
-    Los canales son del cliente dueño de las credenciales. Antes esto corria
-    igual para cualquier cliente: si otro registraba un movimiento de un SKU
-    que se llamara igual que uno del dueño, podia terminar publicando el stock
-    de ese otro cliente en las publicaciones del dueño (el mapeo se buscaba con
-    el cliente que hubiera dejado la conexion del pool).
+    Cada cliente publica en SUS canales, con sus credenciales y su stock
+    (credenciales_canal + filtro por cliente en el cuerpo).
 
-    - Otro cliente: no se publica nada.
+    - Otro cliente: publica en los canales que tenga conectados.
     - Sin cliente conocido (codigo viejo que no lo propaga): se corre como el
       dueño, que es de quien son los canales.
     """
     from inventario import tenant_actual
     ctx = tenant_actual()
     if ctx is not None and ctx[0] != TENANT_INTEGRACIONES:
-        return {"omitido": "el cliente %s no tiene canales conectados" % ctx[0]}
+        # Otro cliente publica en SUS canales, con sus credenciales. Sin
+        # ninguno conectado no hay nada que publicar.
+        from credenciales_canal import tiene_canal as _tc
+        if not any(_tc(c, ctx[0]) for c in ("web", "walmart", "paris", "mercadolibre",
+                                            "falabella", "ripley")):
+            return {"omitido": "el cliente %s no tiene canales conectados" % ctx[0]}
+        return _sincronizar_stock_marketplaces_cuerpo(sku, stock, contexto=contexto)
     if ctx is not None:
         return _sincronizar_stock_marketplaces_cuerpo(sku, stock, contexto=contexto)
     set_thread_tenant(TENANT_INTEGRACIONES, is_admin=False)
@@ -3574,6 +3669,47 @@ def clear_thread_tenant():
     _thread_tenant.is_admin = False
 
 
+# Job de canal -> canal de credenciales. Los que no estan aca corren solo para
+# el dueño.
+_CANAL_DEL_JOB = {
+    "_sync_walmart_automatico": "walmart",
+    "_sync_meli_automatico": "mercadolibre",
+    "_sync_falabella_automatico": "falabella",
+    "_sync_paris_automatico": "paris",
+    "_sync_ripley_automatico": "ripley",
+    "_sync_woo_automatico": "web",
+}
+
+
+def _cliente_listo_para_sync(tid, job):
+    """Un cliente que no es el dueño corre los sync de canales solo si ya
+    tiene bodegas y productos.
+
+    - Bodegas: se crean aca si faltan. Sin ellas el stock Full se contaba como
+      propio y se publicaba en las publicaciones propias.
+    - Productos: sin ninguno, el sync de MercadoLibre marcaba las ordenes como
+      procesadas sin registrar la venta, y cuando el cliente cargara sus
+      productos esas ventas ya no se descontarian nunca.
+    """
+    try:
+        from inventario import asegurar_bodegas_cliente, get_conn as _gc2, release_conn as _rc2
+        asegurar_bodegas_cliente(tid)
+        cn = _gc2(tenant_id=tid, is_admin=True)
+        try:
+            with cn.cursor() as c:
+                c.execute("SELECT COUNT(*) FROM productos WHERE tenant_id = %s", (tid,))
+                n = int((c.fetchone() or [0])[0] or 0)
+        finally:
+            _rc2(cn)
+        if n == 0:
+            print(f"[{job}] cliente {tid} sin productos: no se sincroniza todavia")
+            return False
+        return True
+    except Exception as e:
+        print(f"[{job}] no pude preparar al cliente {tid}: {e}")
+        return False
+
+
 def con_tenant_default(func):
     """Decorador: ejecuta func() una vez por cada tenant activo en BD.
     Mientras solo hay 1 tenant (Babymine), corre 1 vez con tenant_id=1.
@@ -3591,17 +3727,29 @@ def con_tenant_default(func):
             cur.close()
             _rc(conn)
         except Exception as e:
-            print(f"[con_tenant_default] Error listando tenants: {e}, usando default=1")
-            tenant_ids = [1]
+            print(f"[con_tenant_default] Error listando tenants: {e}, usando el dueño")
+            tenant_ids = [TENANT_INTEGRACIONES]
         finally:
             release_conn(conn)
 
-        # Todos los jobs con este decorador hablan con los canales usando las
-        # credenciales del entorno, que son de UN cliente. Correrlos para otro
-        # cliente le escribia las ventas de ese: la primera iteracion que
-        # alcanzaba una orden se la quedaba y le descontaba el stock.
-        tenant_ids = [t for t in tenant_ids if t == TENANT_INTEGRACIONES] or [TENANT_INTEGRACIONES]
+        # Cada job de canal corre para el dueño (credenciales del servidor) y
+        # para los clientes que tengan ESE canal conectado con sus propias
+        # credenciales. Antes corria para todos con las del dueño: la vuelta
+        # de otro cliente se quedaba con ventas del dueño.
+        #
+        # El dueño va primero. Los jobs que no son de un canal (autocorreccion,
+        # Full, recuperacion) siguen solo para el dueño.
+        canal_job = _CANAL_DEL_JOB.get(func.__name__)
+        activos = set(tenant_ids)
+        if canal_job:
+            from credenciales_canal import clientes_con_canal
+            tenant_ids = [t for t in clientes_con_canal(canal_job)
+                          if t == TENANT_INTEGRACIONES or t in activos]
+        else:
+            tenant_ids = [TENANT_INTEGRACIONES]
         for tid in tenant_ids:
+            if tid != TENANT_INTEGRACIONES and not _cliente_listo_para_sync(tid, func.__name__):
+                continue
             # Misma red que en las peticiones web: los sync tambien dejaban
             # conexiones sin devolver cuando algo fallaba a mitad.
             try:
@@ -9093,13 +9241,23 @@ def _sync_devoluciones_automatico():
     _sync_devoluciones_automatico._running = True
     try:
         from returns import sincronizar_devoluciones
-        # Solo el cliente dueño de las credenciales. Antes corria para cada
-        # cliente activo con las MISMAS credenciales: un segundo cliente
-        # habria recibido las devoluciones del primero.
-        for tid in [TENANT_INTEGRACIONES]:
+        # El dueño con todos sus canales; cada otro cliente con los canales
+        # que tenga conectados (sus credenciales). Antes corria para todos con
+        # las credenciales del dueño.
+        from credenciales_canal import clientes_con_canal, tiene_canal
+        _canales_dev = ["mercadolibre", "walmart", "ripley", "paris", "falabella"]
+        _clientes = []
+        for _c in _canales_dev:
+            for _t in clientes_con_canal(_c):
+                if _t not in _clientes:
+                    _clientes.append(_t)
+        for tid in _clientes:
             try:
                 set_thread_tenant(tid, is_admin=False)
-                sincronizar_devoluciones(tenant_id=tid, dias=30)
+                _suyos = [c for c in _canales_dev if tiene_canal(c, tid)]
+                if not _suyos:
+                    continue
+                sincronizar_devoluciones(tenant_id=tid, dias=30, canales=_suyos)
             except Exception as e:
                 print(f"[Devoluciones sync] tenant {tid} error: {e}")
             finally:
@@ -11984,7 +12142,13 @@ def ruta_meli_conectar():
     if not session.get("logged"): return redirect("/")
     try:
         from mercadolibre import construir_url_autorizacion
-        url = construir_url_autorizacion(state=session.get("usuario", "lusync"))
+        import secrets as _secrets
+        # state aleatorio y guardado en la sesion: el callback solo acepta el
+        # regreso de ESTE inicio de conexion. Antes era el nombre de usuario,
+        # predecible.
+        estado = _secrets.token_urlsafe(24)
+        session["meli_state"] = estado
+        url = construir_url_autorizacion(state=estado)
         return redirect(url)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -11999,11 +12163,31 @@ def ruta_meli_callback():
         return f"<h2>Error de MercadoLibre</h2><p>{error}: {request.args.get('error_description','')}</p>", 400
     if not code:
         return "<h2>Falta el parámetro code</h2>", 400
+    esperado = session.pop("meli_state", None)
+    if not esperado or request.args.get("state") != esperado:
+        return ("<h2>No se pudo confirmar la conexión</h2><p>Vuelve a Configuración → "
+                "Integraciones y presiona Conectar otra vez.</p>"), 400
 
     try:
         from mercadolibre import intercambiar_codigo_por_token
         import time
         data = intercambiar_codigo_por_token(code)
+        # Una cuenta de MercadoLibre es de UN cliente: si otro ya la tiene
+        # conectada, sus ventas terminarian registradas en los dos.
+        _uid = data.get("user_id")
+        if _uid:
+            from inventario import get_conn as _gc_ml, release_conn as _rc_ml
+            _cn = _gc_ml(tenant_id=_tenant_sesion(), is_admin=True)
+            try:
+                with _cn.cursor() as _c:
+                    _c.execute("""SELECT 1 FROM mercadolibre_auth
+                                   WHERE user_id = %s AND tenant_id <> %s LIMIT 1""",
+                               (_uid, _tenant_sesion()))
+                    if _c.fetchone():
+                        return ("<h2>Esa cuenta de MercadoLibre ya está conectada a otro "
+                                "cliente de Lusync</h2>"), 409
+            finally:
+                _rc_ml(_cn)
         set_meli_auth({
             "access_token":  data["access_token"],
             "refresh_token": data.get("refresh_token", ""),
@@ -12014,7 +12198,9 @@ def ruta_meli_callback():
         return redirect("/panel?meli=ok")
     except Exception as e:
         import traceback
-        return f"<h2>Error conectando MercadoLibre</h2><pre>{str(e)}\n\n{traceback.format_exc()}</pre>", 500
+        # El detalle va al log, no a la pagina (mostraba el traceback completo).
+        traceback.print_exc()
+        return f"<h2>Error conectando MercadoLibre</h2><p>{str(e)[:200]}</p>", 500
 
 
 @app.route("/mercadolibre/desconectar", methods=["POST"])

@@ -88,11 +88,57 @@ def credencial(canal, campo):
 
 
 def tiene_canal(canal, tenant_id=None):
-    """True si el cliente tiene credenciales para el canal."""
+    """True si el cliente tiene credenciales para el canal.
+
+    MercadoLibre no guarda credenciales aca: el cliente lo conecta con el
+    inicio de sesion de MercadoLibre y queda un token en mercadolibre_auth.
+    """
     tid = tenant_id or cliente_en_curso()
     if tid == DUENO:
         return True
+    if canal == "mercadolibre":
+        try:
+            from inventario import get_conn, release_conn
+            conn = get_conn(tenant_id=tid, is_admin=True)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""SELECT 1 FROM mercadolibre_auth
+                                    WHERE tenant_id = %s AND access_token IS NOT NULL
+                                      AND access_token <> '' LIMIT 1""", (tid,))
+                    return cur.fetchone() is not None
+            finally:
+                release_conn(conn)
+        except Exception as e:
+            print(f"[credenciales_canal] mercadolibre cliente {tid}: {e}")
+            return False
     return bool(_guardadas(tid, canal))
+
+
+def clientes_con_canal(canal):
+    """Clientes activos que pueden operar el canal: el dueño siempre, y los
+    demas solo si lo tienen conectado."""
+    ids = [DUENO]
+    try:
+        from inventario import get_conn, release_conn
+        conn = get_conn(tenant_id=DUENO, is_admin=True)
+        try:
+            with conn.cursor() as cur:
+                if canal == "mercadolibre":
+                    cur.execute("""SELECT DISTINCT a.tenant_id FROM mercadolibre_auth a
+                                     JOIN tenants t ON t.id = a.tenant_id
+                                    WHERE t.estado = 'activo' AND a.tenant_id <> %s
+                                      AND COALESCE(a.access_token, '') <> ''""", (DUENO,))
+                else:
+                    cur.execute("""SELECT DISTINCT c.tenant_id FROM credenciales_marketplace c
+                                     JOIN tenants t ON t.id = c.tenant_id
+                                    WHERE t.estado = 'activo' AND c.activo = TRUE
+                                      AND c.canal = %s AND c.tenant_id <> %s""", (canal, DUENO))
+                ids += [int(r[0]) for r in cur.fetchall()]
+        finally:
+            release_conn(conn)
+    except Exception as e:
+        print(f"[credenciales_canal] clientes de {canal}: {e}")
+    return ids
 
 
 def olvidar(tenant_id=None, canal=None):

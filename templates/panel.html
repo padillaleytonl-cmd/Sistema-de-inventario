@@ -5457,8 +5457,9 @@ function pintarCanales(){
   filas.push(`<div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);">
     <div style="width:36px;height:36px;background:#fff7e6;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#f59e0b;">ML</div>
     <div style="flex:1;"><div style="font-size:13px;font-weight:500;color:var(--text);">MercadoLibre</div>
-      <div style="font-size:11px;color:var(--muted);">${ml.disponible ? 'Se conecta con tu cuenta de MercadoLibre' : 'Conexión con tu cuenta de MercadoLibre: próximamente'}</div></div>
-    ${_chipCanal(ml.conectado)}</div>`);
+      <div style="font-size:11px;color:var(--muted);">${ml.conectado ? 'Conectado con tu cuenta de MercadoLibre' : 'Se conecta iniciando sesión en MercadoLibre'}</div></div>
+    ${_chipCanal(ml.conectado)}
+    ${ml.disponible ? '' : `<a href="/mercadolibre/conectar" class="btn-${ml.conectado ? 'secondary' : 'primary'}" style="padding:6px 12px;font-size:12px;text-decoration:none;">${ml.conectado ? 'Reconectar' : 'Conectar'}</a>`}</div>`);
   (d.canales || []).forEach(c => {
     const [ini, bg, col] = CANAL_ESTILO[c.canal] || ['··','var(--bg2)','var(--muted)'];
     let desc, acciones;
