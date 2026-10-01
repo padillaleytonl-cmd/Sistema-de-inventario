@@ -406,6 +406,22 @@ def con_tenant_del_llamador(fn):
 
 
 def get_conn(tenant_id=None, is_admin=False):
+    """Conexion del pool con el cliente fijado (ver _get_conn_una_vez).
+
+    Si la conexion se rompe justo al fijarle el cliente —la primera consulta
+    que hace—, se descarta y se pide otra, en vez de entregarla rota: el que
+    la pidio fallaba con "connection already closed".
+    """
+    conn = _get_conn_una_vez(tenant_id, is_admin)
+    if conn is not None and conn.closed:
+        _olvidar_prestamo(conn)
+        _descartar_conexion(conn)
+        print("[pool] conexion rota al fijar el cliente; se pide otra")
+        conn = _get_conn_una_vez(tenant_id, is_admin)
+    return conn
+
+
+def _get_conn_una_vez(tenant_id=None, is_admin=False):
     """Obtiene una conexión del pool. Usar con try/finally para devolverla.
 
     Multi-tenancy: prioridad de fuente del tenant_id:
