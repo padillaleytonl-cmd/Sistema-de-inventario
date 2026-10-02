@@ -255,16 +255,26 @@ def resumen_despachos(config, tenant_id, ahora=None):
                             ORDER BY fecha_compra ASC""", (tid, DIAS_MAXIMOS))
             filas = cur.fetchall()
 
-            # Productos de cada orden, desde la venta registrada.
+            # Productos de cada orden y de que bodega salieron, desde la venta
+            # registrada. La bodega de la venta es la palabra final: si Lusync
+            # la desconto de una bodega Full, la despacha el marketplace y no
+            # va en esta tarjeta aunque el canal no la haya marcado como Full.
             ids = list({f[1] for f in filas})
             productos = {}
+            de_full = set()
             if ids:
-                cur.execute("""SELECT orden_id, sku, nombre, SUM(cantidad)
-                                 FROM movimientos
-                                WHERE tenant_id = %s AND tipo = 'salida'
-                                  AND orden_id = ANY(%s)
-                                GROUP BY orden_id, sku, nombre""", (tid, ids))
-                for oid, sku, nombre, cant in cur.fetchall():
+                cur.execute("""SELECT m.orden_id, m.sku, m.nombre, SUM(m.cantidad),
+                                      BOOL_OR(COALESCE(m.bodega_codigo, 'CENTRAL') <> 'CENTRAL'
+                                              AND COALESCE(b.tipo, 'propia') <> 'propia')
+                                 FROM movimientos m
+                                 LEFT JOIN bodegas b
+                                   ON b.codigo = m.bodega_codigo AND b.tenant_id = m.tenant_id
+                                WHERE m.tenant_id = %s AND m.tipo = 'salida'
+                                  AND m.orden_id = ANY(%s)
+                                GROUP BY m.orden_id, m.sku, m.nombre""", (tid, ids))
+                for oid, sku, nombre, cant, es_full in cur.fetchall():
+                    if es_full:
+                        de_full.add(oid)
                     productos.setdefault(oid, []).append(
                         {"sku": sku, "nombre": nombre, "cantidad": int(cant or 0)})
     finally:
@@ -275,7 +285,7 @@ def resumen_despachos(config, tenant_id, ahora=None):
                      "hoy": 0, "siguiente": 0} for c, _ in CANALES_DESPACHO}
     ordenes_hoy, ordenes_siguiente = [], []
     for canal, oid, numero, fecha, estado in filas:
-        if canal not in por_canal:
+        if canal not in por_canal or oid in de_full:
             continue
         dia = dia_de_despacho(fecha, cortes_t[canal], habiles)
         orden = {"canal": canal, "canal_nombre": nombres[canal], "orden_id": oid,
