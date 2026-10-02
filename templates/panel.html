@@ -5230,7 +5230,9 @@ function renderMovimientoItem(m){
   const signo = isEntrada ? '+' : '-';
   const canalAbrev = {'WooCommerce':'WC','Walmart':'WM','MercadoLibre':'ML','Falabella':'FA','Ripley':'RP','Paris':'PA','Manual':'MN','Sistema':'SIS'};
   const abrev = canalAbrev[m.canal] || m.canal || '—';
-  const ordenTag = m.orden_id ? `<span style="font-family:'DM Mono',monospace;background:var(--bg);padding:1px 6px;border-radius:4px;font-size:9px;color:var(--muted);">OC: ${m.orden_id}</span>` : '';
+  // El numero que ve el equipo (Falabella: OrderNumber, empieza con 3); el id interno solo si no hay otro.
+  const _ocVisible = m.numero_orden || m.orden_id;
+  const ordenTag = _ocVisible ? `<span style="font-family:'DM Mono',monospace;background:var(--bg);padding:1px 6px;border-radius:4px;font-size:9px;color:var(--muted);">OC: ${_ocVisible}</span>` : '';
 
   return `<div class="hist-item" style="border-left:3px solid ${cat.borde};padding-left:8px;">
     <div style="display:flex;align-items:center;gap:8px;">

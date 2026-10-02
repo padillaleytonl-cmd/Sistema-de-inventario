@@ -4629,6 +4629,7 @@ def _sync_falabella_automatico():
 
         print(f"[Scheduler Falabella] Total órdenes obtenidas: {len(todas_ordenes)}")
 
+        _numeros_fa = {}
         for o in todas_ordenes:
             if not isinstance(o, dict):
                 continue
@@ -4648,6 +4649,8 @@ def _sync_falabella_automatico():
                     estado_orden = (o.get("Status") or o.get("status") or "").lower()
                 fa_key = f"FALABELLA-{order_id}"
                 cancel_key = f"FALABELLA-CANCEL-{order_id}"
+                if order_number and order_number != order_id:
+                    _numeros_fa[order_id] = order_number
 
                 # Tarjeta de despachos (solo lo que sale de bodega propia).
                 # ready_to_ship = etiqueta lista, pero el paquete sigue en bodega.
@@ -4964,6 +4967,36 @@ def _sync_falabella_automatico():
                 errores.append(f"FALABELLA orden: {e}")
 
         import gc; gc.collect()
+        # El numero que usa el equipo es el OrderNumber (empieza con 3), no el
+        # OrderId interno. El registro de la venta lo completaba solo para las
+        # ordenes que registraba el sync; las que entran por el webhook quedaban
+        # marcadas sin el, y el sync ya no las volvia a tocar. Se completa aca
+        # para todas las de la ventana, en una sola consulta.
+        if _numeros_fa:
+            try:
+                from inventario import get_conn as _gc_num, release_conn as _rc_num, tenant_actual as _ta_num
+                from psycopg2.extras import execute_values as _ev_num
+                _ctx_num = _ta_num()
+                _tid_num = int(_ctx_num[0]) if _ctx_num else TENANT_INTEGRACIONES
+                _cn_num = _gc_num(tenant_id=_tid_num, is_admin=True)
+                try:
+                    with _cn_num.cursor() as _cur_num:
+                        _ev_num(_cur_num, """
+                            UPDATE movimientos m SET numero_orden = v.numero
+                              FROM (VALUES %s) AS v(oid, numero)
+                             WHERE m.tenant_id = """ + str(_tid_num) + """
+                               AND m.canal = 'Falabella'
+                               AND m.orden_id::text = v.oid
+                               AND (m.numero_orden IS NULL OR m.numero_orden = ''
+                                    OR m.numero_orden = m.orden_id::text)""",
+                            list(_numeros_fa.items()))
+                        if _cur_num.rowcount:
+                            print(f"[Scheduler Falabella] numero de orden completado en {_cur_num.rowcount} movimientos")
+                    _cn_num.commit()
+                finally:
+                    _rc_num(_cn_num)
+            except Exception as _e_num:
+                print(f"[Scheduler Falabella] no pude completar numeros de orden: {_e_num}")
         print(f"[Scheduler Falabella] Sync OK — nuevas:{nuevas} canceladas:{canceladas} errores:{len(errores)}")
         if errores:
             print(f"[Scheduler Falabella] Errores: {errores[:3]}")
