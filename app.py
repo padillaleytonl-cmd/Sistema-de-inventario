@@ -3951,13 +3951,30 @@ def _fecha_falabella(o):
             return None
 
 
+def _campos_estado_paris(o, ruta="", salida=None):
+    """Todos los campos cuyo nombre dice "status" o "estado", esten donde
+    esten: en las ordenes de Paris el estado no viene en un lugar fijo."""
+    salida = [] if salida is None else salida
+    if isinstance(o, dict):
+        for k, v in o.items():
+            r = f"{ruta}.{k}" if ruta else k
+            if ("status" in k.lower() or "estado" in k.lower()) and not isinstance(v, (dict, list)):
+                if v not in (None, ""):
+                    salida.append((r, str(v)))
+            elif isinstance(v, dict) and ("status" in k.lower() or "estado" in k.lower()):
+                nombre = v.get("name") or v.get("nombre") or v.get("code") or v.get("id")
+                if nombre not in (None, ""):
+                    salida.append((r, str(nombre)))
+            else:
+                _campos_estado_paris(v, r, salida)
+    elif isinstance(o, list):
+        for x in o[:20]:
+            _campos_estado_paris(x, ruta + "[]", salida)
+    return salida
+
+
 def _estado_envio_paris(o):
-    marcas = [str(o.get("status") or "")]
-    for sh in (o.get("shipments") or []):
-        marcas.append(str(sh.get("status") or ""))
-        for it in (sh.get("items") or []):
-            marcas.append(str(it.get("itemStatus") or it.get("status") or ""))
-    return " ".join(m for m in marcas if m).strip().lower()
+    return " ".join(sorted({v.lower() for _, v in _campos_estado_paris(o)})).strip()
 
 
 def _estados_lineas_walmart(o):
@@ -4983,6 +5000,7 @@ def _sync_paris_automatico():
         print(f"[Scheduler Paris] Órdenes obtenidas: {len(ordenes)}")
 
         _estados_paris_vistos = set()
+        _muestra_paris = []
         for o in ordenes:
             try:
                 sub_order = str(o.get("subOrderNumber") or o.get("subOrder") or o.get("orderNumber") or "")
@@ -5010,9 +5028,16 @@ def _sync_paris_automatico():
                     elif not detectar_fulfillment_paris(o):
                         _est_pa = _estado_envio_paris(o)
                         _estados_paris_vistos.add(_est_pa or "(vacio)")
+                        if not _muestra_paris:
+                            # Una muestra por sync: estructura real de la orden.
+                            _muestra_paris.append(1)
+                            print(f"[Despachos] Paris muestra {sub_order}: claves={sorted(o.keys())[:40]} "
+                                  f"estados={_campos_estado_paris(o)[:20]}")
+                        # Sin estado legible no se puede saber si ya salio: no
+                        # se cuenta, para no inflar la tarjeta con ordenes viejas.
                         _anotar_despacho("paris", sub_order, o.get("createdAt") or o.get("created_at"),
                                          _est_pa or "sin estado",
-                                         not any(p in _est_pa for p in _PARIS_SALIO),
+                                         bool(_est_pa) and not any(p in _est_pa for p in _PARIS_SALIO),
                                          numero=sub_order)
                 except Exception as _e_desp:
                     print(f"[Despachos] Paris {sub_order}: {_e_desp}")
