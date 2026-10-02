@@ -5033,7 +5033,7 @@ def _sync_paris_automatico():
         print(f"[Scheduler Paris] Órdenes obtenidas: {len(ordenes)}")
 
         _estados_paris_vistos = set()
-        _muestra_paris = []
+        _muestra_paris = {}
         for o in ordenes:
             try:
                 sub_order = str(o.get("subOrderNumber") or o.get("subOrder") or o.get("orderNumber") or "")
@@ -5061,28 +5061,27 @@ def _sync_paris_automatico():
                     elif not detectar_fulfillment_paris(o):
                         _est_pa = _estado_envio_paris(o)
                         _estados_paris_vistos.add(_est_pa or "(vacio)")
-                        # Paris manda el estado como numero (statusId) y no hay
-                        # tabla publica de equivalencias. Se registra el estado
-                        # ACTUAL del envio y de los productos (no el historial de
-                        # tracking) para deducirla; mientras tanto Paris no
-                        # cuenta en la tarjeta.
+                        # Paris manda el estado como numero (statusId) sin tabla
+                        # publica. Lo que si es inequivoco: cada envio trae
+                        # effectiveDispatchDate cuando efectivamente salio, y un
+                        # historial (tracking) con codigos en texto. Pendiente =
+                        # ningun envio despachado y el ultimo codigo no es de
+                        # cancelacion ni de entrega.
                         _sh_pa = o.get("shipments") or []
-                        _est_actual = "envio=%s productos=%s" % (
-                            ",".join(sorted({str(s.get("statusId")) for s in _sh_pa if s.get("statusId") is not None})) or "-",
-                            ",".join(sorted({str(i.get("statusId")) for s in _sh_pa for i in (s.get("items") or [])
-                                             if i.get("statusId") is not None})) or "-")
-                        _muestra_paris.append(f"{sub_order} {str(o.get('createdAt') or '')[:16]} {_est_actual}")
-                        if len(_muestra_paris) == 1 and _sh_pa:
-                            _trk = (_sh_pa[0].get("tracking") or [])
-                            _seguro = lambda d: {k: (str(v)[:40] if not isinstance(v, (dict, list)) else type(v).__name__)
-                                                 for k, v in (d or {}).items()
-                                                 if not any(p in k.lower() for p in ("address", "name", "phone", "email",
-                                                                                    "rut", "document", "customer", "street"))}
-                            print(f"[Despachos] Paris envio claves={sorted(_sh_pa[0].keys())} "
-                                  f"tracking_primero={_seguro(_trk[0] if _trk else {})} "
-                                  f"tracking_ultimo={_seguro(_trk[-1] if _trk else {})}")
+                        _despachada_pa = any(s.get("effectiveDispatchDate") for s in _sh_pa)
+                        _codigos_pa = []
+                        for _s in _sh_pa:
+                            _trk = sorted(_s.get("tracking") or [], key=lambda t: str(t.get("createdAt") or ""))
+                            if _trk:
+                                _codigos_pa.append(str(_trk[-1].get("code") or "").upper())
+                        _ultimo_pa = ",".join(sorted(set(c for c in _codigos_pa if c))) or "-"
+                        _ids_pa = ",".join(sorted({str(s.get("statusId")) for s in _sh_pa if s.get("statusId") is not None})) or "-"
+                        _cerrada_pa = any(p in _ultimo_pa for p in ("CANCEL", "REJECT", "FAIL", "DELIVER", "RETURN", "ENTREG"))
+                        _pend_pa = bool(_sh_pa) and not _despachada_pa and not _cerrada_pa
+                        _clave_pa = f"statusId={_ids_pa} codigo={_ultimo_pa} despachada={'si' if _despachada_pa else 'no'}"
+                        _muestra_paris[_clave_pa] = _muestra_paris.get(_clave_pa, 0) + 1
                         _anotar_despacho("paris", sub_order, o.get("createdAt") or o.get("created_at"),
-                                         _est_actual, False, numero=sub_order)
+                                         f"{_ids_pa} {_ultimo_pa}", _pend_pa, numero=sub_order)
                 except Exception as _e_desp:
                     print(f"[Despachos] Paris {sub_order}: {_e_desp}")
 
@@ -5326,8 +5325,9 @@ def _sync_paris_automatico():
         import gc; gc.collect()
         # Los estados de envio de Paris no estan documentados: se dejan a la
         # vista para revisar que la tarjeta los interpreta bien.
-        for _linea in _muestra_paris[:45]:
-            print(f"[Despachos] Paris orden {_linea}")
+        # Resumen para confirmar que significa cada statusId de Paris.
+        for _clave, _n in sorted(_muestra_paris.items()):
+            print(f"[Despachos] Paris {_clave}: {_n} ordenes")
         print(f"[Scheduler Paris] Sync OK — nuevas:{nuevas} canceladas:{canceladas} errores:{len(errores)}")
         if errores:
             print(f"[Scheduler Paris] Errores: {errores[:3]}")
