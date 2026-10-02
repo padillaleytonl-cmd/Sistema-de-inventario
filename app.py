@@ -204,6 +204,11 @@ except Exception as _e:
 init_alertas()
 init_meli_auth()
 init_bodegas()
+try:
+    from despachos import init_despachos_bodega
+    init_despachos_bodega()
+except Exception as _e:
+    print(f"[despachos] {_e}")
 
 # ── Facturación electrónica SII (multi-tenant) ──
 try:
@@ -3853,6 +3858,157 @@ def con_tenant_default(func):
     return wrapper
 
 
+# ── Despachos desde bodega propia (tarjeta del dashboard) ────────────────────
+# Cada sync anota el estado de envio de las ordenes que salen de la bodega
+# propia. Ver despachos.py. Nada de esto puede cortar una sincronizacion: los
+# llamados van envueltos en try y los errores solo se loguean.
+
+# MercadoLibre: substatus de ready_to_ship que ya significan "salio de bodega".
+_MELI_ENTREGADA_AL_COURIER = {"dropped_off", "picked_up", "in_hub", "in_transit",
+                              "shipped", "authorized_by_carrier"}
+
+# Paris: palabras del estado de envio que indican que ya salio de bodega.
+_PARIS_SALIO = ("shipped", "delivered", "despach", "entreg", "transit",
+                "enviad", "en_camino", "en camino", "on_route", "picked")
+
+
+def _anotar_despacho(*args, **kwargs):
+    from despachos import anotar_despacho
+    anotar_despacho(*args, **kwargs)
+
+
+def _quitar_despacho(canal, orden_id):
+    from despachos import quitar_despacho
+    quitar_despacho(canal, orden_id)
+
+
+def _despachos_resueltos(canal):
+    from despachos import despachos_resueltos
+    return despachos_resueltos(canal)
+
+
+def _envio_meli(shipping_id):
+    """El envio de MercadoLibre: /orders/search no trae su estado."""
+    from mercadolibre import meli_headers, MELI_API_URL
+    import requests as _rq
+    r = _rq.get(f"{MELI_API_URL}/shipments/{shipping_id}", headers=meli_headers(), timeout=10)
+    return r.json() if r.status_code == 200 else None
+
+
+def _anotar_envio_meli(order_id, fecha_compra, shipping_id, envio):
+    logistica = (envio.get("logistic_type") or (envio.get("logistic") or {}).get("type") or "").lower()
+    estado = (envio.get("status") or "").lower()
+    sub_estado = (envio.get("substatus") or "").lower()
+    if logistica == "fulfillment":
+        # Full: lo despacha MercadoLibre. Queda resuelta para no consultarla mas.
+        _anotar_despacho("mercadolibre", order_id, fecha_compra, "full", False,
+                         numero=order_id, ref_envio=shipping_id)
+        return
+    pendiente = estado in ("pending", "handling") or (
+        estado == "ready_to_ship" and sub_estado not in _MELI_ENTREGADA_AL_COURIER)
+    _anotar_despacho("mercadolibre", order_id, fecha_compra,
+                     f"{estado}/{sub_estado}" if sub_estado else estado, pendiente,
+                     numero=order_id, ref_envio=shipping_id)
+
+
+def _despacho_meli(o, order_id, resueltos):
+    if order_id in resueltos:
+        return
+    shipping_id = (o.get("shipping") or {}).get("id")
+    if not shipping_id:
+        return
+    envio = _envio_meli(shipping_id)
+    if envio:
+        _anotar_envio_meli(order_id, o.get("date_created"), shipping_id, envio)
+
+
+def _refrescar_despachos_meli():
+    """Pendientes que ya no vienen entre las ultimas 50 ordenes: se pregunta
+    su envio directo."""
+    from despachos import despachos_por_revisar
+    for order_id, shipping_id in despachos_por_revisar("mercadolibre"):
+        try:
+            if shipping_id:
+                envio = _envio_meli(shipping_id)
+                if envio:
+                    _anotar_envio_meli(order_id, None, shipping_id, envio)
+        except Exception as e:
+            print(f"[Despachos] MELI {order_id}: {str(e)[:120]}")
+
+
+def _fecha_falabella(o):
+    """CreatedAt de Falabella, igual que lo lee el registro de la venta."""
+    import pytz as _pz
+    texto = (o.get("CreatedAt") or o.get("created_at") or "").strip()
+    if not texto:
+        return None
+    try:
+        return datetime.fromisoformat(texto.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            return _pz.utc.localize(datetime.strptime(texto, "%Y-%m-%d %H:%M:%S"))
+        except Exception:
+            return None
+
+
+def _estado_envio_paris(o):
+    marcas = [str(o.get("status") or "")]
+    for sh in (o.get("shipments") or []):
+        marcas.append(str(sh.get("status") or ""))
+        for it in (sh.get("items") or []):
+            marcas.append(str(it.get("itemStatus") or it.get("status") or ""))
+    return " ".join(m for m in marcas if m).strip().lower()
+
+
+def _estados_lineas_walmart(o):
+    estados = []
+    lineas = (o.get("orderLines") or {}).get("orderLine") or []
+    if isinstance(lineas, dict):
+        lineas = [lineas]
+    for linea in lineas:
+        sts = (linea.get("orderLineStatuses") or {}).get("orderLineStatus") or []
+        if isinstance(sts, dict):
+            sts = [sts]
+        for s in sts:
+            if s.get("status"):
+                estados.append(str(s["status"]).lower())
+    return estados
+
+
+def _fecha_woo(o):
+    from datetime import timezone as _tz_utc
+    gmt = o.get("date_created_gmt")
+    if gmt:
+        try:
+            return datetime.fromisoformat(str(gmt).replace("Z", "")).replace(tzinfo=_tz_utc.utc)
+        except ValueError:
+            pass
+    return o.get("date_created")  # hora del sitio (Chile), sin zona
+
+
+def _refrescar_despachos_web():
+    """Pendientes de la Web que el sync ya no trae (solo mira 2 dias)."""
+    from despachos import despachos_por_revisar
+    for order_id, _ in despachos_por_revisar("web"):
+        try:
+            r = requests.get(_woo_api() + f"/orders/{order_id}",
+                             params={"consumer_key": credencial("web", "consumer_key"),
+                                     "consumer_secret": credencial("web", "consumer_secret")},
+                             timeout=10)
+            if r.status_code == 404:
+                _quitar_despacho("web", order_id)
+            elif r.status_code == 200:
+                o = r.json() or {}
+                estado = o.get("status") or ""
+                if estado in ("cancelled", "refunded", "failed", "trash"):
+                    _quitar_despacho("web", order_id)
+                else:
+                    _anotar_despacho("web", order_id, _fecha_woo(o), estado,
+                                     estado == "processing", numero=o.get("number") or order_id)
+        except Exception as e:
+            print(f"[Despachos] Web {order_id}: {str(e)[:120]}")
+
+
 # ── SYNC AUTOMÁTICO WALMART CADA 5 MINUTOS ──
 @con_tenant_default
 def _sync_walmart_automatico():
@@ -3890,6 +4046,23 @@ def _sync_walmart_automatico():
                 if not order_id:
                     continue
                 customer_order_id = str(o.get("customerOrderId") or order_id)
+
+                # Tarjeta de despachos (solo lo que sale de bodega propia)
+                try:
+                    _sts_wm = _estados_lineas_walmart(o)
+                    if _sts_wm and all(s == "cancelled" for s in _sts_wm):
+                        _quitar_despacho("walmart", customer_order_id)
+                    elif not detectar_fulfillment_walmart(o):
+                        _anotar_despacho(
+                            "walmart", customer_order_id,
+                            _fecha_compra_walmart(o.get("orderDate") or o.get("createdAt") or
+                                                  o.get("orderPlacedTime") or o.get("orderTimestamp")),
+                            ",".join(sorted(set(_sts_wm))) or "sin estado",
+                            any(s in ("created", "acknowledged") for s in _sts_wm),
+                            numero=customer_order_id)
+                except Exception as _e_desp:
+                    print(f"[Despachos] Walmart {customer_order_id}: {_e_desp}")
+
                 if orden_ya_procesada_texto(customer_order_id):
                     continue
 
@@ -4140,12 +4313,22 @@ def _sync_meli_automatico():
             print(f"[Scheduler MELI] Error obteniendo órdenes: {e}")
             return
 
+        _resueltos_meli = _despachos_resueltos("mercadolibre")
         for o in ordenes:
             try:
                 order_id = str(o.get("id", ""))
                 estado = o.get("status", "")
                 meli_key = f"MELI-{order_id}"
                 cancel_key = f"MELI-CANCEL-{order_id}"
+
+                # Tarjeta de despachos (solo lo que sale de bodega propia)
+                try:
+                    if estado in ("paid", "confirmed"):
+                        _despacho_meli(o, order_id, _resueltos_meli)
+                    elif estado in ("cancelled", "canceled"):
+                        _quitar_despacho("mercadolibre", order_id)
+                except Exception as _e_desp:
+                    print(f"[Despachos] MELI {order_id}: {_e_desp}")
 
                 # ── Órdenes pagadas ──
                 if estado in ("paid", "confirmed"):
@@ -4383,6 +4566,10 @@ def _sync_meli_automatico():
             except Exception as e:
                 errores.append(f"MELI orden: {e}")
 
+        try:
+            _refrescar_despachos_meli()
+        except Exception as _e_desp:
+            print(f"[Despachos] refresco MELI: {_e_desp}")
         print(f"[Scheduler MELI] Sync OK — nuevas:{nuevas} canceladas:{canceladas} errores:{len(errores)}")
     except Exception as e:
         print(f"[Scheduler MELI] Error general: {e}")
@@ -4444,6 +4631,19 @@ def _sync_falabella_automatico():
                     estado_orden = (o.get("Status") or o.get("status") or "").lower()
                 fa_key = f"FALABELLA-{order_id}"
                 cancel_key = f"FALABELLA-CANCEL-{order_id}"
+
+                # Tarjeta de despachos (solo lo que sale de bodega propia).
+                # ready_to_ship = etiqueta lista, pero el paquete sigue en bodega.
+                try:
+                    if estado_orden in ("pending", "ready_to_ship", "shipped", "delivered"):
+                        if not detectar_fulfillment_falabella(o):
+                            _anotar_despacho("falabella", order_id, _fecha_falabella(o), estado_orden,
+                                             estado_orden in ("pending", "ready_to_ship"),
+                                             numero=order_number)
+                    elif estado_orden in ("canceled", "cancelled"):
+                        _quitar_despacho("falabella", order_id)
+                except Exception as _e_desp:
+                    print(f"[Despachos] Falabella {order_id}: {_e_desp}")
 
                 # ── Órdenes nuevas (estados que descuentan stock) ──
                 if estado_orden in ("ready_to_ship", "shipped", "delivered", "pending"):
@@ -4782,6 +4982,7 @@ def _sync_paris_automatico():
 
         print(f"[Scheduler Paris] Órdenes obtenidas: {len(ordenes)}")
 
+        _estados_paris_vistos = set()
         for o in ordenes:
             try:
                 sub_order = str(o.get("subOrderNumber") or o.get("subOrder") or o.get("orderNumber") or "")
@@ -4801,6 +5002,20 @@ def _sync_paris_automatico():
 
                 # Estados que indican cancelación explícita
                 es_cancelada = estado_orden in ("canceled", "cancelled", "rejected", "failure")
+
+                # Tarjeta de despachos (solo lo que sale de bodega propia)
+                try:
+                    if es_cancelada:
+                        _quitar_despacho("paris", sub_order)
+                    elif not detectar_fulfillment_paris(o):
+                        _est_pa = _estado_envio_paris(o)
+                        _estados_paris_vistos.add(_est_pa or "(vacio)")
+                        _anotar_despacho("paris", sub_order, o.get("createdAt") or o.get("created_at"),
+                                         _est_pa or "sin estado",
+                                         not any(p in _est_pa for p in _PARIS_SALIO),
+                                         numero=sub_order)
+                except Exception as _e_desp:
+                    print(f"[Despachos] Paris {sub_order}: {_e_desp}")
 
                 # ── Órdenes canceladas ──
                 if es_cancelada:
@@ -5040,6 +5255,9 @@ def _sync_paris_automatico():
                 errores.append(f"PA orden: {e}")
 
         import gc; gc.collect()
+        # Los estados de envio de Paris no estan documentados: se dejan a la
+        # vista para revisar que la tarjeta los interpreta bien.
+        print(f"[Despachos] Paris estados de envio vistos: {sorted(_estados_paris_vistos)[:15]}")
         print(f"[Scheduler Paris] Sync OK — nuevas:{nuevas} canceladas:{canceladas} errores:{len(errores)}")
         if errores:
             print(f"[Scheduler Paris] Errores: {errores[:3]}")
@@ -5101,6 +5319,20 @@ def _sync_ripley_automatico():
 
                 rp_key     = f"RIPLEY-{order_id}"
                 cancel_key = f"RP-CANCEL-{order_id}"
+
+                # Tarjeta de despachos (solo lo que sale de bodega propia).
+                # WAITING_DEBIT todavia no esta pagada: no se cuenta.
+                try:
+                    if estado in ("REFUSED", "CANCELED", "CANCELLED"):
+                        _quitar_despacho("ripley", order_id)
+                    elif estado in ("WAITING_ACCEPTANCE", "WAITING_DEBIT", "SHIPPING", "SHIPPED",
+                                    "RECEIVED", "CLOSED") and not detectar_fulfillment_ripley(o):
+                        _anotar_despacho("ripley", order_id,
+                                         o.get("created_date") or o.get("createdDate"), estado,
+                                         estado in ("WAITING_ACCEPTANCE", "SHIPPING"),
+                                         numero=o.get("commercial_id") or order_id)
+                except Exception as _e_desp:
+                    print(f"[Despachos] Ripley {order_id}: {_e_desp}")
 
                 # FIX: los items en Mirakl vienen en order_lines[].order_line_items[]
                 # o directamente en order_lines[] según versión. Intentar ambos.
@@ -5378,6 +5610,14 @@ def _sync_woo_automatico():
             try:
                 order_id = str(o.get("id", ""))
                 woo_key = f"WOO-{order_id}"
+
+                # Tarjeta de despachos: processing = por despachar
+                try:
+                    _anotar_despacho("web", order_id, _fecha_woo(o), o.get("status") or "",
+                                     o.get("status") == "processing",
+                                     numero=o.get("number") or order_id)
+                except Exception as _e_desp:
+                    print(f"[Despachos] Web {order_id}: {_e_desp}")
                 if orden_ya_procesada_texto(woo_key):
                     continue
                 items_descontados = []
@@ -5465,6 +5705,10 @@ def _sync_woo_automatico():
                 order_id = str(o.get("id", ""))
                 woo_key = f"WOO-{order_id}"
                 cancel_key = f"WOO-CANCEL-{order_id}"
+                try:
+                    _quitar_despacho("web", order_id)
+                except Exception as _e_desp:
+                    print(f"[Despachos] Web {order_id}: {_e_desp}")
                 if orden_ya_procesada_texto(cancel_key): continue
                 if not orden_ya_procesada_texto(woo_key):
                     # [atomic] orden marcada al inicio — no remarcar
@@ -5505,6 +5749,10 @@ def _sync_woo_automatico():
             except Exception as e:
                 errores.append(f"Woo cancel: {e}")
 
+        try:
+            _refrescar_despachos_web()
+        except Exception as _e_desp:
+            print(f"[Despachos] refresco Web: {_e_desp}")
         print(f"[Scheduler Woo] Sync OK — nuevas:{nuevas} canceladas:{canceladas} errores:{len(errores)}")
     except Exception as e:
         print(f"[Scheduler Woo] Error general: {e}")
@@ -7465,6 +7713,20 @@ def eliminar_producto_route():
         return {"error": "SKU requerido"}
     eliminar_producto(sku)
     return {"ok": True}
+
+@app.route("/stats/despachos")
+def stats_despachos():
+    """Tarjeta "Despacho desde bodega": que sale hoy y que queda para el
+    siguiente dia habil, por canal y por orden."""
+    if not session.get("logged"):
+        return {"error": "no autorizado"}, 401
+    from despachos import resumen_despachos
+    try:
+        return jsonify(resumen_despachos(get_configuracion(), _tenant_sesion() or 1))
+    except Exception as e:
+        print(f"[Despachos] resumen: {e}")
+        return jsonify({"error": "No se pudo calcular los despachos"}), 500
+
 
 @app.route("/configuracion", methods=["GET","POST"])
 def configuracion():

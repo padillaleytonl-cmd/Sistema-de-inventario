@@ -480,7 +480,7 @@ body {
 /* ── METRICS ── */
 .metrics-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 12px;
   margin-bottom: 20px;
 }
@@ -2045,6 +2045,25 @@ tbody td {
           <span style="font-size:11px;color:var(--muted);">Ver alertas →</span>
           <button class="btn-ver-mas" title="Estado de los marketplaces conectados"
                   onclick="event.stopPropagation();abrirModalKpi('canales')">Estado de canales</button>
+        </div>
+      </div>
+      <div class="metric-card" role="button" tabindex="0" style="border-top:3px solid #0e7490;cursor:pointer;"
+           onclick="abrirModalKpi('despachos')"
+           onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();abrirModalKpi('despachos');}">
+        <div class="metric-label" style="color:#0e7490;">🚚 Despacho desde bodega</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div>
+            <div style="font-size:11px;color:var(--muted);" id="kpiDespHoyLbl">Hoy</div>
+            <div class="metric-value" id="kpiDespHoy">—</div>
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--muted);" id="kpiDespSigLbl">Siguiente día hábil</div>
+            <div class="metric-value" id="kpiDespSig" style="color:var(--muted);">—</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
+          <span style="font-size:11px;color:var(--muted);" id="kpiDespCorte">Corte —</span>
+          <button class="btn-ver-mas" onclick="event.stopPropagation();abrirModalKpi('despachos')">Ver detalle</button>
         </div>
       </div>
     </div>
@@ -4144,6 +4163,18 @@ tbody td {
               <div class="form-group"><label>Teléfono bodega</label><input id="cfg_bodega_tel" placeholder="+56 9 XXXX XXXX"></div>
             </div>
           </div>
+          <div class="card" style="margin-bottom:14px;" id="cfg-cortes-despacho">
+            <div class="card-title" style="margin-bottom:4px;">Horario de corte de despacho</div>
+            <div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Lo que se compra en día hábil antes de esta hora se despacha ese mismo día; lo que entra después, en fin de semana o en feriado, pasa al siguiente día hábil. Lo usa la tarjeta "Despacho desde bodega" del dashboard.</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;">
+              <div class="form-group"><label>MercadoLibre</label><input type="time" id="cfg_corte_despacho_mercadolibre" value="12:00"></div>
+              <div class="form-group"><label>Falabella</label><input type="time" id="cfg_corte_despacho_falabella" value="12:00"></div>
+              <div class="form-group"><label>Paris</label><input type="time" id="cfg_corte_despacho_paris" value="12:00"></div>
+              <div class="form-group"><label>Ripley</label><input type="time" id="cfg_corte_despacho_ripley" value="12:00"></div>
+              <div class="form-group"><label>Walmart</label><input type="time" id="cfg_corte_despacho_walmart" value="12:00"></div>
+              <div class="form-group"><label>Web</label><input type="time" id="cfg_corte_despacho_web" value="12:00"></div>
+            </div>
+          </div>
           <div style="padding:16px;border:0.5px dashed var(--border);border-radius:var(--radius);text-align:center;color:var(--muted);font-size:13px;cursor:pointer;background:var(--bg);">
             + Agregar bodega adicional (próximamente)
           </div>
@@ -5422,7 +5453,7 @@ function cargarMovimientosFull(){
 function showCfgTab(tab, el){
   if (tab === 'tipificaciones') cargarTipificaciones();
   if (tab === 'integraciones') cargarCanalesCliente();
-  ['negocio','restock','bodegas','integraciones','usuarios'].forEach(t => {
+  ['negocio','restock','bodegas','integraciones','usuarios','tipificaciones'].forEach(t => {
     const el2 = document.getElementById('cfg-'+t);
     if(el2) el2.style.display = t===tab ? '' : 'none';
   });
@@ -5542,7 +5573,8 @@ function cargarConfiguracion(){
     const campos = ['nombre','rut','giro','actividad','correo','telefono','moneda','timezone',
       'razon','rut_fact','direccion','comuna','ciudad','region','proveedor_fact','api_fact',
       'periodo_analisis','periodo_cobertura','buffer','correo_alertas','dias_seguridad',
-      'bodega_nombre','bodega_dir','bodega_resp','bodega_tel'];
+      'bodega_nombre','bodega_dir','bodega_resp','bodega_tel',
+    'corte_despacho_mercadolibre','corte_despacho_falabella','corte_despacho_paris','corte_despacho_ripley','corte_despacho_walmart','corte_despacho_web'];
     campos.forEach(k => {
       const el = document.getElementById('cfg_'+k);
       if(el && c[k]) el.value = c[k];
@@ -5554,7 +5586,8 @@ function guardarConfiguracion(){
   const campos = ['nombre','rut','giro','actividad','correo','telefono','moneda','timezone',
     'razon','rut_fact','direccion','comuna','ciudad','region','proveedor_fact','api_fact',
     'periodo_analisis','periodo_cobertura','buffer','correo_alertas','dias_seguridad',
-    'bodega_nombre','bodega_dir','bodega_resp','bodega_tel'];
+    'bodega_nombre','bodega_dir','bodega_resp','bodega_tel',
+    'corte_despacho_mercadolibre','corte_despacho_falabella','corte_despacho_paris','corte_despacho_ripley','corte_despacho_walmart','corte_despacho_web'];
   const data = {};
   campos.forEach(k => {
     const el = document.getElementById('cfg_'+k);
@@ -9543,6 +9576,91 @@ function _formatearFecha(yyyymmdd) {
   return `${d}/${m}`;
 }
 
+// ─── Despacho desde bodega ─────────────────────────────────────
+// Ordenes de bodega propia que hay que despachar hoy y las que quedan para el
+// siguiente dia habil, segun el horario de corte de cada canal.
+let _despachos = null;
+async function cargarKpiDespachos() {
+  try {
+    const r = await fetch('/stats/despachos');
+    const d = await r.json();
+    if (d.error) return;
+    _despachos = d;
+    document.getElementById('kpiDespHoy').textContent = d.hoy;
+    document.getElementById('kpiDespSig').textContent = d.siguiente;
+    document.getElementById('kpiDespHoyLbl').textContent = d.dia_hoy_es_hoy ? `Hoy · ${d.dia_hoy}` : d.dia_hoy;
+    document.getElementById('kpiDespSigLbl').textContent = d.dia_siguiente;
+    const cortes = [...new Set(Object.values(d.cortes || {}))];
+    document.getElementById('kpiDespCorte').textContent =
+      cortes.length === 1 ? `Corte ${cortes[0]}` : 'Corte por canal';
+  } catch (e) {}
+}
+
+function _despHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function _despTablaOrdenes(ordenes) {
+  if (!ordenes.length) return '<div style="font-size:12px;color:var(--muted);padding:8px 0;">No hay órdenes.</div>';
+  let h = '<table style="width:100%;border-collapse:collapse;font-size:12px;">' +
+    '<tr style="color:var(--muted);text-align:left;"><th style="padding:6px 4px;font-weight:500;">Canal</th>' +
+    '<th style="padding:6px 4px;font-weight:500;">Orden</th><th style="padding:6px 4px;font-weight:500;">Compra</th>' +
+    '<th style="padding:6px 4px;font-weight:500;">Productos</th></tr>';
+  ordenes.forEach(o => {
+    const prods = (o.productos || []).map(p => `${_despHtml(p.nombre || p.sku)} <span style="color:var(--muted);">${_despHtml(p.sku)}</span> ×${p.cantidad}`).join('<br>')
+      || '<span style="color:var(--muted);">Venta aún no registrada</span>';
+    h += `<tr style="border-top:0.5px solid var(--border);vertical-align:top;">
+      <td style="padding:6px 4px;white-space:nowrap;">${_despHtml(o.canal_nombre)}</td>
+      <td style="padding:6px 4px;white-space:nowrap;font-variant-numeric:tabular-nums;">${_despHtml(o.numero)}</td>
+      <td style="padding:6px 4px;white-space:nowrap;font-variant-numeric:tabular-nums;">${_despHtml(o.fecha_compra)}</td>
+      <td style="padding:6px 4px;">${prods}</td></tr>`;
+  });
+  return h + '</table>';
+}
+
+async function cargarModalDespachos(body) {
+  try {
+    const r = await fetch('/stats/despachos');
+    const d = await r.json();
+    if (d.error) { body.innerHTML = `<div style="color:var(--danger);font-size:13px;">${_despHtml(d.error)}</div>`; return; }
+    _despachos = d;
+    const lblHoy = d.dia_hoy_es_hoy ? `Hoy · ${d.dia_hoy}` : d.dia_hoy;
+    const filas = d.por_canal.filter(c => c.hoy || c.siguiente);
+    let h = '<div style="font-size:12px;color:var(--muted);margin-bottom:12px;">Solo ventas que salen de tu bodega; las Full las despacha el marketplace. ' +
+      'Una orden deja de contar cuando el canal la marca como entregada al courier. Actualizado ' + _despHtml(d.generado) + '.</div>';
+    h += '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:18px;">' +
+      `<tr style="color:var(--muted);text-align:left;font-size:12px;"><th style="padding:6px 4px;font-weight:500;">Canal</th>` +
+      `<th style="padding:6px 4px;font-weight:500;">Corte</th><th style="padding:6px 4px;font-weight:500;text-align:right;">${_despHtml(lblHoy)}</th>` +
+      `<th style="padding:6px 4px;font-weight:500;text-align:right;">${_despHtml(d.dia_siguiente)}</th></tr>`;
+    (filas.length ? filas : d.por_canal).forEach(c => {
+      h += `<tr style="border-top:0.5px solid var(--border);"><td style="padding:6px 4px;">${_despHtml(c.nombre)}</td>
+        <td style="padding:6px 4px;font-variant-numeric:tabular-nums;">${_despHtml(c.corte)}</td>
+        <td style="padding:6px 4px;text-align:right;font-weight:600;font-variant-numeric:tabular-nums;">${c.hoy}</td>
+        <td style="padding:6px 4px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums;">${c.siguiente}</td></tr>`;
+    });
+    h += `<tr style="border-top:1px solid var(--border);"><td style="padding:6px 4px;font-weight:600;" colspan="2">Total</td>
+      <td style="padding:6px 4px;text-align:right;font-weight:600;">${d.hoy}</td>
+      <td style="padding:6px 4px;text-align:right;color:var(--muted);">${d.siguiente}</td></tr></table></div>`;
+    h += `<div style="font-size:13px;font-weight:600;margin-bottom:4px;">Despachar ${_despHtml(d.dia_hoy_es_hoy ? 'hoy' : d.dia_hoy)} (${d.hoy})</div>`;
+    h += '<div style="overflow-x:auto;">' + _despTablaOrdenes(d.ordenes_hoy) + '</div>';
+    h += `<div style="font-size:13px;font-weight:600;margin:16px 0 4px;">Quedan para el ${_despHtml(d.dia_siguiente)} (${d.siguiente})</div>`;
+    h += '<div style="overflow-x:auto;">' + _despTablaOrdenes(d.ordenes_siguiente) + '</div>';
+    h += '<div style="margin-top:16px;text-align:right;"><button class="btn-ver-mas" onclick="irACortesDespacho()">Cambiar horario de corte</button></div>';
+    body.innerHTML = h;
+  } catch (e) {
+    body.innerHTML = '<div style="color:var(--danger);font-size:13px;">No se pudo cargar el detalle. Intenta de nuevo.</div>';
+  }
+}
+
+function irACortesDespacho() {
+  cerrarModalKpi();
+  const btn = document.querySelector('.sidebar-link[data-section="configuracion"]');
+  if (typeof navSidebar === 'function') navSidebar('configuracion', btn);
+  const tab = [...document.querySelectorAll('.cfg-tab')].find(b => (b.getAttribute('onclick') || '').includes("'bodegas'"));
+  showCfgTab('bodegas', tab);
+  setTimeout(() => document.getElementById('cfg-cortes-despacho')?.scrollIntoView({behavior: 'smooth', block: 'start'}), 150);
+}
+
 // ─── KPIs ──────────────────────────────────────────────────────
 async function cargarKPIs() {
   const r = dashRangoActual();
@@ -9556,6 +9674,7 @@ async function cargarKPIs() {
     document.getElementById('kpiOrdenes').textContent = d.ordenes_periodo || 0;
     document.getElementById('kpiStockBajo').textContent = d.stock_bajo || 0;
     document.getElementById('kpiAlertas').textContent = d.alertas_no_leidas || 0;
+    cargarKpiDespachos();
 
     // Ingresos $ y desglose por canal: necesitamos consultar productos para obtener precios
     const [resVentas, resProductos] = await Promise.all([
@@ -10744,6 +10863,9 @@ function abrirModalKpi(tipo) {
   } else if (tipo === 'ventas_canal_donut') {
     titulo.textContent = '🍩 Ventas por canal — análisis detallado';
     cargarModalVentasCanal(body);
+  } else if (tipo === 'despachos') {
+    titulo.textContent = '🚚 Despacho desde bodega';
+    cargarModalDespachos(body);
   }
 }
 
