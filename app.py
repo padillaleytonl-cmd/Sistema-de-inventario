@@ -2169,7 +2169,14 @@ def admin_ventas_faltantes():
           Lusync ya es el real (esas unidades ya no estan), asi que no se
           descuenta nada; solo se borra la deuda y queda registrado quien lo hizo.
 
+      /admin/lusync/ventas/faltantes?orden=3144896210&bodega=CENTRAL&aplicar=1
+      /admin/lusync/ventas/faltantes?mov=123,456&bodega=CENTRAL&aplicar=1
+          la venta se registro contra una bodega equivocada (p. ej. una Full
+          sin stock) y no descontó nada: se pasa a CENTRAL y se salda desde ahí.
+          Solo para ventas que no descontaron ninguna unidad.
+
     Sin &aplicar=1 solo simula: dice cuánto se saldaría y no toca nada.
+    Todo lo que se salda se publica de nuevo en los canales.
 
     Saldar no es automático a propósito. Que llegue mercadería no significa
     que esas unidades sean para cubrir una venta vieja: pudo llegar para otra
@@ -2191,6 +2198,11 @@ def admin_ventas_faltantes():
         # Cerrar sin descontar es a mano y por venta: nunca "todo lo pendiente".
         return jsonify({"error": "cubierto=1 exige mov=<id>[,<id>...] con las ventas a cerrar"}), 400
     tid = TENANT_INTEGRACIONES
+    mover_a = request.args.get("bodega", "").strip().upper()
+    ordenes_f = [x for x in request.args.get("orden", "").replace(" ", "").split(",") if x]
+    if mover_a and not (movs or ordenes_f):
+        return jsonify({"error": "bodega= exige mov=<id> u orden=<numero> con las ventas a mover"}), 400
+    skus_saldados = set()
 
     salida = {"generado": str(now_chile()), "modo": "APLICADO" if aplicar else "simulacion",
               "pendientes": [], "saldado": 0, "sigue_pendiente": 0}
@@ -2208,11 +2220,24 @@ def admin_ventas_faltantes():
             if movs:
                 sql += " AND id = ANY(%s)"
                 params.append(movs)
+            if ordenes_f:
+                sql += " AND (COALESCE(orden_id::text,'') = ANY(%s) OR COALESCE(numero_orden,'') = ANY(%s))"
+                params.extend([ordenes_f, ordenes_f])
             sql += " ORDER BY fecha ASC"
             cur.execute(sql, params)
             filas = cur.fetchall()
 
         for (mid, sku, nombre, bodega, cant, falta, canal, orden, fecha) in filas:
+            bodega_original = bodega
+            if mover_a and mover_a != bodega:
+                if int(falta) < int(cant or 0):
+                    # Ya desconto unidades de su bodega: moverla dejaria ese
+                    # stock descontado dos veces. Eso se corrige a mano.
+                    salida["pendientes"].append({"movimiento": mid, "sku": sku, "bodega": bodega,
+                        "error": "esta venta ya desconto unidades de %s; no se mueve" % bodega})
+                    salida["sigue_pendiente"] += int(falta)
+                    continue
+                bodega = mover_a
             disponible = get_stock_bodega(sku, bodega) or 0
             puede = min(int(falta), int(disponible))
             fila = {"movimiento": mid, "sku": sku, "producto": nombre,
@@ -2258,6 +2283,26 @@ def admin_ventas_faltantes():
                 salida["pendientes"].append(fila)
                 continue
 
+            if bodega != bodega_original:
+                fila["bodega_original"] = bodega_original
+                if aplicar:
+                    cn_mv = get_conn(tenant_id=tid, is_admin=True)
+                    try:
+                        with cn_mv.cursor() as c_mv:
+                            c_mv.execute("""UPDATE movimientos
+                                               SET bodega_codigo = %s,
+                                                   motivo = COALESCE(motivo, '') || %s
+                                             WHERE id = %s AND tenant_id = %s""",
+                                         (bodega, " | bodega corregida %s -> %s" % (bodega_original, bodega),
+                                          mid, tid))
+                        cn_mv.commit()
+                    finally:
+                        release_conn(cn_mv)
+                    registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
+                                    "venta_cambio_bodega", entidad="movimientos", entidad_id=str(mid),
+                                    detalle="sku=%s orden=%s %s -> %s" % (sku, orden, bodega_original, bodega))
+                    fila["bodega_movida"] = True
+
             if aplicar and puede > 0:
                 try:
                     ajustar_stock_bodega(sku, bodega, -puede)
@@ -2287,6 +2332,7 @@ def admin_ventas_faltantes():
                     fila["saldado"] = puede
                     fila["faltante"] = int(falta) - puede
                     salida["saldado"] += puede
+                    skus_saldados.add(sku)
                 except Exception as e:
                     fila["error"] = str(e)[:150]
 
@@ -2294,6 +2340,17 @@ def admin_ventas_faltantes():
             salida["pendientes"].append(fila)
     finally:
         release_conn(conn)
+
+    # El saldo baja el stock: si no se publica, los canales siguen mostrando
+    # las unidades que ya no estan.
+    if aplicar and skus_saldados:
+        salida["publicado"] = {}
+        for _sku in sorted(skus_saldados):
+            try:
+                sincronizar_stock_marketplaces(_sku, contexto="saldo_faltante")
+                salida["publicado"][_sku] = "ok"
+            except Exception as e:
+                salida["publicado"][_sku] = str(e)[:120]
 
     salida["total_movimientos"] = len(salida["pendientes"])
     if not aplicar and salida["pendientes"]:

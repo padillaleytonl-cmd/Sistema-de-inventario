@@ -93,7 +93,27 @@ def detectar_fulfillment_meli(orden_data):
         return False
 
 
+# Paris Full: el cliente dueño no opera Paris Full hace años. Si Paris manda
+# una orden con tipo de fulfillment (orderTypeId 3 o 7, o flujo CROSS/CD), igual
+# sale de la bodega propia: tratarla como Full la registraba contra PARIS_CD,
+# que esta en 0, y CENTRAL no se descontaba (paso con 3 ventas el 3 y 4/10/2026).
+# Se enciende con PARIS_FULL_ACTIVO=1 el dia que vuelva a operarse.
+PARIS_FULL_ACTIVO = (os.environ.get("PARIS_FULL_ACTIVO") or "").strip().lower() in ("1", "true", "si", "sí")
+
+
 def detectar_fulfillment_paris(orden_data):
+    """Envoltorio: decide con _parece_fulfillment_paris, pero solo si Paris Full
+    esta activo. Si no, avisa en el log y la venta sale de bodega propia."""
+    parece = _parece_fulfillment_paris(orden_data)
+    if parece and not PARIS_FULL_ACTIVO:
+        print(f"[Bodegas] Paris {orden_data.get('subOrderNumber') or orden_data.get('orderNumber') or '?'} "
+              f"viene como fulfillment (orderTypeId={orden_data.get('orderTypeId')}), pero Paris Full "
+              f"no esta activo: sale de bodega propia")
+        return False
+    return parece
+
+
+def _parece_fulfillment_paris(orden_data):
     """
     Paris: ventas de bodega propia (normal) vs FULL Paris.
 
