@@ -7553,11 +7553,27 @@ def hora_servidor():
     utc_now = datetime.utcnow()
     chile_tz = pytz.timezone('America/Santiago')  # pytz maneja UTC-3/UTC-4 automáticamente
     chile_now = datetime.now(chile_tz)
+    # Lo que ve cada reloj: los tres de abajo tienen que dar la hora de Chile.
+    postgres = {}
+    try:
+        from inventario import get_conn as _gc_h, release_conn as _rc_h
+        _c = _gc_h()
+        try:
+            with _c.cursor() as _cur:
+                _cur.execute("SELECT NOW()::timestamp, CURRENT_DATE, current_setting('TimeZone')")
+                _n, _d, _z = _cur.fetchone()
+                postgres = {"now": _n.strftime("%d/%m/%Y %H:%M:%S"), "hoy": _d.strftime("%d/%m/%Y"),
+                            "zona": _z}
+        finally:
+            _rc_h(_c)
+    except Exception as e:
+        postgres = {"error": str(e)[:100]}
     return {
         "utc": utc_now.strftime("%d/%m/%Y %H:%M:%S"),
         "chile_pytz": chile_now.strftime("%d/%m/%Y %H:%M:%S"),
         "chile_offset": str(chile_now.utcoffset()),
-        "postgres_now": None
+        "proceso_now": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+        "postgres": postgres,
     }
 
 @app.route("/fix_db")
