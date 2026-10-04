@@ -1320,6 +1320,39 @@ def asegurar_indices_alertas():
         cur.close(); release_conn(conn)
 
 
+def corregir_hora_ajustes_faltantes():
+    """Una sola vez: los ajustes que crea /admin/lusync/ventas/faltantes se
+    grababan con NOW() de la base (UTC) y quedaban 3 horas adelantados en la
+    lista de Movimientos. Se pasan a hora de Chile. La marca en
+    migraciones_aplicadas evita correrlo dos veces."""
+    conn = get_conn(is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""CREATE TABLE IF NOT EXISTS migraciones_aplicadas (
+                               nombre TEXT PRIMARY KEY,
+                               aplicada_en TIMESTAMP NOT NULL DEFAULT NOW())""")
+            cur.execute("""INSERT INTO migraciones_aplicadas (nombre)
+                           VALUES ('hora_ajustes_faltantes_2026_10')
+                           ON CONFLICT (nombre) DO NOTHING RETURNING nombre""")
+            if not cur.fetchone():
+                conn.commit()
+                return
+            cur.execute("""UPDATE movimientos
+                              SET fecha = (fecha AT TIME ZONE 'UTC') AT TIME ZONE 'America/Santiago',
+                                  fecha_importacion = (fecha_importacion AT TIME ZONE 'UTC')
+                                                      AT TIME ZONE 'America/Santiago'
+                            WHERE tipo = 'ajuste' AND origen_registro = 'manual'
+                              AND (motivo LIKE 'Saldo de venta sin stock%%'
+                                   OR motivo LIKE 'Venta cubierta con stock que no estaba en Lusync%%')""")
+            print(f"[Movimientos] hora de {cur.rowcount} ajustes de faltantes pasada a hora de Chile")
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"[Movimientos] corregir_hora_ajustes_faltantes: {e}")
+    finally:
+        release_conn(conn)
+
+
 def asegurar_columnas_movimientos():
     """Crea (una sola vez, al arranque) las columnas e índices que la pantalla de
     Movimientos necesita. Antes esto se ejecutaba en CADA carga, lo que tomaba

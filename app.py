@@ -138,6 +138,8 @@ try:
     from inventario import asegurar_columnas_movimientos, asegurar_indices_alertas
     asegurar_columnas_movimientos()
     asegurar_indices_alertas()
+    from inventario import corregir_hora_ajustes_faltantes
+    corregir_hora_ajustes_faltantes()
 except Exception as _e:
     print(f"[asegurar_columnas_movimientos] {_e}")
 try:
@@ -2198,6 +2200,9 @@ def admin_ventas_faltantes():
         # Cerrar sin descontar es a mano y por venta: nunca "todo lo pendiente".
         return jsonify({"error": "cubierto=1 exige mov=<id>[,<id>...] con las ventas a cerrar"}), 400
     tid = TENANT_INTEGRACIONES
+    # Hora de Chile, como el resto de movimientos. NOW() de la base es UTC y
+    # dejaba estos ajustes 3 horas adelantados en la lista.
+    _ahora_mov = now_chile().replace(tzinfo=None)
     mover_a = request.args.get("bodega", "").strip().upper()
     ordenes_f = [x for x in request.args.get("orden", "").replace(" ", "").split(",") if x]
     if mover_a and not (movs or ordenes_f):
@@ -2265,13 +2270,13 @@ def admin_ventas_faltantes():
                                     (tipo, sku, nombre, cantidad, motivo, usuario, canal,
                                      fecha, bodega_codigo, fecha_importacion,
                                      origen_registro, stock_antes, stock_despues)
-                                    VALUES ('ajuste', %s, %s, 0, %s, %s, 'Manual', NOW(),
-                                            %s, NOW(), 'manual', %s, %s)""",
+                                    VALUES ('ajuste', %s, %s, 0, %s, %s, 'Manual', %s,
+                                            %s, %s, 'manual', %s, %s)""",
                                     (sku, nombre,
                                      "Venta cubierta con stock que no estaba en Lusync — "
                                      "orden %s (mov %s), %s u." % (orden or "s/n", mid, int(falta)),
-                                     session.get("usuario", "Sistema"), bodega,
-                                     disponible, disponible))
+                                     session.get("usuario", "Sistema"), _ahora_mov,
+                                     bodega, _ahora_mov, disponible, disponible))
                             cn2.commit()
                         finally:
                             release_conn(cn2)
@@ -2324,12 +2329,12 @@ def admin_ventas_faltantes():
                                 (tipo, sku, nombre, cantidad, motivo, usuario, canal,
                                  fecha, bodega_codigo, fecha_importacion,
                                  origen_registro, stock_antes, stock_despues)
-                                VALUES ('ajuste', %s, %s, %s, %s, %s, 'Manual', NOW(),
-                                        %s, NOW(), 'manual', %s, %s)""",
+                                VALUES ('ajuste', %s, %s, %s, %s, %s, 'Manual', %s,
+                                        %s, %s, 'manual', %s, %s)""",
                                 (sku, nombre, puede,
                                  "Saldo de venta sin stock — orden %s (mov %s)" % (orden or "s/n", mid),
-                                 session.get("usuario", "Sistema"), bodega,
-                                 disponible, disponible - puede))
+                                 session.get("usuario", "Sistema"), _ahora_mov,
+                                 bodega, _ahora_mov, disponible, disponible - puede))
                         cn2.commit()
                     finally:
                         release_conn(cn2)
