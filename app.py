@@ -2407,6 +2407,184 @@ def admin_hora_migrar():
     return jsonify(resultado)
 
 
+@app.route("/admin/lusync/sku/fusionar")
+def admin_sku_fusionar():
+    """Junta dos SKU de Lusync que son el mismo producto.
+
+      /admin/lusync/sku/fusionar?origen=VIEJO&destino=OFICIAL
+          simula: que se mueve y cuanto stock queda
+      ...&stock_real=6&bodega=CENTRAL
+          ademas deja esa bodega con el conteo fisico, con su movimiento
+      ...&aplicar=1
+          lo hace, en una sola transaccion, y publica el stock en los canales
+
+    Lo que hace: suma el stock de cada bodega de VIEJO a OFICIAL, pasa los
+    mapeos de canal (sin duplicar los que OFICIAL ya tenga), pasa el
+    historial (movimientos, alertas, devoluciones, ajustes) y borra el
+    producto VIEJO. Todo filtrado por el cliente.
+    """
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    from inventario import get_conn, release_conn, now_chile, _recalcular_stock_total
+
+    origen = (request.args.get("origen") or "").strip()
+    destino = (request.args.get("destino") or "").strip()
+    aplicar = request.args.get("aplicar") == "1"
+    bodega_real = (request.args.get("bodega") or "CENTRAL").strip().upper()
+    stock_real = request.args.get("stock_real", "").strip()
+    if not origen or not destino or origen == destino:
+        return jsonify({"error": "Indica origen y destino distintos"}), 400
+    if stock_real and (not stock_real.isdigit()):
+        return jsonify({"error": "stock_real tiene que ser un numero entero >= 0"}), 400
+    tid = _tenant_sesion() or TENANT_INTEGRACIONES
+    salida = {"modo": "APLICADO" if aplicar else "simulacion", "origen": origen,
+              "destino": destino, "cliente": tid}
+
+    conn = get_conn(tenant_id=tid, is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT sku, nombre FROM productos WHERE tenant_id = %s AND sku = ANY(%s)",
+                        (tid, [origen, destino]))
+            nombres = dict(cur.fetchall())
+            if destino not in nombres:
+                return jsonify({"error": f"El SKU oficial {destino} no existe en Lusync"}), 400
+            salida["productos"] = nombres
+
+            cur.execute("""SELECT sku, bodega_codigo, cantidad FROM stock_bodega
+                            WHERE tenant_id = %s AND sku = ANY(%s) ORDER BY sku, bodega_codigo""",
+                        (tid, [origen, destino]))
+            stock = {}
+            for s, b, c in cur.fetchall():
+                stock.setdefault(s, {})[b] = int(c or 0)
+            salida["stock_antes"] = stock
+            despues = dict(stock.get(destino, {}))
+            for b, c in stock.get(origen, {}).items():
+                despues[b] = despues.get(b, 0) + c
+            if stock_real:
+                despues[bodega_real] = int(stock_real)
+            salida["stock_despues_en_" + destino] = despues
+
+            # Tablas con historial por SKU (solo las que existan con esas columnas).
+            # Con columna de cliente: sin ella no se puede filtrar por cliente.
+            cur.execute("""SELECT table_name FROM information_schema.columns
+                            WHERE table_schema = 'public' AND column_name IN ('sku', 'tenant_id')
+                              AND table_name IN ('movimientos', 'alertas', 'devoluciones',
+                                                 'devoluciones_marketplace', 'ajustes_inventario',
+                                                 'movimientos_documento')
+                            GROUP BY table_name HAVING COUNT(DISTINCT column_name) = 2""")
+            historiales = sorted(r[0] for r in cur.fetchall())
+            conteo = {}
+            for t in historiales:
+                cur.execute(f"SELECT COUNT(*) FROM {t} WHERE tenant_id = %s AND sku = %s", (tid, origen))
+                conteo[t] = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM sku_mapeo_canal WHERE tenant_id = %s AND sku_lusync = %s",
+                        (tid, origen))
+            conteo["sku_mapeo_canal"] = cur.fetchone()[0]
+            salida["se_pasan_a_" + destino] = conteo
+
+            if not aplicar:
+                salida["nota"] = "Simulacion: no se cambio nada. Agrega &aplicar=1 para hacerlo."
+                return jsonify(salida)
+
+            hecho = {}
+            # 1. Stock: se suma por bodega y se borra el del viejo.
+            for b, c in stock.get(origen, {}).items():
+                cur.execute("""INSERT INTO stock_bodega (tenant_id, sku, bodega_codigo, cantidad, actualizado_at)
+                               VALUES (%s, %s, %s, %s, %s)
+                               ON CONFLICT (tenant_id, sku, bodega_codigo)
+                               DO UPDATE SET cantidad = stock_bodega.cantidad + EXCLUDED.cantidad,
+                                             actualizado_at = EXCLUDED.actualizado_at""",
+                            (tid, destino, b, c, now_chile().replace(tzinfo=None)))
+            cur.execute("DELETE FROM stock_bodega WHERE tenant_id = %s AND sku = %s", (tid, origen))
+
+            # 2. Mapeos: fuera los que el oficial ya tiene (mismo canal y misma
+            #    publicacion o SKU de canal); el resto pasa al oficial.
+            cur.execute("""DELETE FROM sku_mapeo_canal o
+                            WHERE o.tenant_id = %s AND o.sku_lusync = %s
+                              AND EXISTS (SELECT 1 FROM sku_mapeo_canal d
+                                           WHERE d.tenant_id = o.tenant_id AND d.sku_lusync = %s
+                                             AND d.canal = o.canal
+                                             AND (d.item_id_canal = o.item_id_canal
+                                                  OR (d.item_id_canal IS NULL AND o.item_id_canal IS NULL
+                                                      AND d.sku_canal = o.sku_canal)))""",
+                        (tid, origen, destino))
+            hecho["mapeos_duplicados_borrados"] = cur.rowcount
+            cur.execute("""UPDATE sku_mapeo_canal SET sku_lusync = %s
+                            WHERE tenant_id = %s AND sku_lusync = %s""", (destino, tid, origen))
+            hecho["mapeos_pasados"] = cur.rowcount
+            # Tabla vieja de mapeo (una fila por SKU de Lusync).
+            cur.execute("SELECT 1 FROM sku_mapeo WHERE tenant_id = %s AND sku_lusync = %s", (tid, destino))
+            if cur.fetchone():
+                cur.execute("DELETE FROM sku_mapeo WHERE tenant_id = %s AND sku_lusync = %s", (tid, origen))
+            else:
+                cur.execute("UPDATE sku_mapeo SET sku_lusync = %s WHERE tenant_id = %s AND sku_lusync = %s",
+                            (destino, tid, origen))
+
+            # 3. Historial. En movimientos, una venta que ya este registrada con el
+            #    oficial para la misma orden no se duplica: esa fila queda como esta.
+            for t in historiales:
+                if t == "movimientos":
+                    cur.execute("""UPDATE movimientos m SET sku = %s
+                                    WHERE m.tenant_id = %s AND m.sku = %s
+                                      AND NOT (m.tipo IN ('salida', 'ajuste') AND m.orden_id IS NOT NULL
+                                               AND EXISTS (SELECT 1 FROM movimientos x
+                                                            WHERE x.tenant_id = m.tenant_id AND x.sku = %s
+                                                              AND x.orden_id = m.orden_id AND x.tipo = m.tipo))""",
+                                (destino, tid, origen, destino))
+                else:
+                    cur.execute(f"UPDATE {t} SET sku = %s WHERE tenant_id = %s AND sku = %s",
+                                (destino, tid, origen))
+                hecho[t] = cur.rowcount
+
+            # 4. Producto viejo fuera.
+            cur.execute("DELETE FROM productos WHERE tenant_id = %s AND sku = %s", (tid, origen))
+            hecho["producto_borrado"] = cur.rowcount
+
+            # 5. Conteo fisico, con su movimiento.
+            if stock_real:
+                cur.execute("""SELECT COALESCE(cantidad, 0) FROM stock_bodega
+                                WHERE tenant_id = %s AND sku = %s AND bodega_codigo = %s""",
+                            (tid, destino, bodega_real))
+                fila = cur.fetchone()
+                antes = int(fila[0]) if fila else 0
+                real = int(stock_real)
+                if real != antes:
+                    cur.execute("""INSERT INTO stock_bodega (tenant_id, sku, bodega_codigo, cantidad, actualizado_at)
+                                   VALUES (%s, %s, %s, %s, %s)
+                                   ON CONFLICT (tenant_id, sku, bodega_codigo)
+                                   DO UPDATE SET cantidad = EXCLUDED.cantidad,
+                                                 actualizado_at = EXCLUDED.actualizado_at""",
+                                (tid, destino, bodega_real, real, now_chile().replace(tzinfo=None)))
+                    ahora_mov = now_chile().replace(tzinfo=None)
+                    cur.execute("""INSERT INTO movimientos
+                                   (tenant_id, tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha,
+                                    bodega_codigo, fecha_importacion, origen_registro, stock_antes, stock_despues)
+                                   VALUES (%s, 'ajuste', %s, %s, %s, %s, %s, 'Manual', %s, %s, %s, 'manual', %s, %s)""",
+                                (tid, destino, nombres.get(destino), abs(real - antes),
+                                 "Conteo fisico al fusionar %s en %s" % (origen, destino),
+                                 session.get("usuario", "Sistema"), ahora_mov, bodega_real, ahora_mov,
+                                 antes, real))
+                hecho["conteo_fisico"] = {"bodega": bodega_real, "antes": antes, "despues": real}
+        conn.commit()
+        salida["hecho"] = hecho
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": "No se fusiono nada: " + str(e)[:300]}), 500
+    finally:
+        release_conn(conn)
+
+    registrar_audit(session.get("usuario", "Sistema"), request.remote_addr, "fusionar_sku",
+                    entidad="productos", entidad_id=destino,
+                    detalle=f"{origen} -> {destino} {salida.get('hecho')}"[:500])
+    try:
+        _recalcular_stock_total(destino)
+        sincronizar_stock_marketplaces(destino, contexto="fusionar_sku")
+        salida["publicado"] = "ok"
+    except Exception as e:
+        salida["publicado"] = "error: " + str(e)[:150]
+    return jsonify(salida)
+
+
 @app.route("/admin/lusync/auditoria-ordenes")
 def auditoria_ordenes_limbo():
     """Audita qué órdenes de cada marketplace NO están registradas en Lusync.
