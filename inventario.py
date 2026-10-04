@@ -1400,7 +1400,7 @@ def corregir_hora_ajustes_faltantes():
 # /admin/lusync/hora/migrar.
 #
 # (tabla, columnas, condicion extra). Solo filas con id <= el corte anotado
-# al arrancar el codigo nuevo: las posteriores ya nacen en hora de Chile.
+# (la regla de que filas se corrigen esta en migrar_hora_chile).
 MIGRACION_HORA_CHILE = [
     ("audit_log", ["fecha"], "TRUE"),
     ("alertas", ["fecha"], "TRUE"),
@@ -1425,6 +1425,13 @@ MIGRACION_HORA_CHILE = [
          OR usuario = 'Sistema (Devolución)')"""),
     # ...y los ajustes de stock desde Bodegas, que ponian NOW() en las dos
     # columnas a la vez. Los de la herramienta de faltantes ya se corrigieron.
+    # Ajustes de la herramienta de faltantes: corregir_hora_ajustes_faltantes
+    # corrio al arrancar sin cliente, RLS le escondio las filas y no corrigio
+    # ninguna (aunque dejo su marca).
+    ("movimientos#faltantes", ["fecha", "fecha_importacion"],
+     """tipo = 'ajuste' AND origen_registro = 'manual'
+        AND (COALESCE(motivo, '') LIKE 'Saldo de venta sin stock%%'
+             OR COALESCE(motivo, '') LIKE 'Venta cubierta con stock que no estaba en Lusync%%')"""),
     ("movimientos#ajuste_bodega", ["fecha", "fecha_importacion"],
      """tipo = 'ajuste' AND canal = 'Manual' AND origen_registro = 'manual'
         AND fecha_importacion = fecha
@@ -1466,22 +1473,53 @@ def anotar_corte_hora_chile():
 
 def migrar_hora_chile(aplicar=False):
     """Simula (o aplica) el paso a hora de Chile de lo grabado en UTC.
-    Cada grupo se aplica una sola vez (marca en migraciones_aplicadas)."""
+
+    Regla, por columna: el codigo nuevo arranco en el momento T (hora de
+    Chile, anotado en corte_hora_chile). Desde T todo nace en hora de Chile y
+    cae entre T y ahora. Lo anterior estaba en UTC, que va 3 horas adelante:
+      - valor < T        -> grabado antes de T en UTC: se corrige
+      - valor > ahora    -> UTC "en el futuro": se corrige
+      - entre T y ahora  -> ya es hora de Chile: no se toca
+    No usa ids de corte: al arrancar, la conexion no tenia cliente y las
+    tablas con RLS se veian vacias (el corte quedo en 0).
+
+    La conexion va con permisos de administrador (tenant 0 + is_admin): sin
+    eso RLS esconde las filas y el UPDATE no toca nada.
+    Cada grupo se aplica una sola vez (marca en migraciones_aplicadas).
+    """
     salida = {"modo": "APLICADO" if aplicar else "simulacion", "grupos": []}
-    conn = get_conn(is_admin=True)
+    conn = get_conn(tenant_id=0, is_admin=True)
     try:
         with conn.cursor() as cur:
             cur.execute("""CREATE TABLE IF NOT EXISTS migraciones_aplicadas (
                                nombre TEXT PRIMARY KEY,
                                aplicada_en TIMESTAMP NOT NULL DEFAULT NOW())""")
+            cur.execute("SELECT MIN(anotado_en) FROM corte_hora_chile")
+            t_arranque = (cur.fetchone() or [None])[0]
+            if not t_arranque:
+                salida["error"] = "No esta anotado el arranque del codigo en hora de Chile"
+                return salida
+            ahora = now_chile().replace(tzinfo=None)
+            salida["arranque_hora_chile"] = t_arranque.strftime("%d/%m/%Y %H:%M:%S")
+            salida["ahora"] = ahora.strftime("%d/%m/%Y %H:%M:%S")
+            # Lo grabado en UTC en las 3 horas antes del arranque se reconoce
+            # porque queda "en el futuro". Pasadas 3 horas desde T ya no se
+            # distingue de lo nuevo: no se aplica, para no correr filas buenas.
+            if ahora > t_arranque + timedelta(hours=2, minutes=45):
+                salida["advertencia"] = ("Pasaron casi 3 horas desde el arranque: lo grabado justo antes "
+                                         "ya no se distingue de lo nuevo. No se aplica.")
+                if aplicar:
+                    salida["modo"] = "no aplicado"
+                    aplicar = False
             for clave, columnas, condicion in MIGRACION_HORA_CHILE:
                 tabla = clave.split("#")[0]
-                grupo = {"grupo": clave, "columnas": columnas}
+                grupo = {"grupo": clave}
                 salida["grupos"].append(grupo)
                 existentes = _columnas_de(cur, tabla)
                 columnas = [c for c in columnas if c in existentes]
-                if not columnas or "id" not in existentes:
-                    grupo["estado"] = "sin columnas o sin id: no aplica"
+                grupo["columnas"] = columnas
+                if not columnas:
+                    grupo["estado"] = "sin columnas: no aplica"
                     continue
                 marca = "hora_chile_" + clave
                 cur.execute("SELECT aplicada_en FROM migraciones_aplicadas WHERE nombre = %s", (marca,))
@@ -1489,32 +1527,33 @@ def migrar_hora_chile(aplicar=False):
                 if ya:
                     grupo["estado"] = "ya aplicado el %s" % ya[0].strftime("%d/%m/%Y %H:%M")
                     continue
-                cur.execute("SELECT max_id FROM corte_hora_chile WHERE tabla = %s", (tabla,))
-                corte = cur.fetchone()
-                if not corte:
-                    grupo["estado"] = "sin corte anotado: no se toca"
-                    continue
-                donde = f"id <= %s AND ({condicion})"
-                cur.execute(f"""SELECT COUNT(*), MIN({columnas[0]}), MAX({columnas[0]})
-                                  FROM {tabla} WHERE {donde}""", (corte[0],))
-                n, desde, hasta = cur.fetchone()
-                grupo.update({"filas": n, "hasta_id": corte[0],
-                              "desde": desde.strftime("%d/%m/%Y %H:%M") if desde else None,
-                              "hasta": hasta.strftime("%d/%m/%Y %H:%M") if hasta else None})
-                cur.execute(f"""SELECT id, {columnas[0]},
-                                       ({columnas[0]} AT TIME ZONE 'UTC') AT TIME ZONE 'America/Santiago'
-                                  FROM {tabla} WHERE {donde} AND {columnas[0]} IS NOT NULL
-                                 ORDER BY id DESC LIMIT 3""", (corte[0],))
-                grupo["ejemplos"] = [{"id": r[0], "antes": r[1].strftime("%d/%m %H:%M"),
-                                      "despues": r[2].strftime("%d/%m %H:%M")} for r in cur.fetchall()]
+                vieja = lambda c: f"({c} < %(t)s OR {c} > %(ahora)s)"
+                alguna = " OR ".join(vieja(c) for c in columnas)
+                donde = f"({condicion}) AND ({alguna})"
+                prm = {"t": t_arranque, "ahora": ahora}
+                cur.execute(f"SELECT COUNT(*) FROM {tabla} WHERE {donde}", prm)
+                grupo["filas"] = cur.fetchone()[0]
+                c0 = columnas[0]
+                cur.execute(f"""SELECT MIN({c0}), MAX({c0}) FROM {tabla}
+                                 WHERE ({condicion}) AND {vieja(c0)}""", prm)
+                desde, hasta = cur.fetchone()
+                grupo["desde"] = desde.strftime("%d/%m/%Y %H:%M") if desde else None
+                grupo["hasta"] = hasta.strftime("%d/%m/%Y %H:%M") if hasta else None
+                cur.execute(f"""SELECT {c0}, ({c0} AT TIME ZONE 'UTC') AT TIME ZONE 'America/Santiago'
+                                  FROM {tabla} WHERE ({condicion}) AND {vieja(c0)}
+                                 ORDER BY {c0} DESC LIMIT 3""", prm)
+                grupo["ejemplos"] = [{"antes": r[0].strftime("%d/%m %H:%M"),
+                                      "despues": r[1].strftime("%d/%m %H:%M")} for r in cur.fetchall()]
                 if aplicar:
-                    sets = ", ".join(f"{c} = ({c} AT TIME ZONE 'UTC') AT TIME ZONE 'America/Santiago'"
-                                     for c in columnas)
-                    cur.execute(f"UPDATE {tabla} SET {sets} WHERE {donde}", (corte[0],))
+                    sets = ", ".join(
+                        f"""{c} = CASE WHEN {vieja(c)}
+                                       THEN ({c} AT TIME ZONE 'UTC') AT TIME ZONE 'America/Santiago'
+                                       ELSE {c} END""" for c in columnas)
+                    cur.execute(f"UPDATE {tabla} SET {sets} WHERE {donde}", prm)
                     grupo["corregidas"] = cur.rowcount
                     cur.execute("INSERT INTO migraciones_aplicadas (nombre) VALUES (%s)", (marca,))
                     conn.commit()
-                    print(f"[Hora Chile] {clave}: {cur.rowcount} filas pasadas a hora de Chile")
+                    print(f"[Hora Chile] {clave}: {grupo['corregidas']} filas pasadas a hora de Chile")
         conn.commit()
     except Exception as e:
         conn.rollback()
