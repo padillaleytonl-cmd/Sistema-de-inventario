@@ -2213,7 +2213,8 @@ def admin_ventas_faltantes():
             # La conexion se salta RLS: el cliente va en el WHERE.
             sql = """SELECT id, sku, nombre, COALESCE(bodega_codigo,'CENTRAL'),
                             cantidad, COALESCE(faltante,0), COALESCE(canal,''),
-                            COALESCE(orden_id,''), TO_CHAR(fecha,'DD/MM/YYYY HH24:MI')
+                            COALESCE(orden_id,''), TO_CHAR(fecha,'DD/MM/YYYY HH24:MI'),
+                            COALESCE(NULLIF(numero_orden, ''), orden_id::text, '')
                        FROM movimientos
                       WHERE COALESCE(faltante,0) > 0 AND tenant_id = %s"""
             params = [tid]
@@ -2227,7 +2228,9 @@ def admin_ventas_faltantes():
             cur.execute(sql, params)
             filas = cur.fetchall()
 
-        for (mid, sku, nombre, bodega, cant, falta, canal, orden, fecha) in filas:
+        # "orden" es el numero que ve el equipo (Falabella: el que empieza
+        # con 3); orden_id, el interno del canal.
+        for (mid, sku, nombre, bodega, cant, falta, canal, orden_interno, fecha, orden) in filas:
             bodega_original = bodega
             if mover_a and mover_a != bodega:
                 if int(falta) < int(cant or 0):
@@ -2242,6 +2245,7 @@ def admin_ventas_faltantes():
             puede = min(int(falta), int(disponible))
             fila = {"movimiento": mid, "sku": sku, "producto": nombre,
                     "bodega": bodega, "canal": canal, "orden": orden,
+                    "orden_interna": orden_interno if orden_interno != orden else None,
                     "fecha": fecha, "vendidas": cant, "faltante": int(falta),
                     "hay_en_bodega": int(disponible), "se_puede_saldar": puede}
 
