@@ -545,7 +545,47 @@ def _descartar_conexion(conn):
             pass
 
 
+ZONA_HORARIA_BASE = "America/Santiago"
+
+
+def _fijar_zona_chile(conn):
+    """La sesion de la base en hora de Chile.
+
+    PostgreSQL corre en UTC: NOW(), CURRENT_DATE y los DEFAULT NOW() de las
+    columnas TIMESTAMP grababan la hora de Londres (3 horas adelantada) y
+    "hoy" cambiaba a las 21:00. Con la zona de la sesion en Chile, todo eso
+    da hora de Chile.
+
+    Se hace en cada conexion fisica, no en el arranque del pool, porque un
+    proxy de Postgres podria rechazar la opcion de arranque y botar todas
+    las conexiones. get_parameter_status no va a la base: el SET solo se
+    manda la primera vez. Va con commit: un SET dentro de una transaccion
+    que despues se revierte se pierde.
+    """
+    try:
+        if conn is None or conn.closed:
+            return conn
+        if conn.get_parameter_status("TimeZone") == ZONA_HORARIA_BASE:
+            return conn
+        cur = conn.cursor()
+        cur.execute("SET TIME ZONE %s", (ZONA_HORARIA_BASE,))
+        cur.close()
+        conn.commit()
+    except Exception as e:
+        print(f"[pool] no pude fijar la zona horaria de Chile: {str(e)[:120]}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    return conn
+
+
 def _sacar_conexion_sana():
+    """Una conexion del pool que funcione, en hora de Chile."""
+    return _fijar_zona_chile(_sacar_conexion_sana_cruda())
+
+
+def _sacar_conexion_sana_cruda():
     """Una conexion del pool que funcione.
 
     Las conexiones que pasan un rato quietas en el pool pueden volver rotas: la
@@ -1353,6 +1393,137 @@ def corregir_hora_ajustes_faltantes():
         release_conn(conn)
 
 
+# ── Paso de lo viejo a hora de Chile ────────────────────────────────────────
+# Hasta el 04/10/2026 varias columnas se grababan con NOW() de la base, que
+# esta en UTC. Desde entonces cada conexion trabaja en hora de Chile. Lo
+# grabado antes queda 3 horas adelantado hasta que se corrija con
+# /admin/lusync/hora/migrar.
+#
+# (tabla, columnas, condicion extra). Solo filas con id <= el corte anotado
+# al arrancar el codigo nuevo: las posteriores ya nacen en hora de Chile.
+MIGRACION_HORA_CHILE = [
+    ("audit_log", ["fecha"], "TRUE"),
+    ("alertas", ["fecha"], "TRUE"),
+    ("devoluciones", ["fecha_solicitud", "fecha_recepcion", "fecha_resolucion", "fecha_deadline"], "TRUE"),
+    ("documentos_compra", ["fecha_registro"], "TRUE"),
+    ("ajustes_inventario", ["fecha"], "TRUE"),
+    ("bodegas_imports", ["created_at", "finalizado_at"], "TRUE"),
+    ("sku_mapeo_historial", ["fecha"], "TRUE"),
+    ("sku_mapeo_canal", ["creado_at", "actualizado_at"], "TRUE"),
+    ("usuarios", ["ultimo_login"], "TRUE"),
+    # Facturacion: solo las que se grababan con NOW(). fecha_emision ya va en
+    # hora de Chile (la arma el emisor) y no se toca.
+    ("facturacion_dtes", ["fecha_envio_sii", "fecha_aceptacion_sii", "fecha_anulacion"], "TRUE"),
+    ("ordenes_procesadas", ["fecha"], "TRUE"),
+    # Movimientos: solo los que grababan con NOW(). Son los unicos INSERT que
+    # no llenan fecha_importacion (transferencias, reintegros por cancelacion,
+    # reingresos por devolucion)...
+    ("movimientos#sin_importacion", ["fecha"],
+     """fecha_importacion IS NULL AND (
+            (canal = 'Sistema' AND tipo IN ('entrada', 'salida'))
+         OR (tipo = 'entrada' AND COALESCE(orden_id::text, '') <> '')
+         OR usuario = 'Sistema (Devolución)')"""),
+    # ...y los ajustes de stock desde Bodegas, que ponian NOW() en las dos
+    # columnas a la vez. Los de la herramienta de faltantes ya se corrigieron.
+    ("movimientos#ajuste_bodega", ["fecha", "fecha_importacion"],
+     """tipo = 'ajuste' AND canal = 'Manual' AND origen_registro = 'manual'
+        AND fecha_importacion = fecha
+        AND COALESCE(motivo, '') NOT LIKE 'Saldo de venta sin stock%%'
+        AND COALESCE(motivo, '') NOT LIKE 'Venta cubierta con stock que no estaba en Lusync%%'"""),
+]
+
+
+def _columnas_de(cur, tabla):
+    cur.execute("""SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = %s""", (tabla,))
+    return {r[0] for r in cur.fetchall()}
+
+
+def anotar_corte_hora_chile():
+    """Al arrancar el codigo que graba en hora de Chile, anota hasta que id
+    llegaba cada tabla. Una sola vez por tabla (no se pisa en los reinicios)."""
+    conn = get_conn(is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""CREATE TABLE IF NOT EXISTS corte_hora_chile (
+                               tabla TEXT PRIMARY KEY,
+                               max_id BIGINT,
+                               anotado_en TIMESTAMP NOT NULL DEFAULT NOW())""")
+            for tabla in sorted({t.split("#")[0] for t, _, _ in MIGRACION_HORA_CHILE}):
+                if "id" not in _columnas_de(cur, tabla):
+                    continue
+                cur.execute(f"SELECT COALESCE(MAX(id), 0) FROM {tabla}")
+                max_id = cur.fetchone()[0]
+                cur.execute("""INSERT INTO corte_hora_chile (tabla, max_id) VALUES (%s, %s)
+                               ON CONFLICT (tabla) DO NOTHING""", (tabla, max_id))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"[Hora Chile] anotar corte: {e}")
+    finally:
+        release_conn(conn)
+
+
+def migrar_hora_chile(aplicar=False):
+    """Simula (o aplica) el paso a hora de Chile de lo grabado en UTC.
+    Cada grupo se aplica una sola vez (marca en migraciones_aplicadas)."""
+    salida = {"modo": "APLICADO" if aplicar else "simulacion", "grupos": []}
+    conn = get_conn(is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""CREATE TABLE IF NOT EXISTS migraciones_aplicadas (
+                               nombre TEXT PRIMARY KEY,
+                               aplicada_en TIMESTAMP NOT NULL DEFAULT NOW())""")
+            for clave, columnas, condicion in MIGRACION_HORA_CHILE:
+                tabla = clave.split("#")[0]
+                grupo = {"grupo": clave, "columnas": columnas}
+                salida["grupos"].append(grupo)
+                existentes = _columnas_de(cur, tabla)
+                columnas = [c for c in columnas if c in existentes]
+                if not columnas or "id" not in existentes:
+                    grupo["estado"] = "sin columnas o sin id: no aplica"
+                    continue
+                marca = "hora_chile_" + clave
+                cur.execute("SELECT aplicada_en FROM migraciones_aplicadas WHERE nombre = %s", (marca,))
+                ya = cur.fetchone()
+                if ya:
+                    grupo["estado"] = "ya aplicado el %s" % ya[0].strftime("%d/%m/%Y %H:%M")
+                    continue
+                cur.execute("SELECT max_id FROM corte_hora_chile WHERE tabla = %s", (tabla,))
+                corte = cur.fetchone()
+                if not corte:
+                    grupo["estado"] = "sin corte anotado: no se toca"
+                    continue
+                donde = f"id <= %s AND ({condicion})"
+                cur.execute(f"""SELECT COUNT(*), MIN({columnas[0]}), MAX({columnas[0]})
+                                  FROM {tabla} WHERE {donde}""", (corte[0],))
+                n, desde, hasta = cur.fetchone()
+                grupo.update({"filas": n, "hasta_id": corte[0],
+                              "desde": desde.strftime("%d/%m/%Y %H:%M") if desde else None,
+                              "hasta": hasta.strftime("%d/%m/%Y %H:%M") if hasta else None})
+                cur.execute(f"""SELECT id, {columnas[0]},
+                                       ({columnas[0]} AT TIME ZONE 'UTC') AT TIME ZONE 'America/Santiago'
+                                  FROM {tabla} WHERE {donde} AND {columnas[0]} IS NOT NULL
+                                 ORDER BY id DESC LIMIT 3""", (corte[0],))
+                grupo["ejemplos"] = [{"id": r[0], "antes": r[1].strftime("%d/%m %H:%M"),
+                                      "despues": r[2].strftime("%d/%m %H:%M")} for r in cur.fetchall()]
+                if aplicar:
+                    sets = ", ".join(f"{c} = ({c} AT TIME ZONE 'UTC') AT TIME ZONE 'America/Santiago'"
+                                     for c in columnas)
+                    cur.execute(f"UPDATE {tabla} SET {sets} WHERE {donde}", (corte[0],))
+                    grupo["corregidas"] = cur.rowcount
+                    cur.execute("INSERT INTO migraciones_aplicadas (nombre) VALUES (%s)", (marca,))
+                    conn.commit()
+                    print(f"[Hora Chile] {clave}: {cur.rowcount} filas pasadas a hora de Chile")
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        salida["error"] = str(e)[:300]
+    finally:
+        release_conn(conn)
+    return salida
+
+
 def asegurar_columnas_movimientos():
     """Crea (una sola vez, al arranque) las columnas e índices que la pantalla de
     Movimientos necesita. Antes esto se ejecutaba en CADA carga, lo que tomaba
@@ -1565,7 +1736,7 @@ def listar_audit(limite=200, filtro_accion=None, filtro_usuario=None, filtro_res
     vals.append(limite)
     cur.execute(f"""
         SELECT id,
-               TO_CHAR(fecha AT TIME ZONE 'America/Santiago', 'DD/MM/YYYY HH24:MI:SS') as fecha,
+               TO_CHAR(fecha, 'DD/MM/YYYY HH24:MI:SS') as fecha,
                usuario, ip, accion, entidad, entidad_id, detalle, resultado, dato_antes, dato_despues
         FROM audit_log {w}
         ORDER BY fecha DESC LIMIT %s

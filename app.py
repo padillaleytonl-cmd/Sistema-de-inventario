@@ -29,6 +29,23 @@
 #      veian entre si y trabajaban en paralelo sobre las mismas ordenes.
 import sys as _sys
 
+# ════════════════════════════════════════════════════════════════════
+#  Hora de Chile para todo el proceso
+# ════════════════════════════════════════════════════════════════════
+# Lusync guarda y muestra todo en hora de Chile, este donde este el
+# servidor. Render corre en UTC: datetime.now() y date.today() devolvian la
+# hora de Londres, y despues de las 21:00 "hoy" ya era manana. Con TZ fijado
+# aca, antes de cualquier otro import, datetime.now() y date.today() son de
+# Chile en todo el proceso (incluye el cambio de horario de verano).
+# datetime.utcnow() y time.time() no cambian: siguen siendo UTC y epoch.
+import os as _os_tz
+import time as _time_tz
+_os_tz.environ["TZ"] = "America/Santiago"
+try:
+    _time_tz.tzset()
+except AttributeError:
+    pass  # Windows (desarrollo local): no tiene tzset
+
 if __name__ == "__main__":
     _sys.modules.setdefault("app", _sys.modules["__main__"])
 
@@ -138,8 +155,9 @@ try:
     from inventario import asegurar_columnas_movimientos, asegurar_indices_alertas
     asegurar_columnas_movimientos()
     asegurar_indices_alertas()
-    from inventario import corregir_hora_ajustes_faltantes
+    from inventario import corregir_hora_ajustes_faltantes, anotar_corte_hora_chile
     corregir_hora_ajustes_faltantes()
+    anotar_corte_hora_chile()
 except Exception as _e:
     print(f"[asegurar_columnas_movimientos] {_e}")
 try:
@@ -2368,6 +2386,25 @@ def admin_ventas_faltantes():
                           ("Esto es una simulacion. Agrega &aplicar=1 para descontar "
                            "de verdad lo que aparece en se_puede_saldar."))
     return jsonify(salida)
+
+
+@app.route("/admin/lusync/hora/migrar")
+def admin_hora_migrar():
+    """Pasa a hora de Chile lo que quedo grabado en UTC antes del 04/10/2026.
+
+      /admin/lusync/hora/migrar            simula: cuantas filas y ejemplos
+      /admin/lusync/hora/migrar?aplicar=1  aplica (cada grupo una sola vez)
+    """
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    from inventario import migrar_hora_chile
+    aplicar = request.args.get("aplicar") == "1"
+    resultado = migrar_hora_chile(aplicar=aplicar)
+    if aplicar:
+        registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
+                        "migrar_hora_chile", entidad="sistema",
+                        detalle=str([(g["grupo"], g.get("corregidas")) for g in resultado["grupos"]])[:500])
+    return jsonify(resultado)
 
 
 @app.route("/admin/lusync/auditoria-ordenes")
@@ -7947,11 +7984,9 @@ def devoluciones_lookup_oc():
     cur.execute("""
         SELECT DISTINCT m.sku, m.nombre, m.canal,
                ABS(m.cantidad) as cantidad,
-               TO_CHAR(
-                 CASE WHEN COALESCE(m.canal,'') IN ('Walmart','WooCommerce')
-                      THEN m.fecha - INTERVAL '4 hours'
-                      ELSE m.fecha
-                 END, 'DD/MM/YYYY HH24:MI') as fecha
+               -- movimientos.fecha ya esta en hora de Chile para todos los
+               -- canales: restarle 4 horas a Walmart y Web las mostraba antes.
+               TO_CHAR(m.fecha, 'DD/MM/YYYY HH24:MI') as fecha
         FROM movimientos m
         WHERE m.orden_id = %s AND m.tipo = 'salida'
           AND m.tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int

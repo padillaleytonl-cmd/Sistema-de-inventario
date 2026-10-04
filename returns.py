@@ -33,7 +33,15 @@ from inventario import (
 # Utilidades de parseo de fechas (cada API usa formatos distintos)
 # ─────────────────────────────────────────────────────────────────────────────
 def _parse_fecha(valor):
-    """Convierte distintos formatos ISO a datetime naive (sin tz). None si no se puede."""
+    """Fecha de un canal a datetime naive en HORA DE CHILE. None si no se puede.
+
+    Antes las pasaba a UTC: los plazos de devolucion quedaban 3 horas
+    adelantados frente al resto de Lusync, que esta en hora de Chile, y las
+    horas restantes salian 3 horas cortas. Una fecha sin zona se toma como
+    ya en hora de Chile.
+    """
+    import pytz as _pz_dev
+    _chile = _pz_dev.timezone("America/Santiago")
     if not valor:
         return None
     if isinstance(valor, (int, float)):
@@ -42,7 +50,7 @@ def _parse_fecha(valor):
             v = float(valor)
             if v > 1e12:  # ms
                 v = v / 1000.0
-            return datetime.utcfromtimestamp(v)
+            return datetime.fromtimestamp(v, tz=_pz_dev.utc).astimezone(_chile).replace(tzinfo=None)
         except Exception:
             return None
     s = str(valor).strip()
@@ -62,7 +70,7 @@ def _parse_fecha(valor):
         try:
             dt = datetime.strptime(s, fmt)
             if dt.tzinfo is not None:
-                dt = dt.replace(tzinfo=None) - dt.utcoffset()
+                dt = dt.astimezone(_chile).replace(tzinfo=None)
             return dt
         except Exception:
             continue
