@@ -2585,6 +2585,70 @@ def admin_sku_fusionar():
     return jsonify(salida)
 
 
+@app.route("/admin/lusync/sku/fusionar/sobrantes")
+def admin_sku_fusionar_sobrantes():
+    """Lineas que la fusion dejo con el SKU viejo: la misma orden ya estaba
+    registrada con el SKU oficial (la venta quedo descontada en los dos).
+
+      /admin/lusync/sku/fusionar/sobrantes?origen=VIEJO&destino=OFICIAL
+          muestra cada linea al lado de su par con el SKU oficial
+      ...&aplicar=1
+          borra la linea duplicada SIN tocar stock: la venta ya esta en la
+          del SKU oficial, y el stock quedo fijado por el conteo fisico.
+    """
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    from inventario import get_conn, release_conn
+    origen = (request.args.get("origen") or "").strip()
+    destino = (request.args.get("destino") or "").strip()
+    aplicar = request.args.get("aplicar") == "1"
+    if not origen or not destino or origen == destino:
+        return jsonify({"error": "Indica origen y destino distintos"}), 400
+    tid = _tenant_sesion() or TENANT_INTEGRACIONES
+
+    def _fila(r):
+        return {"id": r[0], "tipo": r[1], "cantidad": r[2], "canal": r[3],
+                "orden": r[4], "fecha": r[5].strftime("%d/%m/%Y %H:%M") if r[5] else None,
+                "motivo": r[6]}
+
+    conn = get_conn(tenant_id=tid, is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            cols = """id, tipo, cantidad, canal, COALESCE(NULLIF(numero_orden, ''), orden_id::text),
+                      fecha, motivo"""
+            cur.execute(f"SELECT {cols}, orden_id FROM movimientos WHERE tenant_id = %s AND sku = %s ORDER BY fecha",
+                        (tid, origen))
+            sobrantes = cur.fetchall()
+            salida = {"modo": "APLICADO" if aplicar else "simulacion", "origen": origen,
+                      "destino": destino, "lineas": []}
+            for r in sobrantes:
+                linea = {"sobrante": _fila(r)}
+                cur.execute(f"""SELECT {cols} FROM movimientos
+                                 WHERE tenant_id = %s AND sku = %s AND orden_id = %s AND tipo = %s
+                                 ORDER BY id LIMIT 1""", (tid, destino, r[7], r[1]))
+                par = cur.fetchone()
+                linea["par_con_sku_oficial"] = _fila(par) if par else None
+                if not par:
+                    linea["estado"] = "sin par con el SKU oficial: no se toca"
+                elif aplicar:
+                    cur.execute("DELETE FROM movimientos WHERE tenant_id = %s AND id = %s", (tid, r[0]))
+                    linea["estado"] = "borrada (sin mover stock)"
+                else:
+                    linea["estado"] = "se borraria, sin mover stock"
+                salida["lineas"].append(linea)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)[:300]}), 500
+    finally:
+        release_conn(conn)
+    if aplicar:
+        registrar_audit(session.get("usuario", "Sistema"), request.remote_addr, "fusion_sku_sobrantes",
+                        entidad="movimientos", entidad_id=destino,
+                        detalle=str([(l["sobrante"]["id"], l["estado"]) for l in salida["lineas"]])[:500])
+    return jsonify(salida)
+
+
 @app.route("/admin/lusync/auditoria-ordenes")
 def auditoria_ordenes_limbo():
     """Audita qué órdenes de cada marketplace NO están registradas en Lusync.
