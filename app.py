@@ -2859,9 +2859,12 @@ def admin_falabella_full_mal_registradas():
                 try:
                     with cn.cursor() as c2:
                         c2.execute("""UPDATE movimientos
-                                         SET bodega_codigo = 'FALABELLA_FBM', faltante = %s, numero_orden = %s,
+                                         SET bodega_codigo = 'FALABELLA_FBM', faltante = 0, numero_orden = %s,
                                              motivo = COALESCE(motivo, '') || ' | era Full (FBF): CENTRAL -> FALABELLA_FBM'
-                                       WHERE tenant_id = %s AND id = %s""", (cant - sale_fbm, numero, tid, mid))
+                                       WHERE tenant_id = %s AND id = %s""", (numero, tid, mid))
+                    # faltante = 0: el stock Full lo maneja Falabella y FALABELLA_FBM
+                    # no se sincroniza sola; anotar faltante llenaria la lista de
+                    # faltantes con ventas que no son sobreventa de la bodega propia.
                         if descontado > 0:
                             ahora_mov = now_chile().replace(tzinfo=None)
                             c2.execute("""INSERT INTO movimientos
