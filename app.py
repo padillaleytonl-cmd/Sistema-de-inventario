@@ -2791,6 +2791,8 @@ def admin_falabella_full_mal_registradas():
 
       /admin/lusync/falabella/full-mal-registradas?dias=10           simula
       /admin/lusync/falabella/full-mal-registradas?dias=10&aplicar=1 corrige
+      ...&devolver=0  pasa las ventas a FALABELLA_FBM SIN devolver stock a
+                      CENTRAL (cuando el conteo fisico de CENTRAL ya es el real)
     """
     if not _acceso_equipo_lusync():
         return redirect("/admin/lusync/login")
@@ -2798,6 +2800,7 @@ def admin_falabella_full_mal_registradas():
                             ajustar_stock_bodega)
     from bodegas_logic import detectar_fulfillment_falabella
     aplicar = request.args.get("aplicar") == "1"
+    devolver = request.args.get("devolver", "1") != "0"
     dias = max(1, min(int(request.args.get("dias", "10") or 10), 30))
     tid = _tenant_sesion() or TENANT_INTEGRACIONES
     salida = {"modo": "APLICADO" if aplicar else "simulacion", "dias": dias,
@@ -2843,7 +2846,7 @@ def admin_falabella_full_mal_registradas():
                 continue
             for (mid, _oid, numero, sku, nombre, cant, falta, fecha) in lineas:
                 cant = int(cant or 0)
-                descontado = cant - int(falta or 0)   # lo que de verdad salio de CENTRAL
+                descontado = (cant - int(falta or 0)) if devolver else 0   # lo que vuelve a CENTRAL
                 numero = numero_visible
                 item = {"orden": numero, "sku": sku, "producto": nombre, "fecha": fecha.strftime("%d/%m %H:%M"),
                         "cantidad": cant, "se_devuelve_a_central": descontado,
@@ -2969,6 +2972,73 @@ def admin_falabella_completar_numeros():
                    "quedan": max(0, len(pendientes) - completadas - sin_leer)})
     if salida["quedan"]:
         salida["nota"] = "Quedan ordenes: vuelve a abrir este enlace para la siguiente tanda."
+    return jsonify(salida)
+
+
+@app.route("/admin/lusync/falabella/full-deshacer-devolucion")
+def admin_falabella_full_deshacer_devolucion():
+    """Deshace lo que /admin/lusync/falabella/full-mal-registradas devolvio a
+    CENTRAL: cada movimiento "Vuelve a CENTRAL ... era Full" se descuenta de
+    CENTRAL y se borra. La venta queda en FALABELLA_FBM. Para cuando el conteo
+    fisico de CENTRAL ya era el real (05/10/2026).
+
+      /admin/lusync/falabella/full-deshacer-devolucion            simula
+      /admin/lusync/falabella/full-deshacer-devolucion?aplicar=1  deshace y publica
+    """
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    from inventario import get_conn, release_conn, get_stock_bodega, ajustar_stock_bodega
+    aplicar = request.args.get("aplicar") == "1"
+    tid = _tenant_sesion() or TENANT_INTEGRACIONES
+    conn = get_conn(tenant_id=tid, is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT id, sku, nombre, cantidad, fecha, motivo FROM movimientos
+                            WHERE tenant_id = %s AND tipo = 'ajuste' AND bodega_codigo = 'CENTRAL'
+                              AND motivo LIKE 'Vuelve a CENTRAL: la venta Falabella %%era Full%%'
+                            ORDER BY id""", (tid,))
+            filas = cur.fetchall()
+        conn.commit()
+    finally:
+        release_conn(conn)
+    por_sku = {}
+    for mid, sku, nombre, cant, fecha, motivo in filas:
+        d = por_sku.setdefault(sku, {"sku": sku, "producto": nombre, "unidades": 0, "movimientos": []})
+        d["unidades"] += int(cant or 0)
+        d["movimientos"].append(mid)
+    salida = {"modo": "APLICADO" if aplicar else "simulacion", "productos": []}
+    for sku, d in por_sku.items():
+        hoy = int(get_stock_bodega(sku, "CENTRAL") or 0)
+        d["central_hoy"] = hoy
+        d["central_despues"] = max(0, hoy - d["unidades"])
+        if aplicar:
+            ajustar_stock_bodega(sku, "CENTRAL", -d["unidades"])
+            cn = get_conn(tenant_id=tid, is_admin=True)
+            try:
+                with cn.cursor() as c2:
+                    c2.execute("DELETE FROM movimientos WHERE tenant_id = %s AND id = ANY(%s)",
+                               (tid, d["movimientos"]))
+                cn.commit()
+            finally:
+                release_conn(cn)
+            d["central_despues"] = int(get_stock_bodega(sku, "CENTRAL") or 0)
+        d["movimientos"] = len(d["movimientos"])
+        salida["productos"].append(d)
+    if aplicar and por_sku:
+        registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
+                        "falabella_full_deshacer_devolucion", entidad="movimientos",
+                        detalle=str([(d["sku"], d["unidades"]) for d in salida["productos"]])[:500])
+        salida["publicado"] = {}
+        for sku in sorted(por_sku):
+            try:
+                sincronizar_stock_marketplaces(sku, contexto="deshacer_devolucion_full")
+                salida["publicado"][sku] = "ok"
+            except Exception as e:
+                salida["publicado"][sku] = str(e)[:120]
+    elif not por_sku:
+        salida["nota"] = "No hay devoluciones registradas que deshacer."
+    else:
+        salida["nota"] = "Simulacion: no se cambio nada. Agrega &aplicar=1 para deshacer."
     return jsonify(salida)
 
 
@@ -5577,7 +5647,11 @@ def _sync_falabella_automatico():
                             # cancelaciones del lote. Se anota el fallo en la
                             # misma lista que se muestra en la alerta, para que
                             # no quede en silencio.
-                            from inventario import ajustar_stock_bodega
+                            # Sin "from inventario import ajustar_stock_bodega" aca:
+                            # ese import local volvia el nombre variable LOCAL de
+                            # toda la funcion, y la cancelacion de una venta normal
+                            # (rama de abajo) fallaba con "cannot access local
+                            # variable". Ya esta importado al inicio del archivo.
                             try:
                                 ajustar_stock_bodega(prod["sku"], "FALABELLA_FBM", cantidad)
                             except Exception as e_aj:
@@ -5826,8 +5900,10 @@ def _sync_paris_automatico():
                             if es_cd_cancel:
                                 # Sigue en el centro de distribución de París. No
                                 # toca central ni re-sincroniza.
-                                # Por item, misma razon que en Falabella.
-                                from inventario import ajustar_stock_bodega
+                                # Por item, misma razon que en Falabella. Sin import
+                                # local: volvia ajustar_stock_bodega variable LOCAL de
+                                # toda la funcion y la cancelacion de una venta propia
+                                # (abajo) fallaba con "cannot access local variable".
                                 try:
                                     ajustar_stock_bodega(prod["sku"], "PARIS_CD", cantidad)
                                 except Exception as e_aj:
