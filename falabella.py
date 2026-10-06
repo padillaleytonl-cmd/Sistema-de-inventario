@@ -1022,6 +1022,30 @@ def falabella_webhook():
         return jsonify({"ok": False, "error": str(e)}), 200
 
 
+def _orden_falabella_completa(order_id):
+    """La orden (GetOrder) sin los envoltorios de la respuesta: el primer
+    diccionario que trae OrderId. None si no se pudo leer."""
+    def _buscar(x):
+        if isinstance(x, dict):
+            if "OrderId" in x:
+                return x
+            for v in x.values():
+                r = _buscar(v)
+                if r:
+                    return r
+        elif isinstance(x, list):
+            for v in x:
+                r = _buscar(v)
+                if r:
+                    return r
+        return None
+    try:
+        return _buscar(obtener_orden_falabella(order_id))
+    except Exception as e:
+        print(f"[Falabella WEBHOOK] no pude leer la orden {order_id}: {e}")
+        return None
+
+
 def procesar_webhook_orden_creada(data):
     """Orden nueva: registrar la venta apenas avisa Falabella.
 
@@ -1051,6 +1075,23 @@ def procesar_webhook_orden_creada(data):
         if orden_ya_procesada_texto(fb_key):
             print(f"[Falabella WEBHOOK] Orden {order_id} ya procesada, skip")
             return
+
+        # El aviso trae solo {"OrderId": ...}. Sin la orden completa no se sabe
+        # si es Full (ShippingType), ni la fecha de compra, ni el numero que usa
+        # el equipo (OrderNumber, el que empieza con 3). Antes se decidia con el
+        # aviso pelado: todas las ventas quedaban como bodega propia y las Full
+        # se descontaban de CENTRAL. Si la orden no se puede leer, no se
+        # registra aca: el sync de cada 10 minutos la trae completa.
+        orden = _orden_falabella_completa(order_id)
+        if not orden:
+            print(f"[Falabella WEBHOOK] {order_id}: no se pudo leer la orden; queda para el sync")
+            return
+        data = {**data, **orden}
+        order_number = str(orden.get("OrderNumber") or "").strip()
+        # Diagnostico: el aviso llega segundos despues de la compra. Comparar
+        # esta hora con la del log dice si CreatedAt viene en Chile o en UTC.
+        print(f"[Falabella WEBHOOK] {order_number or order_id}: CreatedAt={orden.get('CreatedAt')!r} "
+              f"ShippingType={orden.get('ShippingType')!r}")
 
         fecha_compra_falabella = None
         try:
@@ -1109,12 +1150,32 @@ def procesar_webhook_orden_creada(data):
                 fallidas.append(sku_falabella)
                 continue
             registradas += 1
-            print(f"[Falabella WEBHOOK] {order_id} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado.get('bodega')}")
+            print(f"[Falabella WEBHOOK] {order_number or order_id} {tipo_str}: {sku_lusync} -{cantidad} desde {resultado.get('bodega')}")
             if not es_fbf and resultado.get("advertencia") != "ya_registrada":
                 try:
                     sincronizar_stock_a_marketplaces(sku_lusync, excepto=["falabella"])
                 except Exception as e:
                     print(f"[Falabella WEBHOOK] Sync cruzado falló: {e}")
+
+        # El numero que usa el equipo, desde el registro mismo.
+        if registradas and order_number and order_number != order_id:
+            try:
+                from inventario import get_conn as _gc_wn, release_conn as _rc_wn, tenant_actual as _ta_wn
+                _ctx_wn = _ta_wn()
+                _cn_wn = _gc_wn()
+                try:
+                    with _cn_wn.cursor() as _cur_wn:
+                        _cur_wn.execute("""UPDATE movimientos SET numero_orden = %s
+                                            WHERE canal = 'Falabella' AND orden_id::text = %s
+                                              AND tenant_id = %s
+                                              AND (numero_orden IS NULL OR numero_orden = ''
+                                                   OR numero_orden = orden_id::text)""",
+                                        (order_number, order_id, int(_ctx_wn[0]) if _ctx_wn else 1))
+                    _cn_wn.commit()
+                finally:
+                    _rc_wn(_cn_wn)
+            except Exception as e:
+                print(f"[Falabella WEBHOOK] no pude guardar el numero de orden {order_number}: {e}")
 
         if registradas and not fallidas:
             intentar_marcar_orden_atomic(fb_key)
