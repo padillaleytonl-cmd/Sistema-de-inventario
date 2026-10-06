@@ -2827,13 +2827,18 @@ def admin_falabella_full_mal_registradas():
             except Exception:
                 orden = None
             if not orden:
-                salida["no_se_pudo_leer"].append(lineas[0][2])
+                salida["no_se_pudo_leer"].append({"venta_del": lineas[0][7].strftime("%d/%m %H:%M"),
+                                                  "sku": lineas[0][3]})
                 continue
+            # El numero que usa el equipo (empieza con 3), aunque el registro
+            # solo tenga el interno.
+            numero_visible = str(orden.get("OrderNumber") or "").strip() or lineas[0][2]
             if not detectar_fulfillment_falabella(orden):
                 continue
             for (mid, _oid, numero, sku, nombre, cant, falta, fecha) in lineas:
                 cant = int(cant or 0)
                 descontado = cant - int(falta or 0)   # lo que de verdad salio de CENTRAL
+                numero = numero_visible
                 item = {"orden": numero, "sku": sku, "producto": nombre, "fecha": fecha.strftime("%d/%m %H:%M"),
                         "cantidad": cant, "se_devuelve_a_central": descontado,
                         "tipo_envio": orden.get("ShippingType")}
@@ -2854,9 +2859,9 @@ def admin_falabella_full_mal_registradas():
                 try:
                     with cn.cursor() as c2:
                         c2.execute("""UPDATE movimientos
-                                         SET bodega_codigo = 'FALABELLA_FBM', faltante = %s,
+                                         SET bodega_codigo = 'FALABELLA_FBM', faltante = %s, numero_orden = %s,
                                              motivo = COALESCE(motivo, '') || ' | era Full (FBF): CENTRAL -> FALABELLA_FBM'
-                                       WHERE tenant_id = %s AND id = %s""", (cant - sale_fbm, tid, mid))
+                                       WHERE tenant_id = %s AND id = %s""", (cant - sale_fbm, numero, tid, mid))
                         if descontado > 0:
                             ahora_mov = now_chile().replace(tzinfo=None)
                             c2.execute("""INSERT INTO movimientos
