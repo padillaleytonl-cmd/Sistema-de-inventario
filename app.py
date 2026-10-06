@@ -3042,6 +3042,49 @@ def admin_falabella_full_deshacer_devolucion():
     return jsonify(salida)
 
 
+@app.route("/admin/lusync/ventas/duplicadas")
+def admin_ventas_duplicadas():
+    """Solo lectura: ventas registradas mas de una vez.
+
+    La clave unica (orden_id, sku, tipo) impide repetir la misma fila, pero no
+    que la misma venta quede dos veces con distinto identificador de orden
+    (el interno y el que ve el equipo). Se agrupa por canal, SKU y el numero
+    visible de la orden (numero_orden, o el orden_id si no hay).
+
+      /admin/lusync/ventas/duplicadas?dias=14
+    """
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    from inventario import get_conn, release_conn, now_chile
+    dias = max(1, min(int(request.args.get("dias", "14") or 14), 90))
+    tid = _tenant_sesion() or TENANT_INTEGRACIONES
+    desde = now_chile().replace(tzinfo=None) - timedelta(days=dias)
+    conn = get_conn(tenant_id=tid, is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                WITH v AS (
+                    SELECT m.id, m.canal, m.sku, m.cantidad, m.bodega_codigo, m.fecha,
+                           m.motivo, m.origen_registro, m.orden_id::text AS oid,
+                           COALESCE(NULLIF(m.numero_orden, ''), m.orden_id::text) AS clave
+                      FROM movimientos m
+                     WHERE m.tenant_id = %s AND m.tipo = 'salida' AND m.fecha > %s
+                       AND m.orden_id IS NOT NULL)
+                SELECT canal, sku, clave, COUNT(*),
+                       JSON_AGG(JSON_BUILD_OBJECT(
+                           'id', id, 'orden_id', oid, 'cantidad', cantidad, 'bodega', bodega_codigo,
+                           'fecha', TO_CHAR(fecha, 'DD/MM HH24:MI'), 'motivo', motivo,
+                           'origen', origen_registro) ORDER BY id)
+                  FROM v GROUP BY canal, sku, clave HAVING COUNT(*) > 1
+                 ORDER BY MIN(fecha) DESC""", (tid, desde))
+            grupos = [{"canal": r[0], "sku": r[1], "orden": r[2], "veces": r[3], "registros": r[4]}
+                      for r in cur.fetchall()]
+        conn.commit()
+    finally:
+        release_conn(conn)
+    return jsonify({"dias": dias, "ventas_duplicadas": len(grupos), "grupos": grupos})
+
+
 @app.route("/admin/lusync/auditoria-ordenes")
 def auditoria_ordenes_limbo():
     """Audita qué órdenes de cada marketplace NO están registradas en Lusync.
