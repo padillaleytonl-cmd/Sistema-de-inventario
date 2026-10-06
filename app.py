@@ -2749,6 +2749,142 @@ def admin_web_cancelaciones_repetidas():
     return jsonify(salida)
 
 
+def _orden_falabella_plana(order_id):
+    """La orden de Falabella (GetOrder) sin los envoltorios de la respuesta:
+    el primer diccionario que trae OrderId. None si no se pudo leer."""
+    from falabella import obtener_orden_falabella
+    datos = obtener_orden_falabella(order_id)
+
+    def _buscar(x):
+        if isinstance(x, dict):
+            if "OrderId" in x:
+                return x
+            for v in x.values():
+                r = _buscar(v)
+                if r:
+                    return r
+        elif isinstance(x, list):
+            for v in x:
+                r = _buscar(v)
+                if r:
+                    return r
+        return None
+    return _buscar(datos)
+
+
+@app.route("/admin/lusync/falabella/full-mal-registradas")
+def admin_falabella_full_mal_registradas():
+    """Ventas Falabella Full (FBF) que se registraron como de bodega propia.
+
+    El webhook de orden creada trae solo el OrderId, sin ShippingType: todas
+    sus ventas quedaban como FBS y se descontaban de CENTRAL. Se revisa cada
+    orden contra Falabella (GetOrder) y las que son Full se pasan a
+    FALABELLA_FBM, devolviendo a CENTRAL lo que se le desconto.
+
+      /admin/lusync/falabella/full-mal-registradas?dias=10           simula
+      /admin/lusync/falabella/full-mal-registradas?dias=10&aplicar=1 corrige
+    """
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    from inventario import (get_conn, release_conn, now_chile, get_stock_bodega,
+                            ajustar_stock_bodega)
+    from bodegas_logic import detectar_fulfillment_falabella
+    aplicar = request.args.get("aplicar") == "1"
+    dias = max(1, min(int(request.args.get("dias", "10") or 10), 30))
+    tid = _tenant_sesion() or TENANT_INTEGRACIONES
+    salida = {"modo": "APLICADO" if aplicar else "simulacion", "dias": dias,
+              "revisadas": 0, "full": [], "no_se_pudo_leer": []}
+    skus = set()
+
+    conn = get_conn(tenant_id=tid, is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT id, orden_id::text, COALESCE(NULLIF(numero_orden, ''), orden_id::text),
+                                  sku, nombre, cantidad, COALESCE(faltante, 0), fecha
+                             FROM movimientos
+                            WHERE tenant_id = %s AND canal = 'Falabella' AND tipo = 'salida'
+                              AND COALESCE(bodega_codigo, 'CENTRAL') = 'CENTRAL'
+                              AND orden_id IS NOT NULL
+                              AND fecha > %s
+                            ORDER BY fecha""",
+                        (tid, now_chile().replace(tzinfo=None) - timedelta(days=dias)))
+            por_orden = {}
+            for fila in cur.fetchall():
+                por_orden.setdefault(fila[1], []).append(fila)
+
+        for oid, lineas in por_orden.items():
+            salida["revisadas"] += 1
+            try:
+                orden = _orden_falabella_plana(oid)
+            except Exception:
+                orden = None
+            if not orden:
+                salida["no_se_pudo_leer"].append(lineas[0][2])
+                continue
+            if not detectar_fulfillment_falabella(orden):
+                continue
+            for (mid, _oid, numero, sku, nombre, cant, falta, fecha) in lineas:
+                cant = int(cant or 0)
+                descontado = cant - int(falta or 0)   # lo que de verdad salio de CENTRAL
+                item = {"orden": numero, "sku": sku, "producto": nombre, "fecha": fecha.strftime("%d/%m %H:%M"),
+                        "cantidad": cant, "se_devuelve_a_central": descontado,
+                        "tipo_envio": orden.get("ShippingType")}
+                salida["full"].append(item)
+                if not aplicar:
+                    continue
+                if descontado > 0:
+                    antes = int(get_stock_bodega(sku, "CENTRAL") or 0)
+                    ajustar_stock_bodega(sku, "CENTRAL", descontado)
+                    despues = int(get_stock_bodega(sku, "CENTRAL") or 0)
+                else:
+                    antes = despues = int(get_stock_bodega(sku, "CENTRAL") or 0)
+                fbm = int(get_stock_bodega(sku, "FALABELLA_FBM") or 0)
+                sale_fbm = min(cant, fbm)
+                if sale_fbm:
+                    ajustar_stock_bodega(sku, "FALABELLA_FBM", -sale_fbm)
+                cn = get_conn(tenant_id=tid, is_admin=True)
+                try:
+                    with cn.cursor() as c2:
+                        c2.execute("""UPDATE movimientos
+                                         SET bodega_codigo = 'FALABELLA_FBM', faltante = %s,
+                                             motivo = COALESCE(motivo, '') || ' | era Full (FBF): CENTRAL -> FALABELLA_FBM'
+                                       WHERE tenant_id = %s AND id = %s""", (cant - sale_fbm, tid, mid))
+                        if descontado > 0:
+                            ahora_mov = now_chile().replace(tzinfo=None)
+                            c2.execute("""INSERT INTO movimientos
+                                          (tenant_id, tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha,
+                                           bodega_codigo, fecha_importacion, origen_registro, stock_antes, stock_despues)
+                                          VALUES (%s, 'ajuste', %s, %s, %s, %s, %s, 'Manual', %s, 'CENTRAL', %s,
+                                                  'manual', %s, %s)""",
+                                       (tid, sku, nombre, descontado,
+                                        "Vuelve a CENTRAL: la venta Falabella %s era Full y se habia "
+                                        "descontado de la bodega propia" % numero,
+                                        session.get("usuario", "Sistema"), ahora_mov, ahora_mov, antes, despues))
+                    cn.commit()
+                finally:
+                    release_conn(cn)
+                item["corregida"] = True
+                skus.add(sku)
+    finally:
+        release_conn(conn)
+
+    if aplicar:
+        registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
+                        "falabella_full_mal_registradas", entidad="movimientos",
+                        detalle=str([(i["orden"], i["sku"], i["se_devuelve_a_central"])
+                                     for i in salida["full"]])[:500])
+        salida["publicado"] = {}
+        for sku in sorted(skus):
+            try:
+                sincronizar_stock_marketplaces(sku, contexto="falabella_full_corregida")
+                salida["publicado"][sku] = "ok"
+            except Exception as e:
+                salida["publicado"][sku] = str(e)[:120]
+    elif salida["full"]:
+        salida["nota"] = "Simulacion: no se cambio nada. Agrega &aplicar=1 para corregir."
+    return jsonify(salida)
+
+
 @app.route("/admin/lusync/auditoria-ordenes")
 def auditoria_ordenes_limbo():
     """Audita qué órdenes de cada marketplace NO están registradas en Lusync.
