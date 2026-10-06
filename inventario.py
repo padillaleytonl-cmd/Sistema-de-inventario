@@ -1591,6 +1591,15 @@ def asegurar_columnas_movimientos():
         conn.rollback()
         print(f"[Perf] no pude asegurar movimientos.faltante: {e}")
 
+    # Para descontar las canceladas del consolidado (sql_venta_vigente).
+    try:
+        cur.execute("""CREATE INDEX IF NOT EXISTS idx_mov_entrada_orden
+                       ON movimientos (tenant_id, orden_id, sku) WHERE tipo = 'entrada'""")
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"[Perf] no pude crear idx_mov_entrada_orden: {e}")
+
     # El indice es solo velocidad para /admin/lusync/ventas/faltantes. Que no
     # exista no puede costar una venta, asi que tambien va aparte.
     try:
@@ -3290,6 +3299,36 @@ def borrar_meli_auth():
 
 # ── DASHBOARD STATS (para gráficos del dashboard) ───────────────────────────
 
+def sql_venta_vigente(tabla="m"):
+    """Condicion SQL: la venta (fila 'salida') no se cancelo despues.
+
+    Una venta cancelada sigue siendo una fila 'salida': el consolidado la
+    contaba igual. Se reconoce por las dos huellas que deja la cancelacion:
+      - la marca del canal en ordenes_procesadas (FALABELLA-CANCEL-<orden>,
+        PARIS-CANCEL-, RP-CANCEL-, MELI-CANCEL-, WOO-CANCEL-, y Walmart
+        CANCEL-<customerOrderId>);
+      - el reintegro "Cancelacion ... orden X" de ese SKU (cubre las de la Web
+        de antes del 05/10/2026, que no quedaban marcadas).
+    `tabla` es el alias (o el nombre) de movimientos en la consulta de afuera.
+    Va dentro de un execute con parametros: los % van dobles.
+    """
+    t = tabla
+    clave = f"""(CASE WHEN LOWER({t}.canal) LIKE 'falabella%%' THEN 'FALABELLA-CANCEL-'
+                      WHEN LOWER({t}.canal) IN ('paris', 'parís') THEN 'PARIS-CANCEL-'
+                      WHEN LOWER({t}.canal) LIKE 'ripley%%' THEN 'RP-CANCEL-'
+                      WHEN LOWER({t}.canal) LIKE 'mercadolibre%%' THEN 'MELI-CANCEL-'
+                      WHEN LOWER({t}.canal) IN ('web', 'woocommerce') THEN 'WOO-CANCEL-'
+                      WHEN LOWER({t}.canal) LIKE 'walmart%%' THEN 'CANCEL-'
+                 END || {t}.orden_id::text)"""
+    return f"""({t}.orden_id IS NULL OR (
+                NOT EXISTS (SELECT 1 FROM ordenes_procesadas op_c
+                             WHERE op_c.tenant_id = {t}.tenant_id AND op_c.order_id_texto = {clave})
+            AND NOT EXISTS (SELECT 1 FROM movimientos mv_c
+                             WHERE mv_c.tenant_id = {t}.tenant_id AND mv_c.tipo = 'entrada'
+                               AND mv_c.orden_id = {t}.orden_id AND mv_c.sku = {t}.sku
+                               AND mv_c.motivo ILIKE 'cancelaci%%')))"""
+
+
 def stats_ventas_por_canal_dia(fecha_desde, fecha_hasta):
     """Ventas (salidas) agrupadas por día y canal. Para gráfico línea apilada.
     Solo cuenta canales reales de marketplace, excluye 'Manual', 'Sistema', NULL.
@@ -3306,6 +3345,7 @@ def stats_ventas_por_canal_dia(fecha_desde, fecha_hasta):
               AND cantidad > 0
               AND DATE(fecha) BETWEEN %s AND %s
               AND canal IN ({canales_sql})
+              AND {sql_venta_vigente("movimientos")}
             GROUP BY dia, canal_norm
             ORDER BY dia ASC
         """, (fecha_desde, fecha_hasta))
@@ -3333,6 +3373,7 @@ def stats_top_productos_vendidos(fecha_desde, fecha_hasta, limite=10):
               AND m.cantidad > 0
               AND DATE(m.fecha) BETWEEN %s AND %s
               AND m.canal IN ({canales_sql})
+              AND {sql_venta_vigente("m")}
             GROUP BY m.sku
             HAVING SUM(m.cantidad) > 0
             ORDER BY total DESC
@@ -3417,6 +3458,7 @@ def stats_kpis_dashboard(fecha_desde, fecha_hasta):
             WHERE tipo = 'salida'
               AND DATE(fecha) BETWEEN %s AND %s
               AND canal IN ({canales_sql})
+              AND {sql_venta_vigente("movimientos")}
         """, (fecha_desde, fecha_hasta))
         r = cur.fetchone()
         kpis["ventas_periodo"]  = int(r[0] or 0)

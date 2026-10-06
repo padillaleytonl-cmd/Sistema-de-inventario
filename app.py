@@ -186,6 +186,8 @@ except Exception as e:
 # SIN try a proposito: los ON CONFLICT del codigo apuntan a estas claves. Si
 # no se pueden crear, el arranque falla y Render sigue con la version anterior.
 from inventario import asegurar_unicos_por_cliente
+# Condicion SQL de venta no cancelada, para el consolidado de ventas.
+from inventario import sql_venta_vigente
 # Para lanzar hilos con el cliente de quien los lanza (ver inventario).
 from inventario import con_tenant_del_llamador
 # Credenciales de canales del cliente que opera (ver credenciales_canal.py).
@@ -13394,6 +13396,7 @@ def ruta_stats_propia_vs_fulfillment():
             WHERE m.tipo = 'salida'
               AND m.canal IN ({canales_sql})
               AND m.fecha::date BETWEEN %s AND %s
+              AND {sql_venta_vigente("m")}
             GROUP BY COALESCE(m.bodega_codigo, 'CENTRAL')
         """, (desde, hasta))
         rows = cur.fetchall()
@@ -18199,6 +18202,7 @@ def ruta_stats_ingresos_periodo():
             WHERE m.tipo = 'salida'
               AND m.canal IN ({canales_sql})
               AND DATE(m.fecha) BETWEEN %s AND %s
+              AND {sql_venta_vigente("m")}
         """, (desde, hasta))
         r = cur.fetchone()
         monto = float(r[0] or 0)
@@ -18217,6 +18221,7 @@ def ruta_stats_ingresos_periodo():
             WHERE m.tipo = 'salida'
               AND m.canal IN ({canales_sql})
               AND DATE(m.fecha) BETWEEN %s AND %s
+              AND {sql_venta_vigente("m")}
             GROUP BY m.canal
             ORDER BY monto DESC
         """, (desde, hasta))
@@ -29077,7 +29082,9 @@ def ventas_graficos():
         from inventario import get_conn as _gc
         conn = _gc(); cur = conn.cursor()
 
-        where = "m.tipo = 'salida' AND m.canal NOT IN ('Manual','Ajuste','Sistema')"
+        # Sin las ventas canceladas despues (sql_venta_vigente).
+        where = ("m.tipo = 'salida' AND m.canal NOT IN ('Manual','Ajuste','Sistema') AND "
+                 + sql_venta_vigente("m"))
         params = []
         if desde:
             where += " AND DATE(m.fecha) >= %s"; params.append(desde)
