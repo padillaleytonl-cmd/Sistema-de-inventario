@@ -2901,6 +2901,70 @@ def admin_falabella_full_mal_registradas():
     return jsonify(salida)
 
 
+@app.route("/admin/lusync/falabella/completar-numeros")
+def admin_falabella_completar_numeros():
+    """Completa en todo el historial el numero de orden que usa el equipo en
+    Falabella (OrderNumber, empieza con 3) donde solo quedo el interno.
+
+    El sync lo completa solo para la ultima semana; esto cubre lo anterior.
+    Consulta cada orden a Falabella (GetOrder), hasta `limite` por pasada:
+    si quedan pendientes, se vuelve a abrir.
+
+      /admin/lusync/falabella/completar-numeros            cuantas faltan
+      /admin/lusync/falabella/completar-numeros?aplicar=1  completa (por tandas)
+    """
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    from inventario import get_conn, release_conn
+    aplicar = request.args.get("aplicar") == "1"
+    limite = max(1, min(int(request.args.get("limite", "120") or 120), 300))
+    tid = _tenant_sesion() or TENANT_INTEGRACIONES
+    conn = get_conn(tenant_id=tid, is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT orden_id::text, MAX(fecha) FROM movimientos
+                            WHERE tenant_id = %s AND canal = 'Falabella'
+                              AND orden_id IS NOT NULL
+                              AND (numero_orden IS NULL OR numero_orden = ''
+                                   OR numero_orden = orden_id::text)
+                            GROUP BY orden_id::text ORDER BY MAX(fecha) DESC""", (tid,))
+            pendientes = [r[0] for r in cur.fetchall()]
+    finally:
+        release_conn(conn)
+    salida = {"modo": "APLICADO" if aplicar else "simulacion", "ordenes_sin_numero": len(pendientes)}
+    if not aplicar:
+        salida["nota"] = (f"Agrega &aplicar=1 para completarlas (hasta {limite} por pasada)."
+                          if pendientes else "No queda ninguna sin numero.")
+        return jsonify(salida)
+
+    completadas, sin_leer = 0, 0
+    for oid in pendientes[:limite]:
+        try:
+            orden = _orden_falabella_plana(oid)
+        except Exception:
+            orden = None
+        numero = str((orden or {}).get("OrderNumber") or "").strip()
+        if not numero or numero == oid:
+            sin_leer += 1
+            continue
+        cn = get_conn(tenant_id=tid, is_admin=True)
+        try:
+            with cn.cursor() as c2:
+                c2.execute("""UPDATE movimientos SET numero_orden = %s
+                               WHERE tenant_id = %s AND canal = 'Falabella' AND orden_id::text = %s
+                                 AND (numero_orden IS NULL OR numero_orden = ''
+                                      OR numero_orden = orden_id::text)""", (numero, tid, oid))
+            cn.commit()
+        finally:
+            release_conn(cn)
+        completadas += 1
+    salida.update({"completadas": completadas, "no_se_pudo_leer": sin_leer,
+                   "quedan": max(0, len(pendientes) - completadas - sin_leer)})
+    if salida["quedan"]:
+        salida["nota"] = "Quedan ordenes: vuelve a abrir este enlace para la siguiente tanda."
+    return jsonify(salida)
+
+
 @app.route("/admin/lusync/auditoria-ordenes")
 def auditoria_ordenes_limbo():
     """Audita qué órdenes de cada marketplace NO están registradas en Lusync.
