@@ -2819,6 +2819,12 @@ def admin_falabella_full_mal_registradas():
             por_orden = {}
             for fila in cur.fetchall():
                 por_orden.setdefault(fila[1], []).append(fila)
+        # La lectura se cierra ANTES de consultar a Falabella: con la
+        # transaccion abierta durante minutos, el ALTER TABLE de un arranque
+        # quedo esperando y detras de el se congelo todo Lusync (05/10/2026).
+        conn.commit()
+        release_conn(conn)
+        conn = None
 
         for oid, lineas in por_orden.items():
             salida["revisadas"] += 1
@@ -2882,7 +2888,8 @@ def admin_falabella_full_mal_registradas():
                 item["corregida"] = True
                 skus.add(sku)
     finally:
-        release_conn(conn)
+        if conn is not None:
+            release_conn(conn)
 
     if aplicar:
         registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,

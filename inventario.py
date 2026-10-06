@@ -569,6 +569,15 @@ def _fijar_zona_chile(conn):
             return conn
         cur = conn.cursor()
         cur.execute("SET TIME ZONE %s", (ZONA_HORARIA_BASE,))
+        # Limites de espera de la sesion. El 05/10/2026 una transaccion que
+        # quedo abierta minutos (una herramienta que consultaba a Falabella
+        # orden por orden) bloqueo el ALTER TABLE del arranque, y detras del
+        # ALTER quedaron en fila TODAS las consultas a movimientos: Lusync
+        # entero congelado, sin error. Con esto la espera por un bloqueo
+        # falla a los 15 s, y una transaccion abierta e inactiva se corta a
+        # los 10 minutos.
+        cur.execute("SET lock_timeout = '15s'")
+        cur.execute("SET idle_in_transaction_session_timeout = '10min'")
         cur.close()
         conn.commit()
     except Exception as e:
