@@ -2658,13 +2658,20 @@ def admin_web_cancelaciones_repetidas():
     _sync_woo_automatico). Esto deja solo el primer reintegro, que es el
     legitimo, y descuenta lo que se sumo de mas.
 
-      /admin/lusync/web/cancelaciones-repetidas            simula
-      /admin/lusync/web/cancelaciones-repetidas?aplicar=1  corrige y publica
+      /admin/lusync/web/cancelaciones-repetidas                    simula
+      ...?aplicar=1                      limpia el historial repetido (todas)
+      ...?aplicar=1&descontar=16015,...  ademas descuenta de CENTRAL lo sumado
+                                         de mas, SOLO en esas ordenes
+
+    El descuento de stock va solo en las ordenes que se indiquen: en una
+    repeticion vieja el stock inflado ya se vendio o se ajusto despues, y
+    restarlo ahora sacaria unidades que existen.
     """
     if not _acceso_equipo_lusync():
         return redirect("/admin/lusync/login")
     from inventario import get_conn, release_conn, now_chile, get_stock_bodega, ajustar_stock_bodega
     aplicar = request.args.get("aplicar") == "1"
+    descontar = {x for x in request.args.get("descontar", "").replace(" ", "").split(",") if x}
     tid = _tenant_sesion() or TENANT_INTEGRACIONES
     salida = {"modo": "APLICADO" if aplicar else "simulacion", "ordenes": []}
     skus = set()
@@ -2689,7 +2696,8 @@ def admin_web_cancelaciones_repetidas():
                      "primera": desde.strftime("%d/%m %H:%M") if desde else None,
                      "ultima": hasta.strftime("%d/%m %H:%M") if hasta else None,
                      "central_hoy": stock_central,
-                     "central_despues": max(0, stock_central - de_mas)}
+                     "descuenta_stock": oid in descontar,
+                     "central_despues": max(0, stock_central - de_mas) if oid in descontar else stock_central}
                 salida["ordenes"].append(o)
                 if not aplicar:
                     continue
@@ -2708,7 +2716,7 @@ def admin_web_cancelaciones_repetidas():
                             (tid, f"Orden cancelada en Web: {oid}"))
                 o["alertas_borradas"] = cur.rowcount
                 conn.commit()
-                if de_mas > 0:
+                if de_mas > 0 and oid in descontar and stock_central > 0:
                     ajustar_stock_bodega(sku, "CENTRAL", -de_mas)
                     despues = int(get_stock_bodega(sku, "CENTRAL") or 0)
                     ahora_mov = now_chile().replace(tzinfo=None)
@@ -2717,9 +2725,9 @@ def admin_web_cancelaciones_repetidas():
                                     bodega_codigo, fecha_importacion, origen_registro, stock_antes, stock_despues)
                                    VALUES (%s, 'ajuste', %s, %s, %s, %s, %s, 'Manual', %s, 'CENTRAL', %s,
                                            'manual', %s, %s)""",
-                                (tid, sku, nombre, de_mas,
+                                (tid, sku, nombre, stock_central - despues,
                                  "Se descuentan %s unidades reintegradas de mas por la cancelacion "
-                                 "Web orden %s (se repetia cada 10 minutos)" % (de_mas, oid),
+                                 "Web orden %s (se repetia cada 10 minutos)" % (stock_central - despues, oid),
                                  session.get("usuario", "Sistema"), ahora_mov, ahora_mov,
                                  stock_central, despues))
                     conn.commit()
