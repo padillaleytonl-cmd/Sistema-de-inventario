@@ -6124,9 +6124,15 @@ def _sync_woo_automatico():
                     _quitar_despacho("web", order_id)
                 except Exception as _e_desp:
                     print(f"[Despachos] Web {order_id}: {_e_desp}")
-                if orden_ya_procesada_texto(cancel_key): continue
+                # La cancelacion se marca ANTES de reintegrar, como en Falabella
+                # y Paris. Aca no se marcaba nunca (el comentario decia que si):
+                # cada sync, cada 10 minutos, volvia a devolver el stock a
+                # CENTRAL, a registrar la entrada y a crear la alerta, durante
+                # los 2 dias que la orden cae en la ventana de consulta.
+                if not intentar_marcar_orden_atomic(cancel_key):
+                    continue
                 if not orden_ya_procesada_texto(woo_key):
-                    # [atomic] orden marcada al inicio — no remarcar
+                    # Nunca se desconto: no hay nada que devolver.
                     continue
                 items_reintegrados = []
                 ultimo_sku = None
