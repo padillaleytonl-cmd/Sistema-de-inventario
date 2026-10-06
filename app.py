@@ -2649,6 +2649,106 @@ def admin_sku_fusionar_sobrantes():
     return jsonify(salida)
 
 
+@app.route("/admin/lusync/web/cancelaciones-repetidas")
+def admin_web_cancelaciones_repetidas():
+    """Cancelaciones Web que se reintegraron mas de una vez.
+
+    Hasta el 05/10/2026 el sync nunca marcaba la cancelacion como procesada,
+    y cada 10 minutos volvia a devolver el stock a CENTRAL (ver
+    _sync_woo_automatico). Esto deja solo el primer reintegro, que es el
+    legitimo, y descuenta lo que se sumo de mas.
+
+      /admin/lusync/web/cancelaciones-repetidas            simula
+      /admin/lusync/web/cancelaciones-repetidas?aplicar=1  corrige y publica
+    """
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    from inventario import get_conn, release_conn, now_chile, get_stock_bodega, ajustar_stock_bodega
+    aplicar = request.args.get("aplicar") == "1"
+    tid = _tenant_sesion() or TENANT_INTEGRACIONES
+    salida = {"modo": "APLICADO" if aplicar else "simulacion", "ordenes": []}
+    skus = set()
+    conn = get_conn(tenant_id=tid, is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT orden_id::text, sku, MIN(nombre), COUNT(*), SUM(cantidad),
+                                  (ARRAY_AGG(cantidad ORDER BY id))[1], MIN(id),
+                                  MIN(fecha), MAX(fecha)
+                             FROM movimientos
+                            WHERE tenant_id = %s AND tipo = 'entrada'
+                              AND motivo LIKE 'Cancelación Web orden %%'
+                            GROUP BY orden_id::text, sku
+                           HAVING COUNT(*) > 1
+                            ORDER BY MIN(fecha)""", (tid,))
+            filas = cur.fetchall()
+            for oid, sku, nombre, veces, total, primera, id_primera, desde, hasta in filas:
+                de_mas = int(total or 0) - int(primera or 0)
+                stock_central = int(get_stock_bodega(sku, "CENTRAL") or 0)
+                o = {"orden_web": oid, "sku": sku, "producto": nombre,
+                     "veces_reintegrada": int(veces), "unidades_sumadas_de_mas": de_mas,
+                     "primera": desde.strftime("%d/%m %H:%M") if desde else None,
+                     "ultima": hasta.strftime("%d/%m %H:%M") if hasta else None,
+                     "central_hoy": stock_central,
+                     "central_despues": max(0, stock_central - de_mas)}
+                salida["ordenes"].append(o)
+                if not aplicar:
+                    continue
+                # Fuera las entradas repetidas (se conserva la primera) y sus alertas.
+                cur.execute("""DELETE FROM movimientos
+                                WHERE tenant_id = %s AND tipo = 'entrada' AND sku = %s
+                                  AND orden_id::text = %s AND motivo LIKE 'Cancelación Web orden %%'
+                                  AND id <> %s""", (tid, sku, oid, id_primera))
+                o["entradas_borradas"] = cur.rowcount
+                cur.execute("""DELETE FROM alertas a
+                                WHERE a.tenant_id = %s AND a.tipo = 'cancelacion'
+                                  AND a.titulo = %s
+                                  AND a.id <> (SELECT MIN(b.id) FROM alertas b
+                                                WHERE b.tenant_id = a.tenant_id AND b.tipo = a.tipo
+                                                  AND b.titulo = a.titulo)""",
+                            (tid, f"Orden cancelada en Web: {oid}"))
+                o["alertas_borradas"] = cur.rowcount
+                conn.commit()
+                if de_mas > 0:
+                    ajustar_stock_bodega(sku, "CENTRAL", -de_mas)
+                    despues = int(get_stock_bodega(sku, "CENTRAL") or 0)
+                    ahora_mov = now_chile().replace(tzinfo=None)
+                    cur.execute("""INSERT INTO movimientos
+                                   (tenant_id, tipo, sku, nombre, cantidad, motivo, usuario, canal, fecha,
+                                    bodega_codigo, fecha_importacion, origen_registro, stock_antes, stock_despues)
+                                   VALUES (%s, 'ajuste', %s, %s, %s, %s, %s, 'Manual', %s, 'CENTRAL', %s,
+                                           'manual', %s, %s)""",
+                                (tid, sku, nombre, de_mas,
+                                 "Se descuentan %s unidades reintegradas de mas por la cancelacion "
+                                 "Web orden %s (se repetia cada 10 minutos)" % (de_mas, oid),
+                                 session.get("usuario", "Sistema"), ahora_mov, ahora_mov,
+                                 stock_central, despues))
+                    conn.commit()
+                    o["central_despues"] = despues
+                    skus.add(sku)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)[:300], "parcial": salida}), 500
+    finally:
+        release_conn(conn)
+
+    if aplicar:
+        registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
+                        "cancelaciones_web_repetidas", entidad="movimientos",
+                        detalle=str([(o["orden_web"], o["sku"], o["unidades_sumadas_de_mas"])
+                                     for o in salida["ordenes"]])[:500])
+        salida["publicado"] = {}
+        for sku in sorted(skus):
+            try:
+                sincronizar_stock_marketplaces(sku, contexto="cancelaciones_web_repetidas")
+                salida["publicado"][sku] = "ok"
+            except Exception as e:
+                salida["publicado"][sku] = str(e)[:120]
+    elif salida["ordenes"]:
+        salida["nota"] = "Simulacion: no se cambio nada. Agrega &aplicar=1 para corregir."
+    return jsonify(salida)
+
+
 @app.route("/admin/lusync/auditoria-ordenes")
 def auditoria_ordenes_limbo():
     """Audita qué órdenes de cada marketplace NO están registradas en Lusync.
