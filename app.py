@@ -13289,6 +13289,7 @@ def ruta_bodegas_guardar_lote():
 
         guardados = 0
         errores = []
+        skus_cambiados = set()
         for c in cambios:
             try:
                 bodega = c["bodega_codigo"]
@@ -13299,8 +13300,28 @@ def ruta_bodegas_guardar_lote():
                                  usuario=session.get("usuario", "Sistema"),
                                  motivo=f"Edicion de la matriz de bodegas ({bodega})")
                 guardados += 1
+                skus_cambiados.add(c["sku"])
             except Exception as e:
                 errores.append(f"{c.get('sku')}/{c.get('bodega_codigo')}: {e}")
+
+        # Publicar en los canales lo que cambio. La matriz guardaba el stock en
+        # Lusync y NUNCA avisaba a los canales (la edicion de una celda suelta,
+        # /bodegas/set_stock, si lo hacia): un SKU puesto en 0 aca seguia a la
+        # venta en todos lados. sincronizar_stock_marketplaces calcula solo el
+        # stock propio, asi que no importa que bodega se edito.
+        if skus_cambiados:
+            import threading
+            from inventario import con_tenant_del_llamador
+
+            def _publicar_lote(skus):
+                for _s in sorted(skus):
+                    try:
+                        sincronizar_stock_marketplaces(_s, None, contexto="matriz_bodegas")
+                    except Exception as _e_pub:
+                        print(f"[Bodegas] matriz: no pude publicar {_s}: {_e_pub}")
+
+            threading.Thread(target=con_tenant_del_llamador(_publicar_lote),
+                             args=(set(skus_cambiados),), daemon=True).start()
 
         registrar_audit(session.get("usuario","Sistema"), request.remote_addr,
                         "editar_stock_bodegas", entidad="stock_bodega",

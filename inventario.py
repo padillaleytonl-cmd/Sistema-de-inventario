@@ -532,6 +532,9 @@ _ULTIMO_USO = {}
 _FALLO_AL_FIJAR = set()
 _ULTIMO_USO_LOCK = threading.Lock()
 _SEGUNDOS_PARA_REVISAR = 30
+import time as _time_arranque
+_ARRANQUE_PROCESO = _time_arranque.time()
+_SEGUNDOS_ARRANQUE_REVISAR_TODO = 300
 
 
 def _descartar_conexion(conn):
@@ -619,7 +622,12 @@ def _sacar_conexion_sana_cruda():
         if conn.closed:
             _descartar_conexion(conn)
             continue
-        if ultimo is not None and _t.time() - ultimo < _SEGUNDOS_PARA_REVISAR:
+        # En los primeros minutos despues de arrancar se prueban TODAS: es
+        # cuando aparecen las conexiones rotas ("SSL bad record mac"), y una
+        # que se rompio recien pasaba la prueba de tiempo y fallaba en la
+        # operacion del usuario (el 07/10 una salida de MLAM001).
+        en_arranque = _t.time() - _ARRANQUE_PROCESO < _SEGUNDOS_ARRANQUE_REVISAR_TODO
+        if ultimo is not None and not en_arranque and _t.time() - ultimo < _SEGUNDOS_PARA_REVISAR:
             return conn
         try:
             cur = conn.cursor()
