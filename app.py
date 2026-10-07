@@ -4391,6 +4391,32 @@ def _sincronizar_stock_marketplaces_cuerpo(sku, stock=None, contexto="manual"):
 
     stock_publicar = max(0, stock_publicar)
 
+    # Una sola publicacion por SKU y cantidad. registrar_movimiento ya publica
+    # en segundo plano cada movimiento, y varias rutas (salida manual,
+    # cancelaciones) publican otra vez: salian dos envios iguales al mismo
+    # tiempo, Falabella rechazaba el segundo ("payload submitted already"),
+    # MercadoLibre devolvia 409 y quedaba la alerta "Stock no sincronizado".
+    # Si el mismo SKU con la misma cantidad se esta publicando o se publico
+    # hace menos de 90 s, se espera ese resultado y no se vuelve a enviar.
+    import threading as _th_pub, time as _t_pub
+    from inventario import tenant_actual as _ta_pub
+    _clave_pub = ((_ta_pub() or (TENANT_INTEGRACIONES,))[0], sku)
+    with _PUBLICANDO_LOCK:
+        _previo = _PUBLICANDO.get(_clave_pub)
+        if _previo and _previo["stock"] == stock_publicar and _t_pub.time() - _previo["t"] < 90:
+            _propio = None
+        else:
+            _previo = None
+            _propio = {"stock": stock_publicar, "t": _t_pub.time(),
+                       "evento": _th_pub.Event(), "resultado": None}
+            _PUBLICANDO[_clave_pub] = _propio
+    if _previo is not None:
+        _previo["evento"].wait(timeout=90)
+        _r = dict(_previo["resultado"] or {"_stock_publicado": stock_publicar})
+        _r["_omitido"] = "ya se publico este stock hace %ss" % int(_t_pub.time() - _previo["t"])
+        print(f"[SyncCentral][{contexto}] {sku}={stock_publicar} ya publicado: no se reenvia")
+        return _r
+
     resultado = {}
     canales = [
         ("woo",          actualizar_stock_woo),
@@ -4474,7 +4500,16 @@ def _sincronizar_stock_marketplaces_cuerpo(sku, stock=None, contexto="manual"):
     except Exception:
         pass
 
+    _propio["resultado"] = dict(resultado)
+    _propio["evento"].set()
     return resultado
+
+
+# Publicaciones de stock en curso o recientes: (cliente, sku) -> estado.
+# Ver el control al inicio de _sincronizar_stock_marketplaces_cuerpo.
+import threading as _threading_pub
+_PUBLICANDO = {}
+_PUBLICANDO_LOCK = _threading_pub.Lock()
 
 
 def sincronizar_stock_marketplaces(sku, stock=None, contexto="manual"):
