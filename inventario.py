@@ -3045,7 +3045,7 @@ def init_alertas():
 # se debe— vive en movimientos.faltante, que es el registro; la alerta solo
 # avisa que hay que ir a mirar.
 TIPOS_QUE_SE_REPITEN = ("sku_sin_mapeo", "error_sync", "venta_sin_stock",
-                        "venta_cantidad_invalida")
+                        "venta_cantidad_invalida", "canal_desincronizado")
 
 
 def crear_alerta(tipo, titulo, mensaje="", canal=None, orden_id=None, sku=None, enviar_email=True):

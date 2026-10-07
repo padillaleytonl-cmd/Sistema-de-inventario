@@ -3130,6 +3130,19 @@ def admin_walmart_stock_sku():
     return jsonify(salida)
 
 
+@app.route("/admin/lusync/stock/control-ahora")
+def admin_stock_control_ahora():
+    """Corre ya el control permanente de stock (el de cada hora), en segundo
+    plano. El resultado queda en el log como [AutoCorrección]."""
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    if _sync_locks["autocorreccion"]["running"]:
+        return jsonify({"ok": False, "estado": "ya hay un control corriendo"})
+    import threading
+    threading.Thread(target=_sync_autocorreccion, daemon=True).start()
+    return jsonify({"ok": True, "estado": "control iniciado: el resultado queda en el log en unos minutos"})
+
+
 @app.route("/admin/lusync/auditoria-ordenes")
 def auditoria_ordenes_limbo():
     """Audita qué órdenes de cada marketplace NO están registradas en Lusync.
@@ -6729,102 +6742,135 @@ scheduler.add_job(_sync_ripley_automatico, "interval", minutes=10, id="ripley_sy
                   max_instances=1, coalesce=True, misfire_grace_time=60)
 @con_tenant_default
 def _sync_autocorreccion():
-    """RED DE SEGURIDAD (cada 60 min): detecta SKU cuyo stock en un canal
-    NO coincide con el CENTRAL de Lusync y los re-sincroniza.
+    """CONTROL PERMANENTE (cada 60 min): Lusync manda.
 
-    Enfoque eficiente: LEE el stock real de los canales que lo exponen
-    (Ripley, Paris) y solo re-publica los que DIFIEREN. Así corrige los SKU
-    que quedaron desincronizados sin depender de que tengan ventas nuevas,
-    sin machacar las APIs con updates innecesarios.
+    Lee el stock que cada canal tiene publicado, lo compara con el stock propio
+    de Lusync y vuelve a publicar los SKU que difieren:
+      - el canal muestra MAS que Lusync: siempre (es sobreventa segura);
+      - el canal muestra MENOS: si la diferencia es > 2 (ventas en curso);
+      - Web sin "gestionar inventario": siempre (la tienda vende sin limite).
+    Si el mismo desvio sigue en la corrida siguiente, crea una alerta: el canal
+    no esta tomando lo que Lusync le manda.
+
+    Canales: Paris, Ripley, Walmart (solo vendedor, no WFS), Web y Falabella
+    (solo vendedor, no FBF). Solo el stock que publica Lusync; el de Full lo
+    maneja el marketplace.
+
+    Antes (hasta el 07/10/2026) solo miraba Paris y Ripley y solo marcaba
+    desvio si Lusync tenia > 0: un SKU en 0 en Lusync con stock en el canal
+    -el caso que provoca sobreventas- nunca se corregia.
     """
+    global _DESVIOS_ANTERIORES
     if _sync_locks["autocorreccion"]["running"]:
         print("[AutoCorrección] Ya hay una corrida en curso, salto")
         return
     _sync_locks["autocorreccion"]["running"] = True
     try:
         import time as _time
-        from inventario import get_conn, _get_pool
-        print("[AutoCorrección] Iniciando detección de desvíos...")
+        from inventario import get_conn
+        print("[AutoCorrección] Iniciando control de stock en los canales...")
 
-        # 1) Stock CENTRAL por SKU (subquery agregada — no multiplica)
-        # La conexion es admin (se salta RLS): el cliente va en el WHERE. Sin
-        # el, el stock "propio" sumaba el de cualquier cliente con el mismo
-        # SKU y esa cifra se publicaba en los canales del dueño.
-        conn = get_conn(tenant_id=TENANT_INTEGRACIONES, is_admin=True); cur = conn.cursor()
-        cur.execute("""
-            SELECT m.sku_lusync, COALESCE(st.central,0) AS central
-            FROM sku_mapeo_canal m
-            LEFT JOIN (
-                SELECT sb.sku, SUM(sb.cantidad) AS central
-                FROM stock_bodega sb
-                LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo AND b.tenant_id = sb.tenant_id
-                WHERE (b.tipo='propia' OR b.tipo IS NULL OR sb.bodega_codigo='CENTRAL')
-                  AND sb.tenant_id = %s
-                GROUP BY sb.sku
-            ) st ON st.sku = m.sku_lusync
-            WHERE m.activo=TRUE AND m.tenant_id = %s
-            GROUP BY m.sku_lusync, st.central
-        """, (TENANT_INTEGRACIONES, TENANT_INTEGRACIONES))
-        central_por_sku = {r[0]: int(r[1] or 0) for r in cur.fetchall()}
-        cur.close()
-        try: release_conn(conn)
-        except Exception: release_conn(conn)
-
-        desvios = []  # (sku, canal, stock_canal, central)
-
-        # 2) Leer Ripley (expone quantity + active)
+        # 1) Stock propio por SKU y mapeos por canal (cliente en el WHERE: la
+        #    conexion es admin y se salta RLS).
+        conn = get_conn(tenant_id=TENANT_INTEGRACIONES, is_admin=True)
         try:
-            from ripley import obtener_ofertas_ripley
-            from inventario import obtener_sku_lusync_por_canal
-            ofertas = obtener_ofertas_ripley(max_resultados=200)
-            for o in (ofertas or []):
-                shop_sku = o.get("shop_sku")
-                qty = o.get("quantity")
-                sku_lusync = obtener_sku_lusync_por_canal("ripley", shop_sku)
-                if not sku_lusync or sku_lusync not in central_por_sku:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT sb.sku, COALESCE(SUM(sb.cantidad), 0)
+                      FROM stock_bodega sb
+                      LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo AND b.tenant_id = sb.tenant_id
+                     WHERE (b.tipo = 'propia' OR b.tipo IS NULL OR sb.bodega_codigo = 'CENTRAL')
+                       AND sb.tenant_id = %s
+                     GROUP BY sb.sku""", (TENANT_INTEGRACIONES,))
+                propio = {r[0]: int(r[1] or 0) for r in cur.fetchall()}
+                cur.execute("""SELECT canal, sku_canal, sku_lusync FROM sku_mapeo_canal
+                                WHERE activo = TRUE AND tenant_id = %s AND sku_canal IS NOT NULL""",
+                            (TENANT_INTEGRACIONES,))
+                mapeo = {}
+                for canal, sku_canal, sku_lusync in cur.fetchall():
+                    mapeo.setdefault(canal, {})[str(sku_canal).strip()] = sku_lusync
+            conn.commit()
+        finally:
+            release_conn(conn)
+
+        desvios = []   # (sku_lusync, canal, en_canal, en_lusync)
+
+        def _comparar(canal, lecturas, normalizar=None):
+            m = mapeo.get(canal, {})
+            for sku_canal, qty in (lecturas or {}).items():
+                s = str(sku_canal).strip()
+                sku_l = m.get(s) or (m.get(normalizar(s)) if normalizar else None)
+                if not sku_l or sku_l not in propio:
                     continue
-                central = central_por_sku[sku_lusync]
-                # Solo es desvío si el canal devuelve un NÚMERO concreto (no null)
-                # y la diferencia es significativa (>2, para ignorar ventas en curso).
-                if central > 0 and qty is not None and abs(int(qty) - central) > 2:
-                    desvios.append((sku_lusync, "ripley", qty, central))
+                lus = propio[sku_l]
+                if qty == "sin_control":
+                    desvios.append((sku_l, canal, "sin control de stock", lus))
+                    continue
+                if qty is None:
+                    continue
+                try:
+                    qty = int(qty)
+                except (TypeError, ValueError):
+                    continue
+                if qty > lus or (lus - qty) > 2:
+                    desvios.append((sku_l, canal, qty, lus))
+
+        def _sin_sufijo(s):
+            partes = s.rsplit("-", 1)
+            return partes[0] if len(partes) == 2 and partes[1].isdigit() else s
+
+        # 2) Ripley (todas las paginas de ofertas)
+        try:
+            from reconciliacion_stock import leer_stock_ripley
+            _comparar("ripley", leer_stock_ripley())
         except Exception as e:
             print(f"[AutoCorrección] Ripley lectura error: {str(e)[:120]}")
 
-        # 3) Leer Paris (expone quantity por sku_seller)
+        # 3) Paris (a veces devuelve quantity=null: no es 0, no se compara)
         try:
             from paris import obtener_stock_paris
-            from inventario import obtener_sku_lusync_por_canal
-            for off in range(0, 600, 100):
+            lect = {}
+            for off in range(0, 2000, 100):
                 data = obtener_stock_paris(limite=100, offset=off)
-                if not data: break
-                skus = data.get("skus") or []
-                if not skus: break
+                skus = (data or {}).get("skus") or []
                 for it in skus:
                     ss = it.get("sku_seller") or it.get("skuSeller")
-                    qty = it.get("quantity")
-                    if not ss: continue
-                    # quitar sufijo -N para matchear el mapeo
-                    base = ss.rsplit("-",1)[0] if ss.rsplit("-",1)[-1].isdigit() else ss
-                    sku_lusync = (obtener_sku_lusync_por_canal("paris", ss)
-                                  or obtener_sku_lusync_por_canal("paris", base))
-                    if not sku_lusync or sku_lusync not in central_por_sku:
-                        continue
-                    central = central_por_sku[sku_lusync]
-                    # Paris a veces devuelve quantity=null en la lectura: NO es 0.
-                    # Solo marcar desvío con número concreto y diferencia significativa.
-                    if central > 0 and qty is not None and abs(int(qty) - central) > 2:
-                        desvios.append((sku_lusync, "paris", qty, central))
-                if len(skus) < 100: break
+                    if ss:
+                        lect[ss] = it.get("quantity")
+                if len(skus) < 100:
+                    break
+            _comparar("paris", lect, normalizar=_sin_sufijo)
         except Exception as e:
             print(f"[AutoCorrección] Paris lectura error: {str(e)[:120]}")
 
-        # 4) Re-sincronizar SOLO los SKU con desvío (dedup) en lotes con pausa
-        skus_a_corregir = sorted(set(d[0] for d in desvios))
-        print(f"[AutoCorrección] Desvíos detectados: {len(desvios)} en {len(skus_a_corregir)} SKU")
-        for d in desvios[:50]:
-            print(f"[AutoCorrección]   {d[0]} en {d[1]}: canal={d[2]} vs central={d[3]}")
+        # 4) Walmart, stock de vendedor (el WFS lo maneja Walmart)
+        try:
+            from reconciliacion_stock import leer_stock_walmart_vendedor
+            _comparar("walmart", leer_stock_walmart_vendedor(list(mapeo.get("walmart", {}).keys())))
+        except Exception as e:
+            print(f"[AutoCorrección] Walmart lectura error: {str(e)[:120]}")
 
+        # 5) Web
+        try:
+            from reconciliacion_stock import leer_stock_woo
+            _comparar("web", leer_stock_woo())
+        except Exception as e:
+            print(f"[AutoCorrección] Web lectura error: {str(e)[:120]}")
+
+        # 6) Falabella, stock de vendedor (el FBF lo maneja Falabella). Recibe
+        #    el stock en lote y tarda hasta 15 min: lo recien publicado puede no
+        #    verse todavia, y por eso la alerta espera a la corrida siguiente.
+        try:
+            from reconciliacion_stock import leer_stock_falabella_vendedor
+            _comparar("falabella", leer_stock_falabella_vendedor())
+        except Exception as e:
+            print(f"[AutoCorrección] Falabella lectura error: {str(e)[:120]}")
+
+        # 7) Volver a publicar los SKU con desvio
+        skus_a_corregir = sorted({d[0] for d in desvios})
+        print(f"[AutoCorrección] Desvíos: {len(desvios)} en {len(skus_a_corregir)} SKU")
+        for d in desvios[:80]:
+            print(f"[AutoCorrección]   {d[0]} en {d[1]}: canal={d[2]} vs Lusync={d[3]}")
         corregidos = 0
         for i, sku in enumerate(skus_a_corregir):
             try:
@@ -6832,14 +6878,36 @@ def _sync_autocorreccion():
                 corregidos += 1
             except Exception as e:
                 print(f"[AutoCorrección] error re-sync {sku}: {str(e)[:100]}")
-            if (i+1) % 10 == 0:
-                _time.sleep(2)  # pausa cada 10 para no saturar APIs
+            if (i + 1) % 10 == 0:
+                _time.sleep(2)
 
-        print(f"[AutoCorrección] Completado. {corregidos} SKU re-sincronizados.")
+        # 8) Alerta si el mismo desvio ya estaba en la corrida anterior: el
+        #    canal no esta tomando lo que Lusync le manda.
+        actuales = {(d[0], d[1]): d for d in desvios}
+        persistentes = [d for k, d in actuales.items() if k in _DESVIOS_ANTERIORES]
+        _DESVIOS_ANTERIORES = actuales
+        for sku, canal, en_canal, en_lusync in persistentes:
+            try:
+                crear_alerta(
+                    tipo="canal_desincronizado",
+                    titulo=f"{canal}: el SKU {sku} no refleja Lusync",
+                    mensaje=(f"Lusync tiene <b>{en_lusync}</b> unidades propias de <b>{sku}</b> y "
+                             f"<b>{canal}</b> muestra <b>{en_canal}</b>, despues de volver a publicarlo. "
+                             f"Revisa la publicacion en {canal} (puede estar inactiva, duplicada o "
+                             f"con el stock manejado por el canal)."),
+                    sku=sku, canal=canal, enviar_email=True)
+            except Exception as e_al:
+                print(f"[AutoCorrección] no pude crear alerta {sku}/{canal}: {e_al}")
+        print(f"[AutoCorrección] Completado. {corregidos} SKU re-publicados, "
+              f"{len(persistentes)} desvios persistentes con alerta.")
     except Exception as e:
         print(f"[AutoCorrección] Error general: {str(e)[:200]}")
     finally:
         _sync_locks["autocorreccion"]["running"] = False
+
+
+# Desvios de la corrida anterior del control de stock: (sku, canal) -> desvio.
+_DESVIOS_ANTERIORES = {}
 
 
 # Woo cada 10 min
