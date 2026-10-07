@@ -3087,6 +3087,49 @@ def admin_ventas_duplicadas():
     return jsonify({"dias": dias, "ventas_duplicadas": len(grupos), "grupos": grupos})
 
 
+@app.route("/admin/lusync/walmart/stock-sku")
+def admin_walmart_stock_sku():
+    """Solo lectura: que stock tiene Walmart para un SKU de Lusync, y de donde.
+
+      /admin/lusync/walmart/stock-sku?sku=CDBRSVG001
+
+    Para cada publicacion mapeada consulta a Walmart el stock de vendedor
+    (/v3/inventory, el que publica Lusync), el de Walmart Full
+    (/v3/fulfillment/inventory) y la ficha (/v3/items).
+    """
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    from walmart import walmart_headers, WALMART_BASE_URL
+    from inventario import obtener_publicaciones_canal
+    import requests as _rq
+    sku = (request.args.get("sku") or "").strip()
+    if not sku:
+        return jsonify({"error": "Indica ?sku="}), 400
+    pubs = obtener_publicaciones_canal(sku, "walmart") or []
+    skus_wm = sorted({(p.get("sku_canal") or "").strip() for p in pubs if p.get("sku_canal")}) or [sku]
+    salida = {"sku_lusync": sku, "stock_propio_lusync": _stock_propio(sku), "publicaciones": []}
+
+    def _get(ruta, params=None):
+        try:
+            r = _rq.get(f"{WALMART_BASE_URL}{ruta}", headers=walmart_headers(), params=params, timeout=20)
+            try:
+                cuerpo = r.json()
+            except ValueError:
+                cuerpo = r.text[:500]
+            return {"status": r.status_code, "respuesta": cuerpo}
+        except Exception as e:
+            return {"error": str(e)[:200]}
+
+    for s in skus_wm:
+        salida["publicaciones"].append({
+            "sku_walmart": s,
+            "stock_vendedor": _get("/v3/inventory", {"sku": s}),
+            "stock_walmart_full": _get("/v3/fulfillment/inventory", {"sku": s}),
+            "ficha": _get(f"/v3/items/{s}"),
+        })
+    return jsonify(salida)
+
+
 @app.route("/admin/lusync/auditoria-ordenes")
 def auditoria_ordenes_limbo():
     """Audita qué órdenes de cada marketplace NO están registradas en Lusync.
