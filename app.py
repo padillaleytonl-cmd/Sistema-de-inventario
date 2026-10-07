@@ -27277,6 +27277,13 @@ def admin_stock_republicar():
         return jsonify({"error": "Indica los SKU: ?skus=A,B,C"}), 400
     aplicar = request.args.get("aplicar") == "1"
     salida = {"modo": "APLICADO" if aplicar else "vista previa", "skus": []}
+    # Solo SKU que existen en Lusync: publicar un SKU inexistente manda un 0
+    # a los canales que lo acepten sin validar (Falabella recibe en lote).
+    existentes = {p["sku"] for p in cargar_productos()}
+    desconocidos = [s for s in skus if s not in existentes]
+    if desconocidos:
+        salida["no_existen_en_lusync"] = desconocidos
+        skus = [s for s in skus if s in existentes]
     for sku in skus:
         fila = {"sku": sku, "stock_propio": _stock_propio(sku)}
         if aplicar:
