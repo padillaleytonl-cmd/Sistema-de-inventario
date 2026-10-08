@@ -6883,8 +6883,13 @@ def _sync_autocorreccion():
 
         # 8) Alerta si el mismo desvio ya estaba en la corrida anterior: el
         #    canal no esta tomando lo que Lusync le manda.
+        # Solo si el canal muestra EXACTAMENTE lo mismo que la vez anterior: no
+        # tomo ningun cambio. Un SKU que se vende seguido va una venta atras en
+        # Ripley y Falabella (reciben el stock en lote) y su numero si se mueve:
+        # eso no es un canal trabado.
         actuales = {(d[0], d[1]): d for d in desvios}
-        persistentes = [d for k, d in actuales.items() if k in _DESVIOS_ANTERIORES]
+        persistentes = [d for k, d in actuales.items()
+                        if k in _DESVIOS_ANTERIORES and _DESVIOS_ANTERIORES[k][2] == d[2]]
         _DESVIOS_ANTERIORES = actuales
         for sku, canal, en_canal, en_lusync in persistentes:
             try:
