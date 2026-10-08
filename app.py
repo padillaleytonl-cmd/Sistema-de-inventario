@@ -2652,6 +2652,7 @@ def admin_sku_fusionar_sobrantes():
 
 
 @app.route("/admin/lusync/web/cancelaciones-repetidas")
+@app.route("/admin/lusync/cancelaciones-repetidas")
 def admin_web_cancelaciones_repetidas():
     """Cancelaciones Web que se reintegraron mas de una vez.
 
@@ -2680,20 +2681,23 @@ def admin_web_cancelaciones_repetidas():
     conn = get_conn(tenant_id=tid, is_admin=True)
     try:
         with conn.cursor() as cur:
+            # Todos los canales: las cancelaciones de la Web (hasta el 05/10) y
+            # de Walmart (hasta el 08/10) se reintegraban en cada sync.
             cur.execute("""SELECT orden_id::text, sku, MIN(nombre), COUNT(*), SUM(cantidad),
                                   (ARRAY_AGG(cantidad ORDER BY id))[1], MIN(id),
-                                  MIN(fecha), MAX(fecha)
+                                  MIN(fecha), MAX(fecha), MIN(canal)
                              FROM movimientos
                             WHERE tenant_id = %s AND tipo = 'entrada'
-                              AND motivo LIKE 'Cancelación Web orden %%'
+                              AND motivo ILIKE 'cancelaci%%'
+                              AND orden_id IS NOT NULL
                             GROUP BY orden_id::text, sku
                            HAVING COUNT(*) > 1
                             ORDER BY MIN(fecha)""", (tid,))
             filas = cur.fetchall()
-            for oid, sku, nombre, veces, total, primera, id_primera, desde, hasta in filas:
+            for oid, sku, nombre, veces, total, primera, id_primera, desde, hasta, canal_c in filas:
                 de_mas = int(total or 0) - int(primera or 0)
                 stock_central = int(get_stock_bodega(sku, "CENTRAL") or 0)
-                o = {"orden_web": oid, "sku": sku, "producto": nombre,
+                o = {"orden_web": oid, "canal": canal_c, "sku": sku, "producto": nombre,
                      "veces_reintegrada": int(veces), "unidades_sumadas_de_mas": de_mas,
                      "primera": desde.strftime("%d/%m %H:%M") if desde else None,
                      "ultima": hasta.strftime("%d/%m %H:%M") if hasta else None,
@@ -2706,18 +2710,19 @@ def admin_web_cancelaciones_repetidas():
                 # Fuera las entradas repetidas (se conserva la primera) y sus alertas.
                 cur.execute("""DELETE FROM movimientos
                                 WHERE tenant_id = %s AND tipo = 'entrada' AND sku = %s
-                                  AND orden_id::text = %s AND motivo LIKE 'Cancelación Web orden %%'
+                                  AND orden_id::text = %s AND motivo ILIKE 'cancelaci%%'
                                   AND id <> %s""", (tid, sku, oid, id_primera))
                 o["entradas_borradas"] = cur.rowcount
                 cur.execute("""DELETE FROM alertas a
                                 WHERE a.tenant_id = %s AND a.tipo = 'cancelacion'
-                                  AND a.titulo = %s
+                                  AND a.titulo LIKE %s
                                   AND a.id <> (SELECT MIN(b.id) FROM alertas b
                                                 WHERE b.tenant_id = a.tenant_id AND b.tipo = a.tipo
                                                   AND b.titulo = a.titulo)""",
-                            (tid, f"Orden cancelada en Web: {oid}"))
+                            (tid, f"Orden cancelada en %: {oid}"))
                 o["alertas_borradas"] = cur.rowcount
                 conn.commit()
+                skus.add(sku)   # se recalcula el total y se publica al final
                 if de_mas > 0 and oid in descontar and stock_central > 0:
                     ajustar_stock_bodega(sku, "CENTRAL", -de_mas)
                     despues = int(get_stock_bodega(sku, "CENTRAL") or 0)
@@ -2748,9 +2753,13 @@ def admin_web_cancelaciones_repetidas():
                         detalle=str([(o["orden_web"], o["sku"], o["unidades_sumadas_de_mas"])
                                      for o in salida["ordenes"]])[:500])
         salida["publicado"] = {}
+        from inventario import _recalcular_stock_total
         for sku in sorted(skus):
             try:
-                sincronizar_stock_marketplaces(sku, contexto="cancelaciones_web_repetidas")
+                # El total del producto (productos.stock) se inflo en Walmart:
+                # se vuelve a calcular desde las bodegas.
+                _recalcular_stock_total(sku)
+                sincronizar_stock_marketplaces(sku, contexto="cancelaciones_repetidas")
                 salida["publicado"][sku] = "ok"
             except Exception as e:
                 salida["publicado"][sku] = str(e)[:120]
@@ -5057,7 +5066,12 @@ def _sync_walmart_automatico():
                 # Solo procesar si la orden fue previamente descontada Y no se reingresó antes
                 if not orden_ya_procesada_texto(customer_order_id):
                     continue  # nunca se procesó, no hay stock que devolver
-                if orden_ya_procesada_texto(cancel_key):
+                # La cancelacion se marca ANTES de procesar, de forma atomica,
+                # como en los demas canales. Aca solo se consultaba la marca y
+                # nunca se ponia: cada sync (cada 5 minutos) volvia a registrar
+                # la entrada "Cancelacion Walmart" y la alerta (MLAM001,
+                # 4792637001095, 07/10/2026).
+                if not intentar_marcar_orden_atomic(cancel_key):
                     continue  # ya se procesó la cancelación
 
                 lineas = o.get("orderLines", {}).get("orderLine", [])
@@ -5101,15 +5115,17 @@ def _sync_walmart_automatico():
                                                         orden_id=customer_order_id)
                                     print(f"[Scheduler] CANCELACIÓN FULL SKU:{sku} x{cantidad} (solo registro)")
                                 else:
-                                    # Venta Seller cancelada: reponer central (como siempre)
-                                    p["stock"] = p["stock"] + cantidad
-                                    guardar_producto(p)
+                                    # Venta Seller cancelada: vuelve a CENTRAL, como en los
+                                    # demas canales. Antes sumaba a productos.stock (el
+                                    # total viejo) y no a la bodega: CENTRAL no cambiaba y
+                                    # el total del producto se inflaba.
+                                    ajustar_stock_bodega(p["sku"], "CENTRAL", cantidad)
                                     registrar_movimiento("entrada", p["sku"], p["nombre"],
                                                         cantidad, "Cancelación Walmart",
                                                         usuario="Sistema", canal="Walmart",
                                                         orden_id=customer_order_id)
-                                    sincronizar_stock_marketplaces(p["sku"], p["stock"], contexto="walmart_cancelacion")
-                                    print(f"[Scheduler] CANCELACIÓN SKU:{sku} +{cantidad} Stock:{p['stock']}")
+                                    print(f"[Scheduler] CANCELACIÓN SKU:{sku} +{cantidad} -> CENTRAL "
+                                          f"(orden {customer_order_id})")
                                 items_cancelados.append(f"{p['nombre']} (SKU: {sku}) x{cantidad}")
                     except Exception as e:
                         print(f"[Scheduler] Error cancelación linea: {e}")
