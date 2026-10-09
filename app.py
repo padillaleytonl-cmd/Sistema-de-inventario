@@ -3170,6 +3170,69 @@ def admin_stock_control_ahora():
     return jsonify({"ok": True, "estado": "control iniciado: el resultado queda en el log en unos minutos"})
 
 
+@app.route("/admin/lusync/web/stock-sku")
+def admin_web_stock_sku():
+    """Solo lectura: el SKU en la tienda Web y sus ventas recientes.
+
+      /admin/lusync/web/stock-sku?sku=CBTSECN001
+
+    Muestra con que SKU lo busca Lusync en la tienda, que stock y que
+    configuracion tiene ahi el producto, y las ordenes Web de los ultimos 14
+    dias con ese producto, con si quedaron registradas en Lusync.
+    """
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    from woo import _skus_web, _woo_api, _woo_auth
+    from inventario import get_conn, release_conn
+    from datetime import timezone as _tz_w
+    sku = (request.args.get("sku") or "").strip()
+    if not sku:
+        return jsonify({"error": "Indica ?sku="}), 400
+    skus_web, mapeado = _skus_web(sku)
+    salida = {"sku_lusync": sku, "stock_propio_lusync": _stock_propio(sku),
+              "skus_en_la_tienda": skus_web or [sku], "por_mapeo": mapeado,
+              "productos_tienda": [], "ordenes_14_dias": []}
+    for s in (skus_web or [sku]):
+        try:
+            r = requests.get(_woo_api() + "/products", timeout=20,
+                             params={**_woo_auth(), "sku": s,
+                                     "_fields": "id,sku,type,status,manage_stock,stock_quantity,stock_status,parent_id"})
+            salida["productos_tienda"].append({"sku": s, "status": r.status_code,
+                                               "respuesta": r.json() if r.status_code == 200 else r.text[:300]})
+        except Exception as e:
+            salida["productos_tienda"].append({"sku": s, "error": str(e)[:200]})
+    try:
+        desde = (datetime.now(_tz_w.utc) - timedelta(days=14)).isoformat()
+        r = requests.get(_woo_api() + "/orders", timeout=25,
+                         params={**_woo_auth(), "after": desde, "per_page": 100,
+                                 "_fields": "id,number,status,date_created,line_items"})
+        ordenes = r.json() if r.status_code == 200 else []
+        buscados = set(skus_web or [sku]) | {sku}
+        tid = _tenant_sesion() or TENANT_INTEGRACIONES
+        conn = get_conn(tenant_id=tid, is_admin=True)
+        try:
+            with conn.cursor() as cur:
+                for o in ordenes or []:
+                    lineas = [l for l in (o.get("line_items") or []) if (l.get("sku") or "").strip() in buscados]
+                    if not lineas:
+                        continue
+                    cur.execute("""SELECT COUNT(*), COALESCE(SUM(faltante), 0) FROM movimientos
+                                    WHERE tenant_id = %s AND tipo = 'salida' AND orden_id::text = %s""",
+                                (tid, str(o.get("id"))))
+                    n, falta = cur.fetchone()
+                    salida["ordenes_14_dias"].append({
+                        "orden": o.get("number") or o.get("id"), "estado": o.get("status"),
+                        "fecha": str(o.get("date_created") or "")[:16],
+                        "lineas": [{"sku_tienda": l.get("sku"), "cantidad": l.get("quantity")} for l in lineas],
+                        "registrada_en_lusync": bool(n), "faltante": int(falta or 0)})
+            conn.commit()
+        finally:
+            release_conn(conn)
+    except Exception as e:
+        salida["ordenes_error"] = str(e)[:200]
+    return jsonify(salida)
+
+
 @app.route("/admin/lusync/auditoria-ordenes")
 def auditoria_ordenes_limbo():
     """Audita qué órdenes de cada marketplace NO están registradas en Lusync.
