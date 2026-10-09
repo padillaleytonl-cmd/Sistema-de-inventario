@@ -2654,6 +2654,21 @@ def admin_sku_fusionar_sobrantes():
 @app.route("/admin/lusync/web/cancelaciones-repetidas")
 @app.route("/admin/lusync/cancelaciones-repetidas")
 def admin_web_cancelaciones_repetidas():
+    """Ver _admin_cancelaciones_repetidas. Si choca con un bloqueo, reintenta
+    una vez: lo que no alcanzo a confirmarse se revierte entero."""
+    respuesta = _admin_cancelaciones_repetidas()
+    try:
+        cuerpo = respuesta[0].get_json() if isinstance(respuesta, tuple) else None
+    except Exception:
+        cuerpo = None
+    if cuerpo and "lock timeout" in str(cuerpo.get("error", "")):
+        import time as _t_rc
+        _t_rc.sleep(5)
+        respuesta = _admin_cancelaciones_repetidas()
+    return respuesta
+
+
+def _admin_cancelaciones_repetidas():
     """Cancelaciones Web que se reintegraron mas de una vez.
 
     Hasta el 05/10/2026 el sync nunca marcaba la cancelacion como procesada,
@@ -2708,6 +2723,9 @@ def admin_web_cancelaciones_repetidas():
                 if not aplicar:
                     continue
                 # Fuera las entradas repetidas (se conserva la primera) y sus alertas.
+                # Son cientos de filas: esta transaccion espera hasta 60 s por un
+                # bloqueo (la sesion tiene 15 s) y, si igual se corta, reintenta.
+                cur.execute("SET LOCAL lock_timeout = '60s'")
                 cur.execute("""DELETE FROM movimientos
                                 WHERE tenant_id = %s AND tipo = 'entrada' AND sku = %s
                                   AND orden_id::text = %s AND motivo ILIKE 'cancelaci%%'
