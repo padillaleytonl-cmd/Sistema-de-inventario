@@ -17,12 +17,61 @@ def _woo_auth():
 _TIMEOUT = 15
 
 
+def _skus_web(sku):
+    """SKU(s) con que el producto esta en la tienda. Igual que los demas
+    canales: primero el mapeo por canal (sku_mapeo_canal), despues el mapeo
+    viejo (sku_mapeo.sku_web) y al final el mismo SKU de Lusync.
+
+    Hasta el 09/10/2026 la Web miraba solo el mapeo viejo. Al fusionar
+    CTSECNSB001 en CBTSECN001 el mapeo por canal quedo bien (en la tienda es
+    CTSECNSB001), pero el viejo no tenia SKU web: se buscaba "CBTSECN001", la
+    tienda no lo encontraba y el coche E-Crib siguio a la venta con stock en
+    la Web aunque Lusync tenia 0."""
+    skus = []
+    try:
+        from inventario import obtener_publicaciones_canal
+        skus = [str(p.get("sku_canal")).strip() for p in (obtener_publicaciones_canal(sku, "web") or [])
+                if p.get("sku_canal")]
+    except Exception:
+        skus = []
+    if not skus:
+        try:
+            from inventario import get_sku_canal
+            legado = get_sku_canal(sku, "web")
+            if legado:
+                skus = [legado]
+        except Exception:
+            pass
+    return list(dict.fromkeys(skus)), bool(skus)
+
+
 def actualizar_stock_woo(sku, stock):
-    """Publica el stock de un SKU en la tienda Web (WooCommerce).
+    """Publica el stock de un SKU en la tienda Web (WooCommerce), en todas sus
+    publicaciones (ver _skus_web).
 
     Devuelve el mismo dict que los otros canales:
       {"ok", "exitosas", "fallidas", "total_publicaciones", "log"}
     para que sincronizar_stock_marketplaces diga la verdad.
+    """
+    stock = max(0, int(stock or 0))
+    total = {"ok": True, "exitosas": 0, "fallidas": 0, "total_publicaciones": 0, "log": []}
+    skus_web, mapeado = _skus_web(sku)
+    for sku_web in (skus_web or [sku]):
+        r = _publicar_sku_web(sku, sku_web, stock)
+        # Con mapeo y sin producto en la tienda es un error de mapeo, no "sin
+        # publicaciones": tiene que verse y alertar.
+        if mapeado and r["total_publicaciones"] == 0:
+            r = {"exitosas": 0, "fallidas": 1, "total_publicaciones": 1,
+                 "log": [f"el mapeo dice {sku_web} pero la tienda no tiene ese SKU"]}
+        for k in ("exitosas", "fallidas", "total_publicaciones"):
+            total[k] += r[k]
+        total["log"] += r["log"]
+    total["ok"] = total["fallidas"] == 0
+    return total
+
+
+def _publicar_sku_web(sku, sku_web, stock):
+    """Publica `stock` en el producto o variacion con SKU `sku_web`.
 
     Antes (hasta el 06/10/2026) no devolvia nada y se tragaba cualquier error
     con un except vacio: el resumen decia "woo: ok" aunque la tienda no se
@@ -32,13 +81,6 @@ def actualizar_stock_woo(sku, stock):
     """
     log = []
     try:
-        try:
-            from inventario import get_sku_canal
-            sku_web = get_sku_canal(sku, "web") or sku
-        except Exception:
-            sku_web = sku
-        stock = max(0, int(stock or 0))
-
         res = requests.get(_woo_api() + "/products", params={**_woo_auth(), "sku": sku_web},
                            timeout=_TIMEOUT)
         if res.status_code != 200:

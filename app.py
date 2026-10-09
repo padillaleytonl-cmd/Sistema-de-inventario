@@ -6616,11 +6616,33 @@ def _sync_woo_automatico():
                 except Exception:
                     fecha_compra_woo = None
 
+                lineas_sin_producto = []
                 for line in o.get("line_items", []):
-                    sku = (line.get("sku") or "").strip()
+                    sku_tienda = (line.get("sku") or "").strip()
                     cantidad = _cantidad_de_linea(line.get("quantity"))
-                    if not sku: continue
+                    if not sku_tienda: continue
+                    # El SKU de la tienda se traduce con el mapeo, como en los
+                    # demas canales. Antes se comparaba directo con el de Lusync:
+                    # el coche E-Crib esta en la tienda como CTSECNSB001 y en
+                    # Lusync es CBTSECN001 (fusion del 04/10), asi que su venta
+                    # no se registraba y la orden se reintentaba en silencio.
+                    from inventario import obtener_sku_lusync_por_canal as _sku_l_web
+                    sku = _sku_l_web("web", sku_tienda) or sku_tienda
                     productos = cargar_productos()
+                    if not any(p["sku"] == sku for p in productos):
+                        lineas_sin_producto.append(sku_tienda)
+                        print(f"[Scheduler Woo] orden {order_id}: SKU de la tienda '{sku_tienda}' "
+                              f"no existe en Lusync (ni por mapeo)")
+                        try:
+                            crear_alerta(tipo="sku_sin_mapeo", canal="Web",
+                                         titulo=f"Web: SKU {sku_tienda} sin producto en Lusync",
+                                         mensaje=(f"La orden Web {order_id} trae el SKU <b>{sku_tienda}</b>, "
+                                                  f"que no esta en Lusync ni en el mapeo de la Web. La venta "
+                                                  f"no se registro: mapea ese SKU y se registra sola."),
+                                         orden_id=order_id, sku=sku_tienda)
+                        except Exception:
+                            pass
+                        continue
                     for p in productos:
                         if p["sku"] == sku:
                             # Este era el UNICO canal que descontaba escribiendo
@@ -6654,8 +6676,9 @@ def _sync_woo_automatico():
                             if resultado.get("ok"):
                                 items_descontados.append(sku)
                             break
-                if items_descontados:
-                    # Registrar primero, marcar después.
+                if items_descontados and not lineas_sin_producto:
+                    # Registrar primero, marcar después. Con una linea sin
+                    # producto no se marca: se reintenta cuando se mapee.
                     intentar_marcar_orden_atomic(woo_key)
                     nuevas += 1
             except Exception as e:
@@ -6706,9 +6729,11 @@ def _sync_woo_automatico():
                 items_reintegrados = []
                 ultimo_sku = None
                 for line in o.get("line_items", []):
-                    sku = (line.get("sku") or "").strip()
+                    sku_tienda = (line.get("sku") or "").strip()
                     cantidad = _cantidad_de_linea(line.get("quantity"))
-                    if not sku: continue
+                    if not sku_tienda: continue
+                    from inventario import obtener_sku_lusync_por_canal as _sku_l_web_c
+                    sku = _sku_l_web_c("web", sku_tienda) or sku_tienda
                     ultimo_sku = sku
                     productos = cargar_productos()
                     for p in productos:
