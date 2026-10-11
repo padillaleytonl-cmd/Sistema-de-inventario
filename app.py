@@ -6973,8 +6973,9 @@ def _sync_autocorreccion():
     Si el mismo desvio sigue en la corrida siguiente, crea una alerta: el canal
     no esta tomando lo que Lusync le manda.
 
-    Canales: Paris, Ripley, Walmart (solo vendedor, no WFS), Web y Falabella
-    (solo vendedor, no FBF). Solo el stock que publica Lusync; el de Full lo
+    Canales: Paris, Ripley, Walmart (solo vendedor, no WFS), Web, Falabella
+    (solo vendedor, no FBF) y MercadoLibre (solo selling_address, sin Full ni
+    catalogo). Solo el stock que publica Lusync; el de Full lo
     maneja el marketplace.
 
     Antes (hasta el 07/10/2026) solo miraba Paris y Ripley y solo marcaba
@@ -7004,12 +7005,15 @@ def _sync_autocorreccion():
                        AND sb.tenant_id = %s
                      GROUP BY sb.sku""", (TENANT_INTEGRACIONES,))
                 propio = {r[0]: int(r[1] or 0) for r in cur.fetchall()}
-                cur.execute("""SELECT canal, sku_canal, sku_lusync FROM sku_mapeo_canal
+                cur.execute("""SELECT canal, sku_canal, sku_lusync, item_id_canal FROM sku_mapeo_canal
                                 WHERE activo = TRUE AND tenant_id = %s AND sku_canal IS NOT NULL""",
                             (TENANT_INTEGRACIONES,))
                 mapeo = {}
-                for canal, sku_canal, sku_lusync in cur.fetchall():
+                pubs_meli = []
+                for canal, sku_canal, sku_lusync, item_id in cur.fetchall():
                     mapeo.setdefault(canal, {})[str(sku_canal).strip()] = sku_lusync
+                    if canal == "mercadolibre" and item_id:
+                        pubs_meli.append((str(sku_canal).strip(), item_id))
             conn.commit()
         finally:
             release_conn(conn)
@@ -7086,6 +7090,14 @@ def _sync_autocorreccion():
             _comparar("falabella", leer_stock_falabella_vendedor())
         except Exception as e:
             print(f"[AutoCorrección] Falabella lectura error: {str(e)[:120]}")
+
+        # 6b) MercadoLibre, solo stock propio (selling_address): el de Full lo
+        #     maneja MercadoLibre, y las de catalogo tambien.
+        try:
+            from reconciliacion_stock import leer_stock_meli_propio
+            _comparar("mercadolibre", leer_stock_meli_propio(pubs_meli))
+        except Exception as e:
+            print(f"[AutoCorrección] MercadoLibre lectura error: {str(e)[:120]}")
 
         # 7) Volver a publicar los SKU con desvio
         skus_a_corregir = sorted({d[0] for d in desvios})

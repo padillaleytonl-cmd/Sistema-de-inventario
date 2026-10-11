@@ -128,3 +128,71 @@ def leer_stock_ripley():
             break
         offset += 100
     return salida
+
+
+def leer_stock_meli_propio(publicaciones):
+    """Stock PROPIO (bodega del vendedor) de cada publicacion de MercadoLibre.
+
+    publicaciones: lista de (sku_canal, item_id). Devuelve {sku_canal: qty}.
+    Una publicacion puede tener stock Full y propio a la vez (bi-modal): su
+    available_quantity los suma. Por eso se lee /user-products/{id}/stock y se
+    toma solo la ubicacion selling_address. Se saltan las de catalogo (las
+    maneja MercadoLibre) y las que son solo Full.
+    Si un mismo SKU esta en varias publicaciones, se toma la mayor: es la que
+    puede sobrevender.
+    """
+    import time
+    from mercadolibre import meli_headers, MELI_API_URL
+    salida = {}
+    items_vistos = {}
+    for i, (sku_canal, item_id) in enumerate(publicaciones):
+        item_id = str(item_id or "").strip()
+        if not item_id.upper().startswith("MLC"):
+            continue
+        try:
+            if item_id not in items_vistos:
+                r = requests.get(f"{MELI_API_URL}/items/{item_id}?include_attributes=all",
+                                 headers=meli_headers(), timeout=_TIMEOUT)
+                items_vistos[item_id] = r.json() if r.status_code == 200 else None
+            item = items_vistos[item_id]
+            if not item or item.get("catalog_listing"):
+                continue
+            upid = item.get("user_product_id")
+            cantidad_item = item.get("available_quantity")
+            variaciones = item.get("variations") or []
+            if variaciones:
+                objetivo = None
+                for v in variaciones:
+                    v_sku = next((a.get("value_name", "") for a in (v.get("attributes") or [])
+                                  if a.get("id") == "SELLER_SKU"), "") or v.get("seller_custom_field") or ""
+                    if v_sku and v_sku.strip().upper() == str(sku_canal).strip().upper():
+                        objetivo = v
+                        break
+                if not objetivo:
+                    continue
+                upid = objetivo.get("user_product_id") or upid
+                cantidad_item = objetivo.get("available_quantity")
+            qty = None
+            if upid:
+                rs = requests.get(f"{MELI_API_URL}/user-products/{upid}/stock",
+                                  headers=meli_headers(), timeout=_TIMEOUT)
+                if rs.status_code == 200:
+                    ubicaciones = (rs.json() or {}).get("locations") or []
+                    propias = [u for u in ubicaciones if (u.get("type") or "") == "selling_address"]
+                    if propias:
+                        qty = sum(int(u.get("quantity") or 0) for u in propias)
+                    elif ubicaciones:
+                        continue   # solo Full: el stock lo maneja MercadoLibre
+            if qty is None:
+                logistica = ((item.get("shipping") or {}).get("logistic_type") or "").lower()
+                if logistica == "fulfillment":
+                    continue
+                qty = cantidad_item
+            if qty is None:
+                continue
+            salida[sku_canal] = max(int(qty), int(salida.get(sku_canal, 0) or 0))
+        except Exception:
+            continue
+        if (i + 1) % 20 == 0:
+            time.sleep(1)
+    return salida
