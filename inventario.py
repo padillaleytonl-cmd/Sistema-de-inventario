@@ -4369,10 +4369,82 @@ def transferir_stock_bodega(sku, desde, hasta, cantidad, usuario="Sistema", moti
     return {"desde": get_stock_bodega(sku, desde), "hasta": get_stock_bodega(sku, hasta)}
 
 
+def unidades_a_reintegrar(sku, orden_id, cantidad, bodega="CENTRAL"):
+    """Cuantas unidades devolver a `bodega` por la cancelacion de una orden.
+
+    Solo lo que esa venta DESCONTO de verdad en esa bodega (cantidad menos
+    faltante de sus salidas), menos lo que ya se haya devuelto por cancelacion,
+    y nunca mas que `cantidad`.
+
+    Antes cada cancelacion devolvia la cantidad de la orden aunque la venta no
+    hubiera descontado nada: una venta registrada sin stock (faltante) y
+    despues cancelada le daba al SKU unidades que no existian. Paso con el
+    coche E-Crib en la Web (ordenes 16039 y 16043, 06/10/2026). Si no se
+    encuentra la venta, se devuelve 0: sin venta descontada no hay que devolver.
+    """
+    try:
+        cantidad = max(0, int(cantidad or 0))
+    except (TypeError, ValueError):
+        return 0
+    if not orden_id or not cantidad:
+        return 0
+    conn = None
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""SELECT COALESCE(SUM(cantidad - COALESCE(faltante, 0)), 0)
+                             FROM movimientos
+                            WHERE tipo = 'salida' AND sku = %s AND orden_id::text = %s
+                              AND COALESCE(bodega_codigo, 'CENTRAL') = %s
+                              AND tenant_id = """ + EXPR_TENANT_CONTEXTO,
+                        (sku, str(orden_id), bodega))
+            descontado = int((cur.fetchone() or [0])[0] or 0)
+            cur.execute("""SELECT COALESCE(SUM(cantidad), 0) FROM movimientos
+                            WHERE tipo = 'entrada' AND sku = %s AND orden_id::text = %s
+                              AND COALESCE(bodega_codigo, 'CENTRAL') = %s
+                              AND motivo ILIKE 'cancelaci%%'
+                              AND tenant_id = """ + EXPR_TENANT_CONTEXTO,
+                        (sku, str(orden_id), bodega))
+            ya_devuelto = int((cur.fetchone() or [0])[0] or 0)
+        conn.commit()
+        return max(0, min(cantidad, descontado - ya_devuelto))
+    except Exception as e:
+        print(f"[Bodegas] unidades_a_reintegrar {sku}/{orden_id}: {e}")
+        return 0   # ante la duda no se inventa stock
+    finally:
+        release_conn(conn)
+
+
+def nota_reintegro(cantidad, devueltas):
+    """Texto para el motivo cuando se devuelve menos que la orden."""
+    if devueltas >= cantidad:
+        return ""
+    if devueltas == 0:
+        return " (sin reintegro: la venta no desconto stock)"
+    return f" (se devuelven {devueltas} de {cantidad}: el resto no se habia descontado)"
+
+
 def reintegrar_stock_bodega(sku, cantidad, bodega_codigo, motivo, canal=None, orden_id=None,
                              usuario="Sistema"):
-    """Reintegra stock a una bodega específica (para cancelaciones/devoluciones)."""
-    ajustar_stock_bodega(sku, bodega_codigo, cantidad)
+    """Reintegra stock a una bodega específica (para cancelaciones/devoluciones).
+
+    Si es una cancelacion hacia una bodega propia, nunca devuelve mas de lo que
+    la venta desconto ahi (unidades_a_reintegrar): cubre a todos los que la
+    llaman, incluidos el aviso de MercadoLibre y bodegas_logic.reintegrar_venta.
+    """
+    _bodegas_full = {"MELI_FULL", "MELI_FULL_TRANSITO", "WALMART_FBM", "FALABELLA_FBM",
+                     "PARIS_CD", "RIPLEY_FBM"}
+    if (orden_id and (motivo or "").lower().startswith("cancelaci")
+            and (bodega_codigo or "").upper() not in _bodegas_full):
+        pedidas = max(0, int(cantidad or 0))
+        reales = unidades_a_reintegrar(sku, orden_id, pedidas, bodega_codigo)
+        if reales < pedidas:
+            motivo = (motivo or "") + nota_reintegro(pedidas, reales)
+            print(f"[Bodegas] cancelacion {sku}/{orden_id}: se devuelven {reales} de {pedidas} "
+                  f"(la venta no habia descontado el resto)")
+            cantidad = reales
+    if cantidad:
+        ajustar_stock_bodega(sku, bodega_codigo, cantidad)
 
     # Normalizar canal antes de insertar
     canal_normalizado = normalizar_canal(canal) if canal else "Sistema"
