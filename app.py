@@ -7025,6 +7025,12 @@ def _sync_autocorreccion():
             for sku_canal, qty in (lecturas or {}).items():
                 s = str(sku_canal).strip()
                 sku_l = m.get(s) or (m.get(normalizar(s)) if normalizar else None)
+                # Respaldo: el SKU del canal no esta en el mapeo pero existe tal
+                # cual en Lusync (pasa en la Web). Sin esto, un mapeo equivocado
+                # dejaba el producto fuera del control: el coche E-Crib estaba
+                # en la tienda como CBTSECN001 y el mapeo decia CTSECNSB001.
+                if not sku_l and s in propio:
+                    sku_l = s
                 if not sku_l or sku_l not in propio:
                     continue
                 lus = propio[sku_l]
