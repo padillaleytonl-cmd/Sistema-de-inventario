@@ -5243,12 +5243,26 @@ function renderMovimientoItem(m){
           <span style="background:var(--info-bg);color:var(--navy);padding:1px 5px;border-radius:4px;font-size:9px;font-weight:600;">${abrev}</span>
           <span>${m.fecha} ${m.hora}</span>
           <span>👤 ${m.usuario}</span>
+          ${_etiquetaBodega(m)}
           ${ordenTag}
         </div>
       </div>
       <div style="font-size:12px;font-weight:600;color:${cat.qtyColor};flex-shrink:0;">${signo}${m.cantidad}</div>
     </div>
   </div>`;
+}
+
+// De que bodega salio (o entro) un movimiento, en palabras: las ventas Full las
+// despacha el marketplace desde SU bodega; las demas salen de la bodega propia.
+const _BODEGAS_FULL = {MELI_FULL:'MercadoLibre', MELI_FULL_TRANSITO:'MercadoLibre',
+  WALMART_FBM:'Walmart', FALABELLA_FBM:'Falabella', PARIS_CD:'Paris', RIPLEY_FBM:'Ripley'};
+function _etiquetaBodega(m){
+  const b = (m.bodega || '').toUpperCase();
+  if (!b) return '<span style="color:var(--muted);font-size:10px;">—</span>';
+  if (_BODEGAS_FULL[b]) {
+    return `<span title="${b}: la despacha ${_BODEGAS_FULL[b]} desde su bodega" style="background:#EEEDFE;color:#3C3489;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:600;white-space:nowrap;">Full · ${_BODEGAS_FULL[b]}</span>`;
+  }
+  return `<span title="Bodega ${b}" style="background:#EAF3DE;color:#27500A;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:600;white-space:nowrap;">Bodega propia${b !== 'CENTRAL' ? ' · ' + b : ''}</span>`;
 }
 
 function cargarMovimientosFull(){
@@ -10078,8 +10092,8 @@ async function cargarActividad() {
     }
 
     // Header de tabla
-    let html = `<div style="display:grid;grid-template-columns:28px 1fr 70px 60px 50px 60px;gap:10px;align-items:center;padding:8px 4px;background:var(--bg2);font-weight:500;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:0.05em;border-bottom:0.5px solid var(--border);">
-      <div></div><div>Producto</div><div>Canal</div><div>Cantidad</div><div>Bodega</div><div style="text-align:right;">Hora</div>
+    let html = `<div style="display:grid;grid-template-columns:28px minmax(0,1fr) 60px 60px 130px 60px;gap:10px;align-items:center;padding:8px 4px;background:var(--bg2);font-weight:500;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:0.05em;border-bottom:0.5px solid var(--border);">
+      <div></div><div>Producto</div><div>Canal</div><div>Cantidad</div><div>Despacho</div><div style="text-align:right;">Hora</div>
     </div>`;
 
     movs.forEach(m => {
@@ -10120,13 +10134,13 @@ async function cargarActividad() {
         canalHtml = `<span style="font-size:10px;color:var(--muted);font-weight:500;">${tag}</span>`;
       }
 
-      const bodega = m.bodega || '—';
+      const bodega = _etiquetaBodega(m);
       const hora = m.hora || m.fecha || '';
 
       const _skuSafe = (m.sku || '').replace(/"/g, '&quot;');
       const _ordenSafe = String(ocNum || m.sku || '').replace(/"/g, '&quot;');
 
-      html += `<div style="display:grid;grid-template-columns:28px 1fr 70px 60px 50px 60px;gap:10px;align-items:center;padding:9px 4px;border-bottom:0.5px solid var(--border);font-size:12px;cursor:pointer;" data-orden="${_ordenSafe}" data-sku="${_skuSafe}" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'" onclick="abrirDetalleMovimiento(this.dataset.orden, this.dataset.sku)">
+      html += `<div style="display:grid;grid-template-columns:28px minmax(0,1fr) 60px 60px 130px 60px;gap:10px;align-items:center;padding:9px 4px;border-bottom:0.5px solid var(--border);font-size:12px;cursor:pointer;" data-orden="${_ordenSafe}" data-sku="${_skuSafe}" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background='transparent'" onclick="abrirDetalleMovimiento(this.dataset.orden, this.dataset.sku)">
         <div style="width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;background:${dotBg};color:${dotColor};">${dotChar}</div>
         <div style="min-width:0;overflow:hidden;">
           <div style="font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${m.nombre || m.sku}</div>
@@ -10134,7 +10148,7 @@ async function cargarActividad() {
         </div>
         <div>${canalHtml}</div>
         <div style="color:${cantidadColor};font-weight:600;font-size:11px;">${cantidad}</div>
-        <div style="color:var(--muted);font-size:11px;">${bodega}</div>
+        <div style="font-size:11px;min-width:0;overflow:hidden;">${bodega}</div>
         <div style="text-align:right;color:var(--muted);font-family:'DM Mono',monospace;font-size:11px;">${hora}</div>
       </div>`;
     });
