@@ -2967,12 +2967,12 @@ tbody td {
       </div>
     </div>
     <div class="card" style="padding:0;overflow:hidden;display:flex;flex-direction:column;height:calc(100vh - 180px);">
-      <div style="display:grid;grid-template-columns:20px minmax(0,1fr) 110px 110px 100px 90px 110px 44px;align-items:center;gap:8px;padding:7px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);flex-shrink:0;">
+      <div style="display:grid;grid-template-columns:20px minmax(0,1fr) 110px 110px 130px 90px 110px 44px;align-items:center;gap:8px;padding:7px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);flex-shrink:0;">
         <div></div>
         <div style="font-size:10px;font-weight:500;color:var(--muted);">Producto · OC</div>
         <div style="font-size:10px;font-weight:500;color:var(--muted);">Fecha compra</div>
         <div style="font-size:10px;font-weight:500;color:var(--muted);">Fecha import</div>
-        <div style="font-size:10px;font-weight:500;color:var(--muted);">Canal · Bodega</div>
+        <div style="font-size:10px;font-weight:500;color:var(--muted);">Canal · Despacho</div>
         <div style="font-size:10px;font-weight:500;color:var(--muted);">Stock</div>
         <div style="font-size:10px;font-weight:500;color:var(--muted);">Usuario · Origen</div>
         <div style="font-size:10px;font-weight:500;color:var(--muted);text-align:right;">Cant.</div>
@@ -5442,7 +5442,7 @@ function cargarMovimientosFull(){
         ? `<div style="font-size:11px;color:var(--text);font-family:'DM Mono',monospace;white-space:nowrap;">${m.importado}</div>`
         : `<div style="font-size:11px;color:var(--text);white-space:nowrap;">${m.fecha} ${m.hora}</div>`;
 
-      return `<div style="display:grid;grid-template-columns:20px minmax(0,1fr) 110px 110px 100px 90px 110px 44px;align-items:center;gap:8px;padding:5px 14px 5px 11px;border-left:3px solid ${cat.borde};">
+      return `<div style="display:grid;grid-template-columns:20px minmax(0,1fr) 110px 110px 130px 90px 110px 44px;align-items:center;gap:8px;padding:5px 14px 5px 11px;border-left:3px solid ${cat.borde};">
         <div style="width:18px;height:18px;border-radius:50%;background:${cat.dotBg};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:500;color:${cat.dotColor};flex-shrink:0;">${cat.icono}</div>
         <div style="min-width:0;">
           <div style="font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${m.nombre}${tipoBadge}</div>
@@ -5450,7 +5450,7 @@ function cargarMovimientosFull(){
         </div>
         <div>${fechaCompra}</div>
         <div>${fechaImport}</div>
-        <div>${badgeCanalBodega(m.canal, m.bodega)}</div>
+        <div style="display:flex;flex-direction:column;align-items:flex-start;gap:3px;min-width:0;">${badgeCanalBodega(m.canal, m.bodega)}${_etiquetaBodega(m)}</div>
         <div>${getStockChange(m.stock_antes, m.stock_despues)}</div>
         <div>${getUsuarioOrigen(m.usuario, m.origen)}</div>
         <div style="text-align:right;">${qty}</div>
