@@ -58,11 +58,19 @@ def actualizar_stock_woo(sku, stock):
     skus_web, mapeado = _skus_web(sku)
     for sku_web in (skus_web or [sku]):
         r = _publicar_sku_web(sku, sku_web, stock)
-        # Con mapeo y sin producto en la tienda es un error de mapeo, no "sin
-        # publicaciones": tiene que verse y alertar.
         if mapeado and r["total_publicaciones"] == 0:
-            r = {"exitosas": 0, "fallidas": 1, "total_publicaciones": 1,
-                 "log": [f"el mapeo dice {sku_web} pero la tienda no tiene ese SKU"]}
+            # El mapeo apunta a un SKU que la tienda no tiene. Si la tienda si
+            # tiene el SKU de Lusync, se publica ahi: dejar la tienda sin el
+            # cambio es peor (el coche E-Crib siguio vendiendose en la Web con
+            # Lusync en 0 porque el mapeo decia CTSECNSB001 y en la tienda es
+            # CBTSECN001). Igual queda como falla, para que se corrija el mapeo.
+            r2 = _publicar_sku_web(sku, sku, stock) if sku_web != sku else None
+            aviso = (f"el mapeo Web dice {sku_web} pero la tienda no tiene ese SKU"
+                     + (f"; se publico en {sku}, que si existe: corrige el mapeo" if r2 and r2["exitosas"] else ""))
+            print(f"[Woo Stock] MAPEO {sku}: {aviso}")
+            r = {"exitosas": (r2 or {}).get("exitosas", 0), "fallidas": 1,
+                 "total_publicaciones": 1 + (r2 or {}).get("total_publicaciones", 0),
+                 "log": [aviso] + (r2 or {}).get("log", [])}
         for k in ("exitosas", "fallidas", "total_publicaciones"):
             total[k] += r[k]
         total["log"] += r["log"]
