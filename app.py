@@ -3233,6 +3233,105 @@ def admin_web_stock_sku():
     return jsonify(salida)
 
 
+# ── Herramientas de admin en segundo plano ──────────────────────────────────
+# Las que consultan a un canal orden por orden tardan minutos. Dentro de la
+# pagina ocupaban un hilo del servidor y, con una transaccion abierta, llegaron
+# a congelar Lusync (05/10/2026). Aca corren en un hilo aparte, con la sesion
+# de quien las lanzo, y el resultado queda para consultarlo.
+_TRABAJOS = {}
+_TRABAJOS_LOCK = __import__("threading").Lock()
+
+
+def _correr_ruta_admin(ruta, sesion):
+    """Ejecuta una ruta /admin/lusync/... como si la abriera `sesion` y
+    devuelve su JSON."""
+    from urllib.parse import urlsplit
+    partes = urlsplit(ruta)
+    with app.test_request_context(partes.path + ("?" + partes.query if partes.query else "")):
+        session.update(sesion)
+        adaptador = app.url_map.bind("localhost")
+        endpoint, args = adaptador.match(partes.path, method="GET")
+        resp = app.view_functions[endpoint](**args)
+        if isinstance(resp, tuple):
+            resp = resp[0]
+        try:
+            return resp.get_json()
+        except Exception:
+            return {"respuesta": str(resp)[:500]}
+
+
+def _lanzar_trabajo(nombre, pasos):
+    """pasos: lista de (titulo, ruta). Corre en orden en un hilo aparte."""
+    import threading
+    from inventario import now_chile
+    sesion = {k: session.get(k) for k in list(session.keys())}
+    with _TRABAJOS_LOCK:
+        actual = _TRABAJOS.get(nombre)
+        if actual and actual.get("estado") == "corriendo":
+            return False
+        _TRABAJOS[nombre] = {"estado": "corriendo", "inicio": now_chile().strftime("%d/%m %H:%M:%S"),
+                             "pasos": [{"paso": t, "estado": "pendiente"} for t, _ in pasos]}
+
+    def _correr():
+        trabajo = _TRABAJOS[nombre]
+        try:
+            for i, (titulo, ruta) in enumerate(pasos):
+                trabajo["pasos"][i]["estado"] = "corriendo"
+                try:
+                    trabajo["pasos"][i]["resultado"] = _correr_ruta_admin(ruta, sesion)
+                    trabajo["pasos"][i]["estado"] = "listo"
+                except Exception as e:
+                    trabajo["pasos"][i]["estado"] = "error"
+                    trabajo["pasos"][i]["error"] = str(e)[:300]
+                    trabajo["estado"] = "error"
+                    return
+            trabajo["estado"] = "listo"
+        finally:
+            trabajo["fin"] = now_chile().strftime("%d/%m %H:%M:%S")
+            print(f"[Trabajo] {nombre}: {trabajo['estado']}")
+
+    threading.Thread(target=_correr, daemon=True).start()
+    return True
+
+
+@app.route("/admin/lusync/trabajo/<nombre>")
+def admin_trabajo_estado(nombre):
+    """Estado y resultado de un trabajo en segundo plano."""
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    return jsonify(_TRABAJOS.get(nombre) or {"estado": "no se ha lanzado"})
+
+
+@app.route("/admin/lusync/falabella/full-cerrar")
+def admin_falabella_full_cerrar():
+    """Cierra las ventas Falabella Full antiguas, sin devolver stock a CENTRAL
+    (el conteo fisico de CENTRAL ya es el real, 05/10/2026):
+      1) deshace lo que la reparacion alcanzo a devolver a CENTRAL;
+      2) pasa a FALABELLA_FBM las ventas Full que siguen en CENTRAL.
+
+      /admin/lusync/falabella/full-cerrar?dias=15            simula
+      /admin/lusync/falabella/full-cerrar?dias=15&aplicar=1  aplica
+    Corre en segundo plano; el resultado en /admin/lusync/trabajo/falabella_full.
+    """
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    aplicar = request.args.get("aplicar") == "1"
+    dias = max(1, min(int(request.args.get("dias", "15") or 15), 30))
+    sufijo = "&aplicar=1" if aplicar else ""
+    pasos = [
+        ("Deshacer lo devuelto a CENTRAL",
+         "/admin/lusync/falabella/full-deshacer-devolucion" + ("?aplicar=1" if aplicar else "")),
+        ("Pasar a Full sin devolver stock",
+         f"/admin/lusync/falabella/full-mal-registradas?dias={dias}&devolver=0{sufijo}"),
+    ]
+    if not _lanzar_trabajo("falabella_full", pasos):
+        return jsonify({"ok": False, "estado": "ya hay uno corriendo",
+                        "ver": "/admin/lusync/trabajo/falabella_full"})
+    return jsonify({"ok": True, "modo": "APLICANDO" if aplicar else "simulacion",
+                    "estado": "corriendo en segundo plano (puede tardar unos minutos)",
+                    "ver_resultado": "/admin/lusync/trabajo/falabella_full"})
+
+
 @app.route("/admin/lusync/auditoria-ordenes")
 def auditoria_ordenes_limbo():
     """Audita qué órdenes de cada marketplace NO están registradas en Lusync.
