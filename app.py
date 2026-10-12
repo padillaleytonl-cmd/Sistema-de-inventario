@@ -3464,6 +3464,80 @@ def admin_falabella_completar_numeros_todo():
                     "ver_resultado": "/admin/lusync/trabajo/falabella_numeros"})
 
 
+@app.route("/admin/lusync/web/revisar-mapeos")
+def admin_web_revisar_mapeos():
+    """Revisa TODOS los mapeos de la Web contra los SKU que la tienda tiene.
+
+    Un mapeo que apunta a un SKU que la tienda no tiene deja ese producto sin
+    stock actualizado (coche E-Crib: el mapeo decia CTSECNSB001 y en la tienda
+    es CBTSECN001). Si la tienda si tiene el SKU de Lusync, se propone corregir
+    el mapeo a ese SKU.
+
+      /admin/lusync/web/revisar-mapeos            simula (en segundo plano)
+      /admin/lusync/web/revisar-mapeos?aplicar=1  corrige los que se puede
+    Resultado en /admin/lusync/trabajo/web_mapeos.
+    """
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    if request.args.get("_interno") != "1":
+        aplicar = "&aplicar=1" if request.args.get("aplicar") == "1" else ""
+        if not _lanzar_trabajo("web_mapeos", [("Revisar mapeos Web",
+                                                f"/admin/lusync/web/revisar-mapeos?_interno=1{aplicar}")]):
+            return jsonify({"ok": False, "estado": "ya hay uno corriendo",
+                            "ver": "/admin/lusync/trabajo/web_mapeos"})
+        return jsonify({"ok": True, "estado": "corriendo en segundo plano",
+                        "ver_resultado": "/admin/lusync/trabajo/web_mapeos"})
+
+    from inventario import get_conn, release_conn
+    from reconciliacion_stock import leer_stock_woo
+    aplicar = request.args.get("aplicar") == "1"
+    tid = _tenant_sesion() or TENANT_INTEGRACIONES
+    en_tienda = set(leer_stock_woo().keys())
+    if not en_tienda:
+        return jsonify({"error": "No se pudo leer el catalogo de la tienda"})
+    conn = get_conn(tenant_id=tid, is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT id, sku_lusync, sku_canal FROM sku_mapeo_canal
+                            WHERE tenant_id = %s AND canal = 'web' AND activo = TRUE
+                            ORDER BY sku_lusync""", (tid,))
+            mapeos = cur.fetchall()
+            corregibles, sin_producto, corregidos = [], [], 0
+            for mid, sku_l, sku_c in mapeos:
+                sku_c = (sku_c or "").strip()
+                if sku_c in en_tienda:
+                    continue
+                if sku_l in en_tienda:
+                    corregibles.append({"sku_lusync": sku_l, "mapeo_dice": sku_c, "tienda_tiene": sku_l})
+                    if aplicar:
+                        # Si ya hay otro mapeo web con el SKU correcto, el malo sobra.
+                        cur.execute("""SELECT 1 FROM sku_mapeo_canal
+                                        WHERE tenant_id = %s AND canal = 'web' AND sku_lusync = %s
+                                          AND sku_canal = %s AND id <> %s""", (tid, sku_l, sku_l, mid))
+                        if cur.fetchone():
+                            cur.execute("DELETE FROM sku_mapeo_canal WHERE tenant_id = %s AND id = %s", (tid, mid))
+                        else:
+                            cur.execute("""UPDATE sku_mapeo_canal SET sku_canal = %s, actualizado_at = NOW(),
+                                                  notas = COALESCE(notas, '') || ' | corregido: la tienda usa el SKU de Lusync'
+                                            WHERE tenant_id = %s AND id = %s""", (sku_l, tid, mid))
+                        corregidos += 1
+                else:
+                    sin_producto.append({"sku_lusync": sku_l, "mapeo_dice": sku_c})
+        conn.commit()
+    finally:
+        release_conn(conn)
+    if aplicar and corregidos:
+        registrar_audit(session.get("usuario", "Sistema"), request.remote_addr, "corregir_mapeos_web",
+                        entidad="sku_mapeo_canal",
+                        detalle=str([(c["sku_lusync"], c["mapeo_dice"]) for c in corregibles])[:500])
+    return jsonify({"modo": "APLICADO" if aplicar else "simulacion", "skus_en_la_tienda": len(en_tienda),
+                    "mapeos_web": len(mapeos), "corregibles": corregibles, "corregidos": corregidos,
+                    "sin_producto_en_la_tienda": sin_producto,
+                    "nota": ("corregibles: el mapeo apunta a un SKU que la tienda no tiene, pero la tienda si "
+                             "tiene el SKU de Lusync. sin_producto: ni uno ni otro existe en la tienda; hay "
+                             "que revisarlos a mano.")})
+
+
 @app.route("/admin/lusync/auditoria-ordenes")
 def auditoria_ordenes_limbo():
     """Audita qué órdenes de cada marketplace NO están registradas en Lusync.
