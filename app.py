@@ -3332,6 +3332,78 @@ def admin_falabella_full_cerrar():
                     "ver_resultado": "/admin/lusync/trabajo/falabella_full"})
 
 
+@app.route("/admin/lusync/stock/pausar-descontinuados")
+def admin_stock_pausar_descontinuados():
+    """Deja en 0, en todos los canales, las publicaciones de productos que ya
+    no existen en Lusync (siguen mapeadas y a la venta, sin que Lusync controle
+    su stock).
+
+      /admin/lusync/stock/pausar-descontinuados?skus=CCBBN01,SDCMCC001
+          simula: que publicaciones hay en cada canal
+      ...&aplicar=1
+          publica 0 en cada una
+
+    Un SKU que todavia existe en Lusync se rechaza: para esos manda su stock.
+    """
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    from inventario import get_conn, release_conn
+    aplicar = request.args.get("aplicar") == "1"
+    skus = [s.strip() for s in (request.args.get("skus") or "").split(",") if s.strip()]
+    if not skus:
+        return jsonify({"error": "Falta ?skus=SKU1,SKU2"}), 400
+    existentes = {p["sku"] for p in cargar_productos()}
+    salida = {"modo": "APLICADO" if aplicar else "simulacion", "skus": []}
+    rechazados = [s for s in skus if s in existentes]
+    if rechazados:
+        salida["rechazados_existen_en_lusync"] = rechazados
+    canales = [
+        ("web",          actualizar_stock_woo),
+        ("walmart",      actualizar_stock_walmart),
+        ("paris",        actualizar_stock_paris),
+        ("mercadolibre", actualizar_stock_meli),
+        ("falabella",    actualizar_stock_falabella),
+        ("ripley",       actualizar_stock_ripley),
+    ]
+    for sku in skus:
+        if sku in existentes:
+            continue
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT canal, sku_canal, item_id_canal FROM sku_mapeo_canal
+                               WHERE sku_lusync = %s AND activo = TRUE
+                               ORDER BY canal, sku_canal""", (sku,))
+                pubs = [{"canal": r[0], "sku_canal": r[1], "item_id": r[2]} for r in cur.fetchall()]
+        finally:
+            release_conn(conn)
+        fila = {"sku": sku, "publicaciones": pubs}
+        if aplicar:
+            resultado = {}
+            for nombre, fn in canales:
+                if not any(p["canal"] == nombre for p in pubs):
+                    continue
+                try:
+                    ret = fn(sku, 0)
+                    if isinstance(ret, dict):
+                        resultado[nombre] = (f"{int(ret.get('exitosas', 0) or 0)} ok / "
+                                             f"{int(ret.get('fallidas', 0) or 0)} fallaron de "
+                                             f"{int(ret.get('total_publicaciones', 0) or 0)}")
+                        if ret.get("fallidas"):
+                            resultado[nombre] += " — " + " | ".join(ret.get("log", [])[-2:])[:200]
+                    else:
+                        resultado[nombre] = "ok"
+                except Exception as e:
+                    resultado[nombre] = f"error: {str(e)[:150]}"
+            fila["resultado"] = resultado
+            registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
+                            "pausar_descontinuado", detalle=f"{sku}: {resultado}")
+        salida["skus"].append(fila)
+    if not aplicar:
+        salida["nota"] = "Simulacion: agrega &aplicar=1 para dejar en 0 estas publicaciones."
+    return jsonify(salida)
+
+
 @app.route("/admin/lusync/stock/conteo-fisico")
 def admin_stock_conteo_fisico():
     """Busca productos y fija CENTRAL al conteo fisico.
