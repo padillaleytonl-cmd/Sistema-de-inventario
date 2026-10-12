@@ -3503,14 +3503,43 @@ def admin_ripley_comparar_stock():
     salida = {"modo": "APLICADO" if aplicar else "comparacion", "ofertas_ripley": len(ofertas),
               "iguales": iguales, "distintos": distintos, "sin_producto_en_lusync": sin_producto}
     if aplicar and distintos:
-        res = {}
-        for sku in sorted({d["sku_lusync"] for d in distintos}):
+        # En segundo plano: con 80 SKU la pagina tardaba mas de 5 minutos y la
+        # publicacion quedaba cortada a la mitad.
+        from inventario import con_tenant_del_llamador, now_chile
+        skus = sorted({d["sku_lusync"] for d in distintos})
+        with _TRABAJOS_LOCK:
+            actual = _TRABAJOS.get("ripley_comparar")
+            if actual and actual.get("estado") == "corriendo":
+                return jsonify({"ok": False, "estado": "ya hay una publicacion corriendo",
+                                "ver": "/admin/lusync/trabajo/ripley_comparar"})
+            trabajo = {"estado": "corriendo", "inicio": now_chile().strftime("%d/%m %H:%M:%S"),
+                       "total": len(skus), "hechos": 0, "resultado": {}}
+            _TRABAJOS["ripley_comparar"] = trabajo
+
+        def _publicar():
+            import time as _t
             try:
-                res[sku] = (sincronizar_stock_marketplaces(sku, None, contexto="ripley_comparar") or {}).get("ripley")
+                for sku in skus:
+                    try:
+                        trabajo["resultado"][sku] = (sincronizar_stock_marketplaces(
+                            sku, None, contexto="ripley_comparar") or {}).get("ripley")
+                    except Exception as e:
+                        trabajo["resultado"][sku] = f"error: {str(e)[:120]}"
+                    trabajo["hechos"] += 1
+                    _t.sleep(0.5)
+                trabajo["estado"] = "listo"
             except Exception as e:
-                res[sku] = f"error: {str(e)[:120]}"
-        salida["republicados"] = res
-        salida["nota"] = "Ripley recibe el stock en lote: puede tardar unos minutos en verse."
+                trabajo["estado"] = f"error: {str(e)[:150]}"
+            finally:
+                trabajo["fin"] = now_chile().strftime("%d/%m %H:%M:%S")
+
+        import threading
+        threading.Thread(target=con_tenant_del_llamador(_publicar), daemon=True).start()
+        salida["distintos"] = len(distintos)
+        salida["publicando"] = len(skus)
+        salida["ver_avance"] = "/admin/lusync/trabajo/ripley_comparar"
+        salida["nota"] = ("Corre en segundo plano. Ripley recibe el stock en lote: despues de "
+                          "terminar, puede tardar unos minutos en verse.")
     elif distintos:
         salida["nota"] = "Agrega ?aplicar=1 para volver a publicar el stock de Lusync en los distintos."
     return jsonify(salida)
