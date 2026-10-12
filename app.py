@@ -3449,6 +3449,73 @@ def admin_meli_pausar_items():
     return jsonify(salida)
 
 
+@app.route("/admin/lusync/ripley/comparar-stock")
+def admin_ripley_comparar_stock():
+    """Stock de cada oferta de Ripley contra el stock propio de Lusync.
+    Sirve despues de una carga masiva por Excel en Mirakl, que tambien pisa
+    el stock.
+
+      /admin/lusync/ripley/comparar-stock            compara
+      /admin/lusync/ripley/comparar-stock?aplicar=1  vuelve a publicar los distintos
+    """
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    from inventario import get_conn, release_conn
+    from reconciliacion_stock import leer_stock_ripley
+    aplicar = request.args.get("aplicar") == "1"
+    conn = get_conn(tenant_id=TENANT_INTEGRACIONES, is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT sb.sku, COALESCE(SUM(sb.cantidad), 0)
+                  FROM stock_bodega sb
+                  LEFT JOIN bodegas b ON b.codigo = sb.bodega_codigo AND b.tenant_id = sb.tenant_id
+                 WHERE (b.tipo = 'propia' OR b.tipo IS NULL OR sb.bodega_codigo = 'CENTRAL')
+                   AND sb.tenant_id = %s
+                 GROUP BY sb.sku""", (TENANT_INTEGRACIONES,))
+            propio = {r[0]: int(r[1] or 0) for r in cur.fetchall()}
+            cur.execute("SELECT sku FROM productos WHERE tenant_id = %s", (TENANT_INTEGRACIONES,))
+            for (sp,) in cur.fetchall():
+                propio.setdefault(sp, 0)
+            cur.execute("""SELECT sku_canal, sku_lusync FROM sku_mapeo_canal
+                            WHERE canal = 'ripley' AND activo = TRUE AND tenant_id = %s""",
+                        (TENANT_INTEGRACIONES,))
+            mapeo = {str(r[0]).strip(): r[1] for r in cur.fetchall() if r[0]}
+        conn.commit()
+    finally:
+        release_conn(conn)
+    ofertas = leer_stock_ripley()
+    iguales, distintos, sin_producto = 0, [], []
+    for shop_sku, qty in sorted(ofertas.items()):
+        sku_l = mapeo.get(shop_sku) or (shop_sku if shop_sku in propio else None)
+        if not sku_l or sku_l not in propio:
+            sin_producto.append({"oferta": shop_sku, "ripley": qty})
+            continue
+        try:
+            q = int(qty)
+        except (TypeError, ValueError):
+            q = None
+        if q == propio[sku_l]:
+            iguales += 1
+        else:
+            distintos.append({"oferta": shop_sku, "sku_lusync": sku_l, "ripley": qty,
+                              "lusync": propio[sku_l]})
+    salida = {"modo": "APLICADO" if aplicar else "comparacion", "ofertas_ripley": len(ofertas),
+              "iguales": iguales, "distintos": distintos, "sin_producto_en_lusync": sin_producto}
+    if aplicar and distintos:
+        res = {}
+        for sku in sorted({d["sku_lusync"] for d in distintos}):
+            try:
+                res[sku] = (sincronizar_stock_marketplaces(sku, None, contexto="ripley_comparar") or {}).get("ripley")
+            except Exception as e:
+                res[sku] = f"error: {str(e)[:120]}"
+        salida["republicados"] = res
+        salida["nota"] = "Ripley recibe el stock en lote: puede tardar unos minutos en verse."
+    elif distintos:
+        salida["nota"] = "Agrega ?aplicar=1 para volver a publicar el stock de Lusync en los distintos."
+    return jsonify(salida)
+
+
 @app.route("/admin/lusync/stock/conteo-fisico")
 def admin_stock_conteo_fisico():
     """Busca productos y fija CENTRAL al conteo fisico.
@@ -7354,6 +7421,11 @@ def _sync_autocorreccion():
                        AND sb.tenant_id = %s
                      GROUP BY sb.sku""", (TENANT_INTEGRACIONES,))
                 propio = {r[0]: int(r[1] or 0) for r in cur.fetchall()}
+                # Un producto que nunca tuvo stock en bodega no tiene filas en
+                # stock_bodega: para Lusync tiene 0, y quedaba fuera del control.
+                cur.execute("SELECT sku FROM productos WHERE tenant_id = %s", (TENANT_INTEGRACIONES,))
+                for (_sku_p,) in cur.fetchall():
+                    propio.setdefault(_sku_p, 0)
                 cur.execute("""SELECT canal, sku_canal, sku_lusync, item_id_canal FROM sku_mapeo_canal
                                 WHERE activo = TRUE AND tenant_id = %s AND sku_canal IS NOT NULL""",
                             (TENANT_INTEGRACIONES,))
@@ -7368,6 +7440,10 @@ def _sync_autocorreccion():
             release_conn(conn)
 
         desvios = []   # (sku_lusync, canal, en_canal, en_lusync)
+        # Publicaciones con stock que no corresponden a ningun producto de
+        # Lusync: nadie controla su stock. Antes se saltaban en silencio y asi
+        # quedaron dos ofertas de Ripley a la venta con 25 y 24 (11/10/2026).
+        sin_producto = []  # (canal, sku_canal, en_canal)
 
         def _comparar(canal, lecturas, normalizar=None):
             m = mapeo.get(canal, {})
@@ -7381,6 +7457,11 @@ def _sync_autocorreccion():
                 if not sku_l and s in propio:
                     sku_l = s
                 if not sku_l or sku_l not in propio:
+                    try:
+                        if qty not in (None, "sin_control") and int(qty) > 0:
+                            sin_producto.append((canal, s, int(qty)))
+                    except (TypeError, ValueError):
+                        pass
                     continue
                 lus = propio[sku_l]
                 if qty == "sin_control":
@@ -7491,6 +7572,22 @@ def _sync_autocorreccion():
                     sku=sku, canal=canal, enviar_email=True)
             except Exception as e_al:
                 print(f"[AutoCorrección] no pude crear alerta {sku}/{canal}: {e_al}")
+        # 9) Publicaciones con stock sin producto en Lusync: aviso, sin tocarlas
+        #    (puede ser un producto nuevo sin mapear o uno descontinuado).
+        print(f"[AutoCorrección] Publicaciones con stock sin producto en Lusync: {len(sin_producto)}")
+        for canal, sku_canal, en_canal in sin_producto:
+            print(f"[AutoCorrección]   {canal} {sku_canal}: {en_canal} a la venta, sin producto en Lusync")
+            try:
+                crear_alerta(
+                    tipo="publicacion_sin_producto",
+                    titulo=f"{canal}: {sku_canal} se vende sin control de Lusync",
+                    mensaje=(f"<b>{canal}</b> tiene a la venta <b>{en_canal}</b> unidades de "
+                             f"<b>{sku_canal}</b>, que no corresponde a ningun producto de Lusync. "
+                             f"Si el producto existe, mapealo; si esta descontinuado, pausalo con "
+                             f"/admin/lusync/stock/pausar-descontinuados."),
+                    sku=sku_canal, canal=canal, enviar_email=True)
+            except Exception as e_al:
+                print(f"[AutoCorrección] no pude crear alerta {canal}/{sku_canal}: {e_al}")
         print(f"[AutoCorrección] Completado. {corregidos} SKU re-publicados, "
               f"{len(persistentes)} desvios persistentes con alerta.")
     except Exception as e:
