@@ -5206,8 +5206,9 @@ def _refrescar_despachos_meli():
 
 
 def _fecha_falabella(o):
-    """CreatedAt de Falabella, igual que lo lee el registro de la venta."""
-    import pytz as _pz
+    """CreatedAt de Falabella, igual que lo lee el registro de la venta.
+    Sin zona viene en hora de Chile (comprobado contra el log del webhook,
+    07-11/10/2026): se deja tal cual, nunca como UTC."""
     texto = (o.get("CreatedAt") or o.get("created_at") or "").strip()
     if not texto:
         return None
@@ -5215,7 +5216,7 @@ def _fecha_falabella(o):
         return datetime.fromisoformat(texto.replace("Z", "+00:00"))
     except ValueError:
         try:
-            return _pz.utc.localize(datetime.strptime(texto, "%Y-%m-%d %H:%M:%S"))
+            return datetime.strptime(texto, "%Y-%m-%d %H:%M:%S")
         except Exception:
             return None
 
@@ -5975,7 +5976,7 @@ def _sync_falabella_automatico():
                     # (la venta se reconoce por orden y SKU).
                     lineas_fallidas = []
 
-                    # Parsear fecha real de compra (Falabella: CreatedAt = "2026-05-05 23:57:15" sin tz)
+                    # Parsear fecha real de compra (Falabella: CreatedAt = "2026-05-05 23:57:15", hora Chile)
                     fecha_compra_fa = None
                     try:
                         import pytz as _pytz_fa
@@ -5986,9 +5987,8 @@ def _sync_falabella_automatico():
                                 fecha_compra_fa = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
                             except ValueError:
                                 try:
-                                    # Formato "YYYY-MM-DD HH:MM:SS" sin timezone → asumir UTC
-                                    fecha_naive = datetime.strptime(date_str.strip(), "%Y-%m-%d %H:%M:%S")
-                                    fecha_compra_fa = _pytz_fa.utc.localize(fecha_naive)
+                                    # "YYYY-MM-DD HH:MM:SS" sin zona: ya es hora de Chile
+                                    fecha_compra_fa = datetime.strptime(date_str.strip(), "%Y-%m-%d %H:%M:%S")
                                 except Exception:
                                     fecha_compra_fa = None
                     except Exception:
@@ -15458,8 +15458,8 @@ def admin_reconstruir_fechas_compra():
                                 fecha = _dt.fromisoformat(date_str.replace("Z", "+00:00"))
                             except ValueError:
                                 try:
-                                    fecha_naive = _dt.strptime(date_str.strip(), "%Y-%m-%d %H:%M:%S")
-                                    fecha = _pytz.utc.localize(fecha_naive)
+                                    # Sin zona: ya es hora de Chile
+                                    fecha = _dt.strptime(date_str.strip(), "%Y-%m-%d %H:%M:%S")
                                 except Exception as e:
                                     log.append(f"  Falabella {oid}: error parseando '{date_str}': {e}")
                                     continue
