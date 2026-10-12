@@ -1007,10 +1007,15 @@ def _procesar_orden_webhook(resource):
             print(f"[MELI Webhook] Orden {order_id} en estado {estado}, no se procesa")
             return True
 
-        # Marcado ATÓMICO contra race conditions (multi-publicación, webhooks simultáneos)
-        from inventario import intentar_marcar_orden_atomic
-        if not intentar_marcar_orden_atomic(meli_key):
-            print(f"[MELI Webhook] Orden {order_id} ya procesada (atomic check)")
+        # Registrar primero, marcar DESPUES y solo si todas las lineas quedaron
+        # registradas, igual que el sync. Antes se marcaba aca, al inicio: si el
+        # SKU no existia o el registro fallaba, la orden quedaba marcada sin
+        # venta y el sync ya no la reintentaba (venta perdida). Los avisos
+        # repetidos no duplican: una venta ya registrada (orden + SKU) no se
+        # vuelve a descontar.
+        from inventario import intentar_marcar_orden_atomic, orden_ya_procesada_texto
+        if orden_ya_procesada_texto(meli_key):
+            print(f"[MELI Webhook] Orden {order_id} ya procesada")
             return True
 
         # ── Extraer fecha real de compra ──
@@ -1032,6 +1037,7 @@ def _procesar_orden_webhook(resource):
 
         productos = cargar_productos()
         productos_dict = {p["sku"]: p for p in productos}
+        registradas, lineas_fallidas = 0, []
 
         for item in orden.get("order_items", []):
             item_data = item.get("item", {})
@@ -1053,27 +1059,29 @@ def _procesar_orden_webhook(resource):
             qty = int(item.get("quantity", 1))
 
             sku_lusync = sku_meli
-            # Intento 1: tabla vieja sku_mapeo (columna sku_mercadolibre)
+            # Primero el mapeo por canal (sku_mapeo_canal), como el resto de
+            # Lusync; despues la tabla vieja sku_mapeo.
             try:
-                for fila in listar_sku_mapeo():
-                    sku_mapped = (fila.get("sku_mercadolibre") or "").strip()
-                    if sku_mapped and (sku_mapped == sku_meli or sku_mapped == item_id):
-                        sku_lusync = fila.get("sku_lusync")
-                        break
-            except: pass
-            # Intento 2: tabla nueva sku_mapeo_canal (multi-publicación)
+                from inventario import obtener_sku_lusync_por_canal
+                sku_traducido = obtener_sku_lusync_por_canal("mercadolibre", sku_canal=sku_meli, item_id_canal=item_id)
+                if sku_traducido:
+                    sku_lusync = sku_traducido
+            except Exception as e:
+                print(f"[MELI Webhook] Error obtener_sku_lusync_por_canal: {e}")
             if sku_lusync == sku_meli:
                 try:
-                    from inventario import obtener_sku_lusync_por_canal
-                    sku_traducido = obtener_sku_lusync_por_canal("mercadolibre", sku_canal=sku_meli, item_id_canal=item_id)
-                    if sku_traducido:
-                        sku_lusync = sku_traducido
-                        print(f"[MELI Webhook] SKU traducido vía sku_mapeo_canal: {sku_meli} → {sku_lusync}")
-                except Exception as e:
-                    print(f"[MELI Webhook] Error obtener_sku_lusync_por_canal: {e}")
+                    for fila in listar_sku_mapeo():
+                        sku_mapped = (fila.get("sku_mercadolibre") or "").strip()
+                        if sku_mapped and (sku_mapped == sku_meli or sku_mapped == item_id):
+                            sku_lusync = fila.get("sku_lusync")
+                            break
+                except Exception:
+                    pass
 
             if sku_lusync not in productos_dict:
-                print(f"[MELI Webhook] SKU '{sku_lusync}' no encontrado en inventario")
+                print(f"[MELI Webhook] Orden {order_id}: SKU '{sku_lusync}' no encontrado en inventario; "
+                      "no se marca, la reintenta el sync")
+                lineas_fallidas.append(sku_meli)
                 continue
 
             # Descontar de la bodega correcta
@@ -1088,22 +1096,28 @@ def _procesar_orden_webhook(resource):
                 fecha_compra_marketplace=fecha_compra_meli,
                 origen_registro="webhook"
             )
+            if not (resultado or {}).get("ok"):
+                print(f"[MELI Webhook] Orden {order_id}: {sku_lusync} no quedo registrado; no se marca")
+                lineas_fallidas.append(sku_lusync)
+                continue
+            registradas += 1
             print(f"[MELI Webhook] {sku_lusync} -{qty} desde {resultado['bodega']} → {resultado['stock_despues']}")
 
-            # Sync a los 6 marketplaces SOLO si fue Seller (Central afectada)
+            # Publicar en los canales SOLO si fue de la bodega propia. Se pasa
+            # None: la publicacion calcula el stock propio. Antes se le pasaba
+            # productos.stock, que es el total con Full incluido.
             if not es_full:
                 try:
-                    from inventario import cargar_productos as _cp
-                    productos_actualizados = _cp()
-                    stock_total = next((pp["stock"] for pp in productos_actualizados if pp["sku"] == sku_lusync), 0)
-                    # Importar el helper centralizado desde app.py (sync 6 marketplaces resiliente)
                     from app import sincronizar_stock_marketplaces
-                    sincronizar_stock_marketplaces(
-                        sku_lusync, stock_total,
-                        contexto="meli_webhook_venta"
-                    )
+                    sincronizar_stock_marketplaces(sku_lusync, None, contexto="meli_webhook_venta")
                 except Exception as e_sync:
                     print(f"[MELI Webhook] Error sync 6mkts: {e_sync}")
+
+        if registradas and not lineas_fallidas:
+            intentar_marcar_orden_atomic(meli_key)
+        elif lineas_fallidas:
+            print(f"[MELI Webhook] Orden {order_id}: faltan {', '.join(lineas_fallidas)}; "
+                  "no se marca, la reintenta el sync")
         return True
     except Exception as e:
         print(f"[MELI Webhook] Error procesando orden: {e}")
