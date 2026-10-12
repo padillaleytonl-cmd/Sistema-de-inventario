@@ -1088,10 +1088,6 @@ def procesar_webhook_orden_creada(data):
             return
         data = {**data, **orden}
         order_number = str(orden.get("OrderNumber") or "").strip()
-        # Diagnostico: el aviso llega segundos despues de la compra. Comparar
-        # esta hora con la del log dice si CreatedAt viene en Chile o en UTC.
-        print(f"[Falabella WEBHOOK] {order_number or order_id}: CreatedAt={orden.get('CreatedAt')!r} "
-              f"ShippingType={orden.get('ShippingType')!r}")
 
         fecha_compra_falabella = None
         try:
