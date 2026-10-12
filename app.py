@@ -3390,6 +3390,64 @@ def admin_stock_conteo_fisico():
     return jsonify(salida)
 
 
+@app.route("/admin/lusync/cancelaciones-sin-reintegro")
+def admin_cancelaciones_sin_reintegro():
+    """Solo lectura: ventas canceladas que descontaron de la bodega propia y
+    cuya cancelacion quedo marcada SIN devolver el stock.
+
+    Hasta el 05/10/2026 las cancelaciones de ventas propias de Falabella y
+    Paris fallaban ("cannot access local variable 'ajustar_stock_bodega'")
+    despues de marcarse, y no se reintentaban. No se corrige solo: el reintegro
+    lo decide una persona con el conteo fisico.
+
+      /admin/lusync/cancelaciones-sin-reintegro?dias=60
+    """
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    from inventario import get_conn, release_conn, now_chile
+    dias = max(1, min(int(request.args.get("dias", "60") or 60), 365))
+    tid = _tenant_sesion() or TENANT_INTEGRACIONES
+    desde = now_chile().replace(tzinfo=None) - timedelta(days=dias)
+    conn = get_conn(tenant_id=tid, is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT m.canal, COALESCE(NULLIF(m.numero_orden, ''), m.orden_id::text), m.sku,
+                       MIN(m.nombre), SUM(m.cantidad - COALESCE(m.faltante, 0)),
+                       TO_CHAR(MIN(m.fecha), 'DD/MM/YYYY HH24:MI')
+                  FROM movimientos m
+                 WHERE m.tenant_id = %s AND m.tipo = 'salida' AND m.fecha > %s
+                   AND COALESCE(m.bodega_codigo, 'CENTRAL') = 'CENTRAL'
+                   AND m.orden_id IS NOT NULL
+                   AND (m.cantidad - COALESCE(m.faltante, 0)) > 0
+                   AND EXISTS (SELECT 1 FROM ordenes_procesadas op
+                                WHERE op.tenant_id = m.tenant_id
+                                  AND op.order_id_texto =
+                                      (CASE WHEN LOWER(m.canal) LIKE 'falabella%%' THEN 'FALABELLA-CANCEL-'
+                                            WHEN LOWER(m.canal) IN ('paris', 'parís') THEN 'PARIS-CANCEL-'
+                                            WHEN LOWER(m.canal) LIKE 'ripley%%' THEN 'RP-CANCEL-'
+                                            WHEN LOWER(m.canal) LIKE 'mercadolibre%%' THEN 'MELI-CANCEL-'
+                                            WHEN LOWER(m.canal) IN ('web', 'woocommerce') THEN 'WOO-CANCEL-'
+                                            WHEN LOWER(m.canal) LIKE 'walmart%%' THEN 'CANCEL-' END
+                                       || m.orden_id::text))
+                   AND NOT EXISTS (SELECT 1 FROM movimientos e
+                                    WHERE e.tenant_id = m.tenant_id AND e.tipo = 'entrada'
+                                      AND e.orden_id = m.orden_id AND e.sku = m.sku
+                                      AND e.motivo ILIKE 'cancelaci%%')
+                 GROUP BY m.canal, COALESCE(NULLIF(m.numero_orden, ''), m.orden_id::text), m.sku
+                 ORDER BY MIN(m.fecha) DESC""", (tid, desde))
+            filas = [{"canal": r[0], "orden": r[1], "sku": r[2], "producto": r[3],
+                      "unidades_no_devueltas": int(r[4] or 0), "fecha_venta": r[5]}
+                     for r in cur.fetchall()]
+        conn.commit()
+    finally:
+        release_conn(conn)
+    return jsonify({"dias": dias, "total": len(filas),
+                    "nota": ("Ventas canceladas cuyo stock no volvio a CENTRAL. No se corrige solo: "
+                             "si esas unidades estan fisicamente en bodega, se ingresan con una entrada."),
+                    "cancelaciones": filas})
+
+
 @app.route("/admin/lusync/auditoria-ordenes")
 def auditoria_ordenes_limbo():
     """Audita qué órdenes de cada marketplace NO están registradas en Lusync.
