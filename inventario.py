@@ -3523,9 +3523,13 @@ def asegurar_bodegas_cliente(tenant_id):
     conn = get_conn(tenant_id=int(tenant_id)); cur = conn.cursor()
     try:
         for i, (codigo, nombre, tipo, canal) in enumerate(BODEGAS_DEFAULT):
+            # DO UPDATE de tipo y canal: si CENTRAL quedara alguna vez con un
+            # tipo distinto de 'propia', el stock propio daria 0 y se publicaria
+            # 0 en todos los canales. Se fuerza el tipo correcto.
             cur.execute("""INSERT INTO bodegas (codigo, nombre, tipo, canal, orden, tenant_id)
                            VALUES (%s, %s, %s, %s, %s, %s)
-                           ON CONFLICT (tenant_id, codigo) DO NOTHING""",
+                           ON CONFLICT (tenant_id, codigo) DO UPDATE SET
+                               tipo = EXCLUDED.tipo, canal = EXCLUDED.canal""",
                         (codigo, nombre, tipo, canal, i, int(tenant_id)))
         conn.commit()
     except Exception as e:
@@ -3568,18 +3572,9 @@ def init_bodegas():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_stock_bodega_sku ON stock_bodega(sku)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_stock_bodega_codigo ON stock_bodega(bodega_codigo)")
 
-        # Insertar/corregir bodegas default. Usamos DO UPDATE (no DO NOTHING) para
-        # que el tipo y canal SIEMPRE queden correctos: si CENTRAL quedó alguna vez
-        # con tipo distinto de 'propia', el sync de stock publicaría 0 a los canales
-        # (bug de stock fantasma). Forzar el tipo correcto aquí lo previene de raíz.
-        for i, (codigo, nombre, tipo, canal) in enumerate(BODEGAS_DEFAULT):
-            cur.execute("""INSERT INTO bodegas (codigo, nombre, tipo, canal, orden)
-                           VALUES (%s, %s, %s, %s, %s)
-                           ON CONFLICT (tenant_id, codigo) DO UPDATE SET
-                               tipo = EXCLUDED.tipo,
-                               canal = EXCLUDED.canal""",
-                        (codigo, nombre, tipo, canal, i))
-
+        # Las bodegas de cada cliente las crea asegurar_bodegas_cliente, con el
+        # cliente en la conexion (aca, sin cliente, RLS rechazaba el INSERT:
+        # "new row violates row-level security policy for table bodegas").
         # Agregar columna bodega_codigo a movimientos si no existe
         cur.execute("ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS bodega_codigo TEXT DEFAULT 'CENTRAL'")
 
@@ -3600,23 +3595,16 @@ def init_bodegas():
 
         conn.commit()
 
-        # MIGRACIÓN: copiar stock actual de productos a Bodega Central
-        cur.execute("""SELECT sku, stock FROM productos WHERE stock > 0""")
-        productos = cur.fetchall()
-        migrados = 0
-        for sku, stock in productos:
-            cur.execute("""INSERT INTO stock_bodega (sku, bodega_codigo, cantidad)
-                           VALUES (%s, 'CENTRAL', %s)
-                           ON CONFLICT (tenant_id, sku, bodega_codigo) DO NOTHING""",
-                        (sku, stock or 0))
-            if cur.rowcount > 0:
-                migrados += 1
-        conn.commit()
-        if migrados > 0:
-            print(f"[Bodegas] Migrados {migrados} productos a Bodega Central")
+        # (Aca habia una migracion vieja que copiaba productos.stock a CENTRAL
+        # cuando un SKU no tenia fila en CENTRAL. productos.stock es el TOTAL
+        # con Full incluido, y a veces estaba inflado: habria creado stock
+        # fantasma en CENTRAL. No corria solo porque el INSERT de bodegas de
+        # arriba fallaba antes por RLS. Se quito el 11/10/2026.)
     except Exception as e:
         print(f"[Bodegas] init error: {e}"); conn.rollback()
     cur.close(); release_conn(conn)
+    # Bodegas del cliente dueño, con su cliente en la conexion.
+    asegurar_bodegas_cliente(int(os.environ.get("LUSYNC_TENANT_INTEGRACIONES", "1")))
 
 
 def listar_bodegas(solo_activas=True):

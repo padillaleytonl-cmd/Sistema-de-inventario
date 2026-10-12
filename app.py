@@ -6475,9 +6475,8 @@ def _sync_paris_automatico():
         import gc; gc.collect()
         # Los estados de envio de Paris no estan documentados: se dejan a la
         # vista para revisar que la tarjeta los interpreta bien.
-        # Resumen para confirmar que significa cada statusId de Paris.
-        for _clave, _n in sorted(_muestra_paris.items()):
-            print(f"[Despachos] Paris {_clave}: {_n} ordenes")
+        # (El resumen por statusId de Paris se uso para deducir la regla de
+        # despacho: 8/CREATED = por despachar; con fecha de despacho = salio.)
         print(f"[Scheduler Paris] Sync OK — nuevas:{nuevas} canceladas:{canceladas} errores:{len(errores)}")
         if errores:
             print(f"[Scheduler Paris] Errores: {errores[:3]}")
