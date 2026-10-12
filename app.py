@@ -3404,6 +3404,51 @@ def admin_stock_pausar_descontinuados():
     return jsonify(salida)
 
 
+@app.route("/admin/lusync/meli/pausar-items")
+def admin_meli_pausar_items():
+    """Estado de publicaciones de MercadoLibre y pausa de las que siguen activas.
+    Para productos descontinuados cuya cantidad MercadoLibre no deja cambiar
+    ("available_quantity is not modifiable").
+
+      /admin/lusync/meli/pausar-items?ids=MLC1,MLC2            muestra el estado
+      /admin/lusync/meli/pausar-items?ids=MLC1,MLC2&aplicar=1  pausa las activas
+    """
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    import requests as _rq
+    from mercadolibre import meli_headers, MELI_API_URL
+    aplicar = request.args.get("aplicar") == "1"
+    ids = [i.strip().upper() for i in (request.args.get("ids") or "").split(",")
+           if i.strip().upper().startswith("MLC")]
+    if not ids:
+        return jsonify({"error": "Falta ?ids=MLC...,MLC..."}), 400
+    salida = {"modo": "APLICADO" if aplicar else "simulacion", "items": []}
+    for item_id in ids:
+        fila = {"item": item_id}
+        try:
+            r = _rq.get(f"{MELI_API_URL}/items/{item_id}", headers=meli_headers(), timeout=15)
+            if r.status_code != 200:
+                fila["error"] = f"HTTP {r.status_code}: {r.text[:200]}"
+                salida["items"].append(fila)
+                continue
+            it = r.json()
+            fila.update({"titulo": (it.get("title") or "")[:60], "estado": it.get("status"),
+                         "sub_estado": it.get("sub_status"),
+                         "cantidad": it.get("available_quantity"),
+                         "logistica": (it.get("shipping") or {}).get("logistic_type"),
+                         "catalogo": bool(it.get("catalog_listing"))})
+            if aplicar and it.get("status") == "active":
+                rp = _rq.put(f"{MELI_API_URL}/items/{item_id}", headers=meli_headers(),
+                             json={"status": "paused"}, timeout=15)
+                fila["pausa"] = "ok" if rp.status_code == 200 else f"HTTP {rp.status_code}: {rp.text[:200]}"
+                registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
+                                "meli_pausar_item", detalle=f"{item_id}: {fila['pausa']}")
+        except Exception as e:
+            fila["error"] = str(e)[:200]
+        salida["items"].append(fila)
+    return jsonify(salida)
+
+
 @app.route("/admin/lusync/stock/conteo-fisico")
 def admin_stock_conteo_fisico():
     """Busca productos y fija CENTRAL al conteo fisico.
