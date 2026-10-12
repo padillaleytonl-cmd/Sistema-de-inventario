@@ -3448,6 +3448,22 @@ def admin_cancelaciones_sin_reintegro():
                     "cancelaciones": filas})
 
 
+@app.route("/admin/lusync/falabella/completar-numeros-todo")
+def admin_falabella_completar_numeros_todo():
+    """Completa el numero que empieza con 3 en TODO el historial de Falabella,
+    en segundo plano y por tandas (ver completar-numeros).
+    Resultado en /admin/lusync/trabajo/falabella_numeros."""
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    pasos = [(f"Tanda {i + 1}", "/admin/lusync/falabella/completar-numeros?aplicar=1&limite=300")
+             for i in range(8)]
+    if not _lanzar_trabajo("falabella_numeros", pasos):
+        return jsonify({"ok": False, "estado": "ya hay uno corriendo",
+                        "ver": "/admin/lusync/trabajo/falabella_numeros"})
+    return jsonify({"ok": True, "estado": "corriendo en segundo plano",
+                    "ver_resultado": "/admin/lusync/trabajo/falabella_numeros"})
+
+
 @app.route("/admin/lusync/auditoria-ordenes")
 def auditoria_ordenes_limbo():
     """Audita qué órdenes de cada marketplace NO están registradas en Lusync.
