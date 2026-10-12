@@ -6995,11 +6995,13 @@ def _sync_woo_automatico():
                 # Parsear fecha real de compra (WooCommerce: date_created en ISO)
                 fecha_compra_woo = None
                 try:
-                    date_str = (o.get("date_created") or o.get("date_created_gmt") or "")
-                    if date_str:
-                        fecha_compra_woo = datetime.fromisoformat(
-                            str(date_str).replace("Z", "+00:00")
-                        )
+                    # date_created es hora de la tienda (Chile) y date_created_gmt
+                    # es UTC: mezclarlos corria la fecha 3 horas. _fecha_woo
+                    # usa la GMT con su zona, o la del sitio tal cual.
+                    fecha_compra_woo = _fecha_woo(o)
+                    if isinstance(fecha_compra_woo, str):
+                        fecha_compra_woo = (datetime.fromisoformat(fecha_compra_woo)
+                                            if fecha_compra_woo else None)
                 except Exception:
                     fecha_compra_woo = None
 
@@ -8810,10 +8812,9 @@ def fix_woo_movimientos():
         chile_tz = pytz.timezone('America/Santiago')  # pytz maneja UTC-3/UTC-4 automáticamente
         fecha_orden_str = o.get("date_created", "")
         try:
-            # WooCommerce devuelve fecha en UTC — convertir a Chile
-            fecha_utc = datetime.strptime(fecha_orden_str, "%Y-%m-%dT%H:%M:%S")
-            fecha_utc = pytz.utc.localize(fecha_utc)
-            fecha_chile = fecha_utc.astimezone(chile_tz)
+            # date_created ya viene en la hora de la tienda (Chile); la UTC
+            # es date_created_gmt. Tomarla como UTC la corria 3 horas.
+            fecha_chile = chile_tz.localize(datetime.strptime(fecha_orden_str, "%Y-%m-%dT%H:%M:%S"))
         except:
             fecha_chile = None
 

@@ -722,7 +722,8 @@ def falabella_sync_ordenes():
 
                     # ── Extraer fecha real de compra del marketplace ────────
                     # Falabella SellerCenter devuelve CreatedAt en formato:
-                    # "2026-05-03 14:32:15" (sin timezone, asume UTC)
+                    # "2026-05-03 14:32:15" (sin zona: hora de Chile, comprobado
+                    # contra el log del webhook el 11/10/2026)
                     # o a veces "2026-05-03T14:32:15+0000"
                     fecha_compra_falabella = None
                     try:
@@ -734,9 +735,8 @@ def falabella_sync_ordenes():
                                 date_str_clean = date_str.replace("Z", "+00:00")
                                 fecha_compra_falabella = datetime.fromisoformat(date_str_clean)
                             except ValueError:
-                                # Fallback: formato "YYYY-MM-DD HH:MM:SS" sin tz, asumir UTC
-                                fecha_naive = datetime.strptime(date_str.strip(), "%Y-%m-%d %H:%M:%S")
-                                fecha_compra_falabella = _pytz.utc.localize(fecha_naive)
+                                # "YYYY-MM-DD HH:MM:SS" sin zona: ya es hora de Chile
+                                fecha_compra_falabella = datetime.strptime(date_str.strip(), "%Y-%m-%d %H:%M:%S")
                     except Exception as e:
                         log.append(f"  Orden {order_id}: no se pudo parsear CreatedAt: {e}")
                         fecha_compra_falabella = None
@@ -1097,8 +1097,8 @@ def procesar_webhook_orden_creada(data):
                 try:
                     fecha_compra_falabella = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
                 except ValueError:
-                    fecha_naive = datetime.strptime(date_str.strip(), "%Y-%m-%d %H:%M:%S")
-                    fecha_compra_falabella = _pytz.utc.localize(fecha_naive)
+                    # Sin zona: ya es hora de Chile, nunca UTC
+                    fecha_compra_falabella = datetime.strptime(date_str.strip(), "%Y-%m-%d %H:%M:%S")
         except Exception as e:
             print(f"[Falabella WEBHOOK] No se pudo parsear CreatedAt: {e}")
 
