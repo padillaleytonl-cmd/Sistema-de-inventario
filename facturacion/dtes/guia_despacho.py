@@ -50,8 +50,9 @@ y ANTES de <Totales>. Orden EXACTO de sub-campos según manual 2.5:
   <Patente>       (67) placa patente vehículo
   <PatenteCarro>  (nuevo) placa carro/remolque (opcional)
   <RUTTrans>      (68) RUT transportista (si ≠ emisor)
-  <RUTChofer>     (69) RUT chofer
-  <NombreChofer>  (70) nombre chofer
+  <Chofer>        agrupa los dos siguientes (asi lo pide el XSD)
+    <RUTChofer>     (69) RUT chofer
+    <NombreChofer>  (70) nombre chofer
   <DirDest>       (71) dirección destino
   <CmnaDest>      (72) comuna destino
   <CiudadDest>    (73) ciudad destino (opcional)
@@ -248,13 +249,18 @@ def _construir_transporte_xml(transporte: Optional[Dict]) -> str:
     if rut_trans:
         partes.append(f'<RUTTrans>{_escape_xml(rut_trans)}</RUTTrans>')
 
+    # En el XSD el RUT y el nombre del chofer van DENTRO de <Chofer>, y los dos
+    # son obligatorios ahi. Sueltos, el SII rechaza la guia con "Error en Schema"
+    # (folio 156, 01/10/2026). Con uno solo, el bloque no se puede armar.
     rut_chofer = _normalizar_rut(_v('rut_chofer'))
-    if rut_chofer:
-        partes.append(f'<RUTChofer>{_escape_xml(rut_chofer)}</RUTChofer>')
-
     nombre_chofer = _v('nombre_chofer', 30)
-    if nombre_chofer:
-        partes.append(f'<NombreChofer>{_escape_xml(nombre_chofer)}</NombreChofer>')
+    if rut_chofer and nombre_chofer:
+        partes.append('<Chofer>'
+                      f'<RUTChofer>{_escape_xml(rut_chofer)}</RUTChofer>'
+                      f'<NombreChofer>{_escape_xml(nombre_chofer)}</NombreChofer>'
+                      '</Chofer>')
+    elif rut_chofer or nombre_chofer:
+        raise ValueError("Para el chofer hay que indicar el RUT y el nombre (el SII exige los dos).")
 
     dir_dest = _v('dir_dest', 70)
     if dir_dest:

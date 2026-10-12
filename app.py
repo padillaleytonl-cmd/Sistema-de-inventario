@@ -32241,13 +32241,11 @@ def facturacion_boleta_preview():
                 _partes += f"<Patente>{_esc_xml_preview(_tr['patente'])}</Patente>"
             if _tr.get("rut_transportista"):
                 _partes += f"<RUTTrans>{_esc_xml_preview(_tr['rut_transportista'])}</RUTTrans>"
-            if _tr.get("rut_chofer") or _tr.get("nombre_chofer"):
-                _partes += "<Chofer>"
-                if _tr.get("rut_chofer"):
-                    _partes += f"<RUTChofer>{_esc_xml_preview(_tr['rut_chofer'])}</RUTChofer>"
-                if _tr.get("nombre_chofer"):
-                    _partes += f"<NombreChofer>{_esc_xml_preview(_tr['nombre_chofer'])}</NombreChofer>"
-                _partes += "</Chofer>"
+            if _tr.get("rut_chofer") and _tr.get("nombre_chofer"):
+                _partes += ("<Chofer>"
+                            f"<RUTChofer>{_esc_xml_preview(_tr['rut_chofer'])}</RUTChofer>"
+                            f"<NombreChofer>{_esc_xml_preview(_tr['nombre_chofer'])}</NombreChofer>"
+                            "</Chofer>")
             if _tr.get("dir_dest"):
                 _partes += f"<DirDest>{_esc_xml_preview(_tr['dir_dest'])}</DirDest>"
             if _tr.get("cmna_dest"):
