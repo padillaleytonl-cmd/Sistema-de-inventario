@@ -16,6 +16,28 @@ def _woo_auth():
 # la publicacion de stock (y el hilo que la hacia).
 _TIMEOUT = 15
 
+# Errores temporales de la tienda: el hosting responde 503 seguido (11/10/2026)
+# y una publicacion que fallaba ahi dejaba la tienda con el stock viejo.
+_REINTENTABLES = (429, 502, 503, 504)
+
+
+def _pedir(metodo, url, **kw):
+    """requests.get/put con hasta 3 intentos ante un error temporal de la tienda."""
+    import time
+    r = None
+    for espera in (0, 3, 8):
+        if espera:
+            time.sleep(espera)
+        try:
+            r = requests.request(metodo, url, timeout=_TIMEOUT, **kw)
+        except requests.exceptions.RequestException:
+            if espera == 8:
+                raise
+            continue
+        if r.status_code not in _REINTENTABLES:
+            return r
+    return r
+
 
 def _skus_web(sku):
     """SKU(s) con que el producto esta en la tienda. Igual que los demas
@@ -89,8 +111,7 @@ def _publicar_sku_web(sku, sku_web, stock):
     """
     log = []
     try:
-        res = requests.get(_woo_api() + "/products", params={**_woo_auth(), "sku": sku_web},
-                           timeout=_TIMEOUT)
+        res = _pedir("GET", _woo_api() + "/products", params={**_woo_auth(), "sku": sku_web})
         if res.status_code != 200:
             msg = f"buscar SKU {sku_web}: HTTP {res.status_code} {res.text[:150]}"
             print(f"[Woo Stock] {msg}")
@@ -118,8 +139,8 @@ def _publicar_sku_web(sku, sku_web, stock):
             # manage_stock=True: sin esto WooCommerce ignora la cantidad. En una
             # variacion que heredaba el stock del padre ("parent"), la deja con
             # stock propio: Lusync lleva el stock por SKU, o sea por variacion.
-            r = requests.put(url, params=_woo_auth(), timeout=_TIMEOUT,
-                             json={"manage_stock": True, "stock_quantity": stock})
+            r = _pedir("PUT", url, params=_woo_auth(),
+                       json={"manage_stock": True, "stock_quantity": stock})
             quedo = None
             try:
                 quedo = (r.json() or {}).get("stock_quantity")
