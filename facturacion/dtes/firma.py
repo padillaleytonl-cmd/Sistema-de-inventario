@@ -114,7 +114,29 @@ def _digest_sha1_b64(data: bytes) -> str:
     return base64.b64encode(h).decode("ascii")
 
 
-def firmar_documento(dte_xml: bytes, pfx_bytes: bytes, password: str, reference_uri: str) -> bytes:
+# El SII rechaza el sobre con "Error en Schema" (RSC) si una linea pasa de
+# 4090 caracteres (instructivo tecnico, CHR-00002 "Line too long"). Un DTE
+# armado en una sola linea pasa ese largo con unos 10 productos: guias 156,
+# 157 y 158 (5.915 a 6.894) rechazadas; NC 279 (2.940) aceptada. Se pone un
+# salto de linea entre etiquetas ANTES de firmar, como hace el sistema del SII.
+# Dentro del TED no: su firma (FRMT) es sobre el DD tal cual.
+LARGO_MAXIMO_LINEA_SII = 4090
+
+
+def con_saltos_de_linea(dte_xml: bytes) -> bytes:
+    """Un salto de linea entre cada par de etiquetas, salvo dentro del <TED>.
+    Solo toca el espacio entre etiquetas: el texto de los campos no cambia
+    (los nombres van escapados, asi que un '>' nunca queda pegado a una '<')."""
+    import re as _re
+    s = dte_xml.decode("iso-8859-1")
+    partes = _re.split(r"(<TED\b.*?</TED>)", s, flags=_re.S)
+    for i in range(0, len(partes), 2):
+        partes[i] = _re.sub(r">(?=<)", ">\n", partes[i])
+    return "".join(partes).encode("iso-8859-1")
+
+
+def firmar_documento(dte_xml: bytes, pfx_bytes: bytes, password: str, reference_uri: str,
+                     saltos_de_linea: bool = False) -> bytes:
     """Firma un nodo <Documento> dentro de un <DTE> con XMLDSig enveloped.
 
     Args:
@@ -129,6 +151,10 @@ def firmar_documento(dte_xml: bytes, pfx_bytes: bytes, password: str, reference_
     private_key, cert, cert_b64, mod_b64, exp_b64 = cargar_pfx(pfx_bytes, password)
     cert_b64 = _b64_multilinea(cert_b64)
     mod_b64 = _b64_multilinea(mod_b64)
+
+    # Lineas cortas para el SII (ver con_saltos_de_linea). Va antes del digest.
+    if saltos_de_linea:
+        dte_xml = con_saltos_de_linea(dte_xml)
 
     # Parsear el DTE
     parser = etree.XMLParser(remove_blank_text=False)

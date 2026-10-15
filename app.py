@@ -31779,7 +31779,8 @@ def facturacion_nota_credito_emitir():
 
         # 5. Firmar el documento individual + armar sobre EnvioDTE + firmar sobre
         from facturacion.dtes.firma import firmar_documento
-        nc_firmada = firmar_documento(nc_xml, cert["pfx_bytes"], cert["password"], documento_id)
+        nc_firmada = firmar_documento(nc_xml, cert["pfx_bytes"], cert["password"], documento_id,
+                                      saltos_de_linea=True)
 
         set_id = "SetDoc"
         sobre = armar_envio_dte(
@@ -32165,7 +32166,8 @@ def facturacion_nota_debito_emitir():
 
         # 5. Firmar el documento individual + armar sobre EnvioDTE + firmar sobre
         from facturacion.dtes.firma import firmar_documento
-        nc_firmada = firmar_documento(nc_xml, cert["pfx_bytes"], cert["password"], documento_id)
+        nc_firmada = firmar_documento(nc_xml, cert["pfx_bytes"], cert["password"], documento_id,
+                                      saltos_de_linea=True)
 
         set_id = "SetDoc"
         sobre = armar_envio_dte(
@@ -32941,6 +32943,11 @@ def facturacion_validar_esquema(boleta_id):
         datos = datos.replace(b'<DTE version="1.0">', b'<DTE xmlns="http://www.sii.cl/SiiDte" version="1.0">', 1)
         doc = _et.fromstring(datos)
     salida = {"ok": True, "que": que, "tipo_dte": tipo, "folio": row[3], "esquemas": {}}
+    # El SII rechaza (RSC) una linea de mas de 4090 caracteres aunque el XML
+    # cumpla el esquema: es lo que tumbo las guias 156 a 158.
+    _largo = max((len(l) for l in lineas), default=0)
+    salida["linea_mas_larga"] = _largo
+    salida["largo_ok"] = _largo <= 4090
     for version in ("2011", "2026"):
         try:
             xsd = _esquema_sii(version, raiz)
@@ -33975,7 +33982,8 @@ def facturacion_factura_emitir():
         paso("Generar Factura", True, "Total " + str(total))
 
         # 5. Firmar documento + sobre
-        fac_firmada = firmar_documento(fac_xml, cert["pfx_bytes"], cert["password"], documento_id)
+        fac_firmada = firmar_documento(fac_xml, cert["pfx_bytes"], cert["password"], documento_id,
+                                      saltos_de_linea=True)
         set_id = "SetDoc"
         sobre = armar_envio_dte(
             dtes_firmados=[fac_firmada], rut_emisor=emisor["rut"], rut_envia=rut_envia,
@@ -34219,7 +34227,8 @@ def facturacion_guia_emitir():
         paso("Generar Guía de Despacho", True, "Total " + str(total))
 
         # 5. Firmar documento + sobre
-        guia_firmada = firmar_documento(guia_xml, cert["pfx_bytes"], cert["password"], documento_id)
+        guia_firmada = firmar_documento(guia_xml, cert["pfx_bytes"], cert["password"], documento_id,
+                                      saltos_de_linea=True)
         set_id = "SetDoc"
         sobre = armar_envio_dte(
             dtes_firmados=[guia_firmada], rut_emisor=emisor["rut"], rut_envia=rut_envia,
