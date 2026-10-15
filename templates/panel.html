@@ -14596,7 +14596,9 @@ function dtTab(tab, btn){
   btn.style.color='var(--text)'; btn.style.borderBottom='2px solid #059669';
   document.querySelectorAll('.dt-pane').forEach(p=>p.style.display='none');
   document.getElementById('dt-pane-'+tab).style.display='block';
-  if(tab==='emitir' && !document.querySelector('.dt-item')) dtAddItem();
+  // Solo si la tabla de productos esta en pantalla: con el asistente en otro
+  // paso no existe, y dtAddItem fallaba ("reading 'appendChild'").
+  if(tab==='emitir' && document.getElementById('dtItems') && !document.querySelector('.dt-item')) dtAddItem();
   if(tab==='folios') dtCargarFolios();
 }
 // Garantizar primera fila apenas el panel existe en el DOM
