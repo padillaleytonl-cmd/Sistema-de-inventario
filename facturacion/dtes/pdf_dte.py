@@ -417,15 +417,34 @@ def _filas_totales(t: dict) -> int:
     return filas
 
 
-def _base_totales(d: dict, etiqueta_copia: str) -> float:
-    """Altura de la ultima linea del total: justo encima de lo que va abajo
-    (referencias / acuse de recibo / timbre)."""
-    info = d['info']
-    con_acuse = bool(info.get('acuse') and etiqueta_copia)
-    con_ref = bool(info['referencia'] and d['referencias'])
-    if con_acuse:
-        return (11.5 if con_ref else 9.5) * cm
-    return 7.1 * cm
+# Pie de la ultima hoja, igual en las dos copias: timbre abajo a la
+# izquierda; acuse de recibo (solo cedible) abajo a la derecha, al lado del
+# timbre; el total encima del acuse. Antes el acuse iba a lo ancho y en la
+# cedible cabian 13 lineas en vez de 18 (14/10/2026).
+_BASE_TOTALES = 5.3 * cm
+_ACUSE_ANCHO = 9.2 * cm
+_ACUSE_ALTO = 2.8 * cm
+_PIE_Y = 1.9 * cm
+
+
+def _base_totales(d: dict, etiqueta_copia: str = "") -> float:
+    """Altura de la ultima linea del total (la misma en las dos copias)."""
+    return _BASE_TOTALES
+
+
+def _lineas_referencias(d: dict) -> int:
+    if not (d['info']['referencia'] and d['referencias']):
+        return 0
+    return 1 + sum(2 if r.get('razon_ref') else 1 for r in d['referencias'])
+
+
+def _tope_pie(d: dict) -> float:
+    """Altura hasta donde llega el pie (total y referencias) en la ultima hoja."""
+    tope = _BASE_TOTALES + (_filas_totales(d['totales']) - 1) * 0.5 * cm + 0.3 * cm
+    n_ref = _lineas_referencias(d)
+    if n_ref:
+        tope += 0.3 * cm + n_ref * 0.35 * cm
+    return tope
 
 
 def _paginar_items(items: list, alto_disponible: float, alto_ultima: float) -> list:
@@ -761,36 +780,24 @@ def _dibujar_pie_carta(c, d: dict, etiqueta_copia: str):
     x = 2 * cm
     info = d['info']
 
-    # ── Bloque REFERENCIA ──
-    if info['referencia'] and d['referencias']:
-        # El acuse de recibo ocupa la franja 6.4–9.0cm a lo ancho completo.
-        # La referencia va por encima de esa franja cuando hay acuse.
-        # El acuse SOLO existe en la copia cedible (Manual Muestras: prohibido
-        # en muestras no cedibles), así que solo reservamos espacio si esta
-        # copia es cedible.
-        if info.get('acuse') and etiqueta_copia:
-            y_ref = 11.0 * cm   # arranca bien arriba del acuse
-            tope = 9.4 * cm     # no bajar al acuse
-        else:
-            y_ref = 6.6 * cm
-            tope = 4.0 * cm
+    # ── Bloque REFERENCIA (a lo ancho, encima del total) ──
+    if _lineas_referencias(d):
+        y_ref = _tope_pie(d) - 0.3 * cm
         c.setFont("Helvetica-Bold", 8)
         c.drawString(x, y_ref, "Referencia:")
         c.setFont("Helvetica", 8)
-        y_ref -= 0.4 * cm
+        y_ref -= 0.35 * cm
         for r in d['referencias']:
-            if y_ref < tope:
-                break
             linea = f"{r['tpo_doc_ref_nombre']} N° {r['folio_ref']}"
             if r['fecha_ref']:
                 linea += f" del {r['fecha_ref']}"
             if r['cod_ref_glosa']:
                 linea += f" — {r['cod_ref_glosa']}"
-            c.drawString(x, y_ref, linea[:90])
+            c.drawString(x, y_ref, linea[:100])
             y_ref -= 0.35 * cm
-            if r['razon_ref'] and y_ref >= tope:
+            if r['razon_ref']:
                 c.setFont("Helvetica-Oblique", 8)
-                c.drawString(x + 0.3 * cm, y_ref, f"Motivo: {r['razon_ref'][:80]}")
+                c.drawString(x + 0.3 * cm, y_ref, f"Motivo: {r['razon_ref'][:90]}")
                 c.setFont("Helvetica", 8)
                 y_ref -= 0.35 * cm
 
@@ -801,42 +808,28 @@ def _dibujar_pie_carta(c, d: dict, etiqueta_copia: str):
     # debe agregarse en las muestras NO cedibles. Por eso solo se dibuja cuando
     # esta copia es la CEDIBLE (etiqueta_copia con valor).
     if info.get('acuse') and etiqueta_copia:
-        ar_x = x                      # margen izquierdo del contenido
-        ar_w = W - 4 * cm             # ancho completo (de margen a margen)
-        ar_h = 2.6 * cm
-        ar_y = 6.4 * cm               # por encima del timbre (timbre llega a ~5.8cm)
+        ar_w, ar_h = _ACUSE_ANCHO, _ACUSE_ALTO
+        ar_x, ar_y = W - 2 * cm - ar_w, _PIE_Y
         c.setStrokeColorRGB(0.35, 0.35, 0.35)
         c.setLineWidth(0.8)
         c.rect(ar_x, ar_y, ar_w, ar_h)
-        # Título
-        c.setFont("Helvetica-Bold", 9)
-        c.drawString(ar_x + 0.3 * cm, ar_y + ar_h - 0.5 * cm, "Acuse de Recibo")
-        # Texto legal (ancho completo, una/dos líneas)
-        c.setFont("Helvetica", 7)
+        c.setFont("Helvetica-Bold", 8)
+        c.drawString(ar_x + 0.25 * cm, ar_y + ar_h - 0.4 * cm, "Acuse de Recibo")
         texto_ley = ("El acuse de recibo que se declara en este acto, de acuerdo a lo dispuesto en la "
                      "letra b) del Art. 4°, y la letra c) del Art. 5° de la Ley 19.983, acredita que la "
                      "entrega de mercaderías o servicio(s) prestado(s) ha(n) sido recibido(s).")
-        palabras = texto_ley.split()
-        linea = ""
-        ty = ar_y + ar_h - 0.85 * cm
-        for pal in palabras:
-            if len(linea) + len(pal) + 1 > 120:
-                c.drawString(ar_x + 0.3 * cm, ty, linea)
-                ty -= 0.32 * cm
-                linea = pal
-            else:
-                linea = (linea + " " + pal).strip()
-        if linea:
-            c.drawString(ar_x + 0.3 * cm, ty, linea)
-        # Campos de firma distribuidos en el ancho
-        c.setFont("Helvetica", 8)
-        fy1 = ar_y + 0.8 * cm
-        fy2 = ar_y + 0.3 * cm
-        c.drawString(ar_x + 0.3 * cm, fy1, "Nombre: ______________________________")
-        c.drawString(ar_x + 8.5 * cm, fy1, "R.U.T.: __________________")
-        c.drawString(ar_x + 13.0 * cm, fy1, "Fecha: ____________")
-        c.drawString(ar_x + 0.3 * cm, fy2, "Recinto: ______________________________")
-        c.drawString(ar_x + 8.5 * cm, fy2, "Firma: ________________________________")
+        ty = ar_y + ar_h - 0.68 * cm
+        c.setFont("Helvetica", 6)
+        for linea in _wrap_ancho(texto_ley, ar_w - 0.5 * cm, "Helvetica", 6):
+            c.drawString(ar_x + 0.25 * cm, ty, linea)
+            ty -= 0.23 * cm
+        c.setFont("Helvetica", 7)
+        col2 = ar_x + 5.2 * cm
+        c.drawString(ar_x + 0.25 * cm, ar_y + 1.0 * cm, "Nombre: ______________________")
+        c.drawString(col2, ar_y + 1.0 * cm, "R.U.T.: ______________")
+        c.drawString(ar_x + 0.25 * cm, ar_y + 0.58 * cm, "Recinto: _____________________")
+        c.drawString(col2, ar_y + 0.58 * cm, "Fecha: _______________")
+        c.drawString(ar_x + 0.25 * cm, ar_y + 0.16 * cm, "Firma: ____________________________________________")
         c.setStrokeColorRGB(0, 0, 0)
 
     # ── Timbre PDF417 (abajo a la izquierda, ≥2cm del borde) ──
@@ -859,7 +852,7 @@ def _dibujar_pie_carta(c, d: dict, etiqueta_copia: str):
         # Leyenda de destino (solo copia cedible), zona inferior derecha
         if etiqueta_copia:
             c.setFont("Helvetica-Bold", 13)
-            c.drawRightString(W - 2 * cm, 2.6 * cm, etiqueta_copia)
+            c.drawRightString(W - 2 * cm, 1.25 * cm, etiqueta_copia)
     else:
         tw, th = 8 * cm, 4 * cm
         c.setStrokeColorRGB(0.7, 0.7, 0.7); c.setLineWidth(0.7)
@@ -873,6 +866,9 @@ def _dibujar_pie_carta(c, d: dict, etiqueta_copia: str):
         c.setFont("Helvetica", 6.5)
         _res_fecha = d.get('fch_resol') or str(d.get('anio_resol', RESOLUCION_ANIO))
         c.drawString(x, 1.55 * cm, f"Res.{d.get('nro_resol', RESOLUCION_NRO)} de {_res_fecha}. Verifique el documento en: www.sii.cl")
+        if etiqueta_copia:
+            c.setFont("Helvetica-Bold", 13)
+            c.drawRightString(W - 2 * cm, 1.25 * cm, etiqueta_copia)
 
 
 def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""):
@@ -882,9 +878,11 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
     W, H = letter
     # La cabecera es la misma en todas las paginas: se mide en un lienzo aparte
     y_inicio = _encabezado_carta(canvas.Canvas(io.BytesIO(), pagesize=letter), d)
-    base = _base_totales(d, etiqueta_copia)
-    tope_total = base + (_filas_totales(d['totales']) - 1) * 0.5 * cm + 0.75 * cm
-    paginas = _paginar_items(d['items'], y_inicio - _LIMITE_CONTINUA, y_inicio - tope_total)
+    base = _base_totales(d)
+    # El pie es igual en las dos copias, asi que el detalle se reparte igual
+    # (mismas lineas en cada hoja de la original y de la cedible).
+    paginas = _paginar_items(d['items'], y_inicio - _LIMITE_CONTINUA,
+                             y_inicio - _tope_pie(d) - 0.45 * cm)
     n = len(paginas)
     for i, items in enumerate(paginas):
         if i:
