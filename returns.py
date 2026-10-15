@@ -683,6 +683,46 @@ def obtener_devoluciones_paris(dias=30):
 # ─────────────────────────────────────────────────────────────────────────────
 # FALABELLA (Seller Center)
 # ─────────────────────────────────────────────────────────────────────────────
+def _ordenes_falabella_por_tramos(estado, dias, tramo_dias=20):
+    """GetOrders de un estado en los ultimos `dias`, pedido en tramos.
+
+    Falabella no entrega toda la ventana: pedidas desde el 17/07, las
+    "returned" llegaban solo hasta el 05/09 (unas 7 semanas desde la fecha
+    pedida). Con 90 dias de una vez, toda devolucion de una orden de los
+    ultimos ~40 dias quedaba fuera (orden 3255284318, oct-2026). Se pide de a
+    20 dias con CreatedAfter/CreatedBefore y se pagina cada tramo.
+    """
+    from falabella import llamar_api_falabella
+    fin = datetime.utcnow() + timedelta(days=1)
+    desde = fin - timedelta(days=int(dias) + 1)
+    salida = []
+    while desde < fin:
+        hasta = min(desde + timedelta(days=tramo_dias), fin)
+        offset = 0
+        while True:
+            res = llamar_api_falabella("GetOrders", params_extra={
+                "CreatedAfter": desde.strftime("%Y-%m-%dT%H:%M:%S"),
+                "CreatedBefore": hasta.strftime("%Y-%m-%dT%H:%M:%S"),
+                "Status": estado, "Limit": 100, "Offset": offset,
+            }, method="GET", formato="JSON")
+            if not res.get("ok"):
+                print(f"[Returns Falabella] {estado} {desde:%d/%m}-{hasta:%d/%m}: {res.get('error')}")
+                break
+            body = ((res.get("data") or {}).get("SuccessResponse") or {}).get("Body") or {}
+            cont = body.get("Orders") or {}
+            lista = cont.get("Order") if isinstance(cont, dict) else cont
+            if isinstance(lista, dict):
+                lista = [lista]
+            lista = [o.get("Order", o) if isinstance(o, dict) else o for o in (lista or [])]
+            lista = [o for o in lista if isinstance(o, dict)]
+            salida.extend(lista)
+            if len(lista) < 100:
+                break
+            offset += 100
+        desde = hasta
+    return salida
+
+
 def obtener_devoluciones_falabella(dias=30):
     """Devoluciones de Falabella. No hay endpoint: son un ESTADO de la orden.
 
@@ -724,7 +764,7 @@ def obtener_devoluciones_falabella(dias=30):
         ordenes, vistas = [], set()
         for est in ESTADOS_DEV:
             try:
-                for o in (obtener_ordenes_falabella(estado=est, dias=ventana, limit=100) or []):
+                for o in _ordenes_falabella_por_tramos(est, ventana):
                     oid = str(o.get("OrderId") or "")
                     if oid and oid not in vistas:
                         vistas.add(oid)
