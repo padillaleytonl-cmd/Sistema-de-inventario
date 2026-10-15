@@ -392,9 +392,67 @@ def _generar_timbre_pdf417(ted: str) -> Optional[ImageReader]:
 # 3. Formato CARTA — una copia (tributaria o cedible)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""):
-    """Dibuja UNA copia del documento en la página actual del canvas.
-    etiqueta_copia: '' = copia tributaria (sin leyenda), 'CEDIBLE' = copia cedible."""
+# Detalle en paginas: hasta 18 lineas por hoja. Con mas, el documento sigue
+# en otra pagina con la misma cabecera; el total, las referencias, el acuse y
+# el timbre van en la ultima. Antes, cuando se acababa el espacio, el PDF
+# dejaba de dibujar productos sin avisar y el total quedaba encima de las
+# ultimas lineas (guia de despacho, 14/10/2026).
+_MAX_LINEAS_PAGINA = 18
+_FILA_ITEM = 0.45 * cm
+_FILA_DESC = 0.38 * cm
+_LIMITE_CONTINUA = 6.6 * cm   # pagina que sigue: el detalle llega hasta aca
+
+
+def _alto_item(it) -> float:
+    return _FILA_ITEM + (_FILA_DESC if it.get('descripcion') else 0)
+
+
+def _filas_totales(t: dict) -> int:
+    filas = 1  # TOTAL
+    for k in ('neto', 'exento', 'iva', 'monto_reten'):
+        if t.get(k) and t[k] not in ('', '0'):
+            filas += 1
+    if t.get('moneda') and t['moneda'] not in ('', 'PESO CL') and t.get('total_otra_moneda'):
+        filas += 1
+    return filas
+
+
+def _base_totales(d: dict, etiqueta_copia: str) -> float:
+    """Altura de la ultima linea del total: justo encima de lo que va abajo
+    (referencias / acuse de recibo / timbre)."""
+    info = d['info']
+    con_acuse = bool(info.get('acuse') and etiqueta_copia)
+    con_ref = bool(info['referencia'] and d['referencias'])
+    if con_acuse:
+        return (11.5 if con_ref else 9.5) * cm
+    return 7.1 * cm
+
+
+def _paginar_items(items: list, alto_disponible: float, alto_ultima: float) -> list:
+    """Reparte los items en paginas: hasta 18 por hoja y lo que quepa en
+    alto. La ultima pagina tiene menos alto porque lleva el total."""
+    paginas, actual, usado = [], [], 0.0
+    for it in items:
+        h = _alto_item(it)
+        if actual and (len(actual) >= _MAX_LINEAS_PAGINA or usado + h > alto_disponible):
+            paginas.append(actual)
+            actual, usado = [], 0.0
+        actual.append(it)
+        usado += h
+    paginas.append(actual)
+    # Si la ultima no deja lugar al total, sus ultimos items pasan a otra hoja
+    while len(paginas[-1]) > 1 and sum(_alto_item(i) for i in paginas[-1]) > alto_ultima:
+        ultima = paginas[-1]
+        sobrantes = []
+        while len(ultima) > 1 and sum(_alto_item(i) for i in ultima) > alto_ultima:
+            sobrantes.insert(0, ultima.pop())
+        paginas.append(sobrantes)
+    return paginas
+
+
+def _encabezado_carta(c, d: dict, pagina: int = 1, total_paginas: int = 1) -> float:
+    """Recuadro SII, emisor, receptor, transporte y cabecera de la tabla.
+    Devuelve la altura donde va la primera linea del detalle."""
     W, H = letter
     em = d['emisor']
     info = d['info']
@@ -467,6 +525,9 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
     y = rec_y - 0.8 * cm
     c.setFont("Helvetica-Bold", 9)
     c.drawString(x, y, f"Fecha Emisión: {d['fch_emis']}")
+    if total_paginas > 1:
+        c.setFont("Helvetica", 9)
+        c.drawRightString(W - 2 * cm, y, f"Página {pagina} de {total_paginas}")
 
     # ── Bloque RECEPTOR (dentro de un recuadro) ──
     rec = d['receptor']
@@ -629,28 +690,37 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
     c.drawString(col_qty, y, "Cant.")
     c.drawString(col_prc, y, "P. Unit.")
     c.drawRightString(col_tot, y, "Monto")
-    y -= 0.7 * cm
+    return y - 0.65 * cm
 
-    c.setFont("Helvetica", 9)
-    for it in d['items']:
-        nombre = (it['nombre'] or '')[:50]
+
+def _dibujar_items(c, items: list, y: float) -> float:
+    """Dibuja las lineas del detalle desde y. Devuelve donde quedo."""
+    W, H = letter
+    x = 2 * cm
+    col_desc, col_qty, col_prc, col_tot = x + 0.2 * cm, x + 9 * cm, x + 12 * cm, W - 2 * cm
+    c.setFont("Helvetica", 8.5)
+    for it in items:
+        nombre = (it['nombre'] or '')[:52]
         if it.get('exento'):
             nombre += " (E)"
         c.drawString(col_desc, y, nombre)
         c.drawString(col_qty, y, it['cantidad'])
         c.drawString(col_prc, y, _miles(it['precio']) if it['precio'] else '')
         c.drawRightString(col_tot, y, _miles(it['monto']))
-        y -= 0.55 * cm
+        y -= _FILA_ITEM
         if it.get('descripcion'):
-            c.setFont("Helvetica-Oblique", 8)
-            c.drawString(col_desc + 0.3 * cm, y, it['descripcion'][:60])
-            c.setFont("Helvetica", 9)
-            y -= 0.45 * cm
-        if y < 7 * cm:
-            break
+            c.setFont("Helvetica-Oblique", 7.5)
+            c.drawString(col_desc + 0.3 * cm, y + 0.07 * cm, it['descripcion'][:64])
+            c.setFont("Helvetica", 8.5)
+            y -= _FILA_DESC
+    return y
 
-    # ── Totales ──
-    y = max(y, 7.5 * cm)
+
+def _dibujar_totales(c, d: dict, base: float):
+    """El bloque de totales, con su ultima linea (TOTAL) en `base`."""
+    W, H = letter
+    t = d['totales']
+    y = base + (_filas_totales(t) - 1) * 0.5 * cm
     tx = W - 7 * cm
     c.setLineWidth(0.5)
     c.line(tx, y + 0.3 * cm, W - 2 * cm, y + 0.3 * cm)
@@ -683,6 +753,13 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
         c.setFont("Helvetica", 8)
         c.drawString(tx, y, "Total (CLP):")
         c.drawRightString(W - 2 * cm, y, f"$ {_miles(t['total_otra_moneda'])}")
+
+
+def _dibujar_pie_carta(c, d: dict, etiqueta_copia: str):
+    """Referencias, acuse de recibo y timbre: solo en la ultima pagina."""
+    W, H = letter
+    x = 2 * cm
+    info = d['info']
 
     # ── Bloque REFERENCIA ──
     if info['referencia'] and d['referencias']:
@@ -796,6 +873,32 @@ def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""
         c.setFont("Helvetica", 6.5)
         _res_fecha = d.get('fch_resol') or str(d.get('anio_resol', RESOLUCION_ANIO))
         c.drawString(x, 1.55 * cm, f"Res.{d.get('nro_resol', RESOLUCION_NRO)} de {_res_fecha}. Verifique el documento en: www.sii.cl")
+
+
+def _dibujar_copia_carta(c, d: dict, url_consulta: str, etiqueta_copia: str = ""):
+    """Dibuja UNA copia del documento, en tantas paginas como haga falta.
+    etiqueta_copia: '' = copia tributaria (sin leyenda), 'CEDIBLE' = copia cedible.
+    Deja abierta la ultima pagina: el que llama hace el showPage final."""
+    W, H = letter
+    # La cabecera es la misma en todas las paginas: se mide en un lienzo aparte
+    y_inicio = _encabezado_carta(canvas.Canvas(io.BytesIO(), pagesize=letter), d)
+    base = _base_totales(d, etiqueta_copia)
+    tope_total = base + (_filas_totales(d['totales']) - 1) * 0.5 * cm + 0.75 * cm
+    paginas = _paginar_items(d['items'], y_inicio - _LIMITE_CONTINUA, y_inicio - tope_total)
+    n = len(paginas)
+    for i, items in enumerate(paginas):
+        if i:
+            c.showPage()
+        y = _encabezado_carta(c, d, i + 1, n)
+        _dibujar_items(c, items, y)
+        if i < n - 1:
+            c.setFont("Helvetica-Oblique", 8.5)
+            c.setFillColorRGB(0.4, 0.4, 0.4)
+            c.drawRightString(W - 2 * cm, _LIMITE_CONTINUA - 0.6 * cm,
+                              f"Continúa en la página {i + 2} de {n}")
+            c.setFillColorRGB(0, 0, 0)
+    _dibujar_totales(c, d, base)
+    _dibujar_pie_carta(c, d, etiqueta_copia)
 
 
 def _pdf_carta(d: dict, url_consulta: str, solo_copia: str = None) -> bytes:
