@@ -32840,6 +32840,22 @@ def consultadte_verificar():
         release_conn(conn)
 
 
+def _nombre_archivo_dte(tipo_dte, folio):
+    """Nombre de archivo segun el documento: Guia_de_Despacho_157, Factura_88...
+    Antes todo se bajaba como boleta_<id>."""
+    import unicodedata
+    nombres = {33: "Factura", 34: "Factura Exenta", 39: "Boleta", 41: "Boleta Exenta",
+               43: "Liquidacion Factura", 46: "Factura de Compra", 52: "Guia de Despacho",
+               56: "Nota de Debito", 61: "Nota de Credito", 110: "Factura de Exportacion",
+               111: "Nota de Debito de Exportacion", 112: "Nota de Credito de Exportacion"}
+    try:
+        nombre = nombres.get(int(tipo_dte), f"DTE {tipo_dte}")
+    except (TypeError, ValueError):
+        nombre = "Documento"
+    nombre = unicodedata.normalize("NFKD", nombre).encode("ascii", "ignore").decode()
+    return f"{nombre.replace(' ', '_')}_{folio}"
+
+
 @app.route("/facturacion/boleta/<int:boleta_id>/xml", methods=["GET"])
 def facturacion_boleta_xml(boleta_id):
     """Descarga el XML COMPLETO firmado, exactamente como se envió al SII."""
@@ -32859,7 +32875,7 @@ def facturacion_boleta_xml(boleta_id):
     if not row or not row[0]:
         return jsonify({"ok": False, "error": "XML no disponible"}), 404
     xml = row[0].encode("iso-8859-1", errors="replace") if isinstance(row[0], str) else row[0]
-    fname = "DTE_%s_folio_%s.xml" % (row[2], row[1])
+    fname = _nombre_archivo_dte(row[2], row[1]) + ".xml"
     return Response(xml, mimetype="application/xml",
                     headers={"Content-Disposition": 'attachment; filename="%s"' % fname})
 
@@ -33030,7 +33046,7 @@ def facturacion_boleta_pdf(boleta_id):
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT xml_firmado, tipo_dte FROM facturacion_dtes
+                SELECT xml_firmado, tipo_dte, folio FROM facturacion_dtes
                 WHERE id = %s AND tenant_id = %s
             """, (boleta_id, tenant_id))
             row = cur.fetchone()
@@ -33060,7 +33076,8 @@ def facturacion_boleta_pdf(boleta_id):
     pdf = generar_pdf_dte(xml, formato=formato, url_consulta=url_consulta,
                           datos_tenant=_datos_tenant_pdf)
     return Response(pdf, mimetype="application/pdf",
-                    headers={"Content-Disposition": 'inline; filename="boleta_' + str(boleta_id) + '.pdf"'})
+                    headers={"Content-Disposition": 'inline; filename="%s.pdf"'
+                             % _nombre_archivo_dte(row[1], row[2])})
 
 
 @app.route("/facturacion/productos/buscar", methods=["GET"])
