@@ -34135,6 +34135,36 @@ def facturacion_guia_emitir():
     })
 
 
+# Cada documento emitido deja guardado a su receptor en la base de clientes
+# del tenant (14/10/2026). Va en after_request para cubrir las cinco rutas
+# de emision en un solo lugar; si falla, el documento ya esta emitido y no
+# se toca la respuesta.
+_RUTAS_EMISION_DTE = {
+    "/facturacion/boleta/emitir", "/facturacion/factura/emitir",
+    "/facturacion/guia/emitir", "/facturacion/nota-credito/emitir",
+    "/facturacion/nota-debito/emitir",
+}
+
+
+@app.after_request
+def _recordar_cliente_emitido(resp):
+    try:
+        if (request.method == "POST" and request.path in _RUTAS_EMISION_DTE
+                and resp.status_code == 200 and resp.is_json and session.get("logged")):
+            cuerpo = resp.get_json(silent=True) or {}
+            receptor = (request.get_json(silent=True) or {}).get("receptor")
+            if cuerpo.get("ok") and receptor:
+                from inventario import get_conn, release_conn
+                from facturacion.clientes import recordar_cliente_de_documento
+                r = recordar_cliente_de_documento(get_conn, release_conn,
+                                                  session.get("tenant_id") or 1, receptor)
+                if r.get("error"):
+                    print(f"[Facturación] no se pudo guardar el cliente: {r['error']}")
+    except Exception as e:
+        print(f"[Facturación] no se pudo guardar el cliente: {str(e)[:150]}")
+    return resp
+
+
 @app.route("/facturacion/clientes", methods=["GET"])
 def facturacion_clientes_listar():
     """Lista o busca los clientes del tenant (círculo de clientes).

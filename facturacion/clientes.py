@@ -191,6 +191,53 @@ def guardar_cliente(get_conn, release_conn, tenant_id, datos: Dict) -> Dict:
         release_conn(conn)
 
 
+# RUT genericos que no son un cliente: consumidor final y el de exportacion
+_RUT_GENERICOS = {"66666666-6", "55555555-5"}
+
+
+def recordar_cliente_de_documento(get_conn, release_conn, tenant_id, receptor: Dict) -> Dict:
+    """Guarda (o completa) el receptor de un documento emitido en la base de
+    clientes del tenant, para encontrarlo la proxima vez.
+
+    A diferencia de guardar_cliente, un dato que el documento no trae NO
+    borra el que ya estaba: una boleta trae solo RUT y nombre, y no puede
+    dejar sin giro ni direccion a un cliente que ya los tenia. El telefono y
+    el correo solo se cambian a mano.
+    """
+    receptor = receptor or {}
+    rut = _normalizar_rut(receptor.get("rut", ""))
+    razon = (receptor.get("razon_social") or "").strip()
+    if not rut or not razon or rut in _RUT_GENERICOS or razon.lower() == "consumidor final":
+        return {"ok": False, "omitido": "sin cliente identificado"}
+
+    def _v(k):
+        return (str(receptor.get(k) or "")).strip() or None
+
+    conn = _conn_tenant(get_conn, tenant_id)
+    try:
+        with conn.cursor() as cur:
+            _crear_tabla(cur)
+            cur.execute(
+                "INSERT INTO facturacion_clientes "
+                "(tenant_id, rut, razon_social, giro, direccion, comuna, ciudad) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT (tenant_id, rut) DO UPDATE SET "
+                "razon_social=EXCLUDED.razon_social, "
+                "giro=COALESCE(EXCLUDED.giro, facturacion_clientes.giro), "
+                "direccion=COALESCE(EXCLUDED.direccion, facturacion_clientes.direccion), "
+                "comuna=COALESCE(EXCLUDED.comuna, facturacion_clientes.comuna), "
+                "ciudad=COALESCE(EXCLUDED.ciudad, facturacion_clientes.ciudad), "
+                "activo=TRUE, actualizado_en=NOW()",
+                (tenant_id, rut, razon, _v("giro"), _v("direccion"), _v("comuna"), _v("ciudad")))
+        conn.commit()
+        return {"ok": True}
+    except Exception as e:
+        conn.rollback()
+        return {"ok": False, "error": str(e)[:200]}
+    finally:
+        release_conn(conn)
+
+
 def eliminar_cliente(get_conn, release_conn, tenant_id, cliente_id) -> Dict:
     """Baja lógica del cliente (activo=FALSE). No borra para preservar historial."""
     conn = _conn_tenant(get_conn, tenant_id)
