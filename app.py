@@ -35196,6 +35196,7 @@ def facturacion_consultar_estado(boleta_id):
 
     estado_dte = (res.get("estado") or "").upper()
     recibido = res.get("recibido")  # "SI"/"NO" en la consulta avanzada
+    envio_info = None
     # Mapear el estado a estado interno
     # DOK = recibido y datos OK (aceptado) | DNK = recibido, datos no coinciden
     # FAU = no recibido | FAN/FNA = no autorizado | RCT/RCH = rechazado
@@ -35211,6 +35212,38 @@ def facturacion_consultar_estado(boleta_id):
                                           "calcen con lo emitido." % folio)
     elif estado_dte in ("FAU",):
         nuevo_estado, glosa = "en_proceso", "El SII aún no registra este documento (puede estar procesándose)"
+        # FAU puede ser "todavia no" o "el SII rechazo el sobre": en ese caso
+        # el documento nunca se registra y FAU sigue para siempre. El estado
+        # del ENVIO (getEstUp) dice cual de las dos es (guias de agosto, RSC).
+        if track_id and int(tipo_dte) not in (39, 41):
+            try:
+                from facturacion.dtes.sii_client import consultar_estado_envio_dte
+                env = consultar_estado_envio_dte(
+                    pfx_bytes=cert["pfx_bytes"], password=cert["password"],
+                    rut_emisor=config["rut_emisor"], track_id=str(track_id), ambiente=ambiente)
+                _st = env.get("estadisticas") or {}
+                _est_env = (env.get("estado") or "").upper()
+                envio_info = {"estado": _est_env, "glosa": env.get("glosa"), "estadisticas": _st,
+                              "errores": (env.get("errores") or [])[:10]}
+                try:
+                    _rech = int(_st.get("rechazados") or 0)
+                    _acep = int(_st.get("aceptados") or 0)
+                    _reps = int(_st.get("reparos") or 0)
+                except (TypeError, ValueError):
+                    _rech = _acep = _reps = 0
+                if _rech:
+                    nuevo_estado, glosa = "rechazado", "El SII rechazó el documento en el envío"
+                elif _reps:
+                    nuevo_estado, glosa = "aceptado_reparos", "Aceptado con reparos por el SII"
+                elif _acep:
+                    nuevo_estado, glosa = "aceptado", "Aceptado por el SII"
+                elif _est_env in ("RSC", "RFR", "RCT", "RCH", "RPT", "RCO", "RCS", "VOF", "PRD"):
+                    nuevo_estado = "rechazado"
+                    glosa = "El SII rechazó el envío (%s): %s" % (_est_env, env.get("glosa") or "")
+                elif _est_env:
+                    glosa = "Envío en el SII: %s %s" % (_est_env, env.get("glosa") or "")
+            except Exception as e_env:
+                envio_info = {"error": str(e_env)[:300]}
     elif estado_dte in ("FAN", "FNA"):
         nuevo_estado, glosa = "rechazado", "Documento no autorizado por el SII"
     elif estado_dte in ("RCT", "RCH", "RFR", "RSC"):
@@ -35220,11 +35253,11 @@ def facturacion_consultar_estado(boleta_id):
     else:
         nuevo_estado, glosa = "en_proceso", res.get("glosa") or ("Estado SII: " + estado_dte)
 
-    es_aceptada = nuevo_estado == "aceptado"
+    es_aceptada = nuevo_estado in ("aceptado", "aceptado_reparos")
     _fact_actualizar_estado_dte(boleta_id, nuevo_estado, estado_sii=estado_dte,
                                 glosa=glosa, set_fecha_aceptacion=es_aceptada)
     return jsonify({"ok": True, "estado": nuevo_estado, "estado_sii": estado_dte,
-                    "glosa": glosa, "track_id": track_id,
+                    "glosa": glosa, "track_id": track_id, "envio": envio_info,
                     "datos_consultados": {"tipo": tipo_dte, "folio": folio,
                                           "fecha_xml": fecha_str, "monto_xml": monto_total,
                                           "receptor_xml": rut_receptor},
