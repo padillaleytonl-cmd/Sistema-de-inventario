@@ -2940,6 +2940,88 @@ def admin_falabella_full_mal_registradas():
     return jsonify(salida)
 
 
+@app.route("/admin/lusync/falabella/orden")
+def admin_falabella_orden():
+    """Todo sobre una orden de Falabella por su numero (el que empieza con 3):
+    lo que dice Falabella de la orden y de cada producto, y lo que tiene
+    Lusync (movimientos, marcas, devoluciones). SOLO LEE.
+
+      /admin/lusync/falabella/orden?numero=3255284318
+    """
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    from inventario import get_conn, release_conn
+    from falabella import obtener_orden_falabella, llamar_api_falabella
+    numero = (request.args.get("numero") or "").strip()
+    if not numero:
+        return jsonify({"error": "Falta ?numero=3..."}), 400
+    tid = TENANT_INTEGRACIONES
+    salida = {"numero": numero}
+    conn = get_conn(tenant_id=tid, is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT id, fecha, tipo, sku, nombre, cantidad, bodega_codigo, canal,
+                                  orden_id, numero_orden, motivo, faltante
+                             FROM movimientos
+                            WHERE tenant_id = %s AND (numero_orden = %s OR orden_id::text = %s)
+                            ORDER BY id""", (tid, numero, numero))
+            movs = cur.fetchall()
+            salida["movimientos"] = [{
+                "id": m[0], "fecha": m[1].strftime("%d/%m/%Y %H:%M") if m[1] else None,
+                "tipo": m[2], "sku": m[3], "nombre": (m[4] or "")[:50], "cantidad": m[5],
+                "bodega": m[6], "canal": m[7], "orden_id": m[8], "numero_orden": m[9],
+                "motivo": (m[10] or "")[:120], "faltante": m[11]} for m in movs]
+            internos = sorted({str(m[8]) for m in movs if m[8] and str(m[8]) != numero})
+            salida["order_id_interno"] = internos
+            claves = [numero] + internos
+            cur.execute("""SELECT COALESCE(order_id_texto, orden_id::text) FROM ordenes_procesadas
+                            WHERE tenant_id = %s AND (orden_id::text = ANY(%s)
+                                  OR order_id_texto LIKE ANY(%s))""",
+                        (tid, claves, ["%" + c + "%" for c in claves]))
+            salida["marcas"] = [r[0] for r in cur.fetchall()]
+            cur.execute("""SELECT canal, return_id, order_id, sku, cantidad, estado, estado_canal,
+                                  fecha_solicitud
+                             FROM devoluciones_marketplace
+                            WHERE tenant_id = %s AND canal = 'falabella'
+                              AND (order_id = ANY(%s) OR return_id LIKE ANY(%s))""",
+                        (tid, claves, [c + "%" for c in claves]))
+            salida["devoluciones_lusync"] = [
+                {"return_id": r[1], "order_id": r[2], "sku": r[3], "cantidad": r[4],
+                 "estado": r[5], "estado_canal": r[6], "fecha": str(r[7]) if r[7] else None}
+                for r in cur.fetchall()]
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        salida["error_lusync"] = str(e)[:300]
+    finally:
+        release_conn(conn)
+    # Falabella: la orden y sus productos (necesita el OrderId interno)
+    falabella = []
+    for oid in (salida.get("order_id_interno") or []):
+        info = {"order_id": oid}
+        try:
+            o = obtener_orden_falabella(oid) or {}
+            info["orden"] = {k: o.get(k) for k in ("OrderNumber", "CreatedAt", "UpdatedAt", "Statuses",
+                                                    "ItemsCount", "Price", "Remarks")}
+            r = llamar_api_falabella("GetOrderItems", params_extra={"OrderId": oid},
+                                     method="GET", formato="JSON")
+            body = ((r.get("data") or {}).get("SuccessResponse") or {}).get("Body") or {}
+            items = (body.get("OrderItems") or {}).get("OrderItem") or []
+            if isinstance(items, dict):
+                items = [items]
+            info["productos"] = [{k: it.get(k) for k in (
+                "OrderItemId", "Sku", "SellerSku", "Name", "Status", "ReturnStatus", "Reason",
+                "ReasonDetail", "ShippingType", "UpdatedAt", "PaidPrice")} for it in items]
+        except Exception as e:
+            info["error"] = str(e)[:300]
+        falabella.append(info)
+    salida["falabella"] = falabella
+    if not salida.get("order_id_interno"):
+        salida["nota"] = ("Lusync no tiene movimientos con ese numero: no se registro la venta o "
+                          "se guardo sin el numero que empieza con 3.")
+    return jsonify(salida)
+
+
 @app.route("/admin/lusync/falabella/completar-numeros")
 def admin_falabella_completar_numeros():
     """Completa en todo el historial el numero de orden que usa el equipo en
