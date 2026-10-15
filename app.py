@@ -2953,6 +2953,30 @@ def admin_falabella_orden():
     from inventario import get_conn, release_conn
     from falabella import obtener_orden_falabella, llamar_api_falabella
     numero = (request.args.get("numero") or "").strip()
+    estado_q = (request.args.get("estado") or "").strip()
+    if estado_q:
+        # Modo lista: que ordenes entrega Falabella en un estado, por fecha de
+        # creacion o de actualizacion, y en que orden (diagnostico del lector
+        # de devoluciones). ?estado=returned&desde=2026-10-01&por=updated
+        desde = (request.args.get("desde") or "").strip() or "2026-07-01"
+        por = "UpdatedAfter" if request.args.get("por") == "updated" else "CreatedAfter"
+        params = {por: desde + "T00:00:00", "Limit": int(request.args.get("limit") or 100),
+                  "Offset": int(request.args.get("offset") or 0), "Status": estado_q}
+        if request.args.get("orden"):
+            params["SortBy"] = "updated_at" if por == "UpdatedAfter" else "created_at"
+            params["SortDirection"] = request.args.get("orden").upper()
+        r = llamar_api_falabella("GetOrders", params_extra=params, method="GET", formato="JSON")
+        body = ((r.get("data") or {}).get("SuccessResponse") or {}).get("Body") or {}
+        cont = body.get("Orders") or {}
+        lista = cont.get("Order") if isinstance(cont, dict) else cont
+        if isinstance(lista, dict):
+            lista = [lista]
+        lista = [o.get("Order", o) if isinstance(o, dict) else o for o in (lista or [])]
+        return jsonify({"params": params, "ok": r.get("ok"), "error": r.get("error"),
+                        "cantidad": len(lista),
+                        "ordenes": [{"numero": o.get("OrderNumber"), "creada": o.get("CreatedAt"),
+                                     "actualizada": o.get("UpdatedAt"), "estados": o.get("Statuses")}
+                                    for o in lista if isinstance(o, dict)]})
     if not numero:
         return jsonify({"error": "Falta ?numero=3..."}), 400
     tid = TENANT_INTEGRACIONES
