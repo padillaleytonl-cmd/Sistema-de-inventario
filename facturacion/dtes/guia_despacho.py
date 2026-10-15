@@ -169,15 +169,16 @@ def _calcular_totales_guia(items: List[Dict], es_venta: bool) -> Dict:
         mnt_exe = bruto_ex
         mnt_total = mnt_neto + mnt_iva + mnt_exe
     else:
-        # Guía no venta: sin IVA. Los precios (si los hay) solo son valor referencial.
-        # Manual SII: cuando IndTraslado=5 (traslado interno), puede no llevar MntNeto/IVA.
-        mnt_neto = 0
-        mnt_iva = 0
-        mnt_exe = 0
-        # MntTotal = 0 cuando es traslado puro sin precios
-        # Pero si vienen precios (ej. para tener valor referencial de inventario),
-        # podemos usar el bruto_af como MntTotal sin IVA.
-        mnt_total = 0
+        # Guía no venta: si los items traen precio, la guia informa el valor de
+        # la mercaderia. Los precios vienen con IVA incluido (igual que en el
+        # asistente y la vista previa), asi que va MntBruto=1 y el neto se saca
+        # del bruto. Antes quedaba en 0 y la guia emitida no mostraba el valor
+        # que si mostraba la vista previa (folio 157, 14/10/2026).
+        # Sin precios (traslado interno sin valor) sigue en 0.
+        mnt_neto = _redondear_clp(bruto_af / (1 + IVA_PORCENTAJE / 100.0)) if bruto_af else 0
+        mnt_iva = bruto_af - mnt_neto
+        mnt_exe = bruto_ex
+        mnt_total = bruto_af + bruto_ex
 
     return {
         'mnt_neto': mnt_neto, 'mnt_iva': mnt_iva,
@@ -346,6 +347,9 @@ def generar_guia_despacho_xml(
     if tipo_despacho:
         iddoc_parts.append(f'<TipoDespacho>{tipo_despacho}</TipoDespacho>')
     iddoc_parts.append(f'<IndTraslado>{ind_traslado}</IndTraslado>')
+    # No venta con valor: los montos de las lineas incluyen IVA
+    if not es_venta and mnt_total > 0:
+        iddoc_parts.append('<MntBruto>1</MntBruto>')
     iddoc_xml = '<IdDoc>' + ''.join(iddoc_parts) + '</IdDoc>'
 
     # 2. Emisor (con Acteco obligatorio)
@@ -413,8 +417,18 @@ def generar_guia_despacho_xml(
             tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
             tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
         tot_parts.append(f'<MntTotal>{mnt_total}</MntTotal>')
+    elif mnt_total > 0:
+        # No venta con valor de la mercaderia (precios con IVA, MntBruto=1)
+        if mnt_neto > 0:
+            tot_parts.append(f'<MntNeto>{mnt_neto}</MntNeto>')
+        if mnt_exe > 0:
+            tot_parts.append(f'<MntExe>{mnt_exe}</MntExe>')
+        if mnt_neto > 0:
+            tot_parts.append(f'<TasaIVA>{IVA_PORCENTAJE}.00</TasaIVA>')
+            tot_parts.append(f'<IVA>{mnt_iva}</IVA>')
+        tot_parts.append(f'<MntTotal>{mnt_total}</MntTotal>')
     else:
-        # No venta (traslado interno, etc.): MntTotal=0
+        # Traslado sin valor (sin precios): MntTotal=0
         tot_parts.append(f'<MntTotal>0</MntTotal>')
     totales_xml = '<Totales>' + ''.join(tot_parts) + '</Totales>'
 
