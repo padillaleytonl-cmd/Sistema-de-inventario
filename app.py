@@ -32886,6 +32886,81 @@ def facturacion_boleta_xml(boleta_id):
                     headers={"Content-Disposition": 'attachment; filename="%s"' % fname})
 
 
+_ESQUEMAS_SII = {}
+
+
+def _esquema_sii(version, raiz):
+    """XSD oficial del SII (facturacion/xsd/sii_<version>), cargado una vez."""
+    clave = (version, raiz)
+    if clave not in _ESQUEMAS_SII:
+        from lxml import etree as _et
+        base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "facturacion", "xsd",
+                            "sii_" + version)
+        _ESQUEMAS_SII[clave] = _et.XMLSchema(_et.parse(os.path.join(base, raiz + "_v10.xsd")))
+    return _ESQUEMAS_SII[clave]
+
+
+@app.route("/facturacion/boleta/<int:boleta_id>/validar-esquema", methods=["GET"])
+def facturacion_validar_esquema(boleta_id):
+    """Valida el sobre que se envio al SII contra los dos esquemas oficiales:
+    el publicado en feb-2026 y el anterior (2011), que es con el que el SII
+    sigue validando en produccion. Para entender un 'Error en Schema' (RSC),
+    que el SII devuelve sin decir que campo fallo."""
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    tenant_id = session.get("tenant_id") or 1
+    from inventario import get_conn, release_conn
+    from lxml import etree as _et
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT xml_envio_sii, xml_firmado, tipo_dte, folio FROM facturacion_dtes
+                            WHERE id=%s AND tenant_id=%s""", (boleta_id, tenant_id))
+            row = cur.fetchone()
+    finally:
+        release_conn(conn)
+    if not row:
+        return jsonify({"ok": False, "error": "Documento no encontrado"}), 404
+    tipo = int(row[2] or 0)
+    if tipo in (39, 41):
+        return jsonify({"ok": False, "error": "Las boletas usan otro esquema (EnvioBOLETA)"}), 400
+    if row[0]:
+        que, texto, raiz = "sobre enviado", row[0], "EnvioDTE"
+    elif row[1]:
+        que, texto, raiz = "documento (no hay sobre guardado)", row[1], "DTE"
+    else:
+        return jsonify({"ok": False, "error": "No hay XML guardado"}), 404
+    datos = texto.encode("iso-8859-1", errors="replace") if isinstance(texto, str) else texto
+    lineas = datos.decode("iso-8859-1", errors="replace").splitlines()
+    try:
+        doc = _et.fromstring(datos)
+    except Exception as e:
+        return jsonify({"ok": True, "valida": False, "que": que, "error_xml": str(e)[:400]})
+    if raiz == "DTE" and not doc.tag.startswith("{"):
+        # El DTE suelto se guarda sin namespace; el SII lo valida dentro del sobre, con el del DTE
+        datos = datos.replace(b'<DTE version="1.0">', b'<DTE xmlns="http://www.sii.cl/SiiDte" version="1.0">', 1)
+        doc = _et.fromstring(datos)
+    salida = {"ok": True, "que": que, "tipo_dte": tipo, "folio": row[3], "esquemas": {}}
+    for version in ("2011", "2026"):
+        try:
+            xsd = _esquema_sii(version, raiz)
+        except Exception as e:
+            salida["esquemas"][version] = {"error": "no se pudo cargar: " + str(e)[:200]}
+            continue
+        ok = xsd.validate(doc)
+        errores = []
+        for err in list(xsd.error_log)[:10]:
+            frag = ""
+            if err.line and len(lineas) >= err.line:
+                frag = lineas[err.line - 1]
+                # La linea puede ser todo el documento: mostrar el entorno del error
+                if len(frag) > 300 and err.column:
+                    frag = frag[max(0, err.column - 150): err.column + 150]
+            errores.append({"linea": err.line, "mensaje": err.message[:400], "xml": frag[:300]})
+        salida["esquemas"][version] = {"valida": ok, "errores": errores}
+    return jsonify(salida)
+
+
 @app.route("/facturacion/boleta/<int:boleta_id>/envio-sii", methods=["GET"])
 def facturacion_boleta_envio_sii(boleta_id):
     """Descarga el SOBRE EnvioBOLETA completo (con carátula + 2 firmas) tal cual
