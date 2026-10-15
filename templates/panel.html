@@ -3649,6 +3649,7 @@ tbody td {
           <div id="dtLeyendaModulos" style="font-size:12px;color:var(--muted);margin-top:16px;display:none;align-items:center;gap:6px;">
             Puedes activar más tipos de documento desde Configuración, desde 0,1 UF según el documento.
           </div>
+          <div id="dtBorradores" style="margin-top:22px;"></div>
         </div>
 
         <!-- ══════ ASISTENTE POR PASOS ══════ -->
@@ -3674,7 +3675,11 @@ tbody td {
 
           <!-- Pie: navegación -->
           <div style="padding:14px 22px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:var(--bg2);">
-            <span id="dtStepInfo" style="font-size:12px;color:var(--muted);"></span>
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+              <span id="dtStepInfo" style="font-size:12px;color:var(--muted);"></span>
+              <button id="dtBtnBorrador" onclick="dtGuardarBorrador()" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:8px 14px;border-radius:9px;font-family:inherit;font-weight:600;font-size:12px;cursor:pointer;">Guardar borrador</button>
+              <span id="dtBorradorEstado" style="font-size:12px;color:var(--muted);"></span>
+            </div>
             <div style="display:flex;gap:8px;">
               <button id="dtBtnAtras" onclick="dtStepAtras()" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:10px 16px;border-radius:9px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Atrás</button>
               <button id="dtBtnSiguiente" onclick="dtStepSiguiente()" style="background:#534AB7;border:none;color:#fff;padding:10px 18px;border-radius:9px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Continuar</button>
@@ -14775,6 +14780,7 @@ const DT_PASO_NOMBRE = {
 let _dtTipo = null;
 let _dtPasoIdx = 0;
 let _dtDatos = {};   // acumula lo capturado en cada paso
+let _dtBorradorId = null;  // borrador abierto (se borra al emitir el documento)
 
 function dtPasos(){
   let p = (DT_PASOS[_dtTipo] || ['productos','revisar']).slice();
@@ -14820,6 +14826,8 @@ function dtElegirTipo(tipo){
   _dtTipo = tipo;
   _dtPasoIdx = 0;
   _dtDatos = { items: [] };
+  _dtBorradorId = null;
+  const est=document.getElementById('dtBorradorEstado'); if(est) est.textContent='';
   if(tipo==='52') _dtDatos.ind_traslado = 1;
   if(tipo==='61'||tipo==='56') _dtDatos.cod_ref = 1;
   if(tipo==='33'||tipo==='34') _dtDatos.forma_pago = 1;
@@ -14836,6 +14844,71 @@ function dtVolverATipos(){
   document.getElementById('dtPaso0').style.display='block';
   document.getElementById('dtResultado').innerHTML='';
   _dtTipo=null;
+  _dtBorradorId=null;
+  dtCargarBorradores();
+}
+
+// ── Borradores: guardar lo que se lleva y seguir despues ──
+async function dtGuardarBorrador(){
+  const btn=document.getElementById('dtBtnBorrador');
+  const est=document.getElementById('dtBorradorEstado');
+  // Lo escrito en el paso actual se guarda aunque falte completar algo
+  dtValidarPaso(dtPasos()[_dtPasoIdx]);
+  btn.disabled=true; btn.textContent='Guardando…';
+  try{
+    const r=await fetch('/facturacion/borradores',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id:_dtBorradorId, tipo_dte:parseInt(_dtTipo,10), paso:_dtPasoIdx, datos:_dtDatos})});
+    const d=await r.json();
+    if(!d.ok) throw new Error(d.error||'No se pudo guardar');
+    _dtBorradorId=d.id;
+    est.textContent='Guardado '+d.actualizado;
+  }catch(e){
+    est.textContent='No se pudo guardar: '+e.message;
+  }
+  btn.disabled=false; btn.textContent='Guardar borrador';
+}
+
+async function dtCargarBorradores(){
+  const cont=document.getElementById('dtBorradores');
+  if(!cont) return;
+  let lista=[];
+  try{
+    const d=await fetch('/facturacion/borradores').then(r=>r.json());
+    lista=(d.ok && d.borradores) || [];
+  }catch(e){ cont.innerHTML=''; return; }
+  if(!lista.length){ cont.innerHTML=''; return; }
+  const filas=lista.map(b=>`<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 14px;border-top:1px solid var(--border);flex-wrap:wrap;">
+      <div style="min-width:0;">
+        <div style="font-size:13px;font-weight:600;color:var(--text);">${_dtEsc(b.nombre||'Borrador')}</div>
+        <div style="font-size:12px;color:var(--muted);">${b.productos} producto${b.productos===1?'':'s'}${b.total?' · '+_dtCLP(b.total):''} · ${_dtEsc(b.actualizado)}${b.usuario?' · '+_dtEsc(b.usuario):''}</div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button onclick="dtAbrirBorrador(${b.id})" style="background:#534AB7;border:none;color:#fff;padding:7px 14px;border-radius:8px;font-family:inherit;font-weight:600;font-size:12px;cursor:pointer;">Continuar</button>
+        <button onclick="dtEliminarBorrador(${b.id})" style="background:var(--card);border:1px solid var(--border);color:var(--muted);padding:7px 12px;border-radius:8px;font-family:inherit;font-size:12px;cursor:pointer;">Eliminar</button>
+      </div>
+    </div>`).join('');
+  cont.innerHTML=`<div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:8px;">Borradores guardados</div>
+    <div style="border:1px solid var(--border);border-radius:11px;overflow:hidden;background:var(--card);">${filas}</div>`;
+  const primero=cont.querySelector('div[style*="border-top"]'); if(primero) primero.style.borderTop='none';
+}
+
+async function dtAbrirBorrador(id){
+  try{
+    const d=await fetch('/facturacion/borradores/'+id).then(r=>r.json());
+    if(!d.ok){ alert(d.error||'No se pudo abrir el borrador'); dtCargarBorradores(); return; }
+    dtElegirTipo(String(d.tipo_dte));
+    _dtDatos=Object.assign({items:[]}, d.datos||{});
+    _dtBorradorId=d.id;
+    _dtPasoIdx=Math.max(0, Math.min(parseInt(d.paso||0,10), dtPasos().length-1));
+    dtStepRender();
+    const est=document.getElementById('dtBorradorEstado'); if(est) est.textContent='Borrador abierto';
+  }catch(e){ alert('No se pudo abrir el borrador: '+e.message); }
+}
+
+async function dtEliminarBorrador(id){
+  if(!confirm('¿Eliminar este borrador?')) return;
+  try{ await fetch('/facturacion/borradores/'+id+'/eliminar',{method:'POST'}); }catch(e){}
+  dtCargarBorradores();
 }
 
 // ── Barra de pasos ──
@@ -15225,7 +15298,7 @@ function dtItemsRender(){
   if(!tb) return;
   tb.innerHTML='';
   const guardados=_dtDatos.items||[];
-  if(guardados.length){ guardados.forEach(it=>dtAddItem(it.nombre,it.cantidad,it.precio_unitario,it.unidad,'',it.exento)); }
+  if(guardados.length){ guardados.forEach(it=>dtAddItem(it.nombre,it.cantidad,it.precio_unitario,it.unidad,it.sku||'',it.exento)); }
   else { dtAddItem(); }
   dtCalc();
 }
@@ -15306,6 +15379,7 @@ function dtValidarPaso(paso){
   if(paso==='receptor' || paso==='destinatario'){
     const r={ rut:v('dtRecRut'), razon_social:v('dtRecNombre'), giro:v('dtRecGiro'),
               direccion:v('dtRecDireccion'), comuna:v('dtRecRC_comuna') };
+    _dtDatos.receptor=r;
     const falta=[];
     if(!r.rut) falta.push('RUT');
     if(!r.razon_social) falta.push('razón social');
@@ -15321,6 +15395,7 @@ function dtValidarPaso(paso){
   if(paso==='referencia'){
     const ref={ folio_ref:parseInt(v('dtNCFolioRef')||'0',10), tipo_doc_ref:parseInt(v('dtNCTipoRef')||'0',10),
                 fecha_ref:v('dtNCFechaRef'), razon_ref:v('dtNCRazon') };
+    _dtDatos.ref=ref;
     if(!ref.folio_ref) return 'Indica el folio del documento.';
     if(!ref.fecha_ref) return 'Indica la fecha de emisión del documento.';
     if(!ref.razon_ref) return 'El motivo es obligatorio.';
@@ -15336,6 +15411,8 @@ function dtValidarPaso(paso){
     const hs=v('dtGuiaHraSalida');
     if(hs) t.hra_salida = hs.length===5 ? hs+':00' : hs;
     if(t.cmna_dest) t.ciudad_dest=t.cmna_dest;
+    const _t=Object.assign({},t); Object.keys(_t).forEach(k=>{ if(!_t[k]) delete _t[k]; });
+    _dtDatos.transporte=_t;
     const falta=[];
     if(!t.patente) falta.push('patente');
     if(!t.rut_transportista) falta.push('RUT del transportista');
@@ -15351,6 +15428,8 @@ function dtValidarPaso(paso){
   }
   if(paso==='productos'){
     const items=dtLeerItems();
+    _dtDatos.items=items;
+    if(document.getElementById('dtRefsItems')) _dtDatos.referencias = dtLeerReferencias();
     if(!items.length) return 'Agrega al menos un ítem con nombre y precio.';
     // NC que rebaja: no puede superar el monto del documento referenciado
     if(_dtTipo==='61' && _dtDatos.cod_ref===3 && _dtNCMontoMax>0){
@@ -15410,6 +15489,10 @@ function dtMostrarResultado(d, etiqueta){
   const cont=document.getElementById('dtResultado');
   if(d.ok){
     document.getElementById('dtWizard').style.display='none';
+    if(_dtBorradorId){
+      fetch('/facturacion/borradores/'+_dtBorradorId+'/eliminar',{method:'POST'}).catch(()=>{});
+      _dtBorradorId=null;
+    }
     const id = d.guia_id || d.fac_id || d.nc_id || d.boleta_id;
     const pdf = d.pdf_url || (id?('/facturacion/boleta/'+id+'/pdf'):'');
     const rollo = (_dtTipo==='39'||_dtTipo==='41')
@@ -15438,6 +15521,7 @@ function dtMostrarResultado(d, etiqueta){
 
 function dtInit(){
   if(document.getElementById('dtTiposGrid')) dtCargarTiposHabilitados();
+  dtCargarBorradores();
 }
 
 function dtAddItem(nombre='',cant=1,precio='',unidad='Un',sku='',exento=null){

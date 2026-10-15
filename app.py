@@ -33178,6 +33178,167 @@ def facturacion_boletas_zip():
 
 
 
+# ── Borradores de documentos tributarios ──────────────────────────────────
+# Lo que se lleva escrito en el asistente de emision (tipo, cliente,
+# transporte, productos...) se guarda para seguir despues. No reserva folio
+# ni pasa por el SII. Cada cliente ve solo los suyos (tenant en el WHERE).
+_BORRADORES_TABLA_LISTA = False
+_NOMBRES_DTE = {33: "Factura", 34: "Factura exenta", 39: "Boleta", 41: "Boleta exenta",
+                52: "Guía de despacho", 56: "Nota de débito", 61: "Nota de crédito"}
+
+
+def _borradores_asegurar_tabla(cur):
+    global _BORRADORES_TABLA_LISTA
+    if _BORRADORES_TABLA_LISTA:
+        return
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS dte_borradores (
+            id SERIAL PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            tipo_dte INTEGER NOT NULL,
+            nombre TEXT,
+            paso INTEGER DEFAULT 0,
+            datos JSONB NOT NULL,
+            usuario TEXT,
+            creado TIMESTAMP,
+            actualizado TIMESTAMP)""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_dte_borradores_tenant "
+                "ON dte_borradores (tenant_id, actualizado DESC)")
+    _BORRADORES_TABLA_LISTA = True
+
+
+def _borrador_resumen(tipo_dte, datos):
+    """Nombre para la lista: tipo, a quien y cuantos productos."""
+    datos = datos or {}
+    partes = [_NOMBRES_DTE.get(int(tipo_dte or 0), "Documento")]
+    rec = datos.get("receptor") or {}
+    if rec.get("razon_social"):
+        partes.append(str(rec["razon_social"])[:60])
+    items = datos.get("items") or []
+    total = 0
+    for it in items:
+        try:
+            total += float(it.get("precio_unitario") or 0) * float(it.get("cantidad") or 0)
+        except (TypeError, ValueError):
+            pass
+    return " · ".join(partes), len(items), int(round(total))
+
+
+@app.route("/facturacion/borradores", methods=["GET"])
+def facturacion_borradores_listar():
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    tenant_id = session.get("tenant_id") or 1
+    from inventario import get_conn, release_conn
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            _borradores_asegurar_tabla(cur)
+            cur.execute("""SELECT id, tipo_dte, nombre, paso, datos, usuario, actualizado
+                             FROM dte_borradores WHERE tenant_id = %s
+                            ORDER BY actualizado DESC LIMIT 100""", (tenant_id,))
+            filas = cur.fetchall()
+        conn.commit()
+    finally:
+        release_conn(conn)
+    salida = []
+    for bid, tipo, nombre, paso, datos, usuario, actualizado in filas:
+        _, n_items, total = _borrador_resumen(tipo, datos)
+        salida.append({"id": bid, "tipo_dte": tipo, "nombre": nombre, "paso": paso,
+                       "productos": n_items, "total": total, "usuario": usuario,
+                       "actualizado": actualizado.strftime("%d/%m/%Y %H:%M") if actualizado else ""})
+    return jsonify({"ok": True, "borradores": salida})
+
+
+@app.route("/facturacion/borradores/<int:bid>", methods=["GET"])
+def facturacion_borradores_ver(bid):
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    tenant_id = session.get("tenant_id") or 1
+    from inventario import get_conn, release_conn
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            _borradores_asegurar_tabla(cur)
+            cur.execute("""SELECT id, tipo_dte, paso, datos FROM dte_borradores
+                            WHERE id = %s AND tenant_id = %s""", (bid, tenant_id))
+            fila = cur.fetchone()
+        conn.commit()
+    finally:
+        release_conn(conn)
+    if not fila:
+        return jsonify({"ok": False, "error": "Ese borrador ya no existe"}), 404
+    return jsonify({"ok": True, "id": fila[0], "tipo_dte": fila[1], "paso": fila[2] or 0,
+                    "datos": fila[3] or {}})
+
+
+@app.route("/facturacion/borradores", methods=["POST"])
+def facturacion_borradores_guardar():
+    """Body: {id?, tipo_dte, paso, datos}. Con id actualiza ese borrador."""
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    tenant_id = session.get("tenant_id") or 1
+    import json as _json
+    from inventario import get_conn, release_conn, now_chile
+    body = request.get_json() or {}
+    try:
+        tipo_dte = int(body.get("tipo_dte") or 0)
+    except (TypeError, ValueError):
+        tipo_dte = 0
+    if tipo_dte not in _NOMBRES_DTE:
+        return jsonify({"ok": False, "error": "Tipo de documento no valido"}), 400
+    datos = body.get("datos") or {}
+    paso = int(body.get("paso") or 0)
+    nombre, _, _ = _borrador_resumen(tipo_dte, datos)
+    ahora = now_chile()
+    usuario = session.get("usuario") or ""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            _borradores_asegurar_tabla(cur)
+            bid = body.get("id")
+            if bid:
+                cur.execute("""UPDATE dte_borradores
+                                  SET tipo_dte = %s, nombre = %s, paso = %s, datos = %s::jsonb,
+                                      usuario = %s, actualizado = %s
+                                WHERE id = %s AND tenant_id = %s RETURNING id""",
+                            (tipo_dte, nombre, paso, _json.dumps(datos), usuario, ahora,
+                             int(bid), tenant_id))
+                fila = cur.fetchone()
+                bid = fila[0] if fila else None
+            if not bid:
+                cur.execute("""INSERT INTO dte_borradores
+                                   (tenant_id, tipo_dte, nombre, paso, datos, usuario, creado, actualizado)
+                               VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s) RETURNING id""",
+                            (tenant_id, tipo_dte, nombre, paso, _json.dumps(datos), usuario,
+                             ahora, ahora))
+                bid = cur.fetchone()[0]
+        conn.commit()
+    finally:
+        release_conn(conn)
+    return jsonify({"ok": True, "id": bid, "nombre": nombre,
+                    "actualizado": ahora.strftime("%d/%m/%Y %H:%M")})
+
+
+@app.route("/facturacion/borradores/<int:bid>/eliminar", methods=["POST"])
+def facturacion_borradores_eliminar(bid):
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    tenant_id = session.get("tenant_id") or 1
+    from inventario import get_conn, release_conn
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            _borradores_asegurar_tabla(cur)
+            cur.execute("DELETE FROM dte_borradores WHERE id = %s AND tenant_id = %s",
+                        (bid, tenant_id))
+            borrados = cur.rowcount
+        conn.commit()
+    finally:
+        release_conn(conn)
+    return jsonify({"ok": True, "borrados": borrados})
+
+
 @app.route("/facturacion/folios/tipos-habilitados", methods=["GET"])
 def facturacion_folios_tipos_habilitados():
     """Devuelve los tipos de DTE que el tenant tiene habilitados/activos,
