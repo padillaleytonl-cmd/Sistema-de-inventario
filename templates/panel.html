@@ -16352,6 +16352,23 @@ function dtMenuPuntitos(doc){
     style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:7px;font-size:14px;cursor:pointer;line-height:1;margin-left:6px;">⋮</button>`;
 }
 
+// Copia un documento emitido a un borrador y lo abre en el asistente: para
+// volver a emitir uno rechazado sin escribirlo de nuevo.
+async function dtCopiarABorrador(id, folio){
+  try{
+    const r=await fetch('/facturacion/borradores/desde-documento/'+id,{method:'POST'});
+    const d=await r.json();
+    if(!d.ok){ alert(d.error||'No se pudo copiar el documento'); return; }
+    const navF=document.querySelector('.fac-nav[data-fac="facturar"]');
+    if(navF) facNav('facturar', navF);
+    const tabE=document.querySelector('.dt-tab[data-dt="emitir"]');
+    if(tabE) dtTab('emitir', tabE);
+    await dtAbrirBorrador(d.id);
+    const w=document.getElementById('dtWizard');
+    if(w) w.scrollIntoView({behavior:'smooth', block:'start'});
+  }catch(e){ alert('No se pudo copiar el documento: '+e.message); }
+}
+
 // Menú flotante único (position:fixed) — no lo corta el overflow de la tabla
 function dtToggleMenu(btn, datosEnc){
   let menu=document.getElementById('dtFloatMenu');
@@ -16377,6 +16394,7 @@ function dtToggleMenu(btn, datosEnc){
     menu.appendChild(opt(null,'🔄 Consultar estado SII',null,()=>dtConsultarEstado(d.id)));
   }
   menu.appendChild(opt(d.pdf,'📄 Descargar PDF','_blank'));
+  menu.appendChild(opt(null,'📝 Copiar a borrador',null,()=>dtCopiarABorrador(d.id, d.folio)));
   menu.appendChild(opt(d.xml,'📥 Descargar XML',null));
   const last=opt(d.xmlr,'📥 XML Receptor',null);
   menu.appendChild(last);

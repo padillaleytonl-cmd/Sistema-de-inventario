@@ -76,6 +76,30 @@ from .ted import construir_ted
 
 IVA_PORCENTAJE = 19
 
+# Campos de transporte de la Res. 154/2025 (PatenteCarro, FchSalida, HraSalida,
+# FchLlegada). El XSD publicado en feb-2026 los trae, pero el SII en produccion
+# todavia valida con el anterior y rechaza el sobre por "Error en Schema" (guias
+# 156 y 157, oct-2026; el mismo sobre sin esos campos pasa los dos esquemas).
+# La obligacion parte el 1-nov-2026 (Res. 52/2026): desde ese dia se envian.
+# SII_TRANSPORTE_RES154=1 / 0 en el entorno lo fuerza antes o lo apaga.
+RES154_DESDE = "2026-11-01"
+
+
+def res154_activa(hoy: Optional[str] = None) -> bool:
+    import os
+    forzado = (os.environ.get("SII_TRANSPORTE_RES154") or "").strip().lower()
+    if forzado in ("1", "si", "true", "on"):
+        return True
+    if forzado in ("0", "no", "false", "off"):
+        return False
+    if hoy is None:
+        try:
+            from zoneinfo import ZoneInfo
+            hoy = datetime.now(ZoneInfo("America/Santiago")).strftime("%Y-%m-%d")
+        except Exception:
+            hoy = datetime.now().strftime("%Y-%m-%d")
+    return hoy >= RES154_DESDE
+
 
 def _redondear_clp(valor: float) -> int:
     return int(round(valor))
@@ -242,8 +266,9 @@ def _construir_transporte_xml(transporte: Optional[Dict]) -> str:
     if patente:
         partes.append(f'<Patente>{_escape_xml(patente)}</Patente>')
 
+    res154 = res154_activa()
     patente_carro = _v('patente_carro', 8)
-    if patente_carro:
+    if patente_carro and res154:
         partes.append(f'<PatenteCarro>{_escape_xml(patente_carro)}</PatenteCarro>')
 
     rut_trans = _normalizar_rut(_v('rut_transportista'))
@@ -275,17 +300,17 @@ def _construir_transporte_xml(transporte: Optional[Dict]) -> str:
     if ciudad_dest:
         partes.append(f'<CiudadDest>{_escape_xml(ciudad_dest)}</CiudadDest>')
 
-    # Campos nuevos Res.154 / Anexo 2.5
+    # Campos nuevos Res.154 / Anexo 2.5: solo cuando el SII ya los acepta
     fch_salida = _v('fch_salida')
-    if fch_salida:
+    if fch_salida and res154:
         partes.append(f'<FchSalida>{_escape_xml(fch_salida)}</FchSalida>')
 
     hra_salida = _v('hra_salida')
-    if hra_salida:
+    if hra_salida and res154:
         partes.append(f'<HraSalida>{_escape_xml(hra_salida)}</HraSalida>')
 
     fch_llegada = _v('fch_llegada')
-    if fch_llegada:
+    if fch_llegada and res154:
         partes.append(f'<FchLlegada>{_escape_xml(fch_llegada)}</FchLlegada>')
 
     if not partes:

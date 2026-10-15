@@ -32485,6 +32485,12 @@ def facturacion_boleta_preview():
                 _partes += f"<Patente>{_esc_xml_preview(_tr['patente'])}</Patente>"
             if _tr.get("rut_transportista"):
                 _partes += f"<RUTTrans>{_esc_xml_preview(_tr['rut_transportista'])}</RUTTrans>"
+            from facturacion.dtes.guia_despacho import res154_activa as _res154
+            if not _res154():
+                # Mismo criterio que el documento final: sin los campos de la
+                # Res. 154 hasta que el SII los acepte
+                _tr = {k: v for k, v in _tr.items()
+                       if k not in ("fch_salida", "hra_salida", "fch_llegada", "patente_carro")}
             if _tr.get("rut_chofer") and _tr.get("nombre_chofer"):
                 _partes += ("<Chofer>"
                             f"<RUTChofer>{_esc_xml_preview(_tr['rut_chofer'])}</RUTChofer>"
@@ -33335,6 +33341,91 @@ def facturacion_borradores_guardar():
         release_conn(conn)
     return jsonify({"ok": True, "id": bid, "nombre": nombre,
                     "actualizado": ahora.strftime("%d/%m/%Y %H:%M")})
+
+
+@app.route("/facturacion/borradores/desde-documento/<int:dte_id>", methods=["POST"])
+def facturacion_borradores_desde_documento(dte_id):
+    """Crea un borrador con los datos de un documento ya emitido (cliente,
+    transporte, productos, referencias), para emitirlo otra vez con otro folio
+    sin escribirlo de nuevo. Sirve para un documento que el SII rechazo."""
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    tenant_id = session.get("tenant_id") or 1
+    import json as _json
+    from inventario import get_conn, release_conn, now_chile
+    from facturacion.dtes.pdf_dte import parsear_dte_xml
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT xml_firmado, tipo_dte, folio FROM facturacion_dtes
+                            WHERE id = %s AND tenant_id = %s""", (dte_id, tenant_id))
+            fila = cur.fetchone()
+        conn.commit()
+    finally:
+        release_conn(conn)
+    if not fila or not fila[0]:
+        return jsonify({"ok": False, "error": "No encontré el XML de ese documento"}), 404
+    xml = fila[0].encode("iso-8859-1", errors="replace") if isinstance(fila[0], str) else fila[0]
+    d = parsear_dte_xml(xml)
+    tipo = int(fila[1] or d.get("tipo_int") or 0)
+    if tipo not in _NOMBRES_DTE:
+        return jsonify({"ok": False, "error": "Ese tipo de documento no se puede copiar"}), 400
+
+    def _num(v, defecto=0):
+        try:
+            return float(str(v).replace(",", "."))
+        except (TypeError, ValueError):
+            return defecto
+
+    items = []
+    for it in d.get("items") or []:
+        cant = _num(it.get("cantidad"), 1)
+        items.append({"nombre": it.get("nombre") or "", "sku": "",
+                      "cantidad": int(cant) if cant == int(cant) else cant,
+                      "unidad": it.get("unidad") or "Un",
+                      "precio_unitario": int(round(_num(it.get("precio")))),
+                      "exento": bool(it.get("exento"))})
+    datos = {"items": items}
+    rec = d.get("receptor") or {}
+    if rec.get("rut") and rec.get("rut") != "66666666-6":
+        datos["receptor"] = {k: rec.get(k) for k in ("rut", "razon_social", "giro", "direccion", "comuna")
+                             if rec.get(k)}
+    if tipo == 52:
+        tr = d.get("transporte") or {}
+        datos["ind_traslado"] = int(tr.get("ind_traslado") or 1)
+        datos["tipo_despacho"] = int(tr.get("tipo_despacho") or 0)
+        datos["transporte"] = {k: tr.get(k) for k in (
+            "patente", "patente_carro", "rut_transportista", "rut_chofer", "nombre_chofer",
+            "dir_dest", "cmna_dest", "ciudad_dest", "fch_salida", "hra_salida", "fch_llegada") if tr.get(k)}
+    if tipo in (33, 34):
+        datos["forma_pago"] = 1
+    refs = d.get("referencias") or []
+    if tipo in (61, 56) and refs:
+        r0 = refs[0]
+        datos["cod_ref"] = int(r0.get("cod_ref") or 1)
+        datos["ref"] = {"folio_ref": int(_num(r0.get("folio_ref"))), "tipo_doc_ref": int(_num(r0.get("tpo_doc_ref"))),
+                        "fecha_ref": r0.get("fecha_ref"), "razon_ref": r0.get("razon_ref")}
+    elif refs:
+        datos["referencias"] = [{"tpo_doc_ref": r.get("tpo_doc_ref"), "folio_ref": r.get("folio_ref"),
+                                 "razon_ref": r.get("razon_ref")} for r in refs]
+
+    nombre, _, _ = _borrador_resumen(tipo, datos)
+    nombre = f"{nombre} (copia del folio {fila[2]})"
+    ahora = now_chile()
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            _borradores_asegurar_tabla(cur)
+            cur.execute("""INSERT INTO dte_borradores
+                               (tenant_id, tipo_dte, nombre, paso, datos, usuario, creado, actualizado)
+                           VALUES (%s, %s, %s, 0, %s::jsonb, %s, %s, %s) RETURNING id""",
+                        (tenant_id, tipo, nombre, _json.dumps(datos), session.get("usuario") or "",
+                         ahora, ahora))
+            bid = cur.fetchone()[0]
+        conn.commit()
+    finally:
+        release_conn(conn)
+    return jsonify({"ok": True, "id": bid, "nombre": nombre, "productos": len(items)})
 
 
 @app.route("/facturacion/borradores/<int:bid>/eliminar", methods=["POST"])
