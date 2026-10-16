@@ -3107,6 +3107,11 @@ def _paris_registrar_orden():
                        "existe_en_lusync": sku_l in existentes})
     estado = {k: o.get(k) for k in ("status", "statusId", "subOrderStatus", "effectiveDispatchDate",
                                      "cancelledAt", "canceledAt") if o.get(k) is not None}
+    try:
+        # El estado de Paris no viene en un lugar fijo: todos los campos que lo nombran
+        estado["campos"] = _campos_estado_paris(o)
+    except Exception:
+        pass
     salida = {"modo": "APLICADO" if aplicar else "simulacion", "sub_order": sub_order,
               "creada": o.get("createdAt"), "tipo": "Fulfillment" if es_cd else "Seller",
               "estado_paris": estado, "lineas": lineas}
