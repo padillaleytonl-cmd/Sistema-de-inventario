@@ -3048,6 +3048,14 @@ def admin_falabella_orden():
 
 @app.route("/admin/lusync/falabella/registrar-orden")
 def admin_falabella_registrar_orden():
+    try:
+        return _falabella_registrar_orden()
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e)[:300], "detalle": traceback.format_exc()[-1500:]}), 500
+
+
+def _falabella_registrar_orden():
     """Registra una venta de Falabella que quedo sin registrar (p. ej. por un
     SKU sin mapeo que se mapeo cuando la orden ya estaba fuera de la ventana
     del sync). Igual que el sync: lee la orden y sus productos en Falabella,
