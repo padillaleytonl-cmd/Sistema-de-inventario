@@ -15312,6 +15312,56 @@ def ruta_alertas():
     solo_no = request.args.get("solo_no_leidas", "false").lower() == "true"
     return jsonify(listar_alertas(limite=100, solo_no_leidas=solo_no))
 
+@app.route("/admin/lusync/alertas/resumen")
+def admin_alertas_resumen():
+    """De donde salen las alertas sin leer del cliente: por tipo y canal, por
+    mes, los ultimos 14 dias y los titulos que mas se repiten. SOLO LEE."""
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    from inventario import get_conn, release_conn
+    tid = _tenant_sesion() or TENANT_INTEGRACIONES
+    salida = {"tenant": tid}
+    conn = get_conn(tenant_id=tid, is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT COUNT(*), COUNT(*) FILTER (WHERE leida IS NOT TRUE),
+                                  MIN(fecha), MAX(fecha)
+                             FROM alertas WHERE tenant_id = %s""", (tid,))
+            t, nl, mn, mx = cur.fetchone()
+            salida.update({"total": t, "sin_leer": nl,
+                           "desde": mn.strftime("%d/%m/%Y") if mn else None,
+                           "hasta": mx.strftime("%d/%m/%Y %H:%M") if mx else None})
+            cur.execute("""SELECT tipo, COALESCE(canal, ''), COUNT(*),
+                                  MIN(fecha), MAX(fecha), COUNT(DISTINCT sku)
+                             FROM alertas WHERE tenant_id = %s AND leida IS NOT TRUE
+                            GROUP BY 1, 2 ORDER BY 3 DESC""", (tid,))
+            salida["por_tipo"] = [{"tipo": r[0], "canal": r[1], "cantidad": r[2],
+                                   "desde": r[3].strftime("%d/%m/%Y") if r[3] else None,
+                                   "hasta": r[4].strftime("%d/%m/%Y") if r[4] else None,
+                                   "skus_distintos": r[5]} for r in cur.fetchall()]
+            cur.execute("""SELECT TO_CHAR(fecha, 'YYYY-MM'), COUNT(*)
+                             FROM alertas WHERE tenant_id = %s AND leida IS NOT TRUE
+                            GROUP BY 1 ORDER BY 1""", (tid,))
+            salida["por_mes"] = {r[0]: r[1] for r in cur.fetchall()}
+            cur.execute("""SELECT TO_CHAR(fecha, 'DD/MM'), tipo, COUNT(*)
+                             FROM alertas WHERE tenant_id = %s AND fecha >= CURRENT_DATE - 14
+                            GROUP BY TO_CHAR(fecha, 'YYYY-MM-DD'), 1, 2
+                            ORDER BY TO_CHAR(fecha, 'YYYY-MM-DD'), 3 DESC""", (tid,))
+            dias = {}
+            for d, tipo, n in cur.fetchall():
+                dias.setdefault(d, {})[tipo] = n
+            salida["ultimos_14_dias"] = dias
+            cur.execute("""SELECT regexp_replace(titulo, '[0-9]{4,}', '#', 'g') AS patron, tipo, COUNT(*)
+                             FROM alertas WHERE tenant_id = %s AND leida IS NOT TRUE
+                            GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 25""", (tid,))
+            salida["titulos_mas_repetidos"] = [{"titulo": r[0], "tipo": r[1], "cantidad": r[2]}
+                                               for r in cur.fetchall()]
+        conn.commit()
+    finally:
+        release_conn(conn)
+    return jsonify(salida)
+
+
 @app.route("/alertas/contador")
 def ruta_alertas_contador():
     if not session.get("logged"): return jsonify({"count": 0})
