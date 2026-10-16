@@ -3046,6 +3046,103 @@ def admin_falabella_orden():
     return jsonify(salida)
 
 
+@app.route("/admin/lusync/paris/registrar-orden")
+def admin_paris_registrar_orden():
+    """Registra una venta de Paris que quedo sin registrar y ya esta fuera de
+    la ventana de 7 dias del sync. Igual que el sync: lee la sub-orden en
+    Paris, resuelve el SKU (con o sin el sufijo -1 de variante), descuenta de
+    la bodega que corresponde, marca PARIS-<suborden> y publica. Muestra el
+    estado de la orden en Paris para no registrar una cancelada.
+
+      /admin/lusync/paris/registrar-orden?sub_order=3145957860            simula
+      /admin/lusync/paris/registrar-orden?sub_order=3145957860&aplicar=1  registra
+    """
+    try:
+        return _paris_registrar_orden()
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e)[:300], "detalle": traceback.format_exc()[-1500:]}), 500
+
+
+def _paris_registrar_orden():
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    import re as _re
+    from paris import obtener_orden_paris
+    from bodegas_logic import descontar_venta, detectar_fulfillment_paris
+    from inventario import intentar_marcar_orden_atomic, obtener_sku_lusync_por_canal
+    aplicar = request.args.get("aplicar") == "1"
+    sub_order = (request.args.get("sub_order") or "").strip()
+    if not sub_order.isdigit():
+        return jsonify({"error": "Falta ?sub_order="}), 400
+    o = obtener_orden_paris(sub_order)
+    if isinstance(o, dict) and isinstance(o.get("data"), dict):
+        o = o["data"]
+    if not isinstance(o, dict) or not o:
+        return jsonify({"error": "Paris no devolvio esa sub-orden", "respuesta": str(o)[:300]}), 502
+    es_cd = detectar_fulfillment_paris(o)
+    fecha = None
+    try:
+        _f = str(o.get("createdAt") or o.get("created_at") or "")
+        if _f:
+            fecha = datetime.fromisoformat(_f.replace("Z", "+00:00"))
+    except ValueError:
+        pass
+    items = {}
+    fuentes = [it for ship in (o.get("shipments") or []) for it in (ship.get("items") or [])] or (o.get("items") or [])
+    for it in fuentes:
+        s = (it.get("seller_sku") or it.get("sellerSku") or "").strip()
+        if s:
+            items[s] = items.get(s, 0) + _cantidad_de_linea(it.get("quantity"))
+    existentes = {p["sku"] for p in cargar_productos()}
+    lineas = []
+    for s, cant in items.items():
+        sku_l = obtener_sku_lusync_por_canal("paris", s) or s
+        if sku_l not in existentes:
+            base = _re.sub(r"-\d+$", "", s)
+            sku_b = obtener_sku_lusync_por_canal("paris", base) or base
+            if sku_b in existentes:
+                sku_l = sku_b
+        lineas.append({"sku_paris": s, "sku_lusync": sku_l, "cantidad": cant,
+                       "existe_en_lusync": sku_l in existentes})
+    estado = {k: o.get(k) for k in ("status", "statusId", "subOrderStatus", "effectiveDispatchDate",
+                                     "cancelledAt", "canceledAt") if o.get(k) is not None}
+    salida = {"modo": "APLICADO" if aplicar else "simulacion", "sub_order": sub_order,
+              "creada": o.get("createdAt"), "tipo": "Fulfillment" if es_cd else "Seller",
+              "estado_paris": estado, "lineas": lineas}
+    if not aplicar:
+        salida["nota"] = "Revisa el estado en Paris; agrega &aplicar=1 para registrar la venta."
+        return jsonify(salida)
+    tipo_str = "Fulfillment" if es_cd else "Seller"
+    ok_todas = True
+    for ln in lineas:
+        if not ln["existe_en_lusync"]:
+            ln["resultado"] = "no registrada: el SKU no existe en Lusync"
+            ok_todas = False
+            continue
+        res = descontar_venta(sku=ln["sku_lusync"], cantidad=ln["cantidad"], canal="Paris",
+                              fulfillment=es_cd, orden_id=sub_order,
+                              motivo=f"Venta Paris {tipo_str} (registrada a mano: SKU sin mapeo)",
+                              usuario=session.get("usuario", "Sistema"),
+                              fecha_compra_marketplace=fecha, origen_registro="manual")
+        ln["resultado"] = res.get("advertencia") or ("ok" if res.get("ok") else (res.get("error") or "no registrada"))
+        ln["bodega"] = res.get("bodega") or res.get("bodega_codigo")
+        if not res.get("ok"):
+            ok_todas = False
+            continue
+        if res.get("advertencia") != "ya_registrada":
+            try:
+                sincronizar_stock_marketplaces(ln["sku_lusync"], None, contexto="paris_registrar_orden")
+            except Exception as e:
+                ln["publicar"] = f"error: {str(e)[:100]}"
+    if ok_todas and lineas:
+        intentar_marcar_orden_atomic(f"PARIS-{sub_order}")
+        salida["marcada"] = True
+    registrar_audit(session.get("usuario", "Sistema"), request.remote_addr, "paris_registrar_orden",
+                    detalle=f"{sub_order}: {[(l['sku_lusync'], l['cantidad'], l.get('resultado')) for l in lineas]}")
+    return jsonify(salida)
+
+
 @app.route("/admin/lusync/falabella/registrar-orden")
 def admin_falabella_registrar_orden():
     try:
