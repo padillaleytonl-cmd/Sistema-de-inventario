@@ -3046,6 +3046,94 @@ def admin_falabella_orden():
     return jsonify(salida)
 
 
+@app.route("/admin/lusync/falabella/registrar-orden")
+def admin_falabella_registrar_orden():
+    """Registra una venta de Falabella que quedo sin registrar (p. ej. por un
+    SKU sin mapeo que se mapeo cuando la orden ya estaba fuera de la ventana
+    del sync). Igual que el sync: lee la orden y sus productos en Falabella,
+    descuenta de la bodega que corresponde (propia o FBF), guarda el numero que
+    empieza con 3 y la fecha de compra, marca la orden y publica.
+    descontar_venta no duplica: una linea ya registrada vuelve 'ya_registrada'.
+
+      /admin/lusync/falabella/registrar-orden?order_id=1166957133            simula
+      /admin/lusync/falabella/registrar-orden?order_id=1166957133&aplicar=1  registra
+    """
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    from bodegas_logic import descontar_venta, detectar_fulfillment_falabella
+    from falabella import obtener_items_orden_falabella, _orden_falabella_completa
+    from inventario import get_conn, release_conn, intentar_marcar_orden_atomic
+    aplicar = request.args.get("aplicar") == "1"
+    order_id = (request.args.get("order_id") or "").strip()
+    if not order_id.isdigit():
+        return jsonify({"error": "Falta ?order_id= (el OrderId interno de Falabella)"}), 400
+    o = _orden_falabella_completa(order_id) or {}
+    if not o:
+        return jsonify({"error": "Falabella no devolvio la orden"}), 502
+    numero = str(o.get("OrderNumber") or "").strip()
+    es_fbf = detectar_fulfillment_falabella(o)
+    fecha = None
+    try:
+        fecha = datetime.strptime(str(o.get("CreatedAt") or "").strip()[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        pass
+    existentes = {p["sku"] for p in cargar_productos()}
+    lineas = []
+    for it in (obtener_items_orden_falabella(order_id) or []):
+        sku_canal = (it.get("SellerSku") or it.get("Sku") or "").strip()
+        if not sku_canal:
+            continue
+        cantidad = _cantidad_de_linea(it.get("Quantity"))
+        sku_l = obtener_sku_lusync_por_canal("falabella", sku_canal) or sku_canal
+        lineas.append({"sku_falabella": sku_canal, "sku_lusync": sku_l, "cantidad": cantidad,
+                       "estado_falabella": it.get("Status"), "existe_en_lusync": sku_l in existentes})
+    salida = {"modo": "APLICADO" if aplicar else "simulacion", "order_id": order_id, "numero": numero,
+              "creada": o.get("CreatedAt"), "tipo": "FBF" if es_fbf else "FBS", "lineas": lineas}
+    if not aplicar:
+        salida["nota"] = "Agrega &aplicar=1 para registrar la venta."
+        return jsonify(salida)
+    tipo_str = "FBF" if es_fbf else "FBS"
+    ok_todas = True
+    for ln in lineas:
+        if not ln["existe_en_lusync"]:
+            ln["resultado"] = "no registrada: el SKU no existe en Lusync (mapealo primero)"
+            ok_todas = False
+            continue
+        res = descontar_venta(sku=ln["sku_lusync"], cantidad=ln["cantidad"], canal="Falabella",
+                              fulfillment=es_fbf, orden_id=order_id,
+                              motivo=f"Venta Falabella {tipo_str} (registrada a mano: SKU sin mapeo)",
+                              usuario=session.get("usuario", "Sistema"),
+                              fecha_compra_marketplace=fecha, origen_registro="manual")
+        ln["resultado"] = res.get("advertencia") or ("ok" if res.get("ok") else (res.get("error") or "no registrada"))
+        ln["bodega"] = res.get("bodega") or res.get("bodega_codigo")
+        if not res.get("ok"):
+            ok_todas = False
+            continue
+        if numero:
+            conn = get_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""UPDATE movimientos SET numero_orden = %s
+                                    WHERE canal = 'Falabella' AND orden_id::text = %s AND sku = %s
+                                      AND tipo = 'salida'
+                                      AND (numero_orden IS NULL OR numero_orden = orden_id::text)""",
+                                (numero, order_id, ln["sku_lusync"]))
+                conn.commit()
+            finally:
+                release_conn(conn)
+        if res.get("advertencia") != "ya_registrada":
+            try:
+                sincronizar_stock_marketplaces(ln["sku_lusync"], None, contexto="falabella_registrar_orden")
+            except Exception as e:
+                ln["publicar"] = f"error: {str(e)[:100]}"
+    if ok_todas and lineas:
+        intentar_marcar_orden_atomic(f"FALABELLA-{order_id}")
+        salida["marcada"] = True
+    registrar_audit(session.get("usuario", "Sistema"), request.remote_addr, "falabella_registrar_orden",
+                    detalle=f"{numero or order_id}: {[(l['sku_lusync'], l['cantidad'], l.get('resultado')) for l in lineas]}")
+    return jsonify(salida)
+
+
 @app.route("/admin/lusync/falabella/completar-numeros")
 def admin_falabella_completar_numeros():
     """Completa en todo el historial el numero de orden que usa el equipo en
