@@ -6862,6 +6862,18 @@ def _sync_paris_automatico():
                         productos = cargar_productos()
                         prod = next((p for p in productos if p["sku"] == sku_lusync), None)
                         if not prod:
+                            # Paris agrega "-1", "-2"... al codigo de la variante
+                            # (CBTSSLND001-1 por CBTSSLND001): sin esto la venta no
+                            # descontaba stock (orden 3145957860, 12/10/2026). Mismo
+                            # criterio que el control de stock (_sin_sufijo).
+                            import re as _re_pa
+                            _base = _re_pa.sub(r"-\d+$", "", seller_sku)
+                            if _base != seller_sku:
+                                _sku_b = obtener_sku_lusync_por_canal("paris", _base) or _base
+                                prod = next((p for p in productos if p["sku"] == _sku_b), None)
+                                if prod:
+                                    sku_lusync = _sku_b
+                        if not prod:
                             print(f"[Scheduler Paris] SKU '{sku_lusync}' no encontrado")
                             _msg_mapeo = (
                                 f"La orden <b>{sub_order}</b> de París contiene el SKU "
