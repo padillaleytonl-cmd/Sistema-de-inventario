@@ -11931,7 +11931,11 @@ def logout():
     return redirect("/")
 
 @app.route("/panel")
-def panel():
+@app.route("/panel/<path:modulo>")
+def panel(modulo=None):
+    # Cada modulo tiene su direccion (/panel/inventario, /panel/facturacion/consultar):
+    # es la misma pagina, que abre el modulo segun la ruta. Asi se puede abrir en
+    # otra pestana, guardar o compartir, y el boton Atras del navegador funciona.
     if not session.get("logged"):
         return redirect("/")
     return render_template("panel.html")
@@ -15360,6 +15364,65 @@ def admin_alertas_resumen():
     finally:
         release_conn(conn)
     return jsonify(salida)
+
+
+@app.route("/admin/lusync/alertas/compactar")
+def admin_alertas_compactar():
+    """Deja sin leer solo la alerta mas reciente de cada (tipo, canal, SKU) en
+    los tipos que describen una condicion que se repite, y marca leidas las
+    copias. Antes de que crear_alerta refrescara la existente (sept-2026), el
+    sync de Paris dejo 41.462 'SKU sin mapeo' de 40 SKU. No borra nada.
+
+      /admin/lusync/alertas/compactar            simula
+      /admin/lusync/alertas/compactar?aplicar=1  marca leidas las copias
+    """
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    from inventario import get_conn, release_conn, TIPOS_QUE_SE_REPITEN
+    aplicar = request.args.get("aplicar") == "1"
+    tid = _tenant_sesion() or TENANT_INTEGRACIONES
+    conn = get_conn(tenant_id=tid, is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SET LOCAL lock_timeout = '60s'")
+            cur.execute("""
+                WITH ranked AS (
+                    SELECT id, tipo, COALESCE(canal, '') AS canal,
+                           ROW_NUMBER() OVER (PARTITION BY tipo, COALESCE(canal, ''), COALESCE(sku, '')
+                                              ORDER BY fecha DESC, id DESC) AS n
+                      FROM alertas
+                     WHERE tenant_id = %s AND leida IS NOT TRUE AND tipo = ANY(%s))
+                SELECT tipo, canal, COUNT(*) FILTER (WHERE n > 1), COUNT(*) FILTER (WHERE n = 1)
+                  FROM ranked GROUP BY 1, 2 ORDER BY 3 DESC""", (tid, list(TIPOS_QUE_SE_REPITEN)))
+            detalle = [{"tipo": r[0], "canal": r[1], "copias": r[2], "quedan": r[3]}
+                       for r in cur.fetchall()]
+            marcadas = 0
+            if aplicar:
+                cur.execute("""
+                    UPDATE alertas SET leida = TRUE
+                     WHERE id IN (
+                        SELECT id FROM (
+                            SELECT id, ROW_NUMBER() OVER (
+                                       PARTITION BY tipo, COALESCE(canal, ''), COALESCE(sku, '')
+                                       ORDER BY fecha DESC, id DESC) AS n
+                              FROM alertas
+                             WHERE tenant_id = %s AND leida IS NOT TRUE AND tipo = ANY(%s)) x
+                         WHERE n > 1)""", (tid, list(TIPOS_QUE_SE_REPITEN)))
+                marcadas = cur.rowcount
+            cur.execute("SELECT COUNT(*) FROM alertas WHERE tenant_id = %s AND leida IS NOT TRUE", (tid,))
+            sin_leer = cur.fetchone()[0]
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        release_conn(conn)
+    if aplicar:
+        registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
+                        "alertas_compactar", detalle=f"{marcadas} copias marcadas leidas")
+    return jsonify({"modo": "APLICADO" if aplicar else "simulacion", "detalle": detalle,
+                    "marcadas_leidas": marcadas, "sin_leer_ahora": sin_leer,
+                    "nota": None if aplicar else "Agrega ?aplicar=1 para marcar leidas las copias."})
 
 
 @app.route("/alertas/contador")

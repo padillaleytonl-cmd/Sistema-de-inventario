@@ -236,6 +236,7 @@ body {
   gap: 2px;
 }
 
+a.nav-btn { text-decoration: none; display: inline-block; }
 .nav-btn {
   background: none;
   border: none;
@@ -1760,13 +1761,13 @@ tbody td {
       <span class="navbar-name">Lusync</span>
     </div>
     <div class="navbar-nav">
-      <button class="nav-btn active" onclick="showSection('dashboard', this)">Dashboard</button>
-      <button class="nav-btn" onclick="showSection('inventario', this)">Inventario</button>
-      <button class="nav-btn" onclick="showSection('movimientos', this)">Movimientos</button>
-      <button class="nav-btn" onclick="showSection('devoluciones', this)">Devoluciones</button>
-      <button class="nav-btn" onclick="showSection('skumapeo', this)">Mapeo SKUs</button>
-      <button class="nav-btn" onclick="showSection('canales', this)">Canales</button>
-      <button class="nav-btn" onclick="showSection('bodegas', this)">Bodegas</button>
+      <a class="nav-btn active" href="/panel" onclick="return lsNav(event,'dashboard',this)">Dashboard</a>
+      <a class="nav-btn" href="/panel/inventario" onclick="return lsNav(event,'inventario',this)">Inventario</a>
+      <a class="nav-btn" href="/panel/movimientos" onclick="return lsNav(event,'movimientos',this)">Movimientos</a>
+      <a class="nav-btn" href="/panel/devoluciones" onclick="return lsNav(event,'devoluciones',this)">Devoluciones</a>
+      <a class="nav-btn" href="/panel/mapeo-skus" onclick="return lsNav(event,'skumapeo',this)">Mapeo SKUs</a>
+      <a class="nav-btn" href="/panel/canales" onclick="return lsNav(event,'canales',this)">Canales</a>
+      <a class="nav-btn" href="/panel/bodegas" onclick="return lsNav(event,'bodegas',this)">Bodegas</a>
 
     </div>
     <div class="navbar-right">
@@ -1870,42 +1871,42 @@ tbody td {
       <span class="sidebar-brand-name">Lusync</span>
     </div>
     <nav class="sidebar-nav">
-      <button class="sidebar-link active" data-section="dashboard" onclick="navSidebar('dashboard', this)">
+      <a class="sidebar-link active" data-section="dashboard" href="/panel" onclick="return lsNav(event,'dashboard',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
         Dashboard
-      </button>
-      <button class="sidebar-link" data-section="inventario" onclick="navSidebar('inventario', this)">
+      </a>
+      <a class="sidebar-link" data-section="inventario" href="/panel/inventario" onclick="return lsNav(event,'inventario',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
         Inventario
-      </button>
-      <button class="sidebar-link" data-section="bodegas" onclick="navSidebar('bodegas', this)">
+      </a>
+      <a class="sidebar-link" data-section="bodegas" href="/panel/bodegas" onclick="return lsNav(event,'bodegas',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
         Bodegas
-      </button>
-      <button class="sidebar-link" data-section="pos" onclick="navSidebar('pos', this)">
+      </a>
+      <a class="sidebar-link" data-section="pos" href="/panel/pos" onclick="return lsNav(event,'pos',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 8h10M7 12h6"/></svg>
         POS
-      </button>
-      <button class="sidebar-link" data-section="movimientos" onclick="navSidebar('movimientos', this)">
+      </a>
+      <a class="sidebar-link" data-section="movimientos" href="/panel/movimientos" onclick="return lsNav(event,'movimientos',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4"/></svg>
         Movimientos
-      </button>
-      <button class="sidebar-link sidebar-sub" data-section="ventas" onclick="navSidebar('ventas', this)">
+      </a>
+      <a class="sidebar-link sidebar-sub" data-section="ventas" href="/panel/ventas" onclick="return lsNav(event,'ventas',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-4"/></svg>
         Reporte de ventas
-      </button>
-      <button class="sidebar-link" data-section="devoluciones" onclick="navSidebar('devoluciones', this)">
+      </a>
+      <a class="sidebar-link" data-section="devoluciones" href="/panel/devoluciones" onclick="return lsNav(event,'devoluciones',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
         Devoluciones
-      </button>
-      <button class="sidebar-link" data-section="skumapeo" onclick="navSidebar('skumapeo', this)">
+      </a>
+      <a class="sidebar-link" data-section="skumapeo" href="/panel/mapeo-skus" onclick="return lsNav(event,'skumapeo',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
         Mapeo SKUs
-      </button>
-      <button class="sidebar-link" data-section="canales" onclick="navSidebar('canales', this)">
+      </a>
+      <a class="sidebar-link" data-section="canales" href="/panel/canales" onclick="return lsNav(event,'canales',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
         Canales
-      </button>
+      </a>
       <div class="sidebar-bottom">
         <!-- Mini campana de alertas — doble visión sobre Configuración -->
         <button onclick="abrirAlertas()"
@@ -1923,14 +1924,14 @@ tbody td {
           </div>
           Alertas
         </button>
-        <button class="sidebar-link" data-section="facturacion" onclick="navSidebar('facturacion', this)">
+        <a class="sidebar-link" data-section="facturacion" href="/panel/facturacion" onclick="return lsNav(event,'facturacion',this)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
           Facturación SII
-        </button>
-        <button class="sidebar-link" data-section="configuracion" onclick="navSidebar('configuracion', this)">
+        </a>
+        <a class="sidebar-link" data-section="configuracion" href="/panel/configuracion" onclick="return lsNav(event,'configuracion',this)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           Configuración
-        </button>
+        </a>
 
         <!-- Separador antes del logout -->
         <div style="border-top:1px solid #e8e6e0;margin:14px 12px 8px;"></div>
@@ -4423,6 +4424,69 @@ function doLogout(){
 }
 
 // ── NAVEGACIÓN
+// ═══════════ DIRECCION POR MODULO (/panel/<modulo>) ═══════════
+// Cada modulo tiene su ruta: se puede abrir en otra pestana, guardar, compartir,
+// y Atras/Adelante del navegador recorren los modulos. Facturacion suma la
+// sub-seccion: /panel/facturacion/consultar.
+var LS_SLUG = {"dashboard": "", "inventario": "inventario", "bodegas": "bodegas", "pos": "pos", "movimientos": "movimientos", "ventas": "ventas", "devoluciones": "devoluciones", "skumapeo": "mapeo-skus", "canales": "canales", "facturacion": "facturacion", "configuracion": "configuracion", "audit": "auditoria"};
+var LS_SEC = Object.fromEntries(Object.entries(LS_SLUG).filter(([k,v])=>v).map(([k,v])=>[v,k]));
+var LS_FAC_SUB = {facturar:'', consultar:'consultar', clientes:'clientes', config:'configuracion'};
+var LS_FAC_PANE = Object.fromEntries(Object.entries(LS_FAC_SUB).map(([k,v])=>[v,k]));
+var _lsSinHistorial = false;
+
+function lsRuta(sec, sub){
+  let p = '/panel' + (LS_SLUG[sec] ? '/' + LS_SLUG[sec] : '');
+  if(sub) p += '/' + sub;
+  return p;
+}
+function _lsEmpujar(path, reemplazar){
+  if(_lsSinHistorial || location.pathname === path) return;
+  try{
+    if(reemplazar) history.replaceState({lusync:1}, '', path);
+    else history.pushState({lusync:1}, '', path);
+  }catch(e){}
+}
+// Clic en el menu: con Ctrl/Cmd/Shift o boton del medio lo maneja el navegador
+// (pestana nueva); un clic normal cambia de modulo sin recargar.
+function lsNav(ev, sec, el){
+  if(ev && (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button === 1)) return true;
+  if(ev) ev.preventDefault();
+  if(el && el.classList.contains('sidebar-link') && typeof navSidebar === 'function') navSidebar(sec, el);
+  else showSection(sec, el);
+  return false;
+}
+function _lsMarcarActivo(sec){
+  document.querySelectorAll('.nav-btn').forEach(b=>{
+    const h = b.getAttribute('href');
+    if(h) b.classList.toggle('active', h === lsRuta(sec));
+  });
+  document.querySelectorAll('.sidebar-link').forEach(b=>b.classList.toggle('active', b.dataset.section === sec));
+}
+// Abre el modulo que dice la direccion actual
+function lsAplicarRuta(){
+  const partes = location.pathname.split('/').filter(Boolean);   // ['panel', modulo, sub]
+  const sec = LS_SEC[partes[1]] || 'dashboard';
+  if(sec === 'facturacion'){
+    const pane = LS_FAC_PANE[partes[2] || ''] || 'facturar';
+    try{ localStorage.setItem('lusync_fac_pane', pane); }catch(e){}
+  }
+  _lsSinHistorial = true;
+  try{
+    showSection(sec, null);
+    if(sec === 'facturacion' && typeof facNav === 'function' && document.getElementById('fac-pane-facturar')){
+      let pane = 'facturar';
+      try{ pane = localStorage.getItem('lusync_fac_pane') || 'facturar'; }catch(e){}
+      facNav(pane, document.querySelector('.fac-nav[data-fac="'+pane+'"]'));
+    }
+  } finally { _lsSinHistorial = false; }
+}
+window.addEventListener('popstate', lsAplicarRuta);
+document.addEventListener('DOMContentLoaded', ()=>{
+  // Solo si la direccion pide otro modulo: /panel sigue abriendo el dashboard como siempre
+  const partes = location.pathname.split('/').filter(Boolean);
+  if(partes[0] === 'panel' && partes[1]) setTimeout(lsAplicarRuta, 0);
+});
+
 function showSection(sec, btn){
   ['dashboard','inventario','movimientos','ventas','devoluciones','audit','configuracion','skumapeo','canales','bodegas','pos','facturacion'].forEach(s => {
     const el = document.getElementById('sec-' + s);
@@ -4455,6 +4519,12 @@ function showSection(sec, btn){
     cargarConfiguracion();
     cargarTipificaciones();
   }
+  // Direccion del modulo (si algo falla, la navegacion sigue igual que antes)
+  try{
+    _lsMarcarActivo(sec);
+    // Facturacion agrega su sub-seccion en facNav
+    if(sec !== 'facturacion' || !location.pathname.startsWith('/panel/facturacion')) _lsEmpujar(lsRuta(sec));
+  }catch(e){}
 }
 
 // ── SINCRONIZAR PRECIOS
@@ -16104,6 +16174,11 @@ function facNav(pane, btn){
   if(el) el.style.display='block';
   // Recordar la sub-sección para no volver al inicio al recargar
   try{ localStorage.setItem('lusync_fac_pane', pane); }catch(e){}
+  // y en la direccion: /panel/facturacion/consultar
+  if(typeof lsRuta === 'function' && typeof LS_FAC_SUB === 'object'){
+    const _dest = lsRuta('facturacion', LS_FAC_SUB[pane] || '');
+    _lsEmpujar(_dest, location.pathname === '/panel/facturacion' || location.pathname === _dest);
+  }
   // Inicializar contenido según la sub-sección
   if(pane==='consultar'){
     if(!document.getElementById('conDesde').value){
