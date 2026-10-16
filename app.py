@@ -3070,7 +3070,8 @@ def _falabella_registrar_orden():
         return redirect("/admin/lusync/login")
     from bodegas_logic import descontar_venta, detectar_fulfillment_falabella
     from falabella import obtener_items_orden_falabella, _orden_falabella_completa
-    from inventario import get_conn, release_conn, intentar_marcar_orden_atomic
+    from inventario import (get_conn, release_conn, intentar_marcar_orden_atomic,
+                            obtener_sku_lusync_por_canal)
     aplicar = request.args.get("aplicar") == "1"
     order_id = (request.args.get("order_id") or "").strip()
     if not order_id.isdigit():
