@@ -32264,6 +32264,61 @@ def facturacion_boleta_emitir():
     return jsonify(resultado), 400
 
 
+# Estados de una NC que NO cuentan: el SII la rechazo o nunca salio.
+_NC_NO_CUENTA = ("rechazado", "rechazada", "error_envio", "anulada", "anulado")
+
+
+def estado_anulacion_documento(tenant_id, tipo_ref, folio_ref):
+    """Cuanto de un documento (boleta, factura) ya se anulo con notas de credito.
+
+    Regla (usuario, 18/10/2026): un documento se anula completo UNA sola vez.
+    Se permiten NC parciales mientras no sumen el total; cuando las NC suman el
+    total, ya no se puede anular mas. Se suman todas las NC validas que lo
+    referencian (la referencia vive en el XML de la NC: TpoDocRef + FolioRef).
+
+    Devuelve {existe, total, anulado, disponible, completa, notas[]}.
+    """
+    import re as _re
+    from inventario import get_conn, release_conn
+    salida = {"existe": False, "total": 0, "anulado": 0, "disponible": 0,
+              "completa": False, "notas": []}
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT monto_total, estado, motivo_anulacion, fecha_emision
+                             FROM facturacion_dtes
+                            WHERE tenant_id = %s AND tipo_dte = %s AND folio = %s
+                            ORDER BY id DESC LIMIT 1""", (tenant_id, int(tipo_ref), int(folio_ref)))
+            doc = cur.fetchone()
+            cur.execute("""SELECT folio, monto_total, estado, xml_firmado FROM facturacion_dtes
+                            WHERE tenant_id = %s AND tipo_dte = 61
+                              AND xml_firmado LIKE %s""",
+                        (tenant_id, "%<FolioRef>" + str(int(folio_ref)) + "</FolioRef>%"))
+            ncs = cur.fetchall()
+        conn.commit()
+    finally:
+        release_conn(conn)
+    if doc:
+        salida["existe"] = True
+        salida["total"] = int(doc[0] or 0)
+        salida["fecha"] = doc[3].strftime("%Y-%m-%d") if doc[3] else None
+        if doc[1] in ("anulada", "anulado") or (doc[2] and "Anulada con NC" in str(doc[2])):
+            salida["completa"] = True
+    for folio, monto, estado, xml in ncs:
+        if (estado or "") in _NC_NO_CUENTA:
+            continue
+        refs = _re.findall(r"<Referencia>(.*?)</Referencia>", xml or "", flags=_re.S)
+        if not any(_re.search(r"<TpoDocRef>\s*%s\s*</TpoDocRef>" % int(tipo_ref), r) and
+                   _re.search(r"<FolioRef>\s*%s\s*</FolioRef>" % int(folio_ref), r) for r in refs):
+            continue
+        salida["anulado"] += int(monto or 0)
+        salida["notas"].append({"folio": folio, "monto": int(monto or 0), "estado": estado})
+    if salida["total"] and salida["anulado"] >= salida["total"]:
+        salida["completa"] = True
+    salida["disponible"] = 0 if salida["completa"] else max(salida["total"] - salida["anulado"], 0)
+    return salida
+
+
 @app.route("/facturacion/nota-credito/emitir", methods=["POST"])
 def facturacion_nota_credito_emitir():
     """Emite UNA Nota de Crédito (tipo 61) que anula o rebaja un documento previo.
@@ -32382,6 +32437,38 @@ def facturacion_nota_credito_emitir():
     receptor = data.get("receptor") or {"rut": "66666666-6", "razon_social": "Consumidor Final"}
     if not receptor.get("rut"): receptor["rut"] = "66666666-6"
     if not receptor.get("razon_social"): receptor["razon_social"] = "Consumidor Final"
+
+    # 2b. Nunca anular mas de lo que tiene el documento. Va antes de reservar
+    #     el folio para no gastarlo en un intento que se rechaza. Si el control
+    #     falla, NO se emite: anular dos veces rebaja el debito fiscal dos veces.
+    if cod_ref in (1, 3):
+        try:
+            _tipo_ref = int(referencia.get("tipo_doc_ref", 39))
+            _est = estado_anulacion_documento(tenant_id, _tipo_ref, referencia["folio_ref"])
+        except Exception as _e_an:
+            return jsonify({"ok": False, "error": "No pude verificar cuánto se ha anulado de ese "
+                                                  "documento; no se emite la NC: " + str(_e_an)[:150]}), 500
+        if _est["existe"]:
+            _fmt = lambda n: ("$" + format(int(n), ",")).replace(",", ".")
+            if _est["completa"]:
+                return jsonify({"ok": False, "anulacion": _est,
+                                "error": "Este documento ya fue anulado por completo "
+                                         "(%s en notas de crédito). No se puede anular de nuevo."
+                                         % _fmt(_est["anulado"] or _est["total"])}), 409
+            if cod_ref == 1 and _est["anulado"] > 0:
+                return jsonify({"ok": False, "anulacion": _est,
+                                "error": "Este documento ya tiene notas de crédito por %s. Solo puedes "
+                                         "anular lo que queda (%s) con una NC que corrige montos."
+                                         % (_fmt(_est["anulado"]), _fmt(_est["disponible"]))}), 409
+            if cod_ref == 3 and items:
+                from facturacion.dtes.nota_credito import _calcular_totales_bruto, _calcular_totales_neto
+                _monto_nc = (_calcular_totales_bruto(items) if _tipo_ref in (39, 41)
+                             else _calcular_totales_neto(items))["mnt_total"]
+                if _monto_nc > _est["disponible"]:
+                    return jsonify({"ok": False, "anulacion": _est,
+                                    "error": "La NC (%s) supera lo que queda por anular de ese documento "
+                                             "(%s de %s)." % (_fmt(_monto_nc), _fmt(_est["disponible"]),
+                                                             _fmt(_est["total"]))}), 409
 
     # 3. Reservar folio tipo 61 (ATÓMICO)
     folio_res = obtener_folio_disponible(get_conn, release_conn, tenant_id, 61, ambiente)
@@ -32549,6 +32636,32 @@ def facturacion_nota_credito_emitir():
                       "documento original como anulado: %s" % (folio, _e))
             finally:
                 release_conn(_conn)
+        elif cod_ref == 3:
+            # Parcial: si con esta las NC ya suman el total, el documento queda
+            # anulado y no admite mas.
+            try:
+                _est2 = estado_anulacion_documento(tenant_id, int(referencia.get("tipo_doc_ref", 39)),
+                                                   referencia["folio_ref"])
+                if _est2["existe"] and _est2["completa"]:
+                    from inventario import get_conn as _gc3, release_conn as _rc3
+                    _c3 = _gc3()
+                    try:
+                        with _c3.cursor() as _cur3:
+                            _cur3.execute("""UPDATE facturacion_dtes
+                                                SET estado = 'anulada', fecha_anulacion = NOW(),
+                                                    motivo_anulacion = %s, referencia_dte_id = %s
+                                              WHERE tenant_id = %s AND tipo_dte = %s AND folio = %s""",
+                                          ("Anulada con NC parciales N°%s" % ", ".join(
+                                              str(n["folio"]) for n in _est2["notas"]),
+                                           nc_id, tenant_id, int(referencia.get("tipo_doc_ref", 39)),
+                                           referencia["folio_ref"]))
+                        _c3.commit()
+                    finally:
+                        _rc3(_c3)
+                    paso("Documento original anulado por completo", True,
+                         "las NC suman el total del documento")
+            except Exception as _e3:
+                print("[Facturación] NC %s: no pude revisar si el documento quedo anulado: %s" % (folio, _e3))
 
     except Exception as e:
         import traceback
