@@ -1286,9 +1286,13 @@ tbody td {
   justify-content: center;
 }
 
-/* En modo desktop: la sidebar es fija y desplaza el contenido */
-@media (min-width: 901px) {
-  body.has-sidebar .navbar { display: none; }
+/* Sin barra superior en ningun ancho: todo vive en la barra lateral, que
+   queda fija desde 641px (antes se escondia bajo 900px y aparecia la barra
+   superior). En celular se abre con el boton flotante. */
+body.has-sidebar .navbar { display: none; }
+
+/* En modo desktop y tablet: la sidebar es fija y desplaza el contenido */
+@media (min-width: 641px) {
   body.has-sidebar .main { margin-left: 220px; }
   body.has-sidebar .page-header,
   body.has-sidebar .table-wrap,
@@ -1297,12 +1301,13 @@ tbody td {
   body.has-sidebar .dash-card { margin-left: 0; }
 }
 
-/* En modo mobile: la sidebar se oculta y se abre con el botón hamburguesa */
-@media (max-width: 900px) {
+/* En celular: la sidebar se oculta y se abre con el botón hamburguesa */
+@media (max-width: 640px) {
   .sidebar { transform: translateX(-100%); box-shadow: 0 0 24px rgba(0,0,0,0.3); }
   .sidebar.open { transform: translateX(0); }
   .sidebar-toggle { display: flex; }
-  body.has-sidebar .navbar { padding-left: 60px; }
+  /* Espacio para el boton flotante, que ya no va sobre una barra */
+  body.has-sidebar .main { padding-top: 58px; }
   .sidebar-overlay {
     display: none;
     position: fixed; top: 0; left: 0; right: 0; bottom: 0;
@@ -11489,7 +11494,7 @@ function navSidebar(sec, btnElem){
   if(typeof showSection === 'function') showSection(sec, null);
   // Cerrar sidebar en mobile
   const sb = document.getElementById('sidebar');
-  if(sb && window.innerWidth <= 900) sb.classList.remove('open');
+  if(sb && window.innerWidth <= 640) sb.classList.remove('open');
 }
 
 // Sincronizar sidebar cuando se haga click en navbar superior
