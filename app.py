@@ -11219,6 +11219,50 @@ def devoluciones_mkt_importar_falabella():
     return jsonify({"ok": True, **resumen})
 
 
+@app.route("/admin/lusync/devoluciones/falabella-full-reclasificar")
+def admin_dev_falabella_full_reclasificar():
+    """Las devoluciones Falabella Full que el cliente devolvio llegan a nuestra
+    bodega: se recalcula su estado desde el estado del Seller Center ya
+    guardado. Las que no alcanzaron a llegar al cliente (?no_llegaron=orden,...)
+    quedan cerradas: vuelven directo a Falabella.
+
+      ...?no_llegaron=3248886591,3252775393           simula
+      ...?no_llegaron=...&aplicar=1                   aplica
+    """
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    from inventario import get_conn, release_conn
+    aplicar = request.args.get("aplicar") == "1"
+    no_llegaron = {x.strip() for x in (request.args.get("no_llegaron") or "").split(",") if x.strip()}
+    tid = _tenant_sesion() or TENANT_INTEGRACIONES
+    cambios = []
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT return_id, order_id, sku_canal, estado, estado_canal
+                             FROM devoluciones_marketplace
+                            WHERE tenant_id = %s AND canal = 'falabella'
+                              AND tipo = 'return_fulfillment' AND estado_sc IS NOT NULL""", (tid,))
+            for rid, orden, sku, estado, est_sc in cur.fetchall():
+                if orden in no_llegaron:
+                    nuevo = "resuelta" if estado != "cancelada" else "cancelada"
+                else:
+                    nuevo = _SC_FALABELLA_ESTADO.get((est_sc or "").upper(), "en_transito")
+                if nuevo != estado:
+                    cambios.append({"orden": orden, "sku": sku, "estado_sc": est_sc,
+                                    "antes": estado, "ahora": nuevo})
+                    if aplicar:
+                        cur.execute("""UPDATE devoluciones_marketplace
+                                          SET estado = %s, estado_sc = %s, requiere_accion = %s
+                                        WHERE tenant_id = %s AND canal = 'falabella' AND return_id = %s""",
+                                    (nuevo, nuevo, nuevo not in ("resuelta", "cancelada"), tid, rid))
+        conn.commit()
+    finally:
+        release_conn(conn)
+    return jsonify({"modo": "APLICADO" if aplicar else "simulacion", "cambios": cambios,
+                    "no_llegaron": sorted(no_llegaron)})
+
+
 @app.route("/devoluciones-mkt/procesar-info")
 def devoluciones_mkt_procesar_info():
     """Lo que hay que saber ANTES de procesar: a que bodega volveria, por que,
