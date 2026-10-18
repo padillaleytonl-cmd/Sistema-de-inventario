@@ -10348,6 +10348,13 @@ def _bodega_para_reintegro(orden_id, sku):
         bodega, tipo = fila[0], (fila[1] or "propia")
         if tipo == "propia":
             return "CENTRAL", f"la venta salio de {bodega}, que es bodega propia"
+        if bodega == "FALABELLA_FBM":
+            # Falabella Full: lo que devuelve el cliente llega a NUESTRA bodega.
+            # Solo lo que no alcanzo a llegar al cliente (entrega fallida o
+            # cancelada antes) vuelve a Falabella, y eso no es una devolucion
+            # que se procese aca (regla del usuario, 18/10/2026).
+            return "CENTRAL", ("la venta fue Falabella Full, y lo que devuelve el cliente "
+                               "llega a nuestra bodega")
         return bodega, (f"la venta salio de {bodega}, que es del marketplace: "
                         f"el cliente le devuelve a ellos, no a nosotros")
     except Exception as e:
@@ -11096,6 +11103,7 @@ def devoluciones_mkt_importar_falabella():
     c_cant = _col("cantidad")
     c_precio = _col("precio")
     c_razon = _col("detalle razon de devolucion")
+    c_razon_cli = _col("razon de devolucion del cliente")
     c_modelo = _col("modelo logistico")
     c_estado = _col("estado actual")
     c_fecha_estado = _col("fecha de estado actual")
@@ -11130,12 +11138,16 @@ def devoluciones_mkt_importar_falabella():
                 estado_sc = str(fila[c_estado] or "").strip().upper()
                 es_full = "falabella" in _n(fila[c_modelo] if c_modelo is not None else "")
                 estado = _SC_FALABELLA_ESTADO.get(estado_sc, "en_transito")
-                if es_full and estado != "cancelada":
-                    # Full: el producto vuelve a la bodega de Falabella
+                razon_cli = str(fila[c_razon_cli] or "").strip().upper() if c_razon_cli is not None else ""
+                no_llego = razon_cli == "UNDELIVERED"
+                if no_llego and estado != "cancelada":
+                    # No alcanzo a llegar al cliente: vuelve directo a Falabella
+                    # (Full) y no pasa por nuestra bodega.
                     estado = "resuelta"
-                # Llegada a nuestra bodega = la fecha en que quedo DELIVERED
+                # Llegada a nuestra bodega = la fecha en que quedo DELIVERED.
+                # Tambien en Full: lo que devuelve el cliente llega aca.
                 llegada = None
-                if not es_full:
+                if not no_llego:
                     if estado_sc == "DELIVERED":
                         llegada = _fecha(fila[c_fecha_estado])
                     for ce, cf in historial:

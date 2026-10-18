@@ -866,10 +866,10 @@ def obtener_devoluciones_falabella(dias=30):
                     # documentados y son estables. ReturnStatus trae texto
                     # libre en español ("Pendiente", "Aprobada") y no sirve
                     # para mapear, solo para mostrar.
-                    # Full (Own Warehouse): el producto vuelve a la bodega de
-                    # Falabella, no a la nuestra; para Lusync no queda nada
-                    # que procesar.
-                    "estado": ("resuelta" if _es_full_fa else _norm_estado("falabella", estado_item)),
+                    # Tambien en Falabella Full lo que devuelve el cliente llega
+                    # a nuestra bodega: se procesa igual que una propia. Las
+                    # entregas fallidas no aparecen como devolucion en la API.
+                    "estado": _norm_estado("falabella", estado_item),
                     "estado_canal": estado_canal,
                     # Reason y ReasonDetail estan documentados como "Motivo de
                     # cancelacion o devolucion" y "Razon detallada". Se
