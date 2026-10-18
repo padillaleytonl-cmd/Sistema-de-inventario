@@ -33811,11 +33811,17 @@ def facturacion_boleta_xml(boleta_id):
         return jsonify({"ok": False, "error": "XML no disponible"}), 404
     xml = row[0].encode("iso-8859-1", errors="replace") if isinstance(row[0], str) else row[0]
     fname = _nombre_archivo_dte(row[2], row[1]) + ".xml"
-    return Response(xml, mimetype="application/xml",
+    # El XML del SII esta en ISO-8859-1. Con mimetype= Flask anunciaria utf-8, y el
+    # navegador le hace caso al encabezado antes que a la declaracion del XML: las
+    # tildes se verian mal.
+    return Response(xml, content_type=_XML_SII,
                     headers={"Content-Disposition": 'attachment; filename="%s"' % fname})
 
 
 _ESQUEMAS_SII = {}
+
+# Tipo de contenido de los XML tributarios (todos en ISO-8859-1, como exige el SII)
+_XML_SII = "application/xml; charset=ISO-8859-1"
 
 
 def _esquema_sii(version, raiz):
@@ -33936,7 +33942,7 @@ def facturacion_boleta_envio_sii(boleta_id):
             _amb = normalizar_ambiente(_cfg_amb.get("ambiente") or "certificacion")
             _raiz = "EnvioBOLETA" if int(row[2]) in (39, 41) else "EnvioDTE"
             return _Resp(row[3].encode("iso-8859-1", errors="replace"),
-                         mimetype="application/xml",
+                         content_type=_XML_SII,
                          headers={"Content-Disposition":
                                   'attachment; filename="%s_T%s_F%s_%s_ENVIADO.xml"'
                                   % (_raiz, row[2], row[1], _amb)})
@@ -34003,7 +34009,7 @@ def facturacion_boleta_envio_sii(boleta_id):
             set_dte_id=set_id,
             documento_ids=[] if ya_firmado else [documento_id])
         fname = "%s_T%s_F%s_%s.xml" % (nombre_sobre, tipo_dte, folio, ambiente)
-        return Response(sobre_firmado, mimetype="application/xml",
+        return Response(sobre_firmado, content_type=_XML_SII,
                         headers={"Content-Disposition": 'attachment; filename="%s"' % fname})
     except Exception as e:
         import traceback
@@ -34041,7 +34047,7 @@ def facturacion_boleta_xml_receptor(boleta_id):
     dte = m.group(0) if m else s
     salida = '<?xml version="1.0" encoding="ISO-8859-1"?>\n' + dte
     fname = "DTE_receptor_%s_folio_%s.xml" % (row[2], row[1])
-    return Response(salida.encode("iso-8859-1", errors="replace"), mimetype="application/xml",
+    return Response(salida.encode("iso-8859-1", errors="replace"), content_type=_XML_SII,
                     headers={"Content-Disposition": 'attachment; filename="%s"' % fname})
 
 
@@ -35414,14 +35420,24 @@ def facturacion_documentos_listar():
         monto = int(r[5]) if r[5] is not None else 0
         iva = int(r[6]) if r[6] is not None else 0
         tipo_dte = r[1]
-        es_afecta = tipo_dte in (33, 39)
+        # Afecta/exenta: boletas y facturas por su tipo; NC y ND segun lleven IVA
+        # (heredan la del documento que corrigen). La guia de despacho es un
+        # traslado, no una venta: no se marca.
+        if tipo_dte in (33, 39):
+            es_afecta = True
+        elif tipo_dte in (34, 41):
+            es_afecta = False
+        elif tipo_dte in (56, 61):
+            es_afecta = iva > 0
+        else:
+            es_afecta = None
         docs.append({
             "id": r[0], "tipo_dte": tipo_dte,
             "tipo_nombre": TIPOS_DTE.get(tipo_dte, {}).get("nombre", f"Tipo {tipo_dte}"),
             "folio": r[2], "rut_receptor": r[3], "razon_social_receptor": r[4],
             "monto_total": monto, "monto_iva": iva,
             "afecta": es_afecta,
-            "afecta_label": "Afecta" if es_afecta else "Exenta",
+            "afecta_label": ("Afecta" if es_afecta else "Exenta") if es_afecta is not None else "",
             "estado": r[7], "track_id": r[8], "estado_sii": r[9],
             "canal": r[10] or "", "orden_id": r[11] or "",
             "fecha_emision": r[12].isoformat() if r[12] else None,

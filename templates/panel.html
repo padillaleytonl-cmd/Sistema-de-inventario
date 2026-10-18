@@ -16447,7 +16447,9 @@ function conRenderPagina(){
     const cliente = doc.razon_social_receptor || 'Boleta simple';
     const sub = [doc.rut_receptor, doc.orden_id].filter(Boolean).join(' · ');
     const canalTxt = doc.canal ? conCanalLabel(doc.canal) : 'POS local';
-    const ae = doc.afecta
+    const ae = (doc.afecta === null || doc.afecta === undefined)
+      ? '<span title="No es una venta: no se marca afecta ni exenta" style="font-size:12px;color:var(--muted);cursor:default;">—</span>'
+      : doc.afecta
       ? '<span title="Venta afecta (con IVA)" style="font-size:12px;font-weight:700;display:inline-block;width:22px;height:22px;line-height:22px;border-radius:6px;background:#E6F1FB;color:#185FA5;cursor:default;">A</span>'
       : '<span title="Venta exenta (sin IVA)" style="font-size:12px;font-weight:700;display:inline-block;width:22px;height:22px;line-height:22px;border-radius:6px;background:#FAEEDA;color:#854F0B;cursor:default;">E</span>';
     // Botón "Anular con NC": solo para boletas/facturas (no NC/ND), enviadas/aceptadas y NO ya anuladas
