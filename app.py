@@ -11041,6 +11041,172 @@ def devoluciones_dashboard():
     })
 
 
+# Estado del Seller Center de Falabella -> estado de Lusync
+_SC_FALABELLA_ESTADO = {
+    "DELIVERED": "recibida",              # llego a nuestra bodega: por aceptar
+    "SELLER_REJECT": "recibida",          # la rechazamos: en revision
+    "AGENT_REVIEW": "recibida",           # apelacion en curso
+    "SELLER_ACCEPT": "resuelta",
+    "SELLER_REJECTION_REFUSED": "resuelta",   # apelacion perdida: quedo aceptada
+    "SELLER_REJECTION_ACCEPTED": "cancelada",  # apelacion ganada: no hay devolucion
+}
+
+
+@app.route("/devoluciones-mkt/importar-falabella", methods=["POST"])
+def devoluciones_mkt_importar_falabella():
+    """Importa el Excel de devoluciones del Seller Center de Falabella.
+
+    La API de Falabella da el mismo "returned" a las pendientes y a las
+    aceptadas, no informa apelaciones ni el plazo. El Excel si: estado actual
+    y la fecha de cada paso. Lusync guarda ese estado (estado_sc), que la
+    sincronizacion ya no pisa, y la fecha de entrega en nuestra bodega, de la
+    que sale el plazo de 3 dias habiles para aceptar. No mueve stock.
+    """
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autorizado"}), 401
+    archivo = request.files.get("archivo")
+    if not archivo:
+        return jsonify({"ok": False, "error": "Falta el archivo Excel"}), 400
+    import openpyxl
+    from returns import asegurar_columnas_sc
+    from inventario import get_conn, release_conn, obtener_sku_lusync_por_canal
+    try:
+        wb = openpyxl.load_workbook(archivo, read_only=True, data_only=True)
+        filas = list(wb.worksheets[0].iter_rows(values_only=True))
+    except Exception as e:
+        return jsonify({"ok": False, "error": "No pude leer el Excel: " + str(e)[:150]}), 400
+    if not filas:
+        return jsonify({"ok": False, "error": "El Excel viene vacio"}), 400
+
+    import unicodedata
+    def _n(t):
+        t = unicodedata.normalize("NFKD", str(t or "")).encode("ascii", "ignore").decode().lower()
+        return " ".join(t.split())
+    cab = [_n(c) for c in filas[0]]
+
+    def _col(*nombres):
+        for nom in nombres:
+            if nom in cab:
+                return cab.index(nom)
+        return None
+    c_fecha = _col("fecha de devolucion")
+    c_orden = _col("numero de orden")
+    c_nombre = _col("nombre del producto")
+    c_sku = _col("sku del vendedor")
+    c_cant = _col("cantidad")
+    c_precio = _col("precio")
+    c_razon = _col("detalle razon de devolucion")
+    c_modelo = _col("modelo logistico")
+    c_estado = _col("estado actual")
+    c_fecha_estado = _col("fecha de estado actual")
+    if None in (c_orden, c_sku, c_estado):
+        return jsonify({"ok": False, "error": "No es el Excel de devoluciones de Falabella "
+                                              "(faltan Numero de orden, SKU del vendedor o Estado actual)"}), 400
+    historial = [(i, i + 1) for i, c in enumerate(cab) if c.startswith("estado previo")]
+
+    def _fecha(v):
+        if not v:
+            return None
+        if isinstance(v, datetime):
+            return v
+        for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(str(v).strip()[:10], fmt)
+            except ValueError:
+                continue
+        return None
+
+    tid = _tenant_sesion() or TENANT_INTEGRACIONES
+    resumen = {"actualizadas": 0, "nuevas": 0, "por_estado": {}, "detalle": []}
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            asegurar_columnas_sc(cur)
+            for fila in filas[1:]:
+                if not fila or not fila[c_orden]:
+                    continue
+                orden = str(fila[c_orden]).strip()
+                sku_c = str(fila[c_sku] or "").strip()
+                estado_sc = str(fila[c_estado] or "").strip().upper()
+                es_full = "falabella" in _n(fila[c_modelo] if c_modelo is not None else "")
+                estado = _SC_FALABELLA_ESTADO.get(estado_sc, "en_transito")
+                if es_full and estado != "cancelada":
+                    # Full: el producto vuelve a la bodega de Falabella
+                    estado = "resuelta"
+                # Llegada a nuestra bodega = la fecha en que quedo DELIVERED
+                llegada = None
+                if not es_full:
+                    if estado_sc == "DELIVERED":
+                        llegada = _fecha(fila[c_fecha_estado])
+                    for ce, cf in historial:
+                        if str(fila[ce] or "").strip().upper() == "DELIVERED":
+                            llegada = _fecha(fila[cf]) or llegada
+                fecha_dev = _fecha(fila[c_fecha]) if c_fecha is not None else None
+                tipo = "return_fulfillment" if es_full else "return_seller"
+                motivo = str(fila[c_razon] or "").strip() if c_razon is not None else ""
+                try:
+                    cant = int(float(fila[c_cant] or 1)) if c_cant is not None else 1
+                except (TypeError, ValueError):
+                    cant = 1
+                cur.execute("""UPDATE devoluciones_marketplace
+                                  SET estado_sc = %s, estado = %s, estado_canal = %s, tipo = %s,
+                                      fecha_llegada_bodega = COALESCE(fecha_llegada_bodega, %s),
+                                      fecha_solicitud = COALESCE(fecha_solicitud, %s),
+                                      motivo = COALESCE(NULLIF(%s, ''), motivo),
+                                      requiere_accion = %s, sc_actualizado = %s
+                                WHERE tenant_id = %s AND canal = 'falabella' AND order_id = %s
+                                  AND UPPER(sku_canal) = UPPER(%s)""",
+                            (estado, estado, estado_sc, tipo, llegada, fecha_dev, motivo,
+                             estado not in ("resuelta", "cancelada"), now_chile().replace(tzinfo=None),
+                             tid, orden, sku_c))
+                if cur.rowcount:
+                    resumen["actualizadas"] += cur.rowcount
+                    accion = "actualizada"
+                else:
+                    # No la tenia Lusync (p. ej. entregas fallidas): se crea con
+                    # la misma clave que usa la API (OrderId-SKU) si la venta
+                    # esta registrada, para no duplicarla despues.
+                    cur.execute("""SELECT orden_id FROM movimientos
+                                    WHERE tenant_id = %s AND canal = 'Falabella' AND numero_orden = %s
+                                    LIMIT 1""", (tid, orden))
+                    r = cur.fetchone()
+                    rid = f"{r[0]}-{sku_c}" if r and r[0] else f"SC{orden}-{sku_c}"
+                    sku_l = obtener_sku_lusync_por_canal("falabella", sku_c) or sku_c
+                    precio = None
+                    try:
+                        precio = float(fila[c_precio]) if c_precio is not None and fila[c_precio] else None
+                    except (TypeError, ValueError):
+                        pass
+                    cur.execute("""INSERT INTO devoluciones_marketplace
+                                     (tenant_id, canal, return_id, order_id, sku, sku_canal, producto_nombre,
+                                      cantidad, estado, estado_canal, estado_sc, motivo, tipo, monto_reembolso,
+                                      moneda, fecha_solicitud, fecha_llegada_bodega, requiere_accion,
+                                      primera_deteccion, ultima_sincronizacion, sc_actualizado, url_gestion)
+                                   VALUES (%s,'falabella',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'CLP',%s,%s,%s,
+                                           NOW(), NOW(), %s, 'https://sellercenter.falabella.com/return/index')
+                                   ON CONFLICT (tenant_id, canal, return_id) DO NOTHING""",
+                                (tid, rid, orden, sku_l, sku_c,
+                                 str(fila[c_nombre] or "") if c_nombre is not None else None,
+                                 cant, estado, estado_sc, estado, motivo or None, tipo, precio,
+                                 fecha_dev, llegada, estado not in ("resuelta", "cancelada"),
+                                 now_chile().replace(tzinfo=None)))
+                    resumen["nuevas"] += cur.rowcount
+                    accion = "nueva" if cur.rowcount else "sin cambios"
+                resumen["por_estado"][estado_sc] = resumen["por_estado"].get(estado_sc, 0) + 1
+                resumen["detalle"].append({"orden": orden, "sku": sku_c, "estado_sc": estado_sc,
+                                           "lusync": estado, "full": es_full, "accion": accion,
+                                           "llegada": llegada.strftime("%d/%m/%Y") if llegada else None})
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+    finally:
+        release_conn(conn)
+    registrar_audit(session.get("usuario", "Sistema"), request.remote_addr, "importar_devoluciones_falabella",
+                    detalle=f"{resumen['actualizadas']} actualizadas, {resumen['nuevas']} nuevas")
+    return jsonify({"ok": True, **resumen})
+
+
 @app.route("/devoluciones-mkt/procesar-info")
 def devoluciones_mkt_procesar_info():
     """Lo que hay que saber ANTES de procesar: a que bodega volveria, por que,

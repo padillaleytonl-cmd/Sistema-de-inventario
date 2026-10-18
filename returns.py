@@ -146,6 +146,16 @@ ESTADO_CANAL_LABEL = {
         "OPEN": "Abierta",
     },
     "falabella": {
+        # Estados del Seller Center (Excel de devoluciones). La API no los da.
+        "CREATED": "Creada", "PENDING": "Pendiente", "RECEIVED": "Solicitud recibida",
+        "READY_TO_PICKUP": "Lista para retiro", "PICKUP_STARTED": "Retiro iniciado",
+        "PICKUP_ATTEMPTED": "Retiro intentado", "ON_ROUTE": "En ruta",
+        "WAITING_FOR_DISPATCH": "Esperando despacho", "SHIPMENT_CONFIRMED": "Despacho confirmado",
+        "SHIPMENT_LOADED": "Despacho cargado", "IN_TRANSIT": "En camino",
+        "OUT_FOR_DELIVERY": "En reparto", "RETURNING_TO_ORIGIN": "Volviendo al origen",
+        "DELIVERED": "Entregada · por aceptar", "SELLER_ACCEPT": "Aceptada",
+        "SELLER_REJECT": "Rechazada por ti", "AGENT_REVIEW": "En apelación",
+        "SELLER_REJECTION_ACCEPTED": "Apelación ganada", "SELLER_REJECTION_REFUSED": "Apelación perdida",
         "returned": "Devuelto",
         "return_waiting_for_approval": "Esperando aprobación",
         "return_shipped_by_customer": "Enviado por cliente",
@@ -914,6 +924,24 @@ def obtener_devoluciones_falabella(dias=30):
 # ─────────────────────────────────────────────────────────────────────────────
 # UPSERT a la tabla devoluciones_marketplace
 # ─────────────────────────────────────────────────────────────────────────────
+_COLUMNAS_SC_LISTAS = False
+
+
+def asegurar_columnas_sc(cur):
+    """estado_sc: el estado que dice el Seller Center (Excel importado). La API
+    de Falabella no distingue pendiente de aceptada ni informa apelaciones, asi
+    que cuando hay estado_sc, la sincronizacion no lo pisa."""
+    global _COLUMNAS_SC_LISTAS
+    if _COLUMNAS_SC_LISTAS:
+        return
+    cur.execute("""SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'devoluciones_marketplace' AND column_name = 'estado_sc'""")
+    if not cur.fetchone():
+        cur.execute("ALTER TABLE devoluciones_marketplace ADD COLUMN IF NOT EXISTS estado_sc TEXT")
+        cur.execute("ALTER TABLE devoluciones_marketplace ADD COLUMN IF NOT EXISTS sc_actualizado TIMESTAMP")
+    _COLUMNAS_SC_LISTAS = True
+
+
 def upsert_devolucion(dev, tenant_id=None):
     """Inserta o actualiza una devolución normalizada. Calcula dias_restantes y
     requiere_accion. Resuelve el SKU Lusync si es posible. Devuelve 'insert'/'update'/'error'.
@@ -962,6 +990,7 @@ def upsert_devolucion(dev, tenant_id=None):
         except Exception:
             raw_json = None
 
+        asegurar_columnas_sc(cur)
         cur.execute("""
             INSERT INTO devoluciones_marketplace
                 (canal, return_id, claim_id, order_id, sku, sku_canal, producto_nombre,
@@ -979,8 +1008,11 @@ def upsert_devolucion(dev, tenant_id=None):
                 sku_canal = EXCLUDED.sku_canal,
                 producto_nombre = COALESCE(EXCLUDED.producto_nombre, devoluciones_marketplace.producto_nombre),
                 cantidad = EXCLUDED.cantidad,
-                estado = EXCLUDED.estado,
-                estado_canal = EXCLUDED.estado_canal,
+                -- Lo importado del Seller Center manda sobre la API
+                estado = COALESCE(devoluciones_marketplace.estado_sc, EXCLUDED.estado),
+                estado_canal = CASE WHEN devoluciones_marketplace.estado_sc IS NOT NULL
+                                    THEN devoluciones_marketplace.estado_canal
+                                    ELSE EXCLUDED.estado_canal END,
                 motivo = COALESCE(EXCLUDED.motivo, devoluciones_marketplace.motivo),
                 tipo = EXCLUDED.tipo,
                 monto_reembolso = COALESCE(EXCLUDED.monto_reembolso, devoluciones_marketplace.monto_reembolso),
