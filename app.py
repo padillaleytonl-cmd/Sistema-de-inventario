@@ -11263,6 +11263,134 @@ def admin_dev_falabella_full_reclasificar():
                     "no_llegaron": sorted(no_llegaron)})
 
 
+def _boleta_de_devolucion(canal, return_id):
+    """La boleta (o factura) de la venta de una devolucion, si esta en Lusync.
+
+    Se busca por la orden del marketplace guardada en facturacion_dtes.orden_id.
+    Hoy solo la tienen las boletas emitidas a mano con N° de orden; cuando
+    Lusync emita las boletas de los marketplaces (pendiente) quedaran todas.
+    Devuelve (info, motivo_si_no_hay).
+    """
+    from inventario import get_conn, release_conn
+    tid = _tenant_sesion() or TENANT_INTEGRACIONES
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT COALESCE(order_id,''), COALESCE(producto_nombre,''), COALESCE(cantidad,1),
+                                  monto_reembolso, COALESCE(nc_folio,'')
+                             FROM devoluciones_marketplace
+                            WHERE tenant_id = %s AND canal = %s AND return_id = %s""",
+                        (tid, canal, return_id))
+            dev = cur.fetchone()
+            if not dev:
+                return None, "No existe esa devolución"
+            ordenes = [o for o in {dev[0], str(_orden_de_venta(canal, dev[0], return_id) or "")} if o]
+            cur.execute("""SELECT id, tipo_dte, folio, monto_total, fecha_emision, estado
+                             FROM facturacion_dtes
+                            WHERE tenant_id = %s AND tipo_dte IN (39, 41)
+                              AND orden_id = ANY(%s)
+                              AND COALESCE(estado,'') NOT IN ('rechazado', 'error_envio')
+                            ORDER BY id DESC LIMIT 1""", (tid, ordenes))
+            doc = cur.fetchone()
+        conn.commit()
+    finally:
+        release_conn(conn)
+    info = {"orden": dev[0], "producto": dev[1], "cantidad": int(dev[2] or 1),
+            "monto_devolucion": int(round(float(dev[3]))) if dev[3] else None,
+            "nc_folio": dev[4] or None}
+    if not doc:
+        return info, "No puedes anular, orden sin boleta"
+    est = estado_anulacion_documento(tid, doc[1], doc[2])
+    info.update({"existe": True, "dte_id": doc[0], "tipo_dte": doc[1], "folio": doc[2],
+                 "total": int(doc[3] or 0), "fecha": doc[4].strftime("%Y-%m-%d") if doc[4] else None,
+                 "anulado": est["anulado"], "disponible": est["disponible"], "completa": est["completa"]})
+    if est["completa"]:
+        return info, "La boleta ya está anulada por completo"
+    # Sugerido: lo que el canal devolvio al cliente, sin pasar lo que queda
+    sug = info["monto_devolucion"] or info["disponible"]
+    info["monto_sugerido"] = min(sug, info["disponible"])
+    return info, None
+
+
+@app.route("/devoluciones-mkt/boleta")
+def devoluciones_mkt_boleta():
+    """Si la venta de la devolucion tiene boleta en Lusync y cuanto queda por anular."""
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autorizado"}), 401
+    info, motivo = _boleta_de_devolucion((request.args.get("canal") or "").strip(),
+                                         (request.args.get("return_id") or "").strip())
+    if info is None:
+        return jsonify({"ok": False, "error": motivo}), 404
+    return jsonify({"ok": True, "puede_anular": motivo is None and not info.get("nc_folio"),
+                    "motivo": motivo, **info})
+
+
+@app.route("/devoluciones-mkt/emitir-nc", methods=["POST"])
+def devoluciones_mkt_emitir_nc():
+    """Anula la boleta de la venta (NC) desde el flujo de la devolucion.
+
+    Total (CodRef 1) si se anula todo lo que tiene la boleta; si no, parcial
+    (CodRef 3) por el monto devuelto. La regla de no anular mas de una vez la
+    aplica la emision de NC. El folio queda anotado en la devolucion.
+    """
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autorizado"}), 401
+    datos = request.get_json(silent=True) or {}
+    canal = (datos.get("canal") or "").strip()
+    rid = (datos.get("return_id") or "").strip()
+    info, motivo = _boleta_de_devolucion(canal, rid)
+    if info is None:
+        return jsonify({"ok": False, "error": motivo}), 404
+    if motivo:
+        return jsonify({"ok": False, "error": motivo}), 409
+    if info.get("nc_folio"):
+        return jsonify({"ok": False, "error": "Esta devolución ya tiene la NC N°%s" % info["nc_folio"]}), 409
+    try:
+        monto = int(datos.get("monto") or info["monto_sugerido"] or 0)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Monto inválido"}), 400
+    if monto <= 0 or monto > info["disponible"]:
+        return jsonify({"ok": False, "error": "El monto debe ser mayor que 0 y no pasar lo que queda "
+                                              "por anular ($%s)" % format(info["disponible"], ",").replace(",", ".")}), 400
+    total = info["anulado"] == 0 and monto >= info["total"]
+    razon = ("Devolución %s orden %s" % (canal, info["orden"]))[:90]
+    body = {"referencia": {"folio_ref": info["folio"], "tipo_doc_ref": info["tipo_dte"],
+                           "fecha_ref": info["fecha"], "cod_ref": 1 if total else 3,
+                           "razon_ref": razon}}
+    if not total:
+        # Boleta: precio con IVA; factura: neto
+        precio = monto if info["tipo_dte"] in (39, 41) else int(round(monto / 1.19))
+        body["items"] = [{"nombre": ("Devolución " + (info["producto"] or ""))[:80], "cantidad": 1,
+                          "precio_unitario": precio, "exento": info["tipo_dte"] == 41}]
+    sesion = {k: session.get(k) for k in list(session.keys())}
+    with app.test_request_context("/facturacion/nota-credito/emitir", method="POST", json=body):
+        session.update(sesion)
+        resp = facturacion_nota_credito_emitir()
+    status = 200
+    if isinstance(resp, tuple):
+        resp, status = resp[0], resp[1]
+    res = resp.get_json() or {}
+    if not res.get("ok"):
+        return jsonify({"ok": False, "error": res.get("error") or "No se pudo emitir la NC",
+                        "pasos": res.get("pasos")}), status if status >= 400 else 502
+    from inventario import get_conn, release_conn
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""UPDATE devoluciones_marketplace SET nc_folio = %s
+                            WHERE canal = %s AND return_id = %s AND COALESCE(nc_folio,'') = ''
+                              AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int""",
+                        (str(res.get("folio")), canal, rid))
+        conn.commit()
+    finally:
+        release_conn(conn)
+    registrar_audit(session.get("usuario", "Sistema"), request.remote_addr, "devolucion_emitir_nc",
+                    detalle=f"{canal}/{rid}: NC {res.get('folio')} por ${monto} sobre "
+                            f"{info['tipo_dte']}-{info['folio']} ({'total' if total else 'parcial'})")
+    return jsonify({"ok": True, "folio": res.get("folio"), "monto": monto, "total": total,
+                    "boleta": info["folio"]})
+
+
 @app.route("/devoluciones-mkt/procesar-info")
 def devoluciones_mkt_procesar_info():
     """Lo que hay que saber ANTES de procesar: a que bodega volveria, por que,
@@ -11376,6 +11504,20 @@ def devoluciones_mkt_procesar():
                                       f"{cupo['disponible']}. Nunca se repone más de lo vendido.")}), 409
 
         bodega, razon = _bodega_para_reintegro(orden_venta, sku)
+        # Quien la esta procesando la tiene en la mano: si lo confirma
+        # ("recibida_ahora"), se marca la llegada en el mismo paso, sin tener que
+        # pistolearla antes (menos pasos, 18/10/2026).
+        if datos.get("recibida_ahora") and not fila["llegada"]:
+            _c_ll = get_conn(); _cur_ll = _c_ll.cursor()
+            try:
+                _cur_ll.execute("""UPDATE devoluciones_marketplace SET fecha_llegada_bodega = %s
+                                    WHERE canal = %s AND return_id = %s AND fecha_llegada_bodega IS NULL
+                                      AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int""",
+                                (ahora, canal, rid))
+                _c_ll.commit()
+            finally:
+                _cur_ll.close(); release_conn(_c_ll)
+            fila["llegada"] = ahora
         # CENTRAL es solo para lo que paso por nuestra bodega. Si todavia no
         # llega, reintegrarla ahi inventaria una unidad que no tenemos.
         if destino == "reintegrado" and bodega == "CENTRAL" and not fila["llegada"]:
@@ -11556,6 +11698,17 @@ def devoluciones_mkt_llegada():
                         LIMIT 1""",
                     (codigo, codigo, codigo, codigo, codigo))
         fila = cur.fetchone()
+        # Los demas productos del mismo paquete (misma orden): una orden con dos
+        # productos se pistoleaba dos veces. Se marcan todos de una vez.
+        hermanas = []
+        if fila and fila[2]:
+            cur.execute("""SELECT return_id FROM devoluciones_marketplace
+                            WHERE canal = %s AND order_id = %s AND return_id <> %s
+                              AND fecha_llegada_bodega IS NULL
+                              AND COALESCE(estado,'') NOT IN ('cancelada')
+                              AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int""",
+                        (fila[0], fila[2], fila[1]))
+            hermanas = [r[0] for r in cur.fetchall()]
         if not fila:
             cur.close()
             return jsonify({"ok": False, "encontrada": False,
@@ -11567,6 +11720,7 @@ def devoluciones_mkt_llegada():
             cur.close()
             horas = int((flim - ahora).total_seconds() // 3600) if flim else None
             return jsonify({"ok": True, "encontrada": True, "ya_estaba": True,
+                            "return_id": rid, "otros_productos": hermanas,
                             "canal": canal, "orden": oid, "producto": nombre,
                             "sku": skuc, "estado": estado,
                             "llego": llegada.strftime("%d/%m/%Y %H:%M"),
@@ -11581,6 +11735,11 @@ def devoluciones_mkt_llegada():
                     RETURNING fecha_limite""",
                     (ahora, canal, rid))
         nuevo_limite = (cur.fetchone() or [None])[0]
+        if hermanas:
+            cur.execute("""UPDATE devoluciones_marketplace SET fecha_llegada_bodega = %s
+                            WHERE canal = %s AND return_id = ANY(%s) AND fecha_llegada_bodega IS NULL
+                              AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int""",
+                        (ahora, canal, hermanas))
         conn.commit()
         cur.close()
     finally:
@@ -11592,6 +11751,7 @@ def devoluciones_mkt_llegada():
     nuevo_limite, _fuente = plazo_efectivo(canal, nuevo_limite, ahora)
     horas = int((nuevo_limite - ahora).total_seconds() // 3600) if nuevo_limite else None
     return jsonify({"ok": True, "encontrada": True, "ya_estaba": False,
+                    "return_id": rid, "otros_productos": hermanas,
                     "canal": canal, "orden": oid, "producto": nombre, "sku": skuc,
                     "llego": ahora.strftime("%d/%m/%Y %H:%M"),
                     "vence": nuevo_limite.strftime("%d/%m/%Y %H:%M") if nuevo_limite else None,
@@ -32250,6 +32410,8 @@ def facturacion_boleta_emitir():
         ambiente=data.get("ambiente"),
         referencias=data.get("referencias"),
         actualizar_estado_fn=_fact_actualizar_estado_dte,
+        orden_id=data.get("orden_id"),
+        canal=data.get("canal"),
     )
 
     # Códigos HTTP coherentes con el comportamiento anterior
@@ -34769,13 +34931,16 @@ def facturacion_factura_emitir():
                     INSERT INTO facturacion_dtes
                       (tenant_id, tipo_dte, folio, rut_receptor, razon_social_receptor,
                        monto_neto, monto_iva, monto_total, xml_firmado, estado, fecha_emision,
-                       xml_envio_sii)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                       xml_envio_sii, orden_id, canal)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     RETURNING id
                 """, (tenant_id, _tipo_factura, folio, receptor["rut"], receptor["razon_social"],
                       res_fac["totales"]["mnt_neto"], res_fac["totales"]["mnt_iva"],
                       total, fac_firmada.decode("iso-8859-1", errors="replace"), "generado", fecha,
-                      sobre_firmado.decode("iso-8859-1", errors="replace")))
+                      sobre_firmado.decode("iso-8859-1", errors="replace"),
+                      # Orden del marketplace (ver emitir_boleta_core)
+                      (str(data.get("orden_id")).strip() or None) if data.get("orden_id") else None,
+                      (str(data.get("canal")).strip().lower() or None) if data.get("canal") else None))
                 fac_id = cur.fetchone()[0]
             conn.commit()
             paso("Registrar factura (pre-envío)", True, "ID " + str(fac_id))

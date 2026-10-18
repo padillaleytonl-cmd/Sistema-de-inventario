@@ -15,7 +15,8 @@ from datetime import datetime
 
 
 def emitir_boleta_core(tenant_id, items, receptor=None, ambiente=None,
-                       referencias=None, actualizar_estado_fn=None):
+                       referencias=None, actualizar_estado_fn=None,
+                       orden_id=None, canal=None):
     """Emite UNA boleta/factura electrónica y la envía al SII.
 
     Flujo profesional (guardar-antes-de-enviar), idéntico al del endpoint web:
@@ -189,13 +190,20 @@ def emitir_boleta_core(tenant_id, items, receptor=None, ambiente=None,
                     INSERT INTO facturacion_dtes
                       (tenant_id, tipo_dte, folio, rut_receptor, razon_social_receptor,
                        monto_neto, monto_iva, monto_total, xml_firmado, estado,
-                       fecha_emision, xml_envio_sii)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                       fecha_emision, xml_envio_sii, orden_id, canal)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     RETURNING id
                 """, (tenant_id, tipo_dte, folio, receptor["rut"], receptor["razon_social"],
                       res_bol["totales"]["mnt_neto"], res_bol["totales"]["mnt_iva"],
                       total, boleta_xml.decode("iso-8859-1", errors="replace"), "generado",
-                      fecha, sobre_firmado.decode("iso-8859-1", errors="replace")))
+                      fecha, sobre_firmado.decode("iso-8859-1", errors="replace"),
+                      # La orden del marketplace a la que corresponde esta boleta: con
+                      # ella una devolucion encuentra que boleta anular. La emision
+                      # automatica de boletas (pendiente) debe pasarla siempre, con el
+                      # mismo numero que guarda devoluciones_marketplace.order_id
+                      # (Falabella: el que empieza con 3).
+                      (str(orden_id).strip() or None) if orden_id else None,
+                      (str(canal).strip().lower() or None) if canal else None))
                 boleta_id = cur.fetchone()[0]
             conn.commit()
             paso("Registrar boleta (pre-envío)", True, "ID " + str(boleta_id) + " · estado: generado")

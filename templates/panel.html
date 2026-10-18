@@ -3133,9 +3133,14 @@ body.has-sidebar .navbar { display: none; }
           <label for="procCantidad" style="font-size:12px;color:var(--muted);">Cantidad</label>
           <input id="procCantidad" type="number" min="1" step="1" style="width:80px;padding:6px 8px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
         </div>
-        <textarea id="procMotivo" rows="2" placeholder="Qué tiene el producto (obligatorio si se desecha, va a repuestos o tiene detalle)"
-          style="width:100%;padding:8px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);box-sizing:border-box;resize:vertical;"></textarea>
-        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">
+        <div id="procMotivoWrap" style="display:none;">
+          <div id="procMotivoChips" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;"></div>
+          <textarea id="procMotivo" rows="2" placeholder="Qué tiene el producto (queda en la etiqueta DEV)"
+            style="width:100%;padding:8px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);box-sizing:border-box;resize:vertical;"></textarea>
+        </div>
+        <div id="procBoleta" style="margin-top:12px;border-top:0.5px solid var(--border);padding-top:12px;"></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;align-items:center;">
+          <span style="font-size:11px;color:var(--hint);margin-right:auto;">Enter para confirmar</span>
           <button onclick="cerrarProcesarDev()" style="background:transparent;border:0.5px solid var(--border);border-radius:8px;padding:7px 14px;font-size:12px;cursor:pointer;color:var(--text);">Cancelar</button>
           <button id="procConfirmar" onclick="confirmarProcesarDev()" style="background:var(--text);color:var(--bg);border:none;border-radius:8px;padding:7px 16px;font-size:12px;cursor:pointer;font-weight:500;">Confirmar</button>
         </div>
@@ -6530,6 +6535,12 @@ function marcarLlegadaDevolucion(codigo){
     }
     if(typeof dashCargar === 'function') dashCargar();
     if(typeof cargarDevoluciones === 'function') cargarDevoluciones('todas');
+    // Un paso: se abre al tiro la ventana para decidir que pasa con el producto,
+    // y despues los demas productos del mismo paquete.
+    if(d.return_id && typeof dashProcesar === 'function'){
+      _procCola = (d.otros_productos || []).slice();
+      setTimeout(() => dashProcesar(d.canal, d.return_id), 300);
+    }
   })
   .catch(e => toast('Error marcando la llegada: ' + e.message, 'error'));
 }
@@ -7453,9 +7464,32 @@ function dashListar(){
 // La devolucion ya existe —la trajo la API—; aca solo se decide el
 // inventario. Antes de confirmar se muestra a que bodega volveria y por que,
 // y cuanto queda por devolver de esa orden.
+const PROC_MOTIVOS_RAPIDOS = ['Caja dañada', 'Faltan piezas', 'Usado', 'Con falla', 'Sucio o manchado'];
+function _procElegir(k){
+  if(!_procActual) return;
+  _procActual.destino = k;
+  const op = DASH_DESTINOS.find(o => o.k === k);
+  document.getElementById('procMotivoWrap').style.display = (op && op.dev) ? '' : 'none';
+  if(op && op.dev) setTimeout(() => document.getElementById('procMotivo').focus(), 30);
+}
+function _procMotivoChip(t){
+  const m = document.getElementById('procMotivo');
+  m.value = m.value ? (m.value.replace(/[.\s]+$/,'') + '. ' + t) : t;
+  m.focus();
+}
+// Enter confirma (salvo escribiendo el motivo), Escape cierra
+document.addEventListener('keydown', e => {
+  const modal = document.getElementById('modalProcesarDev');
+  if(!modal || modal.style.display !== 'flex') return;
+  if(e.key === 'Escape'){ cerrarProcesarDev(); return; }
+  if(e.key === 'Enter' && !e.shiftKey && e.target && e.target.id !== 'procMotivo' && e.target.id !== 'procNcMonto'){
+    e.preventDefault(); confirmarProcesarDev();
+  }
+});
+
 function dashProcesar(canal, return_id){
   const r = ((_dashDatos && _dashDatos.lista) || []).find(x => x.canal === canal && x.return_id === return_id);
-  _procActual = {canal, return_id, destino: null};
+  _procActual = {canal, return_id, destino: 'reintegrado', llego: !!(r && r.llego)};
   document.getElementById('procProducto').textContent =
     (r ? (r.producto || r.sku) : return_id) + (r && r.orden ? ' · OC ' + r.orden : '');
   document.getElementById('procCantidad').value = (r && r.cantidad) || 1;
@@ -7463,10 +7497,14 @@ function dashProcesar(canal, return_id){
   document.getElementById('procInfo').textContent = 'Cargando…';
   document.getElementById('procOpciones').innerHTML = DASH_DESTINOS.map(o =>
     `<label style="display:flex;gap:10px;align-items:flex-start;padding:9px 11px;border:0.5px solid var(--border);border-radius:8px;cursor:pointer;">
-       <input type="radio" name="procDestino" value="${o.k}" onchange="_procActual.destino='${o.k}'" style="margin-top:2px;">
+       <input type="radio" name="procDestino" value="${o.k}" ${o.k === 'reintegrado' ? 'checked' : ''} onchange="_procElegir('${o.k}')" style="margin-top:2px;">
        <span><span style="font-size:12px;color:var(--text);">${o.t}</span>
        <span style="display:block;font-size:11px;color:var(--muted);margin-top:1px;">${o.d}</span></span></label>`).join('');
+  document.getElementById('procMotivoChips').innerHTML = PROC_MOTIVOS_RAPIDOS.map(t =>
+    `<button type="button" onclick="_procMotivoChip('${t}')" style="background:var(--bg2);border:0.5px solid var(--border);border-radius:999px;padding:3px 10px;font-size:11px;cursor:pointer;color:var(--text);">${t}</button>`).join('');
+  _procElegir('reintegrado');
   document.getElementById('modalProcesarDev').style.display = 'flex';
+  _procCargarBoleta(canal, return_id);
 
   fetch('/devoluciones-mkt/procesar-info?canal=' + encodeURIComponent(canal) +
         '&return_id=' + encodeURIComponent(return_id))
@@ -7481,8 +7519,54 @@ function dashProcesar(canal, return_id){
       document.getElementById('procInfo').innerHTML =
         `Si se reintegra, vuelve a <b style="font-weight:500;color:var(--text);">${d.bodega}</b>: ${d.bodega_motivo}.<br>${lineaCupo}` +
         (!d.llego && d.bodega === 'CENTRAL'
-          ? '<br><span style="color:#854F0B;">Todavía no llega a tu bodega: pistoléala al recibirla antes de reintegrarla.</span>' : '');
+          ? '<br><span style="color:#854F0B;">Al confirmar queda marcada como recibida hoy en tu bodega.</span>' : '');
+      _procActual && (_procActual.llego = !!d.llego);
     }).catch(e => { document.getElementById('procInfo').textContent = 'Error: ' + e.message; });
+}
+
+let _procCola = [];
+function _procCargarBoleta(canal, return_id){
+  const box = document.getElementById('procBoleta');
+  box.innerHTML = '<div style="font-size:12px;color:var(--hint);">Buscando la boleta de la orden…</div>';
+  fetch('/devoluciones-mkt/boleta?canal=' + encodeURIComponent(canal) + '&return_id=' + encodeURIComponent(return_id))
+    .then(r => r.json()).then(b => {
+      const fmt = n => '$' + Number(n || 0).toLocaleString('es-CL');
+      if(b.nc_folio){
+        box.innerHTML = `<div style="font-size:12px;color:var(--success);">Boleta anulada con la NC N° ${b.nc_folio}.</div>`;
+        return;
+      }
+      if(!b.puede_anular){
+        box.innerHTML = `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <button disabled style="background:var(--bg2);border:0.5px solid var(--border);border-radius:8px;padding:7px 14px;font-size:12px;color:var(--hint);cursor:not-allowed;">Anular boleta</button>
+          <span style="font-size:12px;color:var(--muted);">${_dtEscSafe(b.motivo || 'No puedes anular, orden sin boleta')}</span></div>`;
+        return;
+      }
+      box.innerHTML = `<div style="font-size:12px;color:var(--text);margin-bottom:6px;">Boleta N° ${b.folio} · ${fmt(b.total)}${b.anulado ? ' · ya anulado ' + fmt(b.anulado) : ''}</div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <label for="procNcMonto" style="font-size:12px;color:var(--muted);">Monto a anular</label>
+          <input id="procNcMonto" type="number" min="1" max="${b.disponible}" value="${b.monto_sugerido}" style="width:110px;padding:6px 8px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
+          <span style="font-size:11px;color:var(--hint);">queda ${fmt(b.disponible)}</span>
+          <button id="procNcBtn" onclick="_procAnularBoleta()" style="margin-left:auto;background:#534AB7;color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:12px;cursor:pointer;font-weight:600;">Anular boleta</button>
+        </div>`;
+    }).catch(e => { box.innerHTML = `<div style="font-size:12px;color:var(--muted);">No pude revisar la boleta: ${e.message}</div>`; });
+}
+function _dtEscSafe(t){ return String(t == null ? '' : t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function _procAnularBoleta(){
+  if(!_procActual) return;
+  const monto = parseInt(document.getElementById('procNcMonto').value, 10);
+  if(!(monto > 0)){ toast('Indica el monto a anular', 'warn'); return; }
+  if(!confirm('Se emite una nota de crédito por $' + monto.toLocaleString('es-CL') + ' y se envía al SII. ¿Continuar?')) return;
+  const btn = document.getElementById('procNcBtn');
+  btn.disabled = true; btn.textContent = 'Emitiendo NC…';
+  const {canal, return_id} = _procActual;
+  fetch('/devoluciones-mkt/emitir-nc', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({canal, return_id, monto})})
+    .then(r => r.json()).then(d => {
+      if(!d.ok){ btn.disabled = false; btn.textContent = 'Anular boleta'; toast(d.error || 'No se pudo emitir la NC', 'error'); return; }
+      toast('NC N° ' + d.folio + ' emitida' + (d.total ? ' (anula la boleta completa)' : ' (parcial)'));
+      _procCargarBoleta(canal, return_id);
+      dashCargar();
+    }).catch(e => { btn.disabled = false; btn.textContent = 'Anular boleta'; toast('Error: ' + e.message, 'error'); });
 }
 
 function cerrarProcesarDev(){
@@ -7501,14 +7585,21 @@ function confirmarProcesarDev(){
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({canal:_procActual.canal, return_id:_procActual.return_id,
                           destino:_procActual.destino, motivo,
+                          // Quien procesa tiene el producto en la mano: se marca recibida
+                          recibida_ahora: true,
                           cantidad: parseInt(document.getElementById('procCantidad').value, 10)})
   }).then(x => x.json()).then(d => {
     btn.disabled = false;
     if(!d.ok){ toast(d.error || 'No se pudo procesar', 'error'); return; }
+    const canalHecho = _procActual.canal;
     cerrarProcesarDev();
     toast(d.destino_t + (d.codigo ? ' · ' + d.codigo : '') + ' · ' + d.impacto);
     if(d.codigo && d.dev_id) window.open('/devoluciones/' + d.dev_id + '/etiqueta_pdf', '_blank');
     dashCargar();
+    // Siguiente producto del mismo paquete, si lo hay
+    const sig = (_procCola || []).shift();
+    if(sig){ setTimeout(() => dashProcesar(canalHecho, sig), 250); }
+    else { const inp = document.getElementById('devPistoleoInput'); if(inp) inp.focus(); }
   }).catch(e => { btn.disabled = false; toast('Error: ' + e.message, 'error'); });
 }
 
