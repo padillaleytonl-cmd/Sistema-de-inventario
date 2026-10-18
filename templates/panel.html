@@ -3094,12 +3094,22 @@ body.has-sidebar .navbar { display: none; }
         <button class="btn-secondary" onclick="dashExportar()" style="margin-left:auto;padding:6px 12px;font-size:12px;">Exportar</button>
       </div>
 
-      <div class="card" style="padding:0;overflow:hidden;">
-        <div style="display:grid;grid-template-columns:minmax(0,2fr) 40px 104px 88px 80px minmax(0,1.2fr) 118px 160px;gap:10px;padding:8px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);font-size:10px;color:var(--muted);">
+      <div id="dashSelBar" style="display:none;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;padding:9px 14px;background:#EEEDFE;border:1px solid #534AB7;border-radius:9px;">
+        <span id="dashSelTxt" style="font-size:13px;font-weight:600;color:#534AB7;"></span>
+        <span style="display:flex;gap:8px;align-items:center;">
+          <button id="dashSelBtn" onclick="dashMarcarYaProcesadas()" style="background:#534AB7;color:#fff;border:none;padding:7px 14px;border-radius:8px;font-family:inherit;font-weight:600;font-size:12.5px;cursor:pointer;">Marcar como ya procesadas</button>
+          <button onclick="dashSelLimpiar()" style="background:transparent;border:none;color:#534AB7;font-size:12.5px;cursor:pointer;text-decoration:underline;">Limpiar</button>
+        </span>
+      </div>
+      <div class="card" style="padding:0;overflow-x:auto;">
+       <div style="min-width:900px;">
+        <div style="display:grid;grid-template-columns:24px minmax(0,2fr) 40px 104px 88px 80px minmax(0,1.2fr) 118px 160px;gap:10px;padding:8px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border);font-size:10px;color:var(--muted);align-items:center;">
+          <span><input type="checkbox" id="dashSelTodas" onchange="dashSelTodas(this.checked)" title="Seleccionar las de esta etapa que se pueden cerrar" style="cursor:pointer;"></span>
           <span>PRODUCTO</span><span>CANT.</span><span>N° DE ORDEN</span><span>CANAL</span>
           <span>MODELO</span><span>RAZÓN</span><span>PLAZO</span><span>ACCIÓN</span>
         </div>
         <div id="dashLista"></div>
+       </div>
         <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 14px;font-size:11px;color:var(--muted);">
           <span id="dashResumenTxt"></span>
           <span id="dashFuera"></span>
@@ -7209,7 +7219,7 @@ function dashCargar(){
     '<div style="color:var(--hint);font-size:12px;text-align:center;padding:30px;">Cargando...</div>';
   fetch(url).then(r => r.json()).then(d => {
     if(d.error){ toast('No se pudo cargar: ' + d.error, 'error'); return; }
-    _dashDatos = d; dashRender();
+    _dashDatos = d; _dashSel.clear(); dashRender(); _dashSelActualizar();
   }).catch(e => toast('Error cargando el dashboard: ' + e.message, 'error'));
 }
 
@@ -7342,6 +7352,68 @@ function confirmarAnularBoleta(){
   }).catch(e => { btn.disabled = false; toast('Error: ' + e.message, 'error'); });
 }
 
+// ── Seleccion multiple: cerrar las que ya se resolvieron en cada seller center ──
+// "Ya estaba procesada" no mueve stock: solo deja la devolucion como completada.
+let _dashSel = new Set();
+function _dashSeleccionable(r){ return r && r.grupo !== 'lista' && !r.procesada; }
+function _dashSelActualizar(){
+  const n = _dashSel.size;
+  const bar = document.getElementById('dashSelBar');
+  if(bar) bar.style.display = n ? 'flex' : 'none';
+  const t = document.getElementById('dashSelTxt');
+  if(t) t.textContent = n + (n === 1 ? ' seleccionada' : ' seleccionadas');
+  const todas = document.getElementById('dashSelTodas');
+  if(todas){
+    const posibles = dashFilas().filter(_dashSeleccionable);
+    todas.checked = posibles.length > 0 && posibles.every(r => _dashSel.has(r.canal + '|' + r.return_id));
+  }
+}
+function dashSelToggle(canal, rid, on){
+  const k = canal + '|' + rid;
+  if(on) _dashSel.add(k); else _dashSel.delete(k);
+  _dashSelActualizar();
+}
+function dashSelTodas(on){
+  dashFilas().filter(_dashSeleccionable).forEach(r => {
+    const k = r.canal + '|' + r.return_id;
+    if(on) _dashSel.add(k); else _dashSel.delete(k);
+  });
+  document.querySelectorAll('.dashSelChk').forEach(c => c.checked = on);
+  _dashSelActualizar();
+}
+function dashSelLimpiar(){ _dashSel.clear(); dashListar(); _dashSelActualizar(); }
+
+async function dashMarcarYaProcesadas(){
+  const claves = [..._dashSel];
+  if(!claves.length) return;
+  if(!confirm(`Se marcan ${claves.length} devolución(es) como "Ya estaba procesada".\n\nNo se mueve stock: solo pasan a Completadas porque ya las resolviste en el seller center.`)) return;
+  const btn = document.getElementById('dashSelBtn');
+  btn.disabled = true;
+  const lista = (_dashDatos && _dashDatos.lista) || [];
+  let ok = 0, errores = [];
+  for(let i = 0; i < claves.length; i++){
+    const [canal, return_id] = [claves[i].split('|')[0], claves[i].slice(claves[i].indexOf('|') + 1)];
+    const r = lista.find(x => x.canal === canal && String(x.return_id) === return_id);
+    btn.textContent = `Marcando ${i + 1} de ${claves.length}…`;
+    try{
+      const res = await fetch('/devoluciones-mkt/procesar', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({canal, return_id, destino:'ya_procesada',
+                              motivo:'Resuelta en el seller center (cierre masivo)',
+                              cantidad: (r && r.cantidad) || 1})
+      });
+      const d = await res.json();
+      if(d.ok) ok++; else errores.push(`${canal} ${r ? r.orden : return_id}: ${d.error || 'no se pudo'}`);
+    }catch(e){ errores.push(`${canal} ${return_id}: ${e.message}`); }
+  }
+  btn.disabled = false; btn.textContent = 'Marcar como ya procesadas';
+  _dashSel.clear();
+  toast(`${ok} marcada(s) como ya procesadas` + (errores.length ? ` · ${errores.length} con error` : ''),
+        errores.length ? 'warn' : undefined);
+  if(errores.length) console.warn('[Devoluciones] no se pudieron marcar:', errores);
+  dashCargar();
+}
+
 function dashListar(){
   const filas = dashFilas();
   // Primero lo que exige algo: boleta por anular, despues lo que vence antes.
@@ -7349,7 +7421,12 @@ function dashListar(){
     ((a.horas_restantes ?? 1e9) - (b.horas_restantes ?? 1e9)));
   document.getElementById('dashLista').innerHTML = filas.length ? filas.slice(0,100).map(r => {
     const cn = DASH_CANAL[r.canal] || {t:r.canal, c:'#888780'};
-    return `<div style="display:grid;grid-template-columns:minmax(0,2fr) 40px 104px 88px 80px minmax(0,1.2fr) 118px 160px;gap:10px;align-items:center;padding:11px 14px;border-bottom:0.5px solid var(--border);">
+    const _clave = r.canal + '|' + r.return_id;
+    const _sel = _dashSeleccionable(r)
+      ? `<input type="checkbox" class="dashSelChk" ${_dashSel.has(_clave)?'checked':''} onchange="dashSelToggle('${r.canal}','${String(r.return_id).replace(/'/g,"")}',this.checked)" style="cursor:pointer;">`
+      : '';
+    return `<div style="display:grid;grid-template-columns:24px minmax(0,2fr) 40px 104px 88px 80px minmax(0,1.2fr) 118px 160px;gap:10px;align-items:center;padding:11px 14px;border-bottom:0.5px solid var(--border);">
+      <div>${_sel}</div>
       <div style="min-width:0;">
         <div style="font-size:12px;color:var(--text);line-height:1.35;">${r.producto||'(sin nombre)'}</div>
         <div style="font-size:11px;color:var(--hint);font-family:'DM Mono',monospace;margin-top:3px;">${r.sku||'—'}</div></div>

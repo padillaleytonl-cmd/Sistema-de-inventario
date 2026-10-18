@@ -233,6 +233,15 @@ def plazo_efectivo(canal, plazo_api, llegada):
 def _norm_estado(canal, estado_crudo):
     """Mapea el estado crudo de cada canal a un estado normalizado común."""
     e = (str(estado_crudo) or "").lower()
+    canal = (canal or "").lower()
+    # El producto ya volvio a nosotros: en Falabella el item queda "returned"
+    # y en MercadoLibre el envio de la devolucion queda "delivered". Antes
+    # caian en "abierta" y la devolucion se veia "En camino" aunque ya
+    # estuviera en la bodega (oct-2026).
+    if canal == "falabella" and e.strip() == "returned":
+        return "recibida"
+    if canal == "mercadolibre" and e.strip() == "delivered":
+        return "recibida"
     if any(k in e for k in ("cancel", "rejected", "closed_cancel")):
         return "cancelada"
     if any(k in e for k in ("refund", "completed", "resolved", "closed", "store_received", "delivered_after")):
@@ -829,6 +838,8 @@ def obtener_devoluciones_falabella(dias=30):
                 # Se prefiere ese cuando viene, porque es el que dice si
                 # Falabella ya la aprobo.
                 estado_item = str(it.get("Status") or "returned")
+                _st_fa = str(it.get("ShippingType") or "").lower()
+                _es_full_fa = "fulfillment" in _st_fa or "own warehouse" in _st_fa
                 estado_dev = str(it.get("ReturnStatus") or "").strip()
                 estado_canal = f"{estado_item} · {estado_dev}" if estado_dev else estado_item
                 salida.append({
@@ -845,7 +856,10 @@ def obtener_devoluciones_falabella(dias=30):
                     # documentados y son estables. ReturnStatus trae texto
                     # libre en español ("Pendiente", "Aprobada") y no sirve
                     # para mapear, solo para mostrar.
-                    "estado": _norm_estado("falabella", estado_item),
+                    # Full (Own Warehouse): el producto vuelve a la bodega de
+                    # Falabella, no a la nuestra; para Lusync no queda nada
+                    # que procesar.
+                    "estado": ("resuelta" if _es_full_fa else _norm_estado("falabella", estado_item)),
                     "estado_canal": estado_canal,
                     # Reason y ReasonDetail estan documentados como "Motivo de
                     # cancelacion o devolucion" y "Razon detallada". Se
@@ -862,9 +876,9 @@ def obtener_devoluciones_falabella(dias=30):
                     # existen como campos pero Falabella los manda vacios
                     # —comprobado volcando el item crudo—, asi que el motivo
                     # de la devolucion simplemente no esta disponible por API.
-                    "tipo": ("return_fulfillment"
-                             if "fulfillment" in str(it.get("ShippingType") or "").lower()
-                             else "return_seller"),
+                    # Falabella llama "Own Warehouse" a su Full (FBF), no
+                    # "fulfillment": antes ninguna devolucion Full se reconocia.
+                    "tipo": "return_fulfillment" if _es_full_fa else "return_seller",
                     # PaidPrice + ShippingAmount, que es el "Grand Total" que
                     # documenta Falabella para documentos tributarios. NO
                     # ItemPrice, que es el precio antes de descuentos, ni el
