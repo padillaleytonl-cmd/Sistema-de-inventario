@@ -91,7 +91,9 @@ def confirmacion_no_full(canal, orden_cruda):
         fi = ln.get("fulfillment") or {}
         opt = str(fi.get("fulfillmentOption") or "").strip().upper()
         snt = str(fi.get("shipNodeType") or "").strip().upper()
-        if (opt and opt not in ("SELLER", "SELLERFULFILLED")) or "WFS" in snt or "3PL" in snt:
+        # fulfillmentOption es el tipo de entrega (S2H, despacho a domicilio...),
+        # no quien despacha: solo descarta si una linea dice WFS o 3PL.
+        if "WFS" in snt or "3PL" in snt or "WFS" in opt or "3PL" in opt:
             return None
     return "Walmart informa shipNodeType SellerFulfilled en la orden %s" % (
         orden_cruda.get("purchaseOrderId") or "")
