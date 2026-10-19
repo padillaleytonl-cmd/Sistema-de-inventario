@@ -31559,13 +31559,21 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                     items_ml = o.get("order_items") or []
                     unidades_ml = sum(int(i.get("quantity") or 1) for i in items_ml) or 1
                     envio_unit = _envio_por_unidad(envio_cost, unidades_ml)
+                    # Cupon: unit_price no lo resta y lo que se informa es lo que pago
+                    # el cliente (2000019038537424: 94.990 - 5.000). Se reparte en
+                    # proporcion al precio de cada unidad.
+                    _cupon_ml = max(float((o.get("coupon") or {}).get("amount") or 0),
+                                    sum(float(p.get("coupon_amount") or 0) for p in payments))
+                    _base_ml = sum(float(i.get("unit_price") or 0) * int(i.get("quantity") or 1)
+                                   for i in items_ml) or 1
+                    _factor_ml = max(1 - _cupon_ml / _base_ml, 0) if _cupon_ml else 1
 
                     for item in items_ml:
                         it    = item.get("item") or {}
                         sku_s = (it.get("seller_custom_field") or it.get("seller_sku") or "").strip()
                         prod  = it.get("title") or ""
                         qty   = _cantidad_de_linea(item.get("quantity"))
-                        price = float(item.get("unit_price") or 0)
+                        price = round(float(item.get("unit_price") or 0) * _factor_ml)
                         for _ in range(qty):
                             _filas_canal.append(fila("MercadoLibre", order_id, fecha,
                                 nombre, apellido, rut, telefono, email,

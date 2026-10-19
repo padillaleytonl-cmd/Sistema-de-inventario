@@ -73,9 +73,23 @@ def test_meli_promocion_del_vendedor_y_envio_que_paga_el_vendedor():
     assert r["total"] == 59990 and r["envio"] == 0 and r["cuadra"] is True
 
 
-def test_meli_cupon_queda_para_revisar():
-    r = montos_meli(_orden_ml(10000, 10000, 9000, cupon=1000))
-    assert r["cuadra"] is False and "cupon" in r["nota"]
+def test_meli_cupon_va_por_lo_que_pago_el_cliente():
+    # 2000019038537424: 94.990, cupon 5.000; paid_amount NO resta el cupon
+    o = _orden_ml(94990, 99990, 94990, cupon=5000)
+    o["payments"][0].update({"coupon_amount": 5000, "transaction_amount": 94990,
+                             "total_paid_amount": 89990})
+    r = montos_meli(o)
+    assert r["total"] == 89990 and r["lineas"][0]["total"] == 89990
+    assert r["total_canal"] == 89990 and r["cuadra"] is True
+
+
+def test_meli_cupon_se_reparte_entre_lineas():
+    o = _orden_ml(30000, 30000, 40000, cupon=4000)
+    o["order_items"].append({"quantity": 1, "unit_price": 10000, "gross_price": 10000, "item": {}})
+    o["payments"][0]["total_paid_amount"] = 36000
+    r = montos_meli(o)
+    assert [l["total"] for l in r["lineas"]] == [27000, 9000]
+    assert r["total"] == 36000 and r["cuadra"] is True
 
 
 def test_meli_pack_solo_ordenes_nuestras():

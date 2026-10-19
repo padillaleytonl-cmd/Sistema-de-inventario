@@ -129,7 +129,11 @@ def montos_falabella(orden, items_crudos=None):
 # unit_price ya es el precio con la promocion del vendedor (gross_price es el
 # de lista). El envio que paga el COMPRADOR va en payments[].shipping_cost; lo
 # que paga el vendedor por el envio (senders.cost) es un costo nuestro, no va
-# en la boleta. paid_amount = productos + envio del comprador - cupon.
+# en la boleta.
+# Cupones: el documento va por lo que PAGO EL CLIENTE (regla de los
+# marketplaces). paid_amount y transaction_amount NO restan el cupon; el
+# monto pagado de verdad es payments[].total_paid_amount (2000019038537424:
+# 94.990 - cupon 5.000 = 89.990). El cupon se reparte entre las lineas.
 
 def montos_meli(orden):
     lineas, desc = [], 0.0
@@ -150,15 +154,24 @@ def montos_meli(orden):
     cupon = max(_num((orden.get("coupon") or {}).get("amount")),
                 sum(_num(p.get("coupon_amount")) for p in pagos))
     nota = ""
-    if cupon:
-        # Quien financia el cupon cambia lo que se declara: se deja para revisar
-        nota = "orden con cupon de %s: revisar quien lo financia" % round(cupon)
-    total_canal = orden.get("paid_amount")
-    res = _resultado(lineas, envio, 0.0, desc,
-                     None if total_canal is None else _num(total_canal), nota)
-    if cupon:
-        res["cuadra"] = False
-    return res
+    if cupon and lineas:
+        # Se reparte en proporcion al precio; la ultima linea absorbe el redondeo
+        base = sum(l["total"] for l in lineas) or 1
+        restante = round(cupon)
+        for i, l in enumerate(lineas):
+            parte = restante if i == len(lineas) - 1 else round(cupon * l["total"] / base)
+            parte = min(parte, l["total"])
+            l["total"] -= parte
+            restante -= parte
+        desc += cupon
+        nota = "cupon de %s restado: el documento va por lo que pago el cliente" % round(cupon)
+    if pagos and any(p.get("total_paid_amount") is not None for p in pagos):
+        total_canal = sum(_num(p.get("total_paid_amount")) for p in pagos)
+    elif orden.get("paid_amount") is not None:
+        total_canal = _num(orden.get("paid_amount")) - cupon
+    else:
+        total_canal = None
+    return _resultado(lineas, envio, 0.0, desc, total_canal, nota)
 
 
 def montos_meli_pack(ordenes, seller_id=None):
