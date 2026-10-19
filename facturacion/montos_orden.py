@@ -136,9 +136,11 @@ def montos_meli(orden):
     for oi in _lista(orden.get("order_items")):
         item = oi.get("item") or {}
         qty = int(_num(oi.get("quantity")) or 1)
-        # Promocion del vendedor: ya esta restada en unit_price (informativo)
-        desc += max(_num(oi.get("gross_price") or oi.get("full_unit_price")) -
-                    _num(oi.get("unit_price")), 0) * qty
+        # Promocion del vendedor, ya restada en unit_price (informativo).
+        # gross_price es el de lista de TODA la linea (2 x 19.980 = 39.960),
+        # full_unit_price el de lista por unidad.
+        lista = _num(oi.get("gross_price")) or _num(oi.get("full_unit_price")) * qty
+        desc += max(lista - _num(oi.get("unit_price")) * qty, 0)
         lineas.append({"sku": item.get("seller_sku") or item.get("seller_custom_field") or "",
                        "nombre": item.get("title") or "", "cantidad": qty,
                        "total": _num(oi.get("unit_price")) * qty})
