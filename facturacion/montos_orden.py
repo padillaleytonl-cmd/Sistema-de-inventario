@@ -98,29 +98,30 @@ def montos_walmart(orden):
 
 # ── Falabella ───────────────────────────────────────────────────────────
 #
-# Cabecera: ProductTotal + ShippingFeeTotal - Voucher = GrandTotal.
-# Voucher trae el detalle en VoucherDetails (CmrDiscount, OtherDiscount).
-# Los items (GetOrderItems) traen PaidPrice por unidad (cada OrderItem es 1).
+# Cabecera: ProductTotal + ShippingFeeTotal = GrandTotal. OJO: ProductTotal
+# YA VIENE con el voucher restado (revisado con 15 ordenes con voucher el
+# 18/10/2026: 3257488625 = productos 54.990 - voucher 49.000 = ProductTotal
+# 5.990). Voucher y VoucherDetails (CmrDiscount, OtherDiscount) son
+# informativos: restarlos otra vez descuadra.
+# Los items crudos (GetOrderItems) traen PaidPrice por unidad (cada OrderItem
+# es 1), ya con su VoucherAmount restado.
 
 def montos_falabella(orden, items_crudos=None):
     voucher = _num(orden.get("Voucher"))
     nota = ""
-    lineas = []
+    if voucher:
+        nota = "voucher de %s ya restado por Falabella (CMR %s, otros %s)" % (
+            round(voucher), round(_num((orden.get("VoucherDetails") or {}).get("CmrDiscount"))),
+            round(_num((orden.get("VoucherDetails") or {}).get("OtherDiscount"))))
     if items_crudos:
-        for it in items_crudos:
-            precio = _num(it.get("PaidPrice") or it.get("ItemPrice") or it.get("Price"))
-            lineas.append({"sku": it.get("Sku") or it.get("SellerSku") or "",
-                           "nombre": it.get("Name") or "", "cantidad": 1, "total": precio})
-        # PaidPrice ya viene con el voucher del item: no se resta otra vez
-        desc_prod = sum(_num(it.get("VoucherAmount")) for it in items_crudos)
+        lineas = [{"sku": it.get("Sku") or it.get("SellerSku") or "", "nombre": it.get("Name") or "",
+                   "cantidad": 1, "total": _num(it.get("PaidPrice") or it.get("ItemPrice"))}
+                  for it in items_crudos]
     else:
         lineas = [{"sku": "", "nombre": "Productos", "cantidad": 1,
-                   "total": _num(orden.get("ProductTotal")) - voucher}]
-        desc_prod = voucher
-        if voucher:
-            nota = "voucher restado de los productos (sin detalle por item)"
+                   "total": _num(orden.get("ProductTotal"))}]
     return _resultado(lineas, _num(orden.get("ShippingFeeTotal") or orden.get("ShippingFee")),
-                      0.0, desc_prod, _num(orden.get("GrandTotal") or orden.get("Price")), nota)
+                      0.0, voucher, _num(orden.get("GrandTotal") or orden.get("Price")), nota)
 
 
 # ── MercadoLibre ────────────────────────────────────────────────────────

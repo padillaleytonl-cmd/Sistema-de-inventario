@@ -16094,7 +16094,20 @@ def admin_ordenes_muestra_montos():
             calc = {"error": str(e)[:200]}
         if con_desc and not _tiene_descuento(calc, cruda):
             continue
-        ordenes.append({**meta, "calculo": calc, "orden_montos": _montos_de(cruda)})
+        fila = {**meta, "calculo": calc, "orden_montos": _montos_de(cruda)}
+        if canal == "falabella" and request.args.get("items") in ("1", "si"):
+            try:
+                from falabella import llamar_api_falabella
+                _r = llamar_api_falabella("GetOrderItems", method="GET", formato="JSON",
+                                          params_extra={"OrderId": cruda.get("OrderId")})
+                _body = ((_r.get("data") or {}).get("SuccessResponse") or {}).get("Body") or {}
+                _its = (_body.get("OrderItems") or {}).get("OrderItem") or []
+                _its = _its if isinstance(_its, list) else [_its]
+                fila["items_crudos"] = [_montos_de(i) for i in _its]
+                fila["calculo_items"] = POR_CANAL["falabella"](cruda, _its)
+            except Exception as e:  # noqa: BLE001
+                fila["items_crudos"] = {"error": str(e)[:200]}
+        ordenes.append(fila)
         if len(ordenes) >= n:
             break
     return jsonify({"ok": True, "canal": canal, "revisadas": revisadas,

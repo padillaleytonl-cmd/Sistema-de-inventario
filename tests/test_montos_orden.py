@@ -51,10 +51,13 @@ def test_falabella_cabecera():
     assert r["total"] == 63980 and r["envio"] == 8990 and r["cuadra"] is True
 
 
-def test_falabella_voucher_se_resta():
-    r = montos_falabella({"ProductTotal": "20,000.00", "ShippingFeeTotal": "3,990.00",
-                          "Voucher": "2,000.00", "GrandTotal": "21,990.00"})
-    assert r["productos"] == 18000 and r["total"] == 21990 and r["cuadra"] is True
+def test_falabella_voucher_ya_viene_restado():
+    # 3257488625: productos 54.990 con voucher de 49.000 -> ProductTotal 5.990
+    r = montos_falabella({"ProductTotal": "5,990.00", "ShippingFeeTotal": "11,990.00",
+                          "Voucher": "49000.00", "GrandTotal": "17,980.00",
+                          "VoucherDetails": {"CmrDiscount": "0.00", "OtherDiscount": "49000.00"}})
+    assert r["productos"] == 5990 and r["total"] == 17980 and r["cuadra"] is True
+    assert r["descuentos_producto"] == 49000 and "voucher" in r["nota"]
 
 
 def _orden_ml(unit, gross, pagado, envio=0, cupon=0, oid=1, seller=1):
