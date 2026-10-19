@@ -15973,7 +15973,7 @@ def admin_ordenes_muestra_montos():
     def _no_cancelada(estado):
         return "cancel" not in str(estado or "").lower()
 
-    ordenes = []
+    ordenes, crudas = [], []
     try:
         if canal == "falabella":
             from falabella import obtener_ordenes_falabella, obtener_items_orden_falabella
@@ -15982,6 +15982,7 @@ def admin_ordenes_muestra_montos():
             lista.sort(key=lambda o: str(o.get("CreatedAt") or ""), reverse=True)
             for o in lista[:n]:
                 items = obtener_items_orden_falabella(str(o.get("OrderId"))) or []
+                crudas.append(o)
                 ordenes.append({"orden": o.get("OrderNumber"), "fecha": o.get("CreatedAt"),
                                 "estado": o.get("Statuses"),
                                 "orden_montos": _montos_de(o),
@@ -16002,6 +16003,7 @@ def admin_ordenes_muestra_montos():
                     envio = _montos_de(r1.json()) if r1.status_code == 200 else {"http": r1.status_code}
                     r2 = _rq.get(f"{MELI_API_URL}/shipments/{sid}/costs", headers=h, timeout=10)
                     costos = _montos_de(r2.json()) if r2.status_code == 200 else {"http": r2.status_code}
+                crudas.append(o)
                 ordenes.append({"orden": o.get("id"), "pack": o.get("pack_id"),
                                 "fecha": o.get("date_created"), "estado": o.get("status"),
                                 "orden_montos": _montos_de(o), "envio_montos": envio,
@@ -16021,6 +16023,7 @@ def admin_ordenes_muestra_montos():
                 full = {**o, **det}
                 if not _no_cancelada(full.get("status") or full.get("statusName")):
                     continue
+                crudas.append(full)
                 ordenes.append({"orden": so, "orden_padre": full.get("orderNumber"),
                                 "fecha": full.get("createdAt") or full.get("originOrderDate"),
                                 "estado": full.get("status") or full.get("statusName"),
@@ -16033,6 +16036,7 @@ def admin_ordenes_muestra_montos():
             lista = [o for o in lista if _no_cancelada(o.get("order_state"))]
             lista.sort(key=lambda o: str(o.get("created_date") or ""), reverse=True)
             for o in lista[:n]:
+                crudas.append(o)
                 ordenes.append({"orden": o.get("commercial_id") or o.get("order_id"),
                                 "fecha": o.get("created_date"), "estado": o.get("order_state"),
                                 "orden_montos": _montos_de(o)})
@@ -16041,6 +16045,7 @@ def admin_ordenes_muestra_montos():
             lista = obtener_ordenes_walmart(dias=dias, max_paginas=10) or []
             lista.sort(key=lambda o: str(o.get("orderDate") or ""), reverse=True)
             for o in lista[:n]:
+                crudas.append(o)
                 ordenes.append({"orden": o.get("customerOrderId") or o.get("purchaseOrderId"),
                                 "fecha": o.get("orderDate"),
                                 "orden_montos": _montos_de(o)})
@@ -16053,6 +16058,7 @@ def admin_ordenes_muestra_montos():
             if r.status_code != 200:
                 return jsonify({"ok": False, "error": f"Woo HTTP {r.status_code}"}), 502
             for o in (r.json() or []):
+                crudas.append(o)
                 ordenes.append({"orden": o.get("number") or o.get("id"),
                                 "fecha": o.get("date_created"), "estado": o.get("status"),
                                 "orden_montos": _montos_de(o)})
@@ -16060,6 +16066,13 @@ def admin_ordenes_muestra_montos():
             return jsonify({"ok": False, "error": "canal: falabella, mercadolibre, paris, ripley, walmart o web"}), 400
     except Exception as e:  # noqa: BLE001
         return jsonify({"ok": False, "error": str(e)[:300], "traza": _tb.format_exc()[-2500:]}), 500
+    if crudas:
+        from facturacion.montos_orden import POR_CANAL
+        for o, cruda in zip(ordenes, crudas):
+            try:
+                o["calculo"] = POR_CANAL[canal](cruda)
+            except Exception as e:  # noqa: BLE001
+                o["calculo"] = {"error": str(e)[:200]}
     return jsonify({"ok": True, "canal": canal, "cantidad": len(ordenes), "ordenes": ordenes})
 
 
@@ -31718,6 +31731,7 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
 
                         precio = 0.0
                         envio_wm = 0.0
+                        desc_prod_wm = desc_envio_wm = 0.0
                         for ch in charges:
                             tipo_ch = (ch.get("chargeType") or "").upper()
                             if tipo_ch == "PRODUCT" and precio == 0.0:
@@ -31725,8 +31739,19 @@ def _construir_filas_ventas(fecha_desde, fecha_hasta, canales_str):
                             elif tipo_ch == "SHIPPING":
                                 # El envio venia siempre en 0: el cargo estaba ahi y no se leia
                                 envio_wm += _monto(ch)
+                            elif tipo_ch == "DISCOUNT":
+                                # SHIP_DISC descuenta el envio; DISCOUNT, el producto. Sin
+                                # restarlos el reporte mostraba un envio que el cliente no
+                                # pago (8572652000134: $3.990 de envio, descontado entero).
+                                # El cargo TAX no se suma: repite el IVA ya incluido arriba.
+                                if "SHIP" in (ch.get("chargeName") or "").upper():
+                                    desc_envio_wm += abs(_monto(ch))
+                                else:
+                                    desc_prod_wm += abs(_monto(ch))
                         if precio == 0.0 and charges:
                             precio = _monto(charges[0])
+                        precio = max(precio - desc_prod_wm, 0.0)
+                        envio_wm = max(envio_wm - desc_envio_wm, 0.0)
 
                         # El estado es por linea, no por orden
                         estado_wm = ""
