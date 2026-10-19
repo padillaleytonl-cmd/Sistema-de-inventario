@@ -15955,125 +15955,157 @@ def _montos_de(obj, ruta="", salida=None, prof=0):
 
 @app.route("/admin/lusync/ordenes/muestra-montos")
 def admin_ordenes_muestra_montos():
-    """Ultimas N ordenes de un canal con TODOS sus campos de montos (producto,
-    envio, descuentos, cupones, totales), tal como los manda la API. Para
-    decidir como armar la boleta sin descuadres. SOLO LEE; no muestra datos
-    del cliente.
+    """Ordenes recientes de un canal con TODOS sus campos de montos (producto,
+    envio, descuentos, cupones, totales), tal como los manda la API, y el
+    calculo de facturacion/montos_orden.py con si cuadra con el total del
+    canal. SOLO LEE; no muestra datos del cliente.
 
       ?canal=falabella|mercadolibre|paris|ripley|walmart|web  &n=5  &dias=10
+      &con_descuento=1   recorre hasta &tope=200 ordenes y devuelve solo las
+                         que traen descuento, cupon, voucher o promocion
     """
     if not _acceso_equipo_lusync():
         return redirect("/admin/lusync/login")
     canal = (request.args.get("canal") or "").strip().lower()
-    n = min(max(request.args.get("n", default=5, type=int), 1), 15)
-    dias = min(max(request.args.get("dias", default=10, type=int), 1), 60)
+    con_desc = request.args.get("con_descuento") in ("1", "true", "si")
+    n = min(max(request.args.get("n", default=5, type=int), 1), 30)
+    dias = min(max(request.args.get("dias", default=10, type=int), 1), 120)
+    tope = min(max(request.args.get("tope", default=200, type=int), 1), 400) if con_desc else n
     from datetime import datetime as _dt, timedelta as _td
+    from concurrent.futures import ThreadPoolExecutor
     import traceback as _tb
+    from facturacion.montos_orden import POR_CANAL
 
     def _no_cancelada(estado):
         return "cancel" not in str(estado or "").lower()
 
-    ordenes, crudas = [], []
+    def _en_paralelo(fn, claves):
+        if not claves:
+            return {}
+        with ThreadPoolExecutor(max_workers=min(8, len(claves))) as pool:
+            res = list(pool.map(con_tenant_del_llamador(fn), claves))
+        return dict(zip(claves, res))
+
+    def _tiene_descuento(k, cruda):
+        if k.get("descuentos_producto") or k.get("descuento_envio") or k.get("nota"):
+            return True
+        if canal == "falabella":
+            return _num_seguro(cruda.get("Voucher")) > 0
+        if canal == "mercadolibre":
+            return any(_num_seguro(oi.get("gross_price")) > _num_seguro(oi.get("unit_price"))
+                       for oi in (cruda.get("order_items") or []))
+        return False
+
+    crudas, extra = [], []
     try:
         if canal == "falabella":
-            from falabella import obtener_ordenes_falabella, obtener_items_orden_falabella
-            lista = obtener_ordenes_falabella(dias=dias, limit=100) or []
+            from falabella import obtener_ordenes_falabella
+            lista = []
+            for off in range(0, tope, 100):
+                lote = obtener_ordenes_falabella(dias=dias, limit=100, offset=off) or []
+                lista.extend(lote)
+                if len(lote) < 100:
+                    break
             lista = [o for o in lista if _no_cancelada(o.get("Statuses"))]
             lista.sort(key=lambda o: str(o.get("CreatedAt") or ""), reverse=True)
-            for o in lista[:n]:
-                items = obtener_items_orden_falabella(str(o.get("OrderId"))) or []
+            for o in lista[:tope]:
                 crudas.append(o)
-                ordenes.append({"orden": o.get("OrderNumber"), "fecha": o.get("CreatedAt"),
-                                "estado": o.get("Statuses"),
-                                "orden_montos": _montos_de(o),
-                                "items_montos": [_montos_de(i) for i in items]})
+                extra.append({"orden": o.get("OrderNumber"), "fecha": o.get("CreatedAt"),
+                              "estado": o.get("Statuses"), "tipo_envio": o.get("ShippingType")})
         elif canal == "mercadolibre":
-            from mercadolibre import obtener_todas_ordenes_meli_rango, meli_headers, MELI_API_URL
-            import requests as _rq
+            from mercadolibre import obtener_todas_ordenes_meli_rango
             desde = (_dt.utcnow() - _td(days=dias)).strftime("%Y-%m-%dT00:00:00.000-04:00")
-            lista = [o for o in (obtener_todas_ordenes_meli_rango(desde, None, max_paginas=3) or [])
+            lista = [o for o in (obtener_todas_ordenes_meli_rango(
+                         desde, None, max_paginas=max(1, tope // 50 + 1)) or [])
                      if o.get("status") in ("paid", "confirmed")]
             lista.sort(key=lambda o: str(o.get("date_created") or ""), reverse=True)
-            h = meli_headers()
-            for o in lista[:n]:
-                sid = (o.get("shipping") or {}).get("id")
-                envio, costos = {}, {}
-                if sid:
-                    r1 = _rq.get(f"{MELI_API_URL}/shipments/{sid}", headers=h, timeout=10)
-                    envio = _montos_de(r1.json()) if r1.status_code == 200 else {"http": r1.status_code}
-                    r2 = _rq.get(f"{MELI_API_URL}/shipments/{sid}/costs", headers=h, timeout=10)
-                    costos = _montos_de(r2.json()) if r2.status_code == 200 else {"http": r2.status_code}
+            for o in lista[:tope]:
                 crudas.append(o)
-                ordenes.append({"orden": o.get("id"), "pack": o.get("pack_id"),
-                                "fecha": o.get("date_created"), "estado": o.get("status"),
-                                "orden_montos": _montos_de(o), "envio_montos": envio,
-                                "envio_costos": costos})
+                extra.append({"orden": o.get("id"), "pack": o.get("pack_id"),
+                              "fecha": o.get("date_created"), "estado": o.get("status")})
         elif canal == "paris":
-            from paris import obtener_ordenes_paris_todas, obtener_orden_paris
+            from paris import obtener_ordenes_paris_todas, obtener_orden_paris as _det_pa
             lista = obtener_ordenes_paris_todas(dias=dias) or []
             lista.sort(key=lambda o: str(o.get("createdAt") or o.get("originOrderDate") or ""),
                        reverse=True)
-            vistos = set()
+            por_so = {}
             for o in lista:
                 so = str(o.get("subOrderNumber") or o.get("orderNumber") or "")
-                if not so or so in vistos:
-                    continue
-                vistos.add(so)
-                det = obtener_orden_paris(so) or {}
-                full = {**o, **det}
+                if so and so not in por_so:
+                    por_so[so] = o
+                if len(por_so) >= tope:
+                    break
+            detalles = _en_paralelo(_det_pa, list(por_so.keys()))
+            for so, o in por_so.items():
+                full = {**o, **(detalles.get(so) or {})}
                 if not _no_cancelada(full.get("status") or full.get("statusName")):
                     continue
                 crudas.append(full)
-                ordenes.append({"orden": so, "orden_padre": full.get("orderNumber"),
-                                "fecha": full.get("createdAt") or full.get("originOrderDate"),
-                                "estado": full.get("status") or full.get("statusName"),
-                                "orden_montos": _montos_de(full)})
-                if len(ordenes) >= n:
-                    break
+                extra.append({"orden": so, "orden_padre": full.get("orderNumber"),
+                              "fecha": full.get("createdAt") or full.get("originOrderDate")})
         elif canal == "ripley":
             from ripley import obtener_ordenes_ripley
-            lista = obtener_ordenes_ripley(dias=dias, max_resultados=100) or []
+            lista = obtener_ordenes_ripley(dias=dias, max_resultados=tope) or []
             lista = [o for o in lista if _no_cancelada(o.get("order_state"))]
             lista.sort(key=lambda o: str(o.get("created_date") or ""), reverse=True)
-            for o in lista[:n]:
+            for o in lista[:tope]:
                 crudas.append(o)
-                ordenes.append({"orden": o.get("commercial_id") or o.get("order_id"),
-                                "fecha": o.get("created_date"), "estado": o.get("order_state"),
-                                "orden_montos": _montos_de(o)})
+                extra.append({"orden": o.get("commercial_id") or o.get("order_id"),
+                              "fecha": o.get("created_date"), "estado": o.get("order_state")})
         elif canal == "walmart":
             from walmart import obtener_ordenes_walmart
-            lista = obtener_ordenes_walmart(dias=dias, max_paginas=10) or []
+            lista = obtener_ordenes_walmart(dias=dias, max_paginas=20) or []
             lista.sort(key=lambda o: str(o.get("orderDate") or ""), reverse=True)
-            for o in lista[:n]:
+            for o in lista[:tope]:
                 crudas.append(o)
-                ordenes.append({"orden": o.get("customerOrderId") or o.get("purchaseOrderId"),
-                                "fecha": o.get("orderDate"),
-                                "orden_montos": _montos_de(o)})
+                extra.append({"orden": o.get("customerOrderId") or o.get("purchaseOrderId"),
+                              "fecha": o.get("orderDate"), "tipo_envio": o.get("shipNodeType")})
         elif canal == "web":
-            r = requests.get(_woo_api() + "/orders", timeout=20, params={
-                "consumer_key": credencial("web", "consumer_key"),
-                "consumer_secret": credencial("web", "consumer_secret"),
-                "status": "processing,completed", "per_page": n,
-                "orderby": "date", "order": "desc"})
-            if r.status_code != 200:
-                return jsonify({"ok": False, "error": f"Woo HTTP {r.status_code}"}), 502
-            for o in (r.json() or []):
-                crudas.append(o)
-                ordenes.append({"orden": o.get("number") or o.get("id"),
-                                "fecha": o.get("date_created"), "estado": o.get("status"),
-                                "orden_montos": _montos_de(o)})
+            pagina = 1
+            while len(crudas) < tope and pagina <= 10:
+                r = requests.get(_woo_api() + "/orders", timeout=20, params={
+                    "consumer_key": credencial("web", "consumer_key"),
+                    "consumer_secret": credencial("web", "consumer_secret"),
+                    "status": "processing,completed", "per_page": min(100, tope),
+                    "page": pagina, "orderby": "date", "order": "desc",
+                    "after": (_dt.utcnow() - _td(days=dias)).strftime("%Y-%m-%dT00:00:00")})
+                if r.status_code != 200:
+                    return jsonify({"ok": False, "error": f"Woo HTTP {r.status_code}"}), 502
+                lote = r.json() or []
+                for o in lote:
+                    crudas.append(o)
+                    extra.append({"orden": o.get("number") or o.get("id"),
+                                  "fecha": o.get("date_created"), "estado": o.get("status"),
+                                  "cupones": [c.get("code") for c in (o.get("coupon_lines") or [])]})
+                if len(lote) < min(100, tope):
+                    break
+                pagina += 1
         else:
             return jsonify({"ok": False, "error": "canal: falabella, mercadolibre, paris, ripley, walmart o web"}), 400
     except Exception as e:  # noqa: BLE001
         return jsonify({"ok": False, "error": str(e)[:300], "traza": _tb.format_exc()[-2500:]}), 500
-    if crudas:
-        from facturacion.montos_orden import POR_CANAL
-        for o, cruda in zip(ordenes, crudas):
-            try:
-                o["calculo"] = POR_CANAL[canal](cruda)
-            except Exception as e:  # noqa: BLE001
-                o["calculo"] = {"error": str(e)[:200]}
-    return jsonify({"ok": True, "canal": canal, "cantidad": len(ordenes), "ordenes": ordenes})
+
+    ordenes, revisadas = [], 0
+    for meta, cruda in zip(extra, crudas):
+        revisadas += 1
+        try:
+            calc = POR_CANAL[canal](cruda)
+        except Exception as e:  # noqa: BLE001
+            calc = {"error": str(e)[:200]}
+        if con_desc and not _tiene_descuento(calc, cruda):
+            continue
+        ordenes.append({**meta, "calculo": calc, "orden_montos": _montos_de(cruda)})
+        if len(ordenes) >= n:
+            break
+    return jsonify({"ok": True, "canal": canal, "revisadas": revisadas,
+                    "cantidad": len(ordenes), "ordenes": ordenes})
+
+
+def _num_seguro(v):
+    try:
+        return float(str(v).replace(",", "")) if v not in (None, "") else 0.0
+    except ValueError:
+        return 0.0
 
 
 @app.route("/admin/lusync/alertas/resumen")

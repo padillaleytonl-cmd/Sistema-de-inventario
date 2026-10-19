@@ -131,24 +131,28 @@ def montos_falabella(orden, items_crudos=None):
 # en la boleta. paid_amount = productos + envio del comprador - cupon.
 
 def montos_meli(orden):
-    lineas = []
+    lineas, desc = [], 0.0
     for oi in _lista(orden.get("order_items")):
         item = oi.get("item") or {}
         qty = int(_num(oi.get("quantity")) or 1)
+        # Promocion del vendedor: ya esta restada en unit_price (informativo)
+        desc += max(_num(oi.get("gross_price") or oi.get("full_unit_price")) -
+                    _num(oi.get("unit_price")), 0) * qty
         lineas.append({"sku": item.get("seller_sku") or item.get("seller_custom_field") or "",
                        "nombre": item.get("title") or "", "cantidad": qty,
                        "total": _num(oi.get("unit_price")) * qty})
     pagos = [p for p in _lista(orden.get("payments"))
              if str(p.get("status") or "approved") in ("approved", "accredited")]
     envio = sum(_num(p.get("shipping_cost")) for p in pagos)
-    cupon = _num((orden.get("coupon") or {}).get("amount"))
+    cupon = max(_num((orden.get("coupon") or {}).get("amount")),
+                sum(_num(p.get("coupon_amount")) for p in pagos))
     nota = ""
     if cupon:
         # Quien financia el cupon cambia lo que se declara: se deja para revisar
         nota = "orden con cupon de %s: revisar quien lo financia" % round(cupon)
     total_canal = orden.get("paid_amount")
-    res = _resultado(lineas, envio, 0.0, 0.0,
-                     None if total_canal is None else _num(total_canal) + 0.0, nota)
+    res = _resultado(lineas, envio, 0.0, desc,
+                     None if total_canal is None else _num(total_canal), nota)
     if cupon:
         res["cuadra"] = False
     return res
