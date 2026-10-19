@@ -11298,6 +11298,10 @@ def _boleta_de_devolucion(canal, return_id):
     info = {"orden": dev[0], "producto": dev[1], "cantidad": int(dev[2] or 1),
             "monto_devolucion": int(round(float(dev[3]))) if dev[3] else None,
             "nc_folio": dev[4] or None}
+    from facturacion.ordenes_full import estado_full_orden
+    if any(estado_full_orden(tid, _o, canal)[0] for _o in ordenes):
+        info["es_full"] = True
+        return info, "Orden Full: la boleta la anula el marketplace con liquidación factura"
     if not doc:
         return info, "No puedes anular, orden sin boleta"
     est = estado_anulacion_documento(tid, doc[1], doc[2])
@@ -32563,6 +32567,8 @@ def facturacion_boleta_emitir():
         orden_id=data.get("orden_id"),
         canal=data.get("canal"),
     )
+    if resultado.get("es_full"):
+        return jsonify(resultado), 409
 
     # Códigos HTTP coherentes con el comportamiento anterior
     if resultado.get("ok"):
@@ -32679,6 +32685,17 @@ def facturacion_nota_credito_emitir():
     if not referencia.get("folio_ref"):
         return jsonify({"ok": False, "error": "La Nota de Crédito requiere el folio del documento que modifica"}), 400
     cod_ref = int(referencia.get("cod_ref", 1))
+
+    # Ventas Full: la anula el marketplace con liquidacion factura; Lusync no
+    # emite NC ni ND sobre documentos de esas ordenes (regla del usuario).
+    from facturacion.ordenes_full import bloqueo_full_por_documento
+    try:
+        _bloq_full = bloqueo_full_por_documento(tenant_id, int(referencia.get("tipo_doc_ref", 39)),
+                                                int(referencia["folio_ref"]))
+    except (TypeError, ValueError):
+        _bloq_full = None
+    if _bloq_full:
+        return jsonify({"ok": False, "error": _bloq_full, "es_full": True}), 409
 
     # PROTECCIÓN: si es anulación total (CodRef=1), verificar que el documento
     # referenciado NO esté ya anulado. Evita doble anulación (dos NC sobre el
@@ -33124,6 +33141,17 @@ def facturacion_nota_debito_emitir():
     if not referencia.get("folio_ref"):
         return jsonify({"ok": False, "error": "La Nota de Crédito requiere el folio del documento que modifica"}), 400
     cod_ref = int(referencia.get("cod_ref", 1))
+
+    # Ventas Full: la anula el marketplace con liquidacion factura; Lusync no
+    # emite NC ni ND sobre documentos de esas ordenes (regla del usuario).
+    from facturacion.ordenes_full import bloqueo_full_por_documento
+    try:
+        _bloq_full = bloqueo_full_por_documento(tenant_id, int(referencia.get("tipo_doc_ref", 39)),
+                                                int(referencia["folio_ref"]))
+    except (TypeError, ValueError):
+        _bloq_full = None
+    if _bloq_full:
+        return jsonify({"ok": False, "error": _bloq_full, "es_full": True}), 409
 
     # PROTECCIÓN: si es anulación total (CodRef=1), verificar que el documento
     # referenciado NO esté ya anulado. Evita doble anulación (dos NC sobre el
@@ -34958,6 +34986,13 @@ def facturacion_factura_emitir():
 
     tenant_id = session.get("tenant_id") or 1
     data = request.get_json(silent=True) or {}
+
+    # Ventas Full: el documento lo emite el marketplace, nunca Lusync
+    if data.get("orden_id"):
+        from facturacion.ordenes_full import bloqueo_full
+        _bloq = bloqueo_full(tenant_id, data.get("orden_id"), data.get("canal"))
+        if _bloq:
+            return jsonify({"ok": False, "error": _bloq, "es_full": True}), 409
 
     _es_exenta = bool(data.get("exenta"))
     _tipo_factura = 34 if _es_exenta else 33

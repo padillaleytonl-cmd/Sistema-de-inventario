@@ -57,6 +57,14 @@ def emitir_boleta_core(tenant_id, items, receptor=None, ambiente=None,
         if not it.get("nombre") or not it.get("precio_unitario"):
             return {"ok": False, "error": "Cada ítem necesita nombre y precio", "pasos": pasos}
 
+    # 0b. Ventas Full: la boleta la emite el marketplace, nunca Lusync
+    #     (regla del usuario, 18/10/2026). Ver facturacion/ordenes_full.py.
+    if orden_id:
+        from facturacion.ordenes_full import bloqueo_full
+        _bloq = bloqueo_full(tenant_id, orden_id, canal)
+        if _bloq:
+            return {"ok": False, "error": _bloq, "es_full": True, "pasos": pasos}
+
     # 1. Config del tenant
     config = obtener_config_facturacion(get_conn, release_conn, tenant_id)
     if not config:
