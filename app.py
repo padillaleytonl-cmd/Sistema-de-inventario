@@ -15909,7 +15909,9 @@ def ruta_alertas():
     solo_no = request.args.get("solo_no_leidas", "false").lower() == "true"
     return jsonify(listar_alertas(limite=100, solo_no_leidas=solo_no))
 
-_RE_MONTO_CLAVE = re.compile(
+import re as _re_montos
+
+_RE_MONTO_CLAVE = _re_montos.compile(
     r"price|total|amount|shipping|discount|voucher|coupon|fee|cost|charge|tax|paid|"
     r"promo|refund|subsid|bonif|rebate|commission|descuento|envio|monto|precio", _re_montos.I)
 # Tramos de la ruta que son datos personales: no se muestran aunque el nombre
