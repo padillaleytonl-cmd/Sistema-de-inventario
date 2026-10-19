@@ -15953,6 +15953,164 @@ def _montos_de(obj, ruta="", salida=None, prof=0):
     return salida
 
 
+# ════════════════════════════════════════════════════════════════════════
+# Boletas de marketplace (seccion /panel/boletas-marketplace)
+# Emision MANUAL por ahora; la automatica queda apagada hasta validar.
+# Logica en facturacion/boletas_mkt.py.
+# ════════════════════════════════════════════════════════════════════════
+
+def _bmkt_tenant():
+    return session.get("tenant_id") or 1
+
+
+@app.route("/boletas-mkt/lista")
+def boletas_mkt_lista():
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    from inventario import get_conn, release_conn
+    from facturacion.boletas_mkt import asegurar_tabla, ESTADOS
+    tid = _bmkt_tenant()
+    canal = (request.args.get("canal") or "").strip().lower()
+    estado = (request.args.get("estado") or "").strip()
+    q = (request.args.get("q") or "").strip()
+    desde = request.args.get("desde") or (now_chile() - timedelta(days=7)).strftime("%Y-%m-%d")
+    hasta = request.args.get("hasta") or now_chile().strftime("%Y-%m-%d")
+    where = ["tenant_id = %s", "fecha::date >= %s", "fecha::date <= %s"]
+    params = [tid, desde, hasta]
+    if q:
+        where.append("(orden ILIKE %s OR clave ILIKE %s OR cliente ILIKE %s OR productos_txt ILIKE %s "
+                     "OR CAST(folio AS TEXT) = %s)")
+        params += ["%" + q + "%"] * 4 + [q]
+    conn = get_conn(tenant_id=tid, is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            asegurar_tabla(cur)
+            conn.commit()
+            # Resumen del periodo (sin el filtro de canal/estado, para las tarjetas)
+            cur.execute("SELECT canal, estado, COUNT(*), COALESCE(SUM(total),0) FROM boletas_mkt WHERE "
+                        + " AND ".join(where) + " GROUP BY 1, 2", params)
+            resumen = {"por_estado": {}, "por_canal": {}, "total": 0, "monto": 0}
+            for c, e, n, m in cur.fetchall():
+                resumen["por_estado"][e] = resumen["por_estado"].get(e, 0) + n
+                resumen["por_canal"][c] = resumen["por_canal"].get(c, 0) + n
+                resumen["total"] += n
+                resumen["monto"] += int(m or 0)
+            w2, p2 = list(where), list(params)
+            if canal:
+                w2.append("canal = %s"); p2.append(canal)
+            if estado:
+                w2.append("estado = %s"); p2.append(estado)
+            cur.execute("""SELECT id, canal, clave, orden, ordenes, fecha, cliente, productos_txt,
+                                  productos, envio, total, total_canal, cuadra, nota, es_full,
+                                  full_detalle, emitir, estado, dte_id, folio, error, emitida_en
+                             FROM boletas_mkt WHERE """ + " AND ".join(w2) +
+                        " ORDER BY fecha DESC NULLS LAST, id DESC LIMIT 500", p2)
+            filas = []
+            for r in cur.fetchall():
+                filas.append({
+                    "id": r[0], "canal": r[1], "clave": r[2], "orden": r[3], "ordenes": r[4] or [],
+                    "fecha": r[5].strftime("%d/%m %H:%M") if r[5] else "",
+                    "cliente": r[6] or "", "productos_txt": r[7] or "", "productos": r[8],
+                    "envio": r[9], "total": r[10], "total_canal": r[11], "cuadra": r[12],
+                    "nota": r[13] or "", "es_full": r[14], "full_detalle": r[15] or "",
+                    "emitir": r[16], "estado": r[17], "estado_t": ESTADOS.get(r[17], r[17]),
+                    "dte_id": r[18], "folio": r[19], "error": r[20] or "",
+                    "emitida_en": r[21].strftime("%d/%m %H:%M") if r[21] else "",
+                    "pdf_url": ("/facturacion/boleta/%s/pdf" % r[18]) if r[18] else None})
+    finally:
+        release_conn(conn)
+    return jsonify({"ok": True, "filas": filas, "resumen": resumen, "desde": desde, "hasta": hasta,
+                    "automatica": False})
+
+
+@app.route("/boletas-mkt/sincronizar-canal")
+def boletas_mkt_sincronizar_canal():
+    """Un paso del trabajo de sincronizacion: un canal. Los errores de un canal
+    no frenan a los demas."""
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    from facturacion.boletas_mkt import sincronizar_canal, CANALES
+    canal = (request.args.get("canal") or "").strip().lower()
+    if canal not in CANALES:
+        return jsonify({"ok": False, "error": "canal inválido"}), 400
+    dias = min(max(request.args.get("dias", default=7, type=int), 1), 45)
+    try:
+        return jsonify({"ok": True, **sincronizar_canal(_bmkt_tenant(), canal, dias)})
+    except Exception as e:  # noqa: BLE001
+        import traceback
+        print("[Boletas MKT] " + canal + ": " + traceback.format_exc()[-1500:])
+        return jsonify({"ok": False, "canal": canal, "error": str(e)[:300]})
+
+
+@app.route("/boletas-mkt/sincronizar", methods=["POST"])
+def boletas_mkt_sincronizar():
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    from facturacion.boletas_mkt import CANALES
+    datos = request.get_json(silent=True) or {}
+    dias = min(max(int(datos.get("dias") or 7), 1), 45)
+    canales = [c for c in (datos.get("canales") or CANALES) if c in CANALES]
+    nombre = "boletas_mkt_%s" % _bmkt_tenant()
+    ok = _lanzar_trabajo(nombre, [(c, "/boletas-mkt/sincronizar-canal?canal=%s&dias=%s" % (c, dias))
+                                  for c in canales])
+    return jsonify({"ok": True, "lanzado": ok,
+                    "mensaje": None if ok else "Ya se están trayendo las órdenes"})
+
+
+@app.route("/boletas-mkt/sincronizar/estado")
+def boletas_mkt_sincronizar_estado():
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    t = _TRABAJOS.get("boletas_mkt_%s" % _bmkt_tenant())
+    return jsonify({"ok": True, "trabajo": t or {"estado": "sin_lanzar"}})
+
+
+@app.route("/boletas-mkt/decision", methods=["POST"])
+def boletas_mkt_decision():
+    """Emitir si/no para una o varias ordenes. Solo cambia las que aun no se
+    emiten, no son Full y no estan en revision."""
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    from inventario import get_conn, release_conn
+    datos = request.get_json(silent=True) or {}
+    ids = [int(i) for i in (datos.get("ids") or []) if str(i).isdigit()]
+    emitir = bool(datos.get("emitir"))
+    if not ids:
+        return jsonify({"ok": False, "error": "Selecciona al menos una orden"}), 400
+    tid = _bmkt_tenant()
+    conn = get_conn(tenant_id=tid, is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""UPDATE boletas_mkt SET emitir = %s,
+                                  estado = CASE WHEN %s THEN 'por_emitir' ELSE 'no_emitir' END,
+                                  actualizado = %s
+                            WHERE tenant_id = %s AND id = ANY(%s)
+                              AND estado IN ('por_emitir', 'no_emitir', 'error')
+                        RETURNING id""", (emitir, emitir, now_chile().replace(tzinfo=None), tid, ids))
+            cambiadas = [r[0] for r in cur.fetchall()]
+        conn.commit()
+    finally:
+        release_conn(conn)
+    registrar_audit(session.get("usuario", "Sistema"), request.remote_addr, "boletas_mkt_decision",
+                    detalle="%s ordenes -> %s" % (len(cambiadas), "emitir" if emitir else "no emitir"))
+    return jsonify({"ok": True, "cambiadas": cambiadas, "omitidas": [i for i in ids if i not in cambiadas]})
+
+
+@app.route("/boletas-mkt/<int:fila_id>/emitir", methods=["POST"])
+def boletas_mkt_emitir(fila_id):
+    """Emite la boleta de UNA orden (boton manual). Todos los controles viven
+    en facturacion.boletas_mkt.emitir_fila."""
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    from facturacion.boletas_mkt import emitir_fila
+    res = emitir_fila(_bmkt_tenant(), fila_id, session.get("usuario", "Sistema"),
+                      _fact_actualizar_estado_dte)
+    registrar_audit(session.get("usuario", "Sistema"), request.remote_addr, "boletas_mkt_emitir",
+                    detalle="fila %s: %s" % (fila_id, ("boleta %s" % res.get("folio")) if res.get("ok")
+                                             else res.get("error")))
+    return jsonify(res), (200 if res.get("ok") else 409)
+
+
 @app.route("/admin/lusync/ordenes/muestra-montos")
 def admin_ordenes_muestra_montos():
     """Ordenes recientes de un canal con TODOS sus campos de montos (producto,

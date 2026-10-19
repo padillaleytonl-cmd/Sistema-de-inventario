@@ -1250,6 +1250,14 @@ tbody td {
   background: var(--border);
 }
 .sidebar-link.sidebar-sub.active { color: #7c3aed; }
+.bm-fila { display:grid; grid-template-columns:24px 64px minmax(0,1.4fr) minmax(0,1.3fr) 76px 92px 150px 96px; gap:10px; padding:9px 14px; align-items:center; font-size:12px; }
+.bm-fila + .bm-fila { border-top:0.5px solid var(--border); }
+.bm-pill { font-size:11px; padding:2px 8px; border-radius:999px; white-space:nowrap; display:inline-block; }
+.bm-num { text-align:right; font-variant-numeric:tabular-nums; }
+.bm-sw { width:34px; height:20px; border-radius:999px; border:0.5px solid var(--border); background:var(--bg2); position:relative; cursor:pointer; flex-shrink:0; display:inline-block; vertical-align:middle; }
+.bm-sw::after { content:""; position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%; background:var(--muted); transition:left .15s; }
+.bm-sw.on { background:#E1F5EE; border-color:#1D9E75; }
+.bm-sw.on::after { left:16px; background:#0F6E56; }
 [data-theme="dark"] .sidebar-link.sidebar-sub.active { color: #a78bfa; }
 .sidebar-link.active {
   background: rgba(124,58,237,0.12);
@@ -1932,6 +1940,9 @@ body.has-sidebar .navbar { display: none; }
         <a class="sidebar-link" data-section="facturacion" href="/panel/facturacion" onclick="return lsNav(event,'facturacion',this)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
           Facturación SII
+        </a>
+        <a class="sidebar-link sidebar-sub" data-section="boletasmkt" href="/panel/boletas-marketplace" onclick="return lsNav(event,'boletasmkt',this)">
+          Boletas marketplace
         </a>
         <a class="sidebar-link" data-section="configuracion" href="/panel/configuracion" onclick="return lsNav(event,'configuracion',this)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -3066,6 +3077,84 @@ body.has-sidebar .navbar { display: none; }
   </div>
 
   <!-- ── SECCIÓN DEVOLUCIONES ── -->
+  <!-- ═══ Boletas de marketplace ═══ -->
+  <div id="sec-boletasmkt" class="main" style="display:none;">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Boletas de marketplace</div>
+        <div class="page-date">La boleta va por lo que pagó el cliente. Las órdenes Full las emite el marketplace.</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <select id="bmDias" style="padding:6px 8px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
+          <option value="3">Últimos 3 días</option><option value="7" selected>Últimos 7 días</option>
+          <option value="15">Últimos 15 días</option><option value="30">Últimos 30 días</option>
+        </select>
+        <button id="bmBtnTraer" class="btn-secondary" onclick="bmTraer()">Traer órdenes</button>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 14px;border:0.5px solid var(--border);border-radius:10px;background:var(--bg2);margin-bottom:14px;">
+      <div style="min-width:0;">
+        <div style="font-size:13px;font-weight:600;color:var(--text);">Emisión automática</div>
+        <div style="font-size:12px;color:var(--muted);">Apagada. Por ahora cada boleta se emite con el botón. Se podrá activar cuando validemos la emisión manual.</div>
+      </div>
+      <label title="Se habilita después de validar la emisión manual" style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);cursor:not-allowed;">
+        <span style="width:36px;height:20px;border-radius:999px;background:var(--border);position:relative;display:inline-block;opacity:.6;">
+          <span style="position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;"></span>
+        </span>
+        Apagada
+      </label>
+    </div>
+
+    <div id="bmProgreso" style="display:none;font-size:12px;color:var(--muted);margin-bottom:12px;padding:9px 12px;border-radius:9px;background:var(--bg2);"></div>
+
+    <div id="bmTarjetas" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px;"></div>
+
+    <div id="bmCanales" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;"></div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
+      <input id="bmBuscar" type="text" placeholder="N° de orden, cliente, producto o folio"
+        style="padding:6px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);width:260px;"
+        onkeydown="if(event.key==='Enter') bmCargar()">
+      <select id="bmEstado" onchange="bmCargar()" style="padding:6px 8px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
+        <option value="">Boleta: todas</option><option value="por_emitir">Por emitir</option>
+        <option value="revisar">Revisar montos</option><option value="emitida">Emitida</option>
+        <option value="error">Error al emitir</option><option value="no_emitir">No se emite</option>
+        <option value="full">La emite el marketplace</option>
+      </select>
+      <input id="bmDesde" type="date" onchange="bmCargar()" style="padding:5px 8px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
+      <span style="font-size:11px;color:var(--muted);">→</span>
+      <input id="bmHasta" type="date" onchange="bmCargar()" style="padding:5px 8px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
+      <button class="btn-secondary" onclick="bmCargar()" style="padding:6px 12px;font-size:12px;">Buscar</button>
+    </div>
+
+    <div id="bmSelBar" style="display:none;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;padding:9px 14px;background:#EEEDFE;border:1px solid #534AB7;border-radius:9px;">
+      <span id="bmSelTxt" style="font-size:13px;font-weight:600;color:#534AB7;"></span>
+      <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <button id="bmSelEmitir" onclick="bmEmitirSeleccion()" style="background:#534AB7;color:#fff;border:none;padding:7px 14px;border-radius:8px;font-family:inherit;font-weight:600;font-size:12.5px;cursor:pointer;">Emitir boletas</button>
+        <button onclick="bmDecidirSeleccion(false)" style="background:transparent;border:1px solid #534AB7;color:#534AB7;padding:6px 12px;border-radius:8px;font-family:inherit;font-size:12.5px;cursor:pointer;">No se emite</button>
+        <button onclick="bmDecidirSeleccion(true)" style="background:transparent;border:1px solid #534AB7;color:#534AB7;padding:6px 12px;border-radius:8px;font-family:inherit;font-size:12.5px;cursor:pointer;">Sí se emite</button>
+        <button onclick="bmSelLimpiar()" style="background:transparent;border:none;color:#534AB7;font-size:12.5px;cursor:pointer;text-decoration:underline;">Limpiar</button>
+      </span>
+    </div>
+
+    <div class="card" style="padding:0;overflow-x:auto;">
+      <div style="min-width:880px;">
+        <div class="bm-fila" style="background:var(--bg2);border-bottom:0.5px solid var(--border);font-size:10px;color:var(--muted);">
+          <span><input type="checkbox" id="bmSelTodas" onchange="bmSelTodas(this.checked)" title="Seleccionar las que se pueden emitir" style="cursor:pointer;"></span>
+          <span>FECHA</span><span>ORDEN Y CLIENTE</span><span>PRODUCTOS</span>
+          <span style="text-align:right;">ENVÍO</span><span style="text-align:right;">TOTAL PAGADO</span>
+          <span>BOLETA</span><span>EMITIR</span>
+        </div>
+        <div id="bmLista"><div style="color:var(--hint);font-size:12px;text-align:center;padding:30px;">Cargando...</div></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:9px 14px;font-size:11px;color:var(--muted);">
+        <span id="bmPie"></span>
+        <span>Total pagado = productos con descuentos + envío que pagó el cliente.</span>
+      </div>
+    </div>
+  </div>
+
   <div id="sec-devoluciones" class="main" style="display:none;">
     <div class="page-header">
       <div>
@@ -4448,7 +4537,7 @@ function doLogout(){
 // Cada modulo tiene su ruta: se puede abrir en otra pestana, guardar, compartir,
 // y Atras/Adelante del navegador recorren los modulos. Facturacion suma la
 // sub-seccion: /panel/facturacion/consultar.
-var LS_SLUG = {"dashboard": "", "inventario": "inventario", "bodegas": "bodegas", "pos": "pos", "movimientos": "movimientos", "ventas": "ventas", "devoluciones": "devoluciones", "skumapeo": "mapeo-skus", "canales": "canales", "facturacion": "facturacion", "configuracion": "configuracion", "audit": "auditoria"};
+var LS_SLUG = {"dashboard": "", "inventario": "inventario", "bodegas": "bodegas", "pos": "pos", "movimientos": "movimientos", "ventas": "ventas", "devoluciones": "devoluciones", "skumapeo": "mapeo-skus", "canales": "canales", "facturacion": "facturacion", "boletasmkt": "boletas-marketplace", "configuracion": "configuracion", "audit": "auditoria"};
 var LS_SEC = Object.fromEntries(Object.entries(LS_SLUG).filter(([k,v])=>v).map(([k,v])=>[v,k]));
 var LS_FAC_SUB = {facturar:'', consultar:'consultar', clientes:'clientes', config:'configuracion'};
 var LS_FAC_PANE = Object.fromEntries(Object.entries(LS_FAC_SUB).map(([k,v])=>[v,k]));
@@ -4508,7 +4597,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
 });
 
 function showSection(sec, btn){
-  ['dashboard','inventario','movimientos','ventas','devoluciones','audit','configuracion','skumapeo','canales','bodegas','pos','facturacion'].forEach(s => {
+  ['dashboard','inventario','movimientos','ventas','devoluciones','audit','configuracion','skumapeo','canales','bodegas','pos','facturacion','boletasmkt'].forEach(s => {
     const el = document.getElementById('sec-' + s);
     if(el) el.style.display = s === sec ? '' : 'none';
   });
@@ -4525,6 +4614,7 @@ function showSection(sec, btn){
     if(typeof dashInit === 'function') dashInit();
   }
   if(sec === 'audit') cargarAudit();
+  if(sec === 'boletasmkt' && typeof bmInit === 'function') bmInit();
   if(sec === 'skumapeo') cargarSkuMapeo();
   if(sec === 'canales'){
     if(typeof cargarCanales === 'function') cargarCanales();
@@ -16540,6 +16630,204 @@ async function conCopiarDesdeVista(id, folio){
   if(b){ b.disabled=true; b.textContent='Copiando…'; }
   await dtCopiarABorrador(id, folio);
   conCerrarDocumento();
+}
+
+
+// ═══ Boletas de marketplace ═══════════════════════════════════════════
+// Emision MANUAL: cada boleta sale con el boton. Los controles (Full, montos
+// que no cuadran, una sola boleta por orden) viven en el servidor.
+let _bmDatos = null, _bmCanal = '', _bmSel = new Set(), _bmPoll = null, _bmIniciado = false;
+const BM_CANAL = {falabella:'Falabella', mercadolibre:'MercadoLibre', paris:'Paris', ripley:'Ripley', walmart:'Walmart', web:'Web'};
+const BM_ESTADO_ESTILO = {
+  por_emitir:'background:#FAEEDA;color:#854F0B;', revisar:'background:#FCEBEB;color:#A32D2D;',
+  emitida:'background:#E1F5EE;color:#0F6E56;', error:'background:#FCEBEB;color:#A32D2D;',
+  no_emitir:'background:var(--bg2);color:var(--muted);', full:'background:#E6F1FB;color:#185FA5;',
+  emitiendo:'background:#EEEDFE;color:#534AB7;'
+};
+function _bmEsc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function _bmPeso(n){ return n == null ? '—' : '$' + Math.round(n).toLocaleString('es-CL'); }
+function _bmHoy(d){ const x = new Date(); x.setDate(x.getDate() - (d||0)); return x.toLocaleDateString('sv-SE', {timeZone:'America/Santiago'}); }
+
+function bmInit(){
+  if(!_bmIniciado){
+    document.getElementById('bmDesde').value = _bmHoy(7);
+    document.getElementById('bmHasta').value = _bmHoy(0);
+    _bmIniciado = true;
+  }
+  bmCargar();
+  bmVerProgreso();
+}
+
+function bmCargar(){
+  const q = document.getElementById('bmBuscar').value.trim();
+  const url = '/boletas-mkt/lista?desde=' + document.getElementById('bmDesde').value +
+              '&hasta=' + document.getElementById('bmHasta').value +
+              '&estado=' + encodeURIComponent(document.getElementById('bmEstado').value) +
+              (_bmCanal ? '&canal=' + _bmCanal : '') + (q ? '&q=' + encodeURIComponent(q) : '');
+  fetch(url).then(r => r.json()).then(d => {
+    if(!d.ok){ toast('No se pudo cargar: ' + (d.error || ''), 'error'); return; }
+    _bmDatos = d;
+    [..._bmSel].forEach(id => { if(!d.filas.some(f => f.id === id)) _bmSel.delete(id); });
+    bmRender();
+  }).catch(e => toast('No se pudo cargar: ' + e, 'error'));
+}
+
+function bmRender(){
+  const d = _bmDatos; if(!d) return;
+  const pe = d.resumen.por_estado || {};
+  const tarjeta = (t, v, color, est) => `<div onclick="document.getElementById('bmEstado').value='${est}';bmCargar();" style="cursor:pointer;background:var(--bg2);border-radius:10px;padding:10px 12px;">
+      <div style="font-size:11.5px;color:var(--muted);">${t}</div>
+      <div style="font-size:20px;font-weight:600;color:${color};font-variant-numeric:tabular-nums;">${v}</div></div>`;
+  document.getElementById('bmTarjetas').innerHTML =
+    tarjeta('Total pagado del período', _bmPeso(d.resumen.monto), 'var(--text)', '') +
+    tarjeta('Por emitir', pe.por_emitir || 0, '#854F0B', 'por_emitir') +
+    tarjeta('Revisar montos', (pe.revisar || 0) + (pe.error || 0), '#A32D2D', 'revisar') +
+    tarjeta('Emitidas', pe.emitida || 0, '#0F6E56', 'emitida') +
+    tarjeta('La emite el marketplace', pe.full || 0, '#185FA5', 'full') +
+    tarjeta('No se emite', pe.no_emitir || 0, 'var(--muted)', 'no_emitir');
+
+  const pc = d.resumen.por_canal || {};
+  const pill = (k, t, n) => `<button onclick="_bmCanal='${k}';bmCargar();" style="font-family:inherit;font-size:12px;padding:4px 11px;border-radius:999px;cursor:pointer;border:0.5px solid var(--border);${_bmCanal===k ? 'background:var(--text);color:var(--bg);' : 'background:var(--bg2);color:var(--text);'}">${t} ${n}</button>`;
+  document.getElementById('bmCanales').innerHTML = pill('', 'Todos', d.resumen.total || 0) +
+    Object.keys(BM_CANAL).filter(k => pc[k]).map(k => pill(k, BM_CANAL[k], pc[k])).join('');
+
+  const filas = d.filas || [];
+  if(!filas.length){
+    document.getElementById('bmLista').innerHTML = '<div style="color:var(--hint);font-size:12px;text-align:center;padding:30px;">No hay órdenes en este período. Usa “Traer órdenes”.</div>';
+  } else {
+    document.getElementById('bmLista').innerHTML = filas.map(bmFilaHtml).join('');
+  }
+  document.getElementById('bmPie').textContent = filas.length + ' órdenes · ' + d.desde.split('-').reverse().join('/') + ' a ' + d.hasta.split('-').reverse().join('/');
+  _bmSelActualizar();
+}
+
+function _bmSeleccionable(f){ return (f.estado === 'por_emitir' || f.estado === 'error' || f.estado === 'no_emitir'); }
+
+function bmFilaHtml(f){
+  const est = `<span class="bm-pill" style="${BM_ESTADO_ESTILO[f.estado] || ''}">${_bmEsc(f.estado === 'emitida' && f.folio ? 'N° ' + f.folio : f.estado_t)}</span>`;
+  let boleta = est;
+  if(f.estado === 'emitida' && f.pdf_url){
+    boleta = `<a href="${f.pdf_url}" target="_blank" style="text-decoration:none;">${est}</a>` +
+             (f.error ? `<div style="font-size:10.5px;color:#A32D2D;margin-top:3px;">${_bmEsc(f.error).slice(0,90)}</div>` : '');
+  }
+  let accion = '';
+  if(f.estado === 'por_emitir' || f.estado === 'error'){
+    accion = `<span style="display:flex;align-items:center;gap:6px;">
+      <span class="bm-sw on" title="Sí se emite" onclick="bmDecidir([${f.id}], false)"></span>
+      <button onclick="bmEmitir([${f.id}])" style="font-family:inherit;font-size:11px;padding:3px 9px;border-radius:7px;border:1px solid #534AB7;background:#534AB7;color:#fff;cursor:pointer;">Emitir</button></span>`;
+  } else if(f.estado === 'no_emitir'){
+    accion = `<span style="display:flex;align-items:center;gap:6px;"><span class="bm-sw" title="No se emite" onclick="bmDecidir([${f.id}], true)"></span><span style="color:var(--muted);">No</span></span>`;
+  } else if(f.estado === 'full'){
+    accion = '<span style="color:var(--muted);font-size:11px;">Marketplace</span>';
+  } else if(f.estado === 'revisar'){
+    accion = '<span style="color:#A32D2D;font-size:11px;">Revisar</span>';
+  } else if(f.estado === 'emitida'){
+    accion = `<span style="color:var(--muted);font-size:11px;">${_bmEsc(f.emitida_en)}</span>`;
+  } else {
+    accion = `<span style="color:var(--muted);font-size:11px;">${_bmEsc(f.estado_t)}</span>`;
+  }
+  const detalle = (f.estado === 'revisar' || f.estado === 'error') ? (f.error || f.nota)
+                : (f.estado === 'full' ? (f.full_detalle || 'Venta Full') : f.nota);
+  const marcable = _bmSeleccionable(f);
+  return `<div class="bm-fila">
+    <span>${marcable ? `<input type="checkbox" ${_bmSel.has(f.id) ? 'checked' : ''} onchange="bmSel(${f.id}, this.checked)" style="cursor:pointer;">` : ''}</span>
+    <span style="color:var(--muted);">${_bmEsc(f.fecha).replace(' ', '<br>')}</span>
+    <span style="min-width:0;"><span class="bm-pill" style="background:var(--bg2);color:var(--text);">${_bmEsc(BM_CANAL[f.canal] || f.canal)}</span>
+      <span style="font-family:ui-monospace,monospace;font-size:11.5px;">${_bmEsc(f.orden)}</span>
+      <div style="color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_bmEsc(f.cliente) || '—'}${(f.ordenes||[]).length > 1 ? ' · pack de ' + f.ordenes.length + ' órdenes' : ''}</div></span>
+    <span style="min-width:0;"><div style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_bmEsc(f.productos_txt)}">${_bmEsc(f.productos_txt) || '—'}</div>
+      ${detalle ? `<div style="font-size:10.5px;color:${f.estado==='full' ? '#185FA5' : '#A32D2D'};margin-top:2px;" title="${_bmEsc(detalle)}">${_bmEsc(detalle).slice(0,110)}</div>` : ''}</span>
+    <span class="bm-num" style="color:${f.envio ? 'var(--text)' : 'var(--muted)'};">${_bmPeso(f.envio)}</span>
+    <span class="bm-num" style="font-weight:600;" title="${f.total_canal != null ? 'Total del marketplace: ' + _bmPeso(f.total_canal) : 'El canal no informa total para comparar'}">${_bmPeso(f.total)}</span>
+    <span>${boleta}</span>
+    <span>${accion}</span>
+  </div>`;
+}
+
+function bmSel(id, on){ on ? _bmSel.add(id) : _bmSel.delete(id); _bmSelActualizar(); }
+function bmSelTodas(on){
+  (_bmDatos && _bmDatos.filas || []).filter(_bmSeleccionable).forEach(f => on ? _bmSel.add(f.id) : _bmSel.delete(f.id));
+  bmRender();
+}
+function bmSelLimpiar(){ _bmSel.clear(); bmRender(); }
+function _bmSelActualizar(){
+  const bar = document.getElementById('bmSelBar');
+  const filas = (_bmDatos && _bmDatos.filas || []).filter(f => _bmSel.has(f.id));
+  if(!filas.length){ bar.style.display = 'none'; return; }
+  bar.style.display = 'flex';
+  const monto = filas.reduce((a, f) => a + (f.total || 0), 0);
+  document.getElementById('bmSelTxt').textContent = filas.length + ' seleccionada(s) · ' + _bmPeso(monto);
+}
+
+function bmDecidir(ids, emitir){
+  fetch('/boletas-mkt/decision', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ids, emitir})}).then(r => r.json()).then(d => {
+      if(!d.ok){ toast(d.error || 'No se pudo cambiar', 'error'); return; }
+      if(d.omitidas && d.omitidas.length) toast(d.omitidas.length + ' no se cambiaron (emitidas, Full o en revisión)', 'error');
+      bmCargar();
+    });
+}
+function bmDecidirSeleccion(emitir){ bmDecidir([..._bmSel], emitir); _bmSel.clear(); }
+function bmEmitirSeleccion(){
+  const ids = (_bmDatos.filas || []).filter(f => _bmSel.has(f.id) && (f.estado === 'por_emitir' || f.estado === 'error')).map(f => f.id);
+  if(!ids.length){ toast('Ninguna de las seleccionadas está por emitir', 'error'); return; }
+  bmEmitir(ids);
+}
+
+async function bmEmitir(ids){
+  const filas = (_bmDatos.filas || []).filter(f => ids.includes(f.id));
+  const monto = filas.reduce((a, f) => a + (f.total || 0), 0);
+  if(!confirm(`Se emiten ${filas.length} boleta(s) por ${_bmPeso(monto)} y se envían al SII.\n\nCada boleta va por lo que pagó el cliente. Esto no se puede deshacer: para corregir hay que emitir una nota de crédito.`)) return;
+  const btn = document.getElementById('bmSelEmitir');
+  let ok = 0; const errores = [];
+  for(let i = 0; i < filas.length; i++){
+    btn.disabled = true; btn.textContent = `Emitiendo ${i + 1} de ${filas.length}…`;
+    try{
+      const r = await fetch('/boletas-mkt/' + filas[i].id + '/emitir', {method:'POST'});
+      const d = await r.json();
+      if(d.ok) ok++; else errores.push(filas[i].orden + ': ' + (d.error || 'error'));
+    }catch(e){ errores.push(filas[i].orden + ': ' + e); }
+  }
+  btn.disabled = false; btn.textContent = 'Emitir boletas';
+  _bmSel.clear();
+  if(ok) toast(ok + ' boleta(s) emitida(s)');
+  if(errores.length) alert('No se emitieron ' + errores.length + ':\n\n' + errores.slice(0, 15).join('\n'));
+  bmCargar();
+}
+
+function bmTraer(){
+  const dias = document.getElementById('bmDias').value;
+  fetch('/boletas-mkt/sincronizar', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({dias: Number(dias)})}).then(r => r.json()).then(d => {
+      if(!d.ok){ toast(d.error || 'No se pudo iniciar', 'error'); return; }
+      if(!d.lanzado) toast(d.mensaje || 'Ya se están trayendo las órdenes');
+      bmVerProgreso(true);
+    });
+}
+
+function bmVerProgreso(forzar){
+  clearTimeout(_bmPoll);
+  fetch('/boletas-mkt/sincronizar/estado').then(r => r.json()).then(d => {
+    const t = d.trabajo || {}; const box = document.getElementById('bmProgreso');
+    const btn = document.getElementById('bmBtnTraer');
+    if(t.estado === 'sin_lanzar'){ box.style.display = 'none'; return; }
+    box.style.display = 'block';
+    const pasos = (t.pasos || []).map(p => {
+      const r = p.resultado || {};
+      const txt = p.estado === 'listo' ? (r.ok ? `${r.ordenes} órdenes` : 'error: ' + (r.error || '')) :
+                  (p.estado === 'corriendo' ? 'trayendo…' : (p.estado === 'error' ? 'error' : 'en espera'));
+      return `<b>${_bmEsc(BM_CANAL[p.paso] || p.paso)}</b> ${_bmEsc(txt)}`;
+    }).join(' · ');
+    if(t.estado === 'corriendo'){
+      btn.disabled = true; btn.textContent = 'Trayendo…';
+      box.innerHTML = 'Trayendo órdenes: ' + pasos;
+      _bmPoll = setTimeout(() => bmVerProgreso(true), 3000);
+    } else {
+      btn.disabled = false; btn.textContent = 'Traer órdenes';
+      box.innerHTML = 'Última actualización ' + _bmEsc(t.fin || '') + ': ' + pasos;
+      if(forzar) bmCargar();
+    }
+  });
 }
 
 function conCanalLabel(c){
