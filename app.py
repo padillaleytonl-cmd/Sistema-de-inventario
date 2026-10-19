@@ -15909,6 +15909,154 @@ def ruta_alertas():
     solo_no = request.args.get("solo_no_leidas", "false").lower() == "true"
     return jsonify(listar_alertas(limite=100, solo_no_leidas=solo_no))
 
+_RE_MONTO_CLAVE = re.compile(
+    r"price|total|amount|shipping|discount|voucher|coupon|fee|cost|charge|tax|paid|"
+    r"promo|refund|subsid|bonif|rebate|commission|descuento|envio|monto|precio", _re_montos.I)
+# Tramos de la ruta que son datos personales: no se muestran aunque el nombre
+# del campo parezca un monto (p. ej. shippingAddress.firstName).
+_RE_RUTA_PERSONAL = _re_montos.compile(
+    r"address|customer|buyer|billing|receiver|contact|document|email|phone|"
+    r"first_?name|last_?name|rut|identification|street|city|comment", _re_montos.I)
+_RE_RUTA_DINERO = _re_montos.compile(r"charge|promo|discount|coupon|voucher|shipping|tax|fee", _re_montos.I)
+
+
+def _montos_de(obj, ruta="", salida=None, prof=0):
+    """Saca de un JSON de orden solo los campos de plata (y el tipo/nombre de
+    los cargos), con su ruta. Para comparar como informa cada canal el envio
+    y los descuentos sin mirar datos del cliente."""
+    if salida is None:
+        salida = {}
+    if prof > 8 or len(salida) > 400:
+        return salida
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            r = f"{ruta}.{k}" if ruta else str(k)
+            if _RE_RUTA_PERSONAL.search(r):
+                continue
+            if isinstance(v, (dict, list)):
+                _montos_de(v, r, salida, prof + 1)
+            elif _RE_MONTO_CLAVE.search(str(k)):
+                salida[r] = v
+            elif (str(k).lower() in ("type", "name", "chargetype", "chargename", "code",
+                                     "label", "currency", "currency_id", "id")
+                  and _RE_RUTA_DINERO.search(ruta)):
+                salida[r] = v
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj[:40]):
+            _montos_de(v, f"{ruta}[{i}]", salida, prof + 1)
+    return salida
+
+
+@app.route("/admin/lusync/ordenes/muestra-montos")
+def admin_ordenes_muestra_montos():
+    """Ultimas N ordenes de un canal con TODOS sus campos de montos (producto,
+    envio, descuentos, cupones, totales), tal como los manda la API. Para
+    decidir como armar la boleta sin descuadres. SOLO LEE; no muestra datos
+    del cliente.
+
+      ?canal=falabella|mercadolibre|paris|ripley|walmart|web  &n=5  &dias=10
+    """
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    canal = (request.args.get("canal") or "").strip().lower()
+    n = min(max(request.args.get("n", default=5, type=int), 1), 15)
+    dias = min(max(request.args.get("dias", default=10, type=int), 1), 60)
+    from datetime import datetime as _dt, timedelta as _td
+    import traceback as _tb
+
+    def _no_cancelada(estado):
+        return "cancel" not in str(estado or "").lower()
+
+    ordenes = []
+    try:
+        if canal == "falabella":
+            from falabella import obtener_ordenes_falabella, obtener_items_orden_falabella
+            lista = obtener_ordenes_falabella(dias=dias, limit=100) or []
+            lista = [o for o in lista if _no_cancelada(o.get("Statuses"))]
+            lista.sort(key=lambda o: str(o.get("CreatedAt") or ""), reverse=True)
+            for o in lista[:n]:
+                items = obtener_items_orden_falabella(str(o.get("OrderId"))) or []
+                ordenes.append({"orden": o.get("OrderNumber"), "fecha": o.get("CreatedAt"),
+                                "estado": o.get("Statuses"),
+                                "orden_montos": _montos_de(o),
+                                "items_montos": [_montos_de(i) for i in items]})
+        elif canal == "mercadolibre":
+            from mercadolibre import obtener_todas_ordenes_meli_rango, meli_headers, MELI_API_URL
+            import requests as _rq
+            desde = (_dt.utcnow() - _td(days=dias)).strftime("%Y-%m-%dT00:00:00.000-04:00")
+            lista = [o for o in (obtener_todas_ordenes_meli_rango(desde, None, max_paginas=3) or [])
+                     if o.get("status") in ("paid", "confirmed")]
+            lista.sort(key=lambda o: str(o.get("date_created") or ""), reverse=True)
+            h = meli_headers()
+            for o in lista[:n]:
+                sid = (o.get("shipping") or {}).get("id")
+                envio, costos = {}, {}
+                if sid:
+                    r1 = _rq.get(f"{MELI_API_URL}/shipments/{sid}", headers=h, timeout=10)
+                    envio = _montos_de(r1.json()) if r1.status_code == 200 else {"http": r1.status_code}
+                    r2 = _rq.get(f"{MELI_API_URL}/shipments/{sid}/costs", headers=h, timeout=10)
+                    costos = _montos_de(r2.json()) if r2.status_code == 200 else {"http": r2.status_code}
+                ordenes.append({"orden": o.get("id"), "pack": o.get("pack_id"),
+                                "fecha": o.get("date_created"), "estado": o.get("status"),
+                                "orden_montos": _montos_de(o), "envio_montos": envio,
+                                "envio_costos": costos})
+        elif canal == "paris":
+            from paris import obtener_ordenes_paris_todas, obtener_orden_paris
+            lista = obtener_ordenes_paris_todas(dias=dias) or []
+            lista.sort(key=lambda o: str(o.get("createdAt") or o.get("originOrderDate") or ""),
+                       reverse=True)
+            vistos = set()
+            for o in lista:
+                so = str(o.get("subOrderNumber") or o.get("orderNumber") or "")
+                if not so or so in vistos:
+                    continue
+                vistos.add(so)
+                det = obtener_orden_paris(so) or {}
+                full = {**o, **det}
+                if not _no_cancelada(full.get("status") or full.get("statusName")):
+                    continue
+                ordenes.append({"orden": so, "orden_padre": full.get("orderNumber"),
+                                "fecha": full.get("createdAt") or full.get("originOrderDate"),
+                                "estado": full.get("status") or full.get("statusName"),
+                                "orden_montos": _montos_de(full)})
+                if len(ordenes) >= n:
+                    break
+        elif canal == "ripley":
+            from ripley import obtener_ordenes_ripley
+            lista = obtener_ordenes_ripley(dias=dias, max_resultados=100) or []
+            lista = [o for o in lista if _no_cancelada(o.get("order_state"))]
+            lista.sort(key=lambda o: str(o.get("created_date") or ""), reverse=True)
+            for o in lista[:n]:
+                ordenes.append({"orden": o.get("commercial_id") or o.get("order_id"),
+                                "fecha": o.get("created_date"), "estado": o.get("order_state"),
+                                "orden_montos": _montos_de(o)})
+        elif canal == "walmart":
+            from walmart import obtener_ordenes_walmart
+            lista = obtener_ordenes_walmart(dias=dias, max_paginas=10) or []
+            lista.sort(key=lambda o: str(o.get("orderDate") or ""), reverse=True)
+            for o in lista[:n]:
+                ordenes.append({"orden": o.get("customerOrderId") or o.get("purchaseOrderId"),
+                                "fecha": o.get("orderDate"),
+                                "orden_montos": _montos_de(o)})
+        elif canal == "web":
+            r = requests.get(_woo_api() + "/orders", timeout=20, params={
+                "consumer_key": credencial("web", "consumer_key"),
+                "consumer_secret": credencial("web", "consumer_secret"),
+                "status": "processing,completed", "per_page": n,
+                "orderby": "date", "order": "desc"})
+            if r.status_code != 200:
+                return jsonify({"ok": False, "error": f"Woo HTTP {r.status_code}"}), 502
+            for o in (r.json() or []):
+                ordenes.append({"orden": o.get("number") or o.get("id"),
+                                "fecha": o.get("date_created"), "estado": o.get("status"),
+                                "orden_montos": _montos_de(o)})
+        else:
+            return jsonify({"ok": False, "error": "canal: falabella, mercadolibre, paris, ripley, walmart o web"}), 400
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(e)[:300], "traza": _tb.format_exc()[-2500:]}), 500
+    return jsonify({"ok": True, "canal": canal, "cantidad": len(ordenes), "ordenes": ordenes})
+
+
 @app.route("/admin/lusync/alertas/resumen")
 def admin_alertas_resumen():
     """De donde salen las alertas sin leer del cliente: por tipo y canal, por
