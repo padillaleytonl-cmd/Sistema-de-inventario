@@ -26,6 +26,7 @@ import logging
 from datetime import datetime, timedelta
 
 from facturacion.montos_orden import POR_CANAL, montos_falabella, montos_meli_pack
+from facturacion.ordenes_full import confirmacion_no_full
 
 logger = logging.getLogger("lusync")
 
@@ -251,7 +252,9 @@ def _traer_walmart(dias):
             "fecha": _fecha(o.get("orderDate")), "cliente": nombre,
             "email": o.get("customerEmailId") or "", "calculo": POR_CANAL["walmart"](o),
             "crudas": [o], "ref": {"purchase_order_id": po,
-                                   "customer_order_id": str(o.get("customerOrderId") or "")},
+                                   "customer_order_id": str(o.get("customerOrderId") or ""),
+                                   "ship_node_type": o.get("shipNodeType") or "",
+                                   "no_full_por": confirmacion_no_full("walmart", o)},
         })
     return salida
 
@@ -326,6 +329,8 @@ def _full_de(tenant_id, canal, doc):
                 continue
         except Exception:  # noqa: BLE001
             pass
+        if confirmacion_no_full(canal, cruda):
+            continue  # el marketplace dice explicitamente que la despachamos nosotros
         es, det = estado_full_orden(tenant_id, oid, canal)
         if es:
             ids_full.append(oid)
@@ -442,7 +447,7 @@ def items_boleta(fila):
 
 def leer_fila(cur, tenant_id, fila_id):
     cur.execute("""SELECT id, canal, clave, orden, ordenes, estado, emitir, es_full, cuadra,
-                          lineas, envio, total, dte_id, folio
+                          lineas, envio, total, dte_id, folio, ref
                      FROM boletas_mkt WHERE tenant_id=%s AND id=%s""", (tenant_id, fila_id))
     r = cur.fetchone()
     if not r:
@@ -450,7 +455,7 @@ def leer_fila(cur, tenant_id, fila_id):
     return {"id": r[0], "canal": r[1], "clave": r[2], "orden": r[3], "ordenes": r[4] or [],
             "estado": r[5], "emitir": r[6], "es_full": r[7], "cuadra": r[8],
             "lineas": r[9] or [], "envio": r[10] or 0, "total": r[11] or 0,
-            "dte_id": r[12], "folio": r[13]}
+            "dte_id": r[12], "folio": r[13], "ref": r[14] or {}}
 
 
 def emitir_fila(tenant_id, fila_id, usuario, actualizar_estado_fn):
@@ -493,8 +498,9 @@ def emitir_fila(tenant_id, fila_id, usuario, actualizar_estado_fn):
             conn.commit()
 
         # Cada orden del documento se revisa por Full (un pack puede tener varias)
+        no_full_por = (fila["ref"] or {}).get("no_full_por") if fila["canal"] == "walmart" else None
         for oid in fila["ordenes"]:
-            bloq = bloqueo_full(tenant_id, oid, fila["canal"])
+            bloq = bloqueo_full(tenant_id, oid, fila["canal"], no_full_por)
             if bloq:
                 _volver("full" if "es Full" in bloq else "revisar", bloq)
                 return {"ok": False, "error": bloq}
@@ -506,10 +512,14 @@ def emitir_fila(tenant_id, fila_id, usuario, actualizar_estado_fn):
             _volver("revisar", err)
             return {"ok": False, "error": err}
 
+        # La orden que queda en la boleta es la que usan las devoluciones para
+        # encontrarla: Walmart guarda la compra (customerOrderId), no la parte.
+        orden_doc = fila["ordenes"][0] if fila["ordenes"] else fila["clave"]
+        if fila["canal"] == "walmart":
+            orden_doc = (fila["ref"] or {}).get("customer_order_id") or orden_doc
         res = emitir_boleta_core(tenant_id=tenant_id, items=items,
                                  actualizar_estado_fn=actualizar_estado_fn,
-                                 orden_id=fila["ordenes"][0] if fila["ordenes"] else fila["clave"],
-                                 canal=fila["canal"])
+                                 orden_id=orden_doc, canal=fila["canal"], no_full_por=no_full_por)
         if res.get("ok"):
             _volver("emitida", None, dte_id=res.get("boleta_id"), folio=res.get("folio"),
                     emitida_en=_ahora(), emitida_por=(usuario or "")[:80])

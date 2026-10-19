@@ -16,7 +16,7 @@ from datetime import datetime
 
 def emitir_boleta_core(tenant_id, items, receptor=None, ambiente=None,
                        referencias=None, actualizar_estado_fn=None,
-                       orden_id=None, canal=None):
+                       orden_id=None, canal=None, no_full_por=None):
     """Emite UNA boleta/factura electrónica y la envía al SII.
 
     Flujo profesional (guardar-antes-de-enviar), idéntico al del endpoint web:
@@ -61,7 +61,7 @@ def emitir_boleta_core(tenant_id, items, receptor=None, ambiente=None,
     #     (regla del usuario, 18/10/2026). Ver facturacion/ordenes_full.py.
     if orden_id:
         from facturacion.ordenes_full import bloqueo_full
-        _bloq = bloqueo_full(tenant_id, orden_id, canal)
+        _bloq = bloqueo_full(tenant_id, orden_id, canal, no_full_por)
         if _bloq:
             return {"ok": False, "error": _bloq, "es_full": True, "pasos": pasos}
 

@@ -74,10 +74,38 @@ def estado_full_orden(tenant_id, orden_id, canal=None):
     return None, "no encontré la venta en Lusync"
 
 
-def bloqueo_full(tenant_id, orden_id, canal=None):
+def confirmacion_no_full(canal, orden_cruda):
+    """Texto si el MARKETPLACE dice explicitamente que esa orden la despacha
+    el vendedor; None si no lo dice. Hoy solo Walmart lo informa por parte de
+    la compra: shipNodeType = SellerFulfilled en el purchaseOrder. Hace falta
+    porque Walmart parte una compra (customerOrderId) en una parte propia y
+    otra Full, y la venta en Lusync queda con el numero de la compra: mirando
+    solo la bodega, la parte propia pareceria Full o desconocida."""
+    if (canal or "").lower() != "walmart" or not isinstance(orden_cruda, dict):
+        return None
+    if str(orden_cruda.get("shipNodeType") or "").strip().upper() != "SELLERFULFILLED":
+        return None
+    lineas = (orden_cruda.get("orderLines") or {}).get("orderLine") or []
+    lineas = lineas if isinstance(lineas, list) else [lineas]
+    for ln in lineas:
+        fi = ln.get("fulfillment") or {}
+        opt = str(fi.get("fulfillmentOption") or "").strip().upper()
+        snt = str(fi.get("shipNodeType") or "").strip().upper()
+        if (opt and opt not in ("SELLER", "SELLERFULFILLED")) or "WFS" in snt or "3PL" in snt:
+            return None
+    return "Walmart informa shipNodeType SellerFulfilled en la orden %s" % (
+        orden_cruda.get("purchaseOrderId") or "")
+
+
+def bloqueo_full(tenant_id, orden_id, canal=None, no_full_por=None):
     """Mensaje de error si NO se puede emitir/anular un documento para esa
-    orden; None si se puede."""
+    orden; None si se puede.
+
+    no_full_por: la confirmacion explicita del marketplace de que la orden la
+    despacha el vendedor (confirmacion_no_full). Solo vale para Walmart."""
     if not str(orden_id or "").strip():
+        return None
+    if no_full_por and (canal or "").lower() == "walmart":
         return None
     es_full, detalle = estado_full_orden(tenant_id, orden_id, canal)
     if es_full is False:
