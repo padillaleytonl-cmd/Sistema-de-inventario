@@ -39,7 +39,60 @@ ESTADOS = {
     "full": "La emite el marketplace",
     "emitida": "Emitida",
     "error": "Error al emitir",
+    "faltan_datos": "Faltan datos de factura",
 }
+
+CAMPOS_FACTURA = ("rut", "razon_social", "giro", "direccion", "comuna")
+
+
+def _factura_completa(f):
+    from facturacion.utils import validar_rut
+    return bool(f) and all(str(f.get(c) or "").strip() for c in CAMPOS_FACTURA) and validar_rut(f.get("rut"))
+
+
+def factura_falabella(o):
+    """Falabella: InvoiceRequired = true y los datos en ExtraBillingAttributes.
+    No trae giro: queda para completar."""
+    if str(o.get("InvoiceRequired")).lower() != "true":
+        return None
+    x = o.get("ExtraBillingAttributes") or {}
+    rut = str(x.get("LegalId") or "").strip()
+    if rut and "-" not in rut and x.get("CustomerVerifierDigit"):
+        rut = rut + "-" + str(x.get("CustomerVerifierDigit"))
+    return {"rut": _rut_limpio(rut) if rut else "", "razon_social": x.get("ReceiverLegalName") or "",
+            "giro": x.get("ReceiverTypeRegimen") or "", "direccion": x.get("ReceiverAddress") or "",
+            "comuna": x.get("ReceiverMunicipality") or x.get("ReceiverLocality") or "",
+            "ciudad": x.get("ReceiverRegion") or "", "email": x.get("ReceiverEmail") or "",
+            "fuente": "Falabella"}
+
+
+def factura_meli(bi):
+    """MercadoLibre: en billing_info, BUSINESS_NAME y ECONOMIC_ACTIVITY (giro)
+    marcan que el comprador es una empresa y pidio factura."""
+    base = (bi or {}).get("crudo") or {}
+    extra = {str(e.get("type") or "").upper(): str(e.get("value") or "").strip()
+             for e in (base.get("additional_info") or []) if isinstance(e, dict)}
+    if not extra.get("BUSINESS_NAME"):
+        return None
+    direccion = " ".join(x for x in (extra.get("STREET_NAME"), extra.get("STREET_NUMBER")) if x)
+    return {"rut": bi.get("rut") or "", "razon_social": extra.get("BUSINESS_NAME"),
+            "giro": extra.get("ECONOMIC_ACTIVITY") or "", "direccion": direccion,
+            "comuna": extra.get("CITY_NAME") or extra.get("NEIGHBORHOOD") or "",
+            "ciudad": extra.get("STATE_NAME") or "", "email": "", "fuente": "MercadoLibre"}
+
+
+def factura_paris(o):
+    """Paris: originInvoiceType = factura."""
+    if str(o.get("originInvoiceType") or "").lower() != "factura":
+        return None
+    b = o.get("billingAddress") or {}
+    cust = o.get("customer") or {}
+    return {"rut": buscar_rut(cust) or buscar_rut(o) or "",
+            "razon_social": b.get("companyName") or b.get("company") or cust.get("companyName") or "",
+            "giro": b.get("businessActivity") or b.get("giro") or "",
+            "direccion": " ".join(str(x) for x in (b.get("address1"), b.get("address2")) if x),
+            "comuna": b.get("city") or "", "ciudad": b.get("stateCode") or "",
+            "email": cust.get("email") or "", "fuente": "Paris"}
 
 
 def asegurar_tabla(cur):
@@ -132,8 +185,9 @@ def buscar_rut(obj, prof=0):
     if prof > 6:
         return None
     if isinstance(obj, dict):
-        # Woo: meta_data [{key: billing_rut, value: ...}]
-        if "key" in obj and "value" in obj and _RE_CLAVE_RUT.search(str(obj.get("key") or "")):
+        # Woo: meta_data [{key: billing_rut, value}]; MercadoLibre: [{type: DOC_NUMBER, value}]
+        _etiqueta = obj.get("key") if "key" in obj else obj.get("type")
+        if "value" in obj and _etiqueta and _RE_CLAVE_RUT.search(str(_etiqueta)):
             v = str(obj.get("value") or "").strip()
             if v and validar_rut(v) and len(v.replace(".", "").replace("-", "")) >= 8:
                 return _rut_limpio(v)
@@ -228,6 +282,7 @@ def _traer_falabella(dias):
             "ordenes": [str(o.get("OrderNumber"))], "fecha": _fecha(o.get("CreatedAt")),
             "cliente": " ".join(x for x in (o.get("CustomerFirstName"), o.get("CustomerLastName")) if x),
             "email": "", "calculo": calc, "crudas": [o], "rut": buscar_rut(o),
+            "factura": factura_falabella(o),
             "ref": {"order_id": str(o.get("OrderId")),
                     "order_item_ids": [str(i.get("OrderItemId")) for i in its if i.get("OrderItemId")]},
         })
@@ -258,7 +313,7 @@ def _traer_mercadolibre(dias):
             "cliente": bi.get("empresa") or bi.get("nombre") or
                        " ".join(x for x in (buyer.get("first_name"), buyer.get("last_name")) if x)
                        or buyer.get("nickname") or "",
-            "rut": bi.get("rut"),
+            "rut": bi.get("rut"), "factura": factura_meli(bi),
             "email": "", "calculo": None, "crudas": grupo, "seller": seller,
             "ref": {"pack_id": str(grupo[0].get("pack_id") or ""),
                     "order_ids": [str(o.get("id")) for o in grupo]},
@@ -286,7 +341,7 @@ def _traer_paris(dias):
             "fecha": _fecha(full.get("createdAt") or full.get("originOrderDate")),
             "cliente": " ".join(x for x in (cust.get("firstName") or cust.get("name"),) if x),
             "email": cust.get("email") or "", "calculo": POR_CANAL["paris"](full),
-            "crudas": [full], "rut": buscar_rut(full), "ref": {"sub_order": so, "order": str(full.get("orderNumber") or "")},
+            "crudas": [full], "rut": buscar_rut(full), "factura": factura_paris(full), "ref": {"sub_order": so, "order": str(full.get("orderNumber") or "")},
         })
     return salida
 
@@ -452,9 +507,9 @@ def _sincronizar_canal(tenant_id, canal, dias):
             asegurar_tabla(cur)
             from facturacion.carga_mkt import asegurar_columnas
             asegurar_columnas(cur)
-            cur.execute("SELECT clave, estado, emitir FROM boletas_mkt WHERE tenant_id=%s AND canal=%s",
-                        (tenant_id, canal))
-            previas = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+            cur.execute("""SELECT clave, estado, emitir, factura FROM boletas_mkt
+                            WHERE tenant_id=%s AND canal=%s""", (tenant_id, canal))
+            previas = {r[0]: (r[1], r[2], r[3]) for r in cur.fetchall()}
             for d in docs:
                 prev = previas.get(d["clave"])
                 if prev and prev[0] == "emitida":
@@ -487,13 +542,21 @@ def _sincronizar_canal(tenant_id, canal, dias):
                             % (calc.get("total"), calc.get("total_canal")) + nota).strip()
                 else:
                     estado = "por_emitir" if emitir else "no_emitir"
+                # Factura: los datos que la persona completo a mano mandan sobre los
+                # del marketplace (que suelen venir sin giro).
+                factura = d.get("factura")
+                if factura and prev and prev[2]:
+                    factura = {**factura, **{k: v for k, v in (prev[2] or {}).items() if v}}
+                if factura and estado == "por_emitir" and not _factura_completa(factura):
+                    estado = "faltan_datos"
                 if prev and prev[0] == "error" and estado == "por_emitir":
                     estado = "error"  # sigue a la vista hasta que se reintente
                 cur.execute("""
                     INSERT INTO boletas_mkt (tenant_id, canal, clave, orden, ordenes, fecha, cliente,
                         email, productos_txt, productos, envio, total, total_canal, cuadra, nota,
-                        es_full, full_detalle, emitir, estado, lineas, ref, actualizado, rut_cliente)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                        es_full, full_detalle, emitir, estado, lineas, ref, actualizado, rut_cliente,
+                        factura)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (tenant_id, canal, clave) DO UPDATE SET
                         orden=EXCLUDED.orden, ordenes=EXCLUDED.ordenes, fecha=EXCLUDED.fecha,
                         cliente=EXCLUDED.cliente, email=EXCLUDED.email,
@@ -502,14 +565,15 @@ def _sincronizar_canal(tenant_id, canal, dias):
                         cuadra=EXCLUDED.cuadra, nota=EXCLUDED.nota, es_full=EXCLUDED.es_full,
                         full_detalle=EXCLUDED.full_detalle, estado=EXCLUDED.estado,
                         lineas=EXCLUDED.lineas, ref=EXCLUDED.ref, actualizado=EXCLUDED.actualizado,
-                        rut_cliente=EXCLUDED.rut_cliente
+                        rut_cliente=EXCLUDED.rut_cliente, factura=EXCLUDED.factura
                     WHERE boletas_mkt.estado <> 'emitida'
                 """, (tenant_id, canal, d["clave"], d["orden"], json.dumps(d["ordenes"]), d["fecha"],
                       (d.get("cliente") or "")[:120], (d.get("email") or "")[:200],
                       _txt_productos(calc.get("lineas") or []), calc.get("productos"), calc.get("envio"),
                       calc.get("total"), calc.get("total_canal"), calc.get("cuadra"), nota[:500],
                       es_full, det_full[:300], emitir, estado, json.dumps(calc.get("lineas") or []),
-                      json.dumps(d.get("ref") or {}), _ahora(), d.get("rut")))
+                      json.dumps(d.get("ref") or {}), _ahora(), d.get("rut"),
+                      json.dumps(factura) if factura else None))
                 if prev:
                     actualizados += 1
                 else:
@@ -546,9 +610,67 @@ def items_boleta(fila):
     return items
 
 
+def items_factura(fila):
+    """Las lineas de la factura en NETO, calculadas para que neto + IVA de
+    exactamente lo que pago el cliente. La factura se arma en neto y el IVA se
+    calcula sobre el total; con precios redondeados linea a linea el total
+    podria quedar 1 peso arriba o abajo."""
+    from facturacion.dtes.factura import IVA_PORCENTAJE, _redondear_clp
+    brutas = items_boleta(fila)
+    total = sum(i["precio_unitario"] * i["cantidad"] for i in brutas)
+    base = _redondear_clp(total * 100.0 / (100 + IVA_PORCENTAJE))
+    neto = None
+    for n in sorted(range(base - 4, base + 5), key=lambda x: abs(x - base)):
+        if n + _redondear_clp(n * IVA_PORCENTAJE / 100.0) == total:
+            neto = n
+            break
+    if neto is None:
+        return None
+    items, restante = [], neto
+    for idx, it in enumerate(brutas):
+        linea_bruta = it["precio_unitario"] * it["cantidad"]
+        parte = restante if idx == len(brutas) - 1 else _redondear_clp(neto * linea_bruta / total)
+        restante -= parte
+        nombre = it["nombre"] + (" (x%s)" % it["cantidad"] if it["cantidad"] > 1 else "")
+        items.append({"nombre": nombre[:80], "cantidad": 1, "precio_unitario": parte, "exento": False})
+    return items
+
+
+def guardar_datos_factura(tenant_id, fila_id, datos):
+    """Completa a mano los datos de la factura (giro, direccion...)."""
+    from inventario import get_conn, release_conn
+    limpio = {k: str(datos.get(k) or "").strip()[:100] for k in CAMPOS_FACTURA + ("ciudad", "email")}
+    if limpio.get("rut"):
+        limpio["rut"] = _rut_limpio(limpio["rut"])
+    conn = get_conn(tenant_id=tenant_id, is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT factura, estado FROM boletas_mkt WHERE tenant_id=%s AND id=%s",
+                        (tenant_id, fila_id))
+            r = cur.fetchone()
+            if not r:
+                return {"ok": False, "error": "No existe esa orden"}
+            if r[1] not in ("faltan_datos", "por_emitir", "error", "no_emitir"):
+                return {"ok": False, "error": "Esta orden ya no se puede cambiar (%s)" % r[1]}
+            f = {**(r[0] or {}), **{k: v for k, v in limpio.items() if v}}
+            completa = _factura_completa(f)
+            nuevo = r[1]
+            if r[1] == "faltan_datos" and completa:
+                nuevo = "por_emitir"
+            elif r[1] == "por_emitir" and not completa:
+                nuevo = "faltan_datos"
+            cur.execute("UPDATE boletas_mkt SET factura=%s, estado=%s, actualizado=%s "
+                        "WHERE tenant_id=%s AND id=%s", (json.dumps(f), nuevo, _ahora(), tenant_id, fila_id))
+        conn.commit()
+    finally:
+        release_conn(conn)
+    faltan = [c for c in CAMPOS_FACTURA if not str(f.get(c) or "").strip()]
+    return {"ok": True, "completa": completa, "faltan": faltan, "estado": nuevo}
+
+
 def leer_fila(cur, tenant_id, fila_id):
     cur.execute("""SELECT id, canal, clave, orden, ordenes, estado, emitir, es_full, cuadra,
-                          lineas, envio, total, dte_id, folio, ref, cliente, rut_cliente
+                          lineas, envio, total, dte_id, folio, ref, cliente, rut_cliente, factura
                      FROM boletas_mkt WHERE tenant_id=%s AND id=%s""", (tenant_id, fila_id))
     r = cur.fetchone()
     if not r:
@@ -557,11 +679,13 @@ def leer_fila(cur, tenant_id, fila_id):
             "estado": r[5], "emitir": r[6], "es_full": r[7], "cuadra": r[8],
             "lineas": r[9] or [], "envio": r[10] or 0, "total": r[11] or 0,
             "dte_id": r[12], "folio": r[13], "ref": r[14] or {},
-            "cliente": r[15] or "", "rut_cliente": r[16] or ""}
+            "cliente": r[15] or "", "rut_cliente": r[16] or "", "factura": r[17]}
 
 
-def emitir_fila(tenant_id, fila_id, usuario, actualizar_estado_fn):
-    """Emite la boleta de UNA fila, con todos los controles. Devuelve dict."""
+def emitir_fila(tenant_id, fila_id, usuario, actualizar_estado_fn, emitir_factura_fn=None):
+    """Emite la boleta (o la factura, si el cliente la pidio) de UNA fila, con
+    todos los controles. emitir_factura_fn(body) -> dict llama a la emision de
+    facturas de la app. Devuelve dict."""
     from inventario import get_conn, release_conn
     from facturacion.emision_core import emitir_boleta_core
     from facturacion.ordenes_full import bloqueo_full
@@ -613,6 +737,44 @@ def emitir_fila(tenant_id, fila_id, usuario, actualizar_estado_fn):
             err = "Las líneas suman %s y el cliente pagó %s: no se emite" % (suma, fila["total"])
             _volver("revisar", err)
             return {"ok": False, "error": err}
+
+        # El cliente pidio factura: se emite factura con sus datos, nunca boleta
+        if fila.get("factura"):
+            f = fila["factura"]
+            if not _factura_completa(f):
+                _volver("faltan_datos", "Faltan: " + ", ".join(
+                    c for c in CAMPOS_FACTURA if not str(f.get(c) or "").strip()))
+                return {"ok": False, "error": "Faltan datos de la factura"}
+            items_f = items_factura(fila)
+            if not items_f or not emitir_factura_fn:
+                _volver("revisar", "No pude armar una factura que sume al peso %s" % fila["total"])
+                return {"ok": False, "error": "No pude armar la factura al peso"}
+            orden_doc = fila["ordenes"][0] if fila["ordenes"] else fila["clave"]
+            res = emitir_factura_fn({
+                "items": items_f, "forma_pago": 1, "orden_id": orden_doc, "canal": fila["canal"],
+                "receptor": {k: f.get(k) for k in CAMPOS_FACTURA + ("ciudad", "email")}})
+            if res.get("ok") and int(res.get("total") or 0) != int(fila["total"]):
+                logger.error("boletas_mkt: factura %s total %s != pagado %s",
+                             res.get("folio"), res.get("total"), fila["total"])
+            doc_id = res.get("fac_id") or res.get("boleta_id")
+            if res.get("ok") or doc_id:
+                _volver("emitida", None if res.get("ok") else res.get("error"), dte_id=doc_id,
+                        folio=res.get("folio"), emitida_en=_ahora(), emitida_por=(usuario or "")[:80])
+                carga_ok, carga_det = False, ""
+                if res.get("ok"):
+                    try:
+                        from facturacion.carga_mkt import cargar_fila
+                        carga_ok, carga_det = cargar_fila(tenant_id, fila_id)
+                    except Exception as e:  # noqa: BLE001
+                        carga_det = str(e)[:200]
+                    return {"ok": True, "folio": res.get("folio"), "boleta_id": doc_id, "factura": True,
+                            "total": res.get("total"), "carga_ok": carga_ok, "carga": carga_det}
+                return {"ok": False, "folio": res.get("folio"),
+                        "error": "Factura N°%s generada pero el envío al SII falló: %s. Reintenta el "
+                                 "envío desde Facturación; no la emitas de nuevo." % (res.get("folio"),
+                                                                                      res.get("error"))}
+            _volver("full" if res.get("es_full") else "error", res.get("error"))
+            return {"ok": False, "error": res.get("error") or "No se pudo emitir la factura"}
 
         # La orden que queda en la boleta es la que usan las devoluciones para
         # encontrarla: Walmart guarda la compra (customerOrderId), no la parte.

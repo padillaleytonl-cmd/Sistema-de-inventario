@@ -16011,7 +16011,8 @@ def boletas_mkt_lista():
                                   b.productos_txt, b.productos, b.envio, b.total, b.total_canal,
                                   b.cuadra, b.nota, b.es_full, b.full_detalle, b.emitir, b.estado,
                                   b.dte_id, b.folio, b.error, b.emitida_en, b.carga_estado,
-                                  b.carga_detalle, b.rut_cliente, d.estado, b.actualizado
+                                  b.carga_detalle, b.rut_cliente, d.estado, b.actualizado, b.factura,
+                                  d.tipo_dte
                              FROM boletas_mkt b
                         LEFT JOIN facturacion_dtes d ON d.id = b.dte_id AND d.tenant_id = b.tenant_id
                             WHERE """ + " AND ".join(w3) +
@@ -16029,7 +16030,7 @@ def boletas_mkt_lista():
                     "emitida_en": r[21].strftime("%d/%m %H:%M") if r[21] else "",
                     "carga_estado": r[22] or ("pendiente" if r[17] == "emitida" else ""),
                     "carga_detalle": r[23] or "", "rut_cliente": r[24] or "",
-                    "estado_sii": r[25] or "",
+                    "estado_sii": r[25] or "", "factura": r[27], "tipo_dte": r[28],
                     "pdf_url": ("/facturacion/boleta/%s/pdf" % r[18]) if r[18] else None})
             cur.execute("SELECT MAX(actualizado) FROM boletas_mkt WHERE tenant_id = %s", (tid,))
             _ult = cur.fetchone()[0]
@@ -16104,6 +16105,14 @@ def boletas_mkt_decision():
                             WHERE tenant_id = %s AND id = ANY(%s)
                               AND estado IN ('por_emitir', 'no_emitir', 'error')
                         RETURNING id""", (emitir, emitir, now_chile().replace(tzinfo=None), tid, ids))
+            # Una factura sin datos completos no pasa a "por emitir"
+            cur.execute("""UPDATE boletas_mkt SET estado = 'faltan_datos'
+                            WHERE tenant_id = %s AND id = ANY(%s) AND estado = 'por_emitir'
+                              AND factura IS NOT NULL
+                              AND (COALESCE(factura->>'giro','') = '' OR COALESCE(factura->>'rut','') = ''
+                                   OR COALESCE(factura->>'razon_social','') = ''
+                                   OR COALESCE(factura->>'direccion','') = ''
+                                   OR COALESCE(factura->>'comuna','') = '')""", (tid, ids))
             cambiadas = [r[0] for r in cur.fetchall()]
         conn.commit()
     finally:
@@ -16111,6 +16120,17 @@ def boletas_mkt_decision():
     registrar_audit(session.get("usuario", "Sistema"), request.remote_addr, "boletas_mkt_decision",
                     detalle="%s ordenes -> %s" % (len(cambiadas), "emitir" if emitir else "no emitir"))
     return jsonify({"ok": True, "cambiadas": cambiadas, "omitidas": [i for i in ids if i not in cambiadas]})
+
+
+@app.route("/boletas-mkt/<int:fila_id>/datos-factura", methods=["POST"])
+def boletas_mkt_datos_factura(fila_id):
+    """Completa los datos de la factura que el marketplace no entrega (giro,
+    direccion...)."""
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    from facturacion.boletas_mkt import guardar_datos_factura
+    res = guardar_datos_factura(_bmkt_tenant(), fila_id, request.get_json(silent=True) or {})
+    return jsonify(res), (200 if res.get("ok") else 409)
 
 
 @app.route("/boletas-mkt/<int:fila_id>/cargar", methods=["POST"])
@@ -16133,8 +16153,18 @@ def boletas_mkt_emitir(fila_id):
     if not session.get("logged"):
         return jsonify({"ok": False, "error": "no autenticado"}), 401
     from facturacion.boletas_mkt import emitir_fila
+
+    def _emitir_factura(body):
+        sesion = {k: session.get(k) for k in list(session.keys())}
+        with app.test_request_context("/facturacion/factura/emitir", method="POST", json=body):
+            session.update(sesion)
+            resp = facturacion_factura_emitir()
+        if isinstance(resp, tuple):
+            resp = resp[0]
+        return resp.get_json() or {}
+
     res = emitir_fila(_bmkt_tenant(), fila_id, session.get("usuario", "Sistema"),
-                      _fact_actualizar_estado_dte)
+                      _fact_actualizar_estado_dte, _emitir_factura)
     registrar_audit(session.get("usuario", "Sistema"), request.remote_addr, "boletas_mkt_emitir",
                     detalle="fila %s: %s" % (fila_id, ("boleta %s" % res.get("folio")) if res.get("ok")
                                              else res.get("error")))
