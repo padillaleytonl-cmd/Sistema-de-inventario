@@ -115,6 +115,81 @@ def _txt_productos(lineas):
     return " · ".join(partes)[:500]
 
 
+_RE_CLAVE_RUT = None
+
+
+def buscar_rut(obj, prof=0):
+    """El RUT del cliente dentro de la orden, venga en el campo que venga
+    (Falabella NationalRegistrationNumber, Paris documentNumber, MercadoLibre
+    doc_number, Woo meta billing_rut...). Solo devuelve un RUT con digito
+    verificador valido, como 12345678-K. Ignora lo que sea del vendedor."""
+    import re
+    from facturacion.utils import validar_rut
+    global _RE_CLAVE_RUT
+    if _RE_CLAVE_RUT is None:
+        _RE_CLAVE_RUT = re.compile(r"rut|document_?number|nationalregistration|doc_number|"
+                                   r"national_id|tax_?id|identification|dni", re.I)
+    if prof > 6:
+        return None
+    if isinstance(obj, dict):
+        # Woo: meta_data [{key: billing_rut, value: ...}]
+        if "key" in obj and "value" in obj and _RE_CLAVE_RUT.search(str(obj.get("key") or "")):
+            v = str(obj.get("value") or "").strip()
+            if v and validar_rut(v) and len(v.replace(".", "").replace("-", "")) >= 8:
+                return _rut_limpio(v)
+        for k, v in obj.items():
+            if re.search(r"seller|store|shop|merchant|warehouse", str(k), re.I):
+                continue
+            if isinstance(v, (dict, list)):
+                r = buscar_rut(v, prof + 1)
+                if r:
+                    return r
+            elif _RE_CLAVE_RUT.search(str(k)) and v:
+                s = str(v).strip()
+                if validar_rut(s) and len(s.replace(".", "").replace("-", "")) >= 8:
+                    return _rut_limpio(s)
+    elif isinstance(obj, list):
+        for v in obj[:20]:
+            r = buscar_rut(v, prof + 1)
+            if r:
+                return r
+    return None
+
+
+def _rut_limpio(s):
+    s = str(s).replace(".", "").replace(" ", "").upper()
+    if "-" not in s:
+        s = s[:-1] + "-" + s[-1]
+    return s
+
+
+def _billing_meli(order_id):
+    """Nombre y RUT del comprador desde /orders/{id}/billing_info."""
+    from mercadolibre import MELI_API_URL, meli_headers
+    import requests
+    r = requests.get("%s/orders/%s/billing_info" % (MELI_API_URL, order_id),
+                     headers=meli_headers(), timeout=15)
+    if r.status_code != 200:
+        return {}
+    bd = r.json() or {}
+    base = (bd.get("buyer") or {}).get("billing_info") or bd.get("billing_info") or bd
+    datos = {"rut": None, "nombre": "", "empresa": "", "crudo": base}
+    nombre, apellido = base.get("first_name") or base.get("name") or "", base.get("last_name") or ""
+    for extra in base.get("additional_info") or []:
+        if not isinstance(extra, dict):
+            continue
+        t, v = str(extra.get("type") or "").upper(), str(extra.get("value") or "").strip()
+        if t in ("FIRST_NAME", "NAME") and not nombre:
+            nombre = v
+        elif t == "LAST_NAME" and not apellido:
+            apellido = v
+        elif t in ("BUSINESS_NAME", "SOCIAL_REASON", "RAZON_SOCIAL"):
+            datos["empresa"] = v
+    datos["nombre"] = " ".join(x for x in (nombre, apellido) if x)
+    datos["rut"] = buscar_rut(base)
+    return datos
+
+
 def _cancelada(*estados):
     return any("cancel" in str(e or "").lower() for e in estados)
 
@@ -152,7 +227,7 @@ def _traer_falabella(dias):
             "clave": str(o.get("OrderNumber")), "orden": str(o.get("OrderNumber")),
             "ordenes": [str(o.get("OrderNumber"))], "fecha": _fecha(o.get("CreatedAt")),
             "cliente": " ".join(x for x in (o.get("CustomerFirstName"), o.get("CustomerLastName")) if x),
-            "email": "", "calculo": calc, "crudas": [o],
+            "email": "", "calculo": calc, "crudas": [o], "rut": buscar_rut(o),
             "ref": {"order_id": str(o.get("OrderId")),
                     "order_item_ids": [str(i.get("OrderItemId")) for i in its if i.get("OrderItemId")]},
         })
@@ -170,15 +245,20 @@ def _traer_mercadolibre(dias):
     for o in ordenes:
         clave = str(o.get("pack_id") or o.get("id"))
         packs.setdefault(clave, []).append(o)
+    for grupo in packs.values():
+        grupo.sort(key=lambda o: str(o.get("date_created") or ""))
+    facturacion = _en_paralelo(_billing_meli, [str(g[0].get("id")) for g in packs.values()])
     salida = []
     for clave, grupo in packs.items():
-        grupo.sort(key=lambda o: str(o.get("date_created") or ""))
         buyer = grupo[0].get("buyer") or {}
+        bi = facturacion.get(str(grupo[0].get("id"))) or {}
         salida.append({
             "clave": clave, "orden": clave, "ordenes": [str(o.get("id")) for o in grupo],
             "fecha": _fecha(grupo[0].get("date_created")),
-            "cliente": " ".join(x for x in (buyer.get("first_name"), buyer.get("last_name")) if x)
+            "cliente": bi.get("empresa") or bi.get("nombre") or
+                       " ".join(x for x in (buyer.get("first_name"), buyer.get("last_name")) if x)
                        or buyer.get("nickname") or "",
+            "rut": bi.get("rut"),
             "email": "", "calculo": None, "crudas": grupo, "seller": seller,
             "ref": {"pack_id": str(grupo[0].get("pack_id") or ""),
                     "order_ids": [str(o.get("id")) for o in grupo]},
@@ -206,7 +286,7 @@ def _traer_paris(dias):
             "fecha": _fecha(full.get("createdAt") or full.get("originOrderDate")),
             "cliente": " ".join(x for x in (cust.get("firstName") or cust.get("name"),) if x),
             "email": cust.get("email") or "", "calculo": POR_CANAL["paris"](full),
-            "crudas": [full], "ref": {"sub_order": so, "order": str(full.get("orderNumber") or "")},
+            "crudas": [full], "rut": buscar_rut(full), "ref": {"sub_order": so, "order": str(full.get("orderNumber") or "")},
         })
     return salida
 
@@ -227,7 +307,7 @@ def _traer_ripley(dias):
             "fecha": _fecha(o.get("created_date")),
             "cliente": " ".join(x for x in (cli.get("firstname"), cli.get("lastname")) if x),
             "email": cli.get("email") or "", "calculo": POR_CANAL["ripley"](o),
-            "crudas": [o], "ref": {"order_id": oid},
+            "crudas": [o], "rut": buscar_rut(o), "ref": {"order_id": oid},
         })
     return salida
 
@@ -280,7 +360,7 @@ def _traer_web(dias):
                 "clave": num, "orden": num, "ordenes": [num], "fecha": _fecha(o.get("date_created")),
                 "cliente": " ".join(x for x in (b.get("first_name"), b.get("last_name")) if x),
                 "email": b.get("email") or "", "calculo": POR_CANAL["web"](o),
-                "crudas": [o], "ref": {"order_id": str(o.get("id"))},
+                "crudas": [o], "rut": buscar_rut(o), "ref": {"order_id": str(o.get("id"))},
             })
         if len(lote) < 100:
             break
@@ -342,9 +422,27 @@ def _full_de(tenant_id, canal, doc):
 
 # ── Sincronizar ─────────────────────────────────────────────────────────
 
+import threading
+
+_CANDADOS = {}
+_CANDADOS_LOCK = threading.Lock()
+
+
 def sincronizar_canal(tenant_id, canal, dias=7):
     """Trae las ordenes del canal y las guarda/actualiza. Nunca toca una fila
     ya emitida, y respeta lo que la persona decidio (emitir si/no)."""
+    with _CANDADOS_LOCK:
+        candado = _CANDADOS.setdefault((tenant_id, canal), threading.Lock())
+    if not candado.acquire(blocking=False):
+        return {"canal": canal, "ordenes": 0, "nuevas": 0, "actualizadas": 0,
+                "ocupado": "ya se estaba trayendo"}
+    try:
+        return _sincronizar_canal(tenant_id, canal, dias)
+    finally:
+        candado.release()
+
+
+def _sincronizar_canal(tenant_id, canal, dias):
     from inventario import get_conn, release_conn
     docs = TRAER[canal](dias)
     nuevos = actualizados = 0
@@ -352,6 +450,8 @@ def sincronizar_canal(tenant_id, canal, dias=7):
     try:
         with conn.cursor() as cur:
             asegurar_tabla(cur)
+            from facturacion.carga_mkt import asegurar_columnas
+            asegurar_columnas(cur)
             cur.execute("SELECT clave, estado, emitir FROM boletas_mkt WHERE tenant_id=%s AND canal=%s",
                         (tenant_id, canal))
             previas = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
@@ -392,8 +492,8 @@ def sincronizar_canal(tenant_id, canal, dias=7):
                 cur.execute("""
                     INSERT INTO boletas_mkt (tenant_id, canal, clave, orden, ordenes, fecha, cliente,
                         email, productos_txt, productos, envio, total, total_canal, cuadra, nota,
-                        es_full, full_detalle, emitir, estado, lineas, ref, actualizado)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                        es_full, full_detalle, emitir, estado, lineas, ref, actualizado, rut_cliente)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (tenant_id, canal, clave) DO UPDATE SET
                         orden=EXCLUDED.orden, ordenes=EXCLUDED.ordenes, fecha=EXCLUDED.fecha,
                         cliente=EXCLUDED.cliente, email=EXCLUDED.email,
@@ -401,14 +501,15 @@ def sincronizar_canal(tenant_id, canal, dias=7):
                         envio=EXCLUDED.envio, total=EXCLUDED.total, total_canal=EXCLUDED.total_canal,
                         cuadra=EXCLUDED.cuadra, nota=EXCLUDED.nota, es_full=EXCLUDED.es_full,
                         full_detalle=EXCLUDED.full_detalle, estado=EXCLUDED.estado,
-                        lineas=EXCLUDED.lineas, ref=EXCLUDED.ref, actualizado=EXCLUDED.actualizado
+                        lineas=EXCLUDED.lineas, ref=EXCLUDED.ref, actualizado=EXCLUDED.actualizado,
+                        rut_cliente=EXCLUDED.rut_cliente
                     WHERE boletas_mkt.estado <> 'emitida'
                 """, (tenant_id, canal, d["clave"], d["orden"], json.dumps(d["ordenes"]), d["fecha"],
                       (d.get("cliente") or "")[:120], (d.get("email") or "")[:200],
                       _txt_productos(calc.get("lineas") or []), calc.get("productos"), calc.get("envio"),
                       calc.get("total"), calc.get("total_canal"), calc.get("cuadra"), nota[:500],
                       es_full, det_full[:300], emitir, estado, json.dumps(calc.get("lineas") or []),
-                      json.dumps(d.get("ref") or {}), _ahora()))
+                      json.dumps(d.get("ref") or {}), _ahora(), d.get("rut")))
                 if prev:
                     actualizados += 1
                 else:
@@ -447,7 +548,7 @@ def items_boleta(fila):
 
 def leer_fila(cur, tenant_id, fila_id):
     cur.execute("""SELECT id, canal, clave, orden, ordenes, estado, emitir, es_full, cuadra,
-                          lineas, envio, total, dte_id, folio, ref
+                          lineas, envio, total, dte_id, folio, ref, cliente, rut_cliente
                      FROM boletas_mkt WHERE tenant_id=%s AND id=%s""", (tenant_id, fila_id))
     r = cur.fetchone()
     if not r:
@@ -455,7 +556,8 @@ def leer_fila(cur, tenant_id, fila_id):
     return {"id": r[0], "canal": r[1], "clave": r[2], "orden": r[3], "ordenes": r[4] or [],
             "estado": r[5], "emitir": r[6], "es_full": r[7], "cuadra": r[8],
             "lineas": r[9] or [], "envio": r[10] or 0, "total": r[11] or 0,
-            "dte_id": r[12], "folio": r[13], "ref": r[14] or {}}
+            "dte_id": r[12], "folio": r[13], "ref": r[14] or {},
+            "cliente": r[15] or "", "rut_cliente": r[16] or ""}
 
 
 def emitir_fila(tenant_id, fila_id, usuario, actualizar_estado_fn):
@@ -517,14 +619,26 @@ def emitir_fila(tenant_id, fila_id, usuario, actualizar_estado_fn):
         orden_doc = fila["ordenes"][0] if fila["ordenes"] else fila["clave"]
         if fila["canal"] == "walmart":
             orden_doc = (fila["ref"] or {}).get("customer_order_id") or orden_doc
-        res = emitir_boleta_core(tenant_id=tenant_id, items=items,
+        # El cliente real en la boleta: su nombre y, si el canal lo entrega, su RUT.
+        # Sin RUT valido va el generico 66.666.666-6, pero con el nombre del cliente.
+        receptor = {"rut": fila["rut_cliente"] or "66666666-6",
+                    "razon_social": (fila["cliente"] or "Consumidor final").strip()[:100]}
+        res = emitir_boleta_core(tenant_id=tenant_id, items=items, receptor=receptor,
                                  actualizar_estado_fn=actualizar_estado_fn,
                                  orden_id=orden_doc, canal=fila["canal"], no_full_por=no_full_por)
         if res.get("ok"):
             _volver("emitida", None, dte_id=res.get("boleta_id"), folio=res.get("folio"),
                     emitida_en=_ahora(), emitida_por=(usuario or "")[:80])
+            # Se carga altiro en el marketplace (o se envia por correo). Si falla,
+            # el job periodico lo reintenta.
+            try:
+                from facturacion.carga_mkt import cargar_fila
+                carga_ok, carga_det = cargar_fila(tenant_id, fila_id)
+            except Exception as e:  # noqa: BLE001
+                carga_ok, carga_det = False, str(e)[:200]
             return {"ok": True, "folio": res.get("folio"), "boleta_id": res.get("boleta_id"),
-                    "total": res.get("total"), "pdf_url": res.get("pdf_url")}
+                    "total": res.get("total"), "pdf_url": res.get("pdf_url"),
+                    "carga_ok": carga_ok, "carga": carga_det}
         if res.get("boleta_id"):
             # Se reservo folio y se registro el documento, pero el envio fallo: queda
             # anotado para no emitir otra boleta encima. Se reintenta desde Facturacion.

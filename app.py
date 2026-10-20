@@ -16000,11 +16000,22 @@ def boletas_mkt_lista():
                 w2.append("canal = %s"); p2.append(canal)
             if estado:
                 w2.append("estado = %s"); p2.append(estado)
-            cur.execute("""SELECT id, canal, clave, orden, ordenes, fecha, cliente, productos_txt,
-                                  productos, envio, total, total_canal, cuadra, nota, es_full,
-                                  full_detalle, emitir, estado, dte_id, folio, error, emitida_en
-                             FROM boletas_mkt WHERE """ + " AND ".join(w2) +
-                        " ORDER BY fecha DESC NULLS LAST, id DESC LIMIT 500", p2)
+            from facturacion.carga_mkt import asegurar_columnas
+            asegurar_columnas(cur)
+            conn.commit()
+            w3 = ["b." + w if not w.startswith("(") else w.replace("(orden", "(b.orden")
+                  .replace(" clave", " b.clave").replace(" cliente", " b.cliente")
+                  .replace(" productos_txt", " b.productos_txt").replace("CAST(folio", "CAST(b.folio")
+                  for w in w2]
+            cur.execute("""SELECT b.id, b.canal, b.clave, b.orden, b.ordenes, b.fecha, b.cliente,
+                                  b.productos_txt, b.productos, b.envio, b.total, b.total_canal,
+                                  b.cuadra, b.nota, b.es_full, b.full_detalle, b.emitir, b.estado,
+                                  b.dte_id, b.folio, b.error, b.emitida_en, b.carga_estado,
+                                  b.carga_detalle, b.rut_cliente, d.estado, b.actualizado
+                             FROM boletas_mkt b
+                        LEFT JOIN facturacion_dtes d ON d.id = b.dte_id AND d.tenant_id = b.tenant_id
+                            WHERE """ + " AND ".join(w3) +
+                        " ORDER BY b.fecha DESC NULLS LAST, b.id DESC LIMIT 500", p2)
             filas = []
             for r in cur.fetchall():
                 filas.append({
@@ -16016,11 +16027,17 @@ def boletas_mkt_lista():
                     "emitir": r[16], "estado": r[17], "estado_t": ESTADOS.get(r[17], r[17]),
                     "dte_id": r[18], "folio": r[19], "error": r[20] or "",
                     "emitida_en": r[21].strftime("%d/%m %H:%M") if r[21] else "",
+                    "carga_estado": r[22] or ("pendiente" if r[17] == "emitida" else ""),
+                    "carga_detalle": r[23] or "", "rut_cliente": r[24] or "",
+                    "estado_sii": r[25] or "",
                     "pdf_url": ("/facturacion/boleta/%s/pdf" % r[18]) if r[18] else None})
+            cur.execute("SELECT MAX(actualizado) FROM boletas_mkt WHERE tenant_id = %s", (tid,))
+            _ult = cur.fetchone()[0]
     finally:
         release_conn(conn)
     return jsonify({"ok": True, "filas": filas, "resumen": resumen, "desde": desde, "hasta": hasta,
-                    "automatica": False})
+                    "automatica": False,
+                    "actualizado": _ult.strftime("%d/%m %H:%M") if _ult else None})
 
 
 @app.route("/boletas-mkt/sincronizar-canal")
@@ -16096,6 +16113,19 @@ def boletas_mkt_decision():
     return jsonify({"ok": True, "cambiadas": cambiadas, "omitidas": [i for i in ids if i not in cambiadas]})
 
 
+@app.route("/boletas-mkt/<int:fila_id>/cargar", methods=["POST"])
+def boletas_mkt_cargar(fila_id):
+    """Carga (o reintenta cargar) la boleta emitida en el marketplace, o la
+    envia por correo donde el canal no recibe documentos."""
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    from facturacion.carga_mkt import cargar_fila
+    ok, det = cargar_fila(_bmkt_tenant(), fila_id)
+    registrar_audit(session.get("usuario", "Sistema"), request.remote_addr, "boletas_mkt_cargar",
+                    detalle="fila %s: %s" % (fila_id, det[:200]))
+    return jsonify({"ok": ok, "detalle": det, "error": None if ok else det}), (200 if ok else 409)
+
+
 @app.route("/boletas-mkt/<int:fila_id>/emitir", methods=["POST"])
 def boletas_mkt_emitir(fila_id):
     """Emite la boleta de UNA orden (boton manual). Todos los controles viven
@@ -16109,6 +16139,77 @@ def boletas_mkt_emitir(fila_id):
                     detalle="fila %s: %s" % (fila_id, ("boleta %s" % res.get("folio")) if res.get("ok")
                                              else res.get("error")))
     return jsonify(res), (200 if res.get("ok") else 409)
+
+
+@app.route("/admin/lusync/ordenes/campos-factura")
+def admin_ordenes_campos_factura():
+    """Como informa cada canal que el cliente pidio FACTURA (y con que datos:
+    RUT, razon social, giro, direccion). Recorre las ordenes de los ultimos
+    dias y devuelve los campos cuyo nombre suena a facturacion, con los RUT
+    enmascarados. SOLO LEE.   ?canal=falabella|...  &dias=10  &n=40"""
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    import re as _re
+    from facturacion.boletas_mkt import TRAER, _billing_meli
+    canal = (request.args.get("canal") or "").strip().lower()
+    dias = min(max(request.args.get("dias", default=10, type=int), 1), 45)
+    n = min(max(request.args.get("n", default=40, type=int), 1), 200)
+    patron = _re.compile(r"invoice|factura|boleta|billing|tax|giro|business|razon|company|empresa|"
+                         r"document|doc_type|rut|fiscal|receipt|comprobante|tipo_doc", _re.I)
+    sensible = _re.compile(r"rut|document_?number|doc_number|tax_?id|national|identification", _re.I)
+
+    def _campos(obj, ruta="", out=None, prof=0):
+        out = {} if out is None else out
+        if prof > 7 or len(out) > 120:
+            return out
+        if isinstance(obj, dict):
+            if "key" in obj and "value" in obj and patron.search(str(obj.get("key"))):
+                out[ruta + "[" + str(obj.get("key")) + "]"] = obj.get("value")
+            for k, v in obj.items():
+                r = f"{ruta}.{k}" if ruta else str(k)
+                if isinstance(v, (dict, list)):
+                    _campos(v, r, out, prof + 1)
+                elif patron.search(str(k)) or patron.search(ruta):
+                    out[r] = v
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj[:15]):
+                _campos(v, f"{ruta}[{i}]", out, prof + 1)
+        return out
+
+    def _mask(k, v):
+        if v in (None, ""):
+            return v
+        if sensible.search(k) and isinstance(v, (str, int)):
+            t = str(v)
+            return "•" * max(len(t) - 3, 0) + t[-3:]
+        return str(v)[:80] if not isinstance(v, (int, float, bool)) else v
+
+    if canal not in TRAER:
+        return jsonify({"ok": False, "error": "canal inválido"}), 400
+    try:
+        docs = TRAER[canal](dias)[:n]
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+    salida, conteo = [], {}
+    for d in docs:
+        campos = {}
+        for c in d["crudas"]:
+            campos.update(_campos(c))
+        if canal == "mercadolibre":
+            try:
+                bi = _billing_meli(d["ordenes"][0])
+                campos.update(_campos(bi.get("crudo") or {}, "billing_info"))
+            except Exception:  # noqa: BLE001
+                pass
+        limpio = {k: _mask(k, v) for k, v in campos.items()}
+        for k, v in limpio.items():
+            kk = _re.sub(r"\[\d+\]", "[]", k)
+            if isinstance(v, (str, bool)) and len(str(v)) <= 40 and not sensible.search(k):
+                conteo.setdefault(kk, {})
+                conteo[kk][str(v)] = conteo[kk].get(str(v), 0) + 1
+        salida.append({"orden": d["orden"], "campos": limpio})
+    return jsonify({"ok": True, "canal": canal, "ordenes": len(salida),
+                    "valores_por_campo": conteo, "muestra": salida[:5]})
 
 
 @app.route("/admin/lusync/ordenes/muestra-montos")
@@ -37182,6 +37283,58 @@ def _fact_job_rcof_diario():
         print("[RCOF] Error general: %s" % str(e)[:200])
     finally:
         release_conn(conn)
+
+
+@con_tenant_default
+def _bmkt_job_periodico():
+    """Boletas de marketplace: trae las ordenes nuevas y carga en el
+    marketplace las boletas emitidas que falten. NO emite boletas: la emision
+    es manual hasta que se valide (regla del usuario, 18/10/2026)."""
+    from inventario import tenant_actual
+    from facturacion.boletas_mkt import sincronizar_canal, CANALES
+    from facturacion.carga_mkt import cargar_pendientes
+    tid = tenant_actual()
+    if not tid:
+        return
+    # Solo para tenants que ya usan la seccion
+    try:
+        from inventario import get_conn as _gc, release_conn as _rc
+        _c = _gc(tenant_id=tid, is_admin=True)
+        try:
+            with _c.cursor() as _cur:
+                _cur.execute("SELECT to_regclass('boletas_mkt') IS NOT NULL")
+                if not _cur.fetchone()[0]:
+                    return
+                _cur.execute("SELECT 1 FROM boletas_mkt WHERE tenant_id = %s LIMIT 1", (tid,))
+                if not _cur.fetchone():
+                    return
+            _c.commit()
+        finally:
+            _rc(_c)
+    except Exception as e:
+        print("[Boletas MKT] job: %s" % str(e)[:150])
+        return
+    for canal in CANALES:
+        try:
+            sincronizar_canal(tid, canal, 3)
+        except Exception as e:
+            print("[Boletas MKT] job %s: %s" % (canal, str(e)[:200]))
+    try:
+        res = cargar_pendientes(tid)
+        if res:
+            print("[Boletas MKT] cargas: %s" % [(i, ok) for i, ok, _ in res])
+    except Exception as e:
+        print("[Boletas MKT] cargas: %s" % str(e)[:200])
+
+
+try:
+    scheduler.add_job(_bmkt_job_periodico, "interval", minutes=10, id="boletas_mkt",
+                      replace_existing=True, max_instances=1, coalesce=True,
+                      misfire_grace_time=120,
+                      next_run_time=(datetime.now() + timedelta(minutes=4)))
+    print("[Boletas MKT] Job de ordenes y cargas registrado (cada 10 min)")
+except Exception as _e:
+    print("[Boletas MKT] No se pudo registrar el job: %s" % _e)
 
 
 # ── Registro del job de consulta de estados (la función ya está definida arriba) ──

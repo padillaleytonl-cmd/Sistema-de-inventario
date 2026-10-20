@@ -1250,7 +1250,7 @@ tbody td {
   background: var(--border);
 }
 .sidebar-link.sidebar-sub.active { color: #7c3aed; }
-.bm-fila { display:grid; grid-template-columns:24px 64px minmax(0,1.4fr) minmax(0,1.3fr) 76px 92px 150px 96px; gap:10px; padding:9px 14px; align-items:center; font-size:12px; }
+.bm-fila { display:grid; grid-template-columns:24px 64px minmax(0,1.4fr) minmax(0,1.2fr) 76px 92px 190px 96px; gap:10px; padding:9px 14px; align-items:center; font-size:12px; }
 .bm-fila + .bm-fila { border-top:0.5px solid var(--border); }
 .bm-pill { font-size:11px; padding:2px 8px; border-radius:999px; white-space:nowrap; display:inline-block; }
 .bm-num { text-align:right; font-variant-numeric:tabular-nums; }
@@ -16648,7 +16648,20 @@ function _bmEsc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
 function _bmPeso(n){ return n == null ? '—' : '$' + Math.round(n).toLocaleString('es-CL'); }
 function _bmHoy(d){ const x = new Date(); x.setDate(x.getDate() - (d||0)); return x.toLocaleDateString('sv-SE', {timeZone:'America/Santiago'}); }
 
+// Se refresca sola cada 30 s mientras la seccion esta a la vista (las ordenes
+// nuevas las trae el servidor cada 10 min; la emision sigue siendo manual).
+let _bmVivo = null;
+function _bmVisible(){ const el = document.getElementById('sec-boletasmkt'); return el && el.style.display !== 'none' && !document.hidden; }
+function _bmRefrescoVivo(){
+  clearInterval(_bmVivo);
+  _bmVivo = setInterval(() => {
+    if(!_bmVisible()){ return; }
+    if(document.getElementById('bmSelEmitir').disabled) return; // emitiendo
+    bmCargar(true);
+  }, 30000);
+}
 function bmInit(){
+  _bmRefrescoVivo();
   if(!_bmIniciado){
     document.getElementById('bmDesde').value = _bmHoy(7);
     document.getElementById('bmHasta').value = _bmHoy(0);
@@ -16658,18 +16671,18 @@ function bmInit(){
   bmVerProgreso();
 }
 
-function bmCargar(){
+function bmCargar(silencioso){
   const q = document.getElementById('bmBuscar').value.trim();
   const url = '/boletas-mkt/lista?desde=' + document.getElementById('bmDesde').value +
               '&hasta=' + document.getElementById('bmHasta').value +
               '&estado=' + encodeURIComponent(document.getElementById('bmEstado').value) +
               (_bmCanal ? '&canal=' + _bmCanal : '') + (q ? '&q=' + encodeURIComponent(q) : '');
   fetch(url).then(r => r.json()).then(d => {
-    if(!d.ok){ toast('No se pudo cargar: ' + (d.error || ''), 'error'); return; }
+    if(!d.ok){ if(!silencioso) toast('No se pudo cargar: ' + (d.error || ''), 'error'); return; }
     _bmDatos = d;
     [..._bmSel].forEach(id => { if(!d.filas.some(f => f.id === id)) _bmSel.delete(id); });
     bmRender();
-  }).catch(e => toast('No se pudo cargar: ' + e, 'error'));
+  }).catch(e => { if(!silencioso) toast('No se pudo cargar: ' + e, 'error'); });
 }
 
 function bmRender(){
@@ -16697,7 +16710,8 @@ function bmRender(){
   } else {
     document.getElementById('bmLista').innerHTML = filas.map(bmFilaHtml).join('');
   }
-  document.getElementById('bmPie').textContent = filas.length + ' órdenes · ' + d.desde.split('-').reverse().join('/') + ' a ' + d.hasta.split('-').reverse().join('/');
+  document.getElementById('bmPie').textContent = filas.length + ' órdenes · ' + d.desde.split('-').reverse().join('/') + ' a ' + d.hasta.split('-').reverse().join('/') +
+    (d.actualizado ? ' · órdenes al ' + d.actualizado : '') + ' · se actualiza sola';
   _bmSelActualizar();
 }
 
@@ -16707,8 +16721,17 @@ function bmFilaHtml(f){
   const est = `<span class="bm-pill" style="${BM_ESTADO_ESTILO[f.estado] || ''}">${_bmEsc(f.estado === 'emitida' && f.folio ? 'N° ' + f.folio : f.estado_t)}</span>`;
   let boleta = est;
   if(f.estado === 'emitida' && f.pdf_url){
+    const sii = {aceptado:['SII aceptada','#0F6E56'], aceptada:['SII aceptada','#0F6E56'], enviado:['SII: en revisión','#854F0B'],
+                 rechazado:['SII rechazada','#A32D2D'], error_envio:['No llegó al SII','#A32D2D'], generado:['Sin enviar al SII','#A32D2D'],
+                 reparo:['SII con reparos','#854F0B']}[f.estado_sii] || [f.estado_sii ? 'SII: ' + f.estado_sii : '', 'var(--muted)'];
+    const carga = {cargada:['✓ ' + (f.canal === 'web' ? 'Enviada al cliente' : 'Cargada en ' + (BM_CANAL[f.canal] || f.canal)), '#0F6E56'],
+                   no_aplica:['Va impresa en el paquete', 'var(--muted)'],
+                   error:['No se pudo cargar', '#A32D2D'], pendiente:['Carga pendiente', '#854F0B']}[f.carga_estado] || ['', 'var(--muted)'];
     boleta = `<a href="${f.pdf_url}" target="_blank" style="text-decoration:none;">${est}</a>` +
-             (f.error ? `<div style="font-size:10.5px;color:#A32D2D;margin-top:3px;">${_bmEsc(f.error).slice(0,90)}</div>` : '');
+      (sii[0] ? `<div style="font-size:10.5px;color:${sii[1]};margin-top:3px;">${_bmEsc(sii[0])}</div>` : '') +
+      (carga[0] ? `<div style="font-size:10.5px;color:${carga[1]};margin-top:1px;" title="${_bmEsc(f.carga_detalle)}">${_bmEsc(carga[0])}` +
+        ((f.carga_estado === 'error' || f.carga_estado === 'pendiente') ? ` · <a href="#" onclick="bmCargarDoc(${f.id});return false;" style="color:#534AB7;">Cargar</a>` : '') + `</div>` : '') +
+      (f.carga_estado === 'error' && f.carga_detalle ? `<div style="font-size:10px;color:#A32D2D;" title="${_bmEsc(f.carga_detalle)}">${_bmEsc(f.carga_detalle).slice(0,70)}</div>` : '');
   }
   let accion = '';
   if(f.estado === 'por_emitir' || f.estado === 'error'){
@@ -16734,7 +16757,7 @@ function bmFilaHtml(f){
     <span style="color:var(--muted);">${_bmEsc(f.fecha).replace(' ', '<br>')}</span>
     <span style="min-width:0;"><span class="bm-pill" style="background:var(--bg2);color:var(--text);">${_bmEsc(BM_CANAL[f.canal] || f.canal)}</span>
       <span style="font-family:ui-monospace,monospace;font-size:11.5px;">${_bmEsc(f.orden)}</span>
-      <div style="color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_bmEsc(f.cliente) || '—'}${(f.ordenes||[]).length > 1 ? ' · pack de ' + f.ordenes.length + ' órdenes' : ''}</div></span>
+      <div style="color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_bmEsc(f.rut_cliente ? 'RUT ' + f.rut_cliente : 'Sin RUT: la boleta va al RUT genérico con el nombre del cliente')}">${_bmEsc(f.cliente) || '—'}${f.rut_cliente ? ' · ' + _bmEsc(f.rut_cliente) : ''}${(f.ordenes||[]).length > 1 ? ' · pack de ' + f.ordenes.length + ' órdenes' : ''}</div></span>
     <span style="min-width:0;"><div style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_bmEsc(f.productos_txt)}">${_bmEsc(f.productos_txt) || '—'}</div>
       ${detalle ? `<div style="font-size:10.5px;color:${f.estado==='full' ? '#185FA5' : '#A32D2D'};margin-top:2px;" title="${_bmEsc(detalle)}">${_bmEsc(detalle).slice(0,110)}</div>` : ''}</span>
     <span class="bm-num" style="color:${f.envio ? 'var(--text)' : 'var(--muted)'};">${_bmPeso(f.envio)}</span>
@@ -16785,14 +16808,22 @@ async function bmEmitir(ids){
     try{
       const r = await fetch('/boletas-mkt/' + filas[i].id + '/emitir', {method:'POST'});
       const d = await r.json();
-      if(d.ok) ok++; else errores.push(filas[i].orden + ': ' + (d.error || 'error'));
+      if(d.ok){ ok++; if(d.carga_ok === false) errores.push(filas[i].orden + ': boleta ' + d.folio + ' emitida, pero no se cargó: ' + (d.carga || '')); }
+      else errores.push(filas[i].orden + ': ' + (d.error || 'error'));
     }catch(e){ errores.push(filas[i].orden + ': ' + e); }
   }
   btn.disabled = false; btn.textContent = 'Emitir boletas';
   _bmSel.clear();
   if(ok) toast(ok + ' boleta(s) emitida(s)');
-  if(errores.length) alert('No se emitieron ' + errores.length + ':\n\n' + errores.slice(0, 15).join('\n'));
+  if(errores.length) alert('Revisa ' + errores.length + ':\n\n' + errores.slice(0, 15).join('\n'));
   bmCargar();
+}
+
+function bmCargarDoc(id){
+  fetch('/boletas-mkt/' + id + '/cargar', {method:'POST'}).then(r => r.json()).then(d => {
+    toast(d.ok ? (d.detalle || 'Cargada') : ('No se pudo cargar: ' + (d.error || '')), d.ok ? 'ok' : 'error');
+    bmCargar(true);
+  });
 }
 
 function bmTraer(){
