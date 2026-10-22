@@ -4440,7 +4440,17 @@ def unidades_a_reintegrar(sku, orden_id, cantidad, bodega="CENTRAL", motivo_canc
             # Ajuste manual posterior a la venta en esa bodega: el conteo manda
             if descontado > 0:
                 cur.execute("""SELECT a.fecha FROM movimientos a
-                                WHERE a.tipo = 'ajuste' AND COALESCE(a.origen_registro, '') = 'manual'
+                                WHERE (
+                                        (a.tipo = 'ajuste' AND COALESCE(a.origen_registro, '') = 'manual')
+                                     -- Ajustes hechos como entrada/salida manual (Movimientos >
+                                     -- "OC: Ajuste"): canal Manual, sin orden de venta y con
+                                     -- motivo de ajuste/conteo/inventario. Una compra recibida
+                                     -- (entrada con documento) no cuenta.
+                                     OR (a.canal = 'Manual' AND COALESCE(a.orden_id::text, '') = ''
+                                         AND (COALESCE(a.motivo, '') ILIKE '%%ajuste%%'
+                                              OR COALESCE(a.motivo, '') ILIKE '%%conteo%%'
+                                              OR COALESCE(a.motivo, '') ILIKE '%%inventario%%'
+                                              OR COALESCE(a.numero_orden, '') ILIKE 'ajuste%%')))
                                   AND a.sku = %s AND COALESCE(a.bodega_codigo, 'CENTRAL') = %s
                                   AND a.tenant_id = """ + EXPR_TENANT_CONTEXTO + """
                                   AND a.id > (SELECT MAX(v.id) FROM movimientos v
