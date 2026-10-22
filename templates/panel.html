@@ -17171,7 +17171,7 @@ function cpRenderCompras(){
       <span><div style="position:relative;height:10px;border-radius:5px;background:var(--bg2);">
           <i style="position:absolute;left:0;top:0;bottom:0;width:${ancho}%;background:${color};border-radius:5px;"></i>
           <i title="Lo que tarda en llegar: ${lt} días" style="position:absolute;left:50%;top:-3px;bottom:-3px;width:2px;background:var(--text);"></i></div>
-        <div style="font-size:10.5px;color:var(--muted);margin-top:3px;">Stock ${_cpN(p.stock_total)}${p.stock_full ? ' (Full ' + _cpN(p.stock_full) + ')' : ''} · alcanza ${_cpN(p.dias_stock)} días · se agota el ${p.se_agota}</div></span>
+        <div style="font-size:10.5px;color:${p.stock_total ? 'var(--muted)' : '#A32D2D'};margin-top:3px;">${p.stock_total ? 'Stock ' + _cpN(p.stock_total) + (p.stock_full ? ' (Full ' + _cpN(p.stock_full) + ')' : '') + ' · alcanza ' + _cpN(p.dias_stock) + ' días · se agota el ' + p.se_agota : '<b>Agotado</b> · sin stock en tu bodega ni en Full'}</div></span>
       <span>${pill}</span>
       <b style="text-align:right;font-variant-numeric:tabular-nums;">${p.estado_compra === 'despues' ? '—' : _cpN(p.pedir)}</b></div>`;
   }).join('') || '<div style="padding:22px;text-align:center;font-size:12px;color:var(--muted);">Nada que comprar en los próximos ' + d.meses + ' meses.</div>';
