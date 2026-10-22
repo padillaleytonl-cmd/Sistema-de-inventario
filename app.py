@@ -3794,12 +3794,15 @@ def admin_ripley_orden():
     o = ords[0]
     lineas = [{"sku": ln.get("offer_sku"), "estado": ln.get("order_line_state"),
                "cantidad": ln.get("quantity"), "cancelaciones": ln.get("cancelations"),
+               "reembolsos": [{k: rf.get(k) for k in ("quantity", "amount", "reason_code", "state",
+                                                       "created_date")} for rf in (ln.get("refunds") or [])],
                "motivo": ln.get("order_line_state_reason_code") or ln.get("order_line_state_reason_label")}
               for ln in (o.get("order_lines") or [])]
     return jsonify({"ok": True, "orden": oid, "estado": o.get("order_state"),
                     "motivo_estado": [o.get("order_state_reason_code"), o.get("order_state_reason_label")],
                     "creada": o.get("created_date"), "actualizada": o.get("last_updated_date"),
-                    "lineas": lineas, "motivo_detectado": motivo_de_cancelacion(o)})
+                    "lineas": lineas, "motivo_detectado": _ripley_motivo_texto(o),
+                    "reembolsada_completa": _ripley_reembolsada_completa(o)})
 
 
 @app.route("/admin/lusync/ripley/comparar-stock")
@@ -7212,6 +7215,72 @@ def _sync_paris_automatico():
         _sync_locks["paris"]["running"] = False
 
 
+_RP_RAZONES = {"cuando": 0, "mapa": {}}
+
+
+def _ripley_razones():
+    """Codigo -> etiqueta de los motivos de Ripley (Mirakl RE01, /api/reasons).
+    Se cachea 12 h: Mirakl pide no llamarlo seguido."""
+    import time as _t
+    if _RP_RAZONES["mapa"] and _t.time() - _RP_RAZONES["cuando"] < 12 * 3600:
+        return _RP_RAZONES["mapa"]
+    try:
+        import requests as _rq
+        from ripley import RIPLEY_BASE_URL, ripley_headers
+        r = _rq.get(RIPLEY_BASE_URL.rstrip("/") + "/api/reasons", headers=ripley_headers(), timeout=20)
+        if r.status_code == 200:
+            datos = r.json() or {}
+            lista = datos.get("reasons") if isinstance(datos, dict) else datos
+            _RP_RAZONES["mapa"] = {str(x.get("code")): str(x.get("label") or "")
+                                   for x in (lista or []) if isinstance(x, dict)}
+            _RP_RAZONES["cuando"] = _t.time()
+    except Exception as e:
+        print("[Ripley] motivos: %s" % str(e)[:120])
+    return _RP_RAZONES["mapa"]
+
+
+def _ripley_motivo_texto(o):
+    """El motivo de cancelacion/reembolso de una orden de Ripley, con las
+    etiquetas en vez de los codigos (REFUND_SEL01 -> lo que diga Ripley)."""
+    from inventario import motivo_de_cancelacion
+    crudo = motivo_de_cancelacion(o)
+    if not crudo:
+        return ""
+    mapa = _ripley_razones()
+    partes = []
+    for t in crudo.split(" | "):
+        partes.append(t)
+        if t in mapa and mapa[t]:
+            partes.append(mapa[t])
+    return " | ".join(dict.fromkeys(partes))
+
+
+def _ripley_reembolsada_completa(o):
+    """True si TODAS las lineas tienen reembolsos por su cantidad completa.
+    En el Back Office de Ripley, "cancelar" una orden ya aceptada (SHIPPING) es
+    pedir un reembolso: Mirakl deja la orden en SHIPPING con refunds en la linea
+    (25356767901-A, 22/10/2026) y nunca pasa por CANCELED."""
+    lineas = o.get("order_lines") or []
+    if not lineas:
+        return False
+    for ln in lineas:
+        try:
+            qty = int(ln.get("quantity") or 0)
+        except (TypeError, ValueError):
+            return False
+        reemb = 0
+        for rf in (ln.get("refunds") or []):
+            if str(rf.get("state") or "").upper() in ("REFUSED", "REFUND_REFUSED", "CANCELED"):
+                continue
+            try:
+                reemb += int(rf.get("quantity") or 0)
+            except (TypeError, ValueError):
+                pass
+        if qty <= 0 or reemb < qty:
+            return False
+    return True
+
+
 @con_tenant_default
 def _sync_ripley_automatico():
     """Sync órdenes + cancelaciones Ripley cada 10 min."""
@@ -7261,6 +7330,14 @@ def _sync_ripley_automatico():
                 estado = (
                     o.get("order_state") or o.get("status") or o.get("state") or ""
                 ).upper()
+
+                # Reembolso completo antes de despachar = cancelacion (ver
+                # _ripley_reembolsada_completa). Sin esto la orden quedaba como
+                # pendiente de despacho y Lusync no la veia cancelada.
+                if estado in ("WAITING_ACCEPTANCE", "WAITING_DEBIT", "SHIPPING") and \
+                        _ripley_reembolsada_completa(o):
+                    print(f"[Scheduler Ripley] {order_id} reembolsada completa antes de despachar: se trata como cancelada")
+                    estado = "CANCELED"
 
                 rp_key     = f"RIPLEY-{order_id}"
                 cancel_key = f"RP-CANCEL-{order_id}"
@@ -7399,7 +7476,7 @@ def _sync_ripley_automatico():
                         # Venta propia: vuelve a central, como siempre.
                         from inventario import unidades_a_reintegrar as _ua_reint, nota_reintegro as _nota_reint, motivo_de_cancelacion as _motivo_canc
                         # Solo lo que la venta desconto de verdad (sin stock fantasma).
-                        _reint = _ua_reint(prod["sku"], order_id, cantidad, motivo_cancelacion=_motivo_canc(o))
+                        _reint = _ua_reint(prod["sku"], order_id, cantidad, motivo_cancelacion=_ripley_motivo_texto(o))
                         try:
                             if _reint:
                                 ajustar_stock_bodega(prod["sku"], "CENTRAL", _reint)
