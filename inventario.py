@@ -1,5 +1,6 @@
 import os
 import threading
+import re
 import psycopg2
 from psycopg2 import pool as psycopg2_pool
 from datetime import datetime, timezone, timedelta
@@ -4358,12 +4359,54 @@ def transferir_stock_bodega(sku, desde, hasta, cantidad, usuario="Sistema", moti
     return {"desde": get_stock_bodega(sku, desde), "hasta": get_stock_bodega(sku, hasta)}
 
 
-def unidades_a_reintegrar(sku, orden_id, cantidad, bodega="CENTRAL"):
+_RE_SIN_STOCK = re.compile(r"stock|inventar|agotad|out[ _-]?of[ _-]?stock|sin existenc|"
+                           r"faltante|quiebre|no hay unidades", re.I)
+_RAZON_SIN_REINTEGRO = {}
+
+
+def motivo_de_cancelacion(*ordenes):
+    """El motivo de cancelacion que informa el canal, como texto: junta todo
+    campo cuyo nombre diga reason/motivo/cancel (Ripley order_state_reason_*,
+    cancelations[].reason_*, Falabella Reason, MercadoLibre cancel_detail,
+    Walmart cancellationReason...)."""
+    partes = []
+
+    def _rec(x, prof=0, dentro=False):
+        if prof > 6 or len(partes) > 40:
+            return
+        if isinstance(x, dict):
+            for k, v in x.items():
+                kl = str(k).lower()
+                clave_motivo = "cancel" in kl or "reason" in kl or "motivo" in kl
+                if isinstance(v, (dict, list)):
+                    if clave_motivo or dentro or prof < 3:
+                        _rec(v, prof + 1, dentro or clave_motivo)
+                elif isinstance(v, str) and len(v.strip()) > 1 and (
+                        clave_motivo or (dentro and kl in ("description", "label", "code", "group",
+                                                           "detail", "descripcion", "text"))):
+                    partes.append(v.strip()[:120])
+        elif isinstance(x, list):
+            for v in x[:30]:
+                _rec(v, prof + 1, dentro)
+    for o in ordenes:
+        _rec(o)
+    return " | ".join(dict.fromkeys(partes))[:500]
+
+
+def unidades_a_reintegrar(sku, orden_id, cantidad, bodega="CENTRAL", motivo_cancelacion=None):
     """Cuantas unidades devolver a `bodega` por la cancelacion de una orden.
 
     Solo lo que esa venta DESCONTO de verdad en esa bodega (cantidad menos
     faltante de sus salidas), menos lo que ya se haya devuelto por cancelacion,
     y nunca mas que `cantidad`.
+
+    Y nada (regla del usuario, 22/10/2026) cuando:
+      - el canal dice que se cancelo por falta de stock: no hay que devolver
+        una unidad que no existe;
+      - hubo un AJUSTE MANUAL del stock de ese SKU en esa bodega despues de la
+        venta: el conteo manda. Si la unidad no estaba (tenia 21, se conto 0),
+        devolverla crea stock fantasma; si estaba, ya quedo contada.
+    El porque queda en nota_reintegro().
 
     Antes cada cancelacion devolvia la cantidad de la orden aunque la venta no
     hubiera descontado nada: una venta registrada sin stock (faltante) y
@@ -4377,6 +4420,12 @@ def unidades_a_reintegrar(sku, orden_id, cantidad, bodega="CENTRAL"):
         return 0
     if not orden_id or not cantidad:
         return 0
+    clave = (str(sku), str(orden_id), str(bodega))
+    _RAZON_SIN_REINTEGRO.pop(clave, None)
+    if motivo_cancelacion and _RE_SIN_STOCK.search(str(motivo_cancelacion)):
+        _RAZON_SIN_REINTEGRO[clave] = ("el canal informa que se canceló por falta de stock (%s)"
+                                       % str(motivo_cancelacion)[:80])
+        return 0
     conn = None
     try:
         conn = get_conn()
@@ -4388,6 +4437,26 @@ def unidades_a_reintegrar(sku, orden_id, cantidad, bodega="CENTRAL"):
                               AND tenant_id = """ + EXPR_TENANT_CONTEXTO,
                         (sku, str(orden_id), bodega))
             descontado = int((cur.fetchone() or [0])[0] or 0)
+            # Ajuste manual posterior a la venta en esa bodega: el conteo manda
+            if descontado > 0:
+                cur.execute("""SELECT a.fecha FROM movimientos a
+                                WHERE a.tipo = 'ajuste' AND COALESCE(a.origen_registro, '') = 'manual'
+                                  AND a.sku = %s AND COALESCE(a.bodega_codigo, 'CENTRAL') = %s
+                                  AND a.tenant_id = """ + EXPR_TENANT_CONTEXTO + """
+                                  AND a.id > (SELECT MAX(v.id) FROM movimientos v
+                                               WHERE v.tipo = 'salida' AND v.sku = %s
+                                                 AND v.orden_id::text = %s
+                                                 AND COALESCE(v.bodega_codigo, 'CENTRAL') = %s
+                                                 AND v.tenant_id = """ + EXPR_TENANT_CONTEXTO + """)
+                                ORDER BY a.id DESC LIMIT 1""",
+                            (sku, bodega, sku, str(orden_id), bodega))
+                ajuste = cur.fetchone()
+                if ajuste:
+                    conn.commit()
+                    _RAZON_SIN_REINTEGRO[clave] = (
+                        "el stock de %s se ajustó a mano después de la venta%s: el conteo manda"
+                        % (bodega, (" (" + ajuste[0].strftime("%d/%m %H:%M") + ")") if ajuste[0] else ""))
+                    return 0
             cur.execute("""SELECT COALESCE(SUM(cantidad), 0) FROM movimientos
                             WHERE tipo = 'entrada' AND sku = %s AND orden_id::text = %s
                               AND COALESCE(bodega_codigo, 'CENTRAL') = %s
@@ -4404,10 +4473,18 @@ def unidades_a_reintegrar(sku, orden_id, cantidad, bodega="CENTRAL"):
         release_conn(conn)
 
 
-def nota_reintegro(cantidad, devueltas):
+def razon_sin_reintegro(sku, orden_id, bodega="CENTRAL"):
+    """Por que unidades_a_reintegrar devolvio 0 por una regla (o None)."""
+    return _RAZON_SIN_REINTEGRO.get((str(sku), str(orden_id), str(bodega)))
+
+
+def nota_reintegro(cantidad, devueltas, sku=None, orden_id=None, bodega="CENTRAL"):
     """Texto para el motivo cuando se devuelve menos que la orden."""
     if devueltas >= cantidad:
         return ""
+    razon = razon_sin_reintegro(sku, orden_id, bodega) if sku is not None else None
+    if devueltas == 0 and razon:
+        return " (sin reintegro: %s)" % razon
     if devueltas == 0:
         return " (sin reintegro: la venta no desconto stock)"
     return f" (se devuelven {devueltas} de {cantidad}: el resto no se habia descontado)"

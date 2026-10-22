@@ -6024,14 +6024,14 @@ def _sync_walmart_automatico():
                                     # demas canales. Antes sumaba a productos.stock (el
                                     # total viejo) y no a la bodega: CENTRAL no cambiaba y
                                     # el total del producto se inflaba.
-                                    from inventario import unidades_a_reintegrar as _ua_reint, nota_reintegro as _nota_reint
+                                    from inventario import unidades_a_reintegrar as _ua_reint, nota_reintegro as _nota_reint, motivo_de_cancelacion as _motivo_canc
                                     # Solo lo que la venta desconto de verdad: sin esto,
                                     # una venta sin stock cancelada daba stock fantasma.
-                                    _reint = _ua_reint(p["sku"], customer_order_id, cantidad)
+                                    _reint = _ua_reint(p["sku"], customer_order_id, cantidad, motivo_cancelacion=_motivo_canc(o))
                                     if _reint:
                                         ajustar_stock_bodega(p["sku"], "CENTRAL", _reint)
                                     registrar_movimiento("entrada", p["sku"], p["nombre"],
-                                                        _reint, "Cancelación Walmart" + _nota_reint(cantidad, _reint),
+                                                        _reint, "Cancelación Walmart" + _nota_reint(cantidad, _reint, p["sku"], customer_order_id),
                                                         usuario="Sistema", canal="Walmart",
                                                         orden_id=customer_order_id)
                                     print(f"[Scheduler] CANCELACIÓN SKU:{sku} +{cantidad} -> CENTRAL "
@@ -6356,12 +6356,12 @@ def _sync_meli_automatico():
                             # que escribe solo el total legacy sin tocar stock_bodega.
                             # Como el total se recalcula sumando las bodegas, la
                             # reposicion desaparecia en el siguiente recalculo del SKU.
-                            from inventario import unidades_a_reintegrar as _ua_reint, nota_reintegro as _nota_reint
+                            from inventario import unidades_a_reintegrar as _ua_reint, nota_reintegro as _nota_reint, motivo_de_cancelacion as _motivo_canc
                             # Solo lo que la venta desconto de verdad (sin stock fantasma).
-                            _reint = _ua_reint(p["sku"], order_id, cantidad)
+                            _reint = _ua_reint(p["sku"], order_id, cantidad, motivo_cancelacion=_motivo_canc(o))
                             reintegrar_stock_bodega(
                                 p["sku"], _reint, "CENTRAL",
-                                f"Cancelación MELI orden {order_id}" + _nota_reint(cantidad, _reint),
+                                f"Cancelación MELI orden {order_id}" + _nota_reint(cantidad, _reint, p["sku"], order_id),
                                 canal="MercadoLibre", orden_id=order_id,
                                 usuario="Sistema")
                             sincronizar_stock_marketplaces(
@@ -6740,14 +6740,14 @@ def _sync_falabella_automatico():
                         # # productos.stock se deriva de las bodegas: ajustar_stock_bodega lo
                         # recalcula. Antes se escribia el total sin tocar CENTRAL, asi que el
                         # siguiente recalculo del SKU borraba la reposicion.
-                        from inventario import unidades_a_reintegrar as _ua_reint, nota_reintegro as _nota_reint
+                        from inventario import unidades_a_reintegrar as _ua_reint, nota_reintegro as _nota_reint, motivo_de_cancelacion as _motivo_canc
                         # Solo lo que la venta desconto de verdad (sin stock fantasma).
-                        _reint = _ua_reint(prod["sku"], order_id, cantidad)
+                        _reint = _ua_reint(prod["sku"], order_id, cantidad, motivo_cancelacion=_motivo_canc(o))
                         if _reint:
                             ajustar_stock_bodega(prod["sku"], "CENTRAL", _reint)
                         registrar_movimiento(
                             "entrada", prod["sku"], prod["nombre"], _reint,
-                            f"Cancelación Falabella orden {order_number}" + _nota_reint(cantidad, _reint),
+                            f"Cancelación Falabella orden {order_number}" + _nota_reint(cantidad, _reint, prod["sku"], order_id),
                             usuario="Sistema", canal="Falabella", orden_id=order_id,
                             numero_orden=order_number,
                             fecha_compra_marketplace=fecha_compra_fa_cancel,
@@ -6989,14 +6989,14 @@ def _sync_paris_automatico():
                                 continue
 
                             # Venta propia: vuelve a central, como siempre.
-                            from inventario import unidades_a_reintegrar as _ua_reint, nota_reintegro as _nota_reint
+                            from inventario import unidades_a_reintegrar as _ua_reint, nota_reintegro as _nota_reint, motivo_de_cancelacion as _motivo_canc
                             # Solo lo que la venta desconto de verdad (sin stock fantasma).
-                            _reint = _ua_reint(prod["sku"], sub_order, cantidad)
+                            _reint = _ua_reint(prod["sku"], sub_order, cantidad, motivo_cancelacion=_motivo_canc(o))
                             if _reint:
                                 ajustar_stock_bodega(prod["sku"], "CENTRAL", _reint)
                             registrar_movimiento(
                                 "entrada", prod["sku"], prod["nombre"], _reint,
-                                f"Cancelación París orden {sub_order}" + _nota_reint(cantidad, _reint),
+                                f"Cancelación París orden {sub_order}" + _nota_reint(cantidad, _reint, prod["sku"], sub_order),
                                 usuario="Sistema", canal="París", orden_id=sub_order
                             )
                             # Se relee: prod["stock"] quedo viejo y publicaria
@@ -7349,9 +7349,9 @@ def _sync_ripley_automatico():
                             continue
 
                         # Venta propia: vuelve a central, como siempre.
-                        from inventario import unidades_a_reintegrar as _ua_reint, nota_reintegro as _nota_reint
+                        from inventario import unidades_a_reintegrar as _ua_reint, nota_reintegro as _nota_reint, motivo_de_cancelacion as _motivo_canc
                         # Solo lo que la venta desconto de verdad (sin stock fantasma).
-                        _reint = _ua_reint(prod["sku"], order_id, cantidad)
+                        _reint = _ua_reint(prod["sku"], order_id, cantidad, motivo_cancelacion=_motivo_canc(o))
                         try:
                             if _reint:
                                 ajustar_stock_bodega(prod["sku"], "CENTRAL", _reint)
@@ -7362,7 +7362,7 @@ def _sync_ripley_automatico():
                             continue
                         registrar_movimiento(
                             "entrada", prod["sku"], prod["nombre"], _reint,
-                            f"Cancelación Ripley orden {order_id}" + _nota_reint(cantidad, _reint),
+                            f"Cancelación Ripley orden {order_id}" + _nota_reint(cantidad, _reint, prod["sku"], order_id),
                             usuario="Sistema", canal="Ripley", orden_id=order_id
                         )
                         sincronizar_stock_marketplaces(
@@ -7657,15 +7657,15 @@ def _sync_woo_automatico():
                     productos = cargar_productos()
                     for p in productos:
                         if p["sku"] == sku:
-                            from inventario import unidades_a_reintegrar as _ua_reint, nota_reintegro as _nota_reint
+                            from inventario import unidades_a_reintegrar as _ua_reint, nota_reintegro as _nota_reint, motivo_de_cancelacion as _motivo_canc
                             # Solo lo que la venta desconto de verdad: una venta sin
                             # stock cancelada (E-Crib, 16039 y 16043) daba stock fantasma.
-                            _reint = _ua_reint(p["sku"], order_id, cantidad)
+                            _reint = _ua_reint(p["sku"], order_id, cantidad, motivo_cancelacion=_motivo_canc(o))
                             if _reint:
                                 ajustar_stock_bodega(p["sku"], "CENTRAL", _reint)
                             registrar_movimiento(
                                 "entrada", p["sku"], p["nombre"], _reint,
-                                f"Cancelación Web orden {order_id}" + _nota_reint(cantidad, _reint),
+                                f"Cancelación Web orden {order_id}" + _nota_reint(cantidad, _reint, p["sku"], order_id),
                                 usuario="Sistema", canal="Web", orden_id=order_id
                             )
                             sincronizar_stock_marketplaces(
@@ -8412,12 +8412,12 @@ def _sync_recuperacion():
                         cantidad = int(float(qty.get("amount", 1)))
                     for p in productos:
                         if p["sku"] == sku:
-                            from inventario import unidades_a_reintegrar as _ua_reint, nota_reintegro as _nota_reint
-                            _reint = _ua_reint(p["sku"], customer_order_id, cantidad)
+                            from inventario import unidades_a_reintegrar as _ua_reint, nota_reintegro as _nota_reint, motivo_de_cancelacion as _motivo_canc
+                            _reint = _ua_reint(p["sku"], customer_order_id, cantidad, motivo_cancelacion=_motivo_canc(o))
                             if _reint:
                                 ajustar_stock_bodega(p["sku"], "CENTRAL", _reint)
                             registrar_movimiento("entrada", p["sku"], p["nombre"],
-                                                _reint, "Cancelación Walmart (recuperada)" + _nota_reint(cantidad, _reint),
+                                                _reint, "Cancelación Walmart (recuperada)" + _nota_reint(cantidad, _reint, p["sku"], customer_order_id),
                                                 usuario="Sistema", canal="Walmart",
                                                 orden_id=customer_order_id)
                             sincronizar_stock_marketplaces(
