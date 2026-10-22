@@ -4307,7 +4307,7 @@ body.has-sidebar .navbar { display: none; }
           <div class="card">
             <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:2px;">Correo al cliente</div>
             <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">El correo con la boleta o factura que Lusync envía a tus clientes de Walmart y de tu tienda web. Sale desde <b id="ccRemitente">documentos@lusync.cl</b> con el nombre y el logo de tu tienda; si el cliente responde, le llega al correo que pongas abajo.</div>
-            <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px;">
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px;">
               <div style="display:flex;flex-direction:column;gap:12px;min-width:0;">
                 <div>
                   <div class="cc-l">Logo de la tienda</div>
@@ -16974,9 +16974,9 @@ function _ccRep(t){
   const v = {...CC_EJEMPLO, tienda: document.getElementById('ccNombre').value};
   return (t || '').replace(/\{(cliente|documento|folio|orden|canal|total|tienda)\}/g, (m, k) => v[k]);
 }
-function ccCargar(){
+function ccCargar(reintento){
   fetch('/correo-cliente/config').then(r => r.json()).then(d => {
-    if(!d.ok){ toast(d.error || 'No se pudo cargar', 'error'); return; }
+    if(!d.ok){ if(!reintento) return setTimeout(() => ccCargar(true), 1500); toast(d.error || 'No se pudo cargar', 'error'); return; }
     const c = _ccCfg = d.config;
     document.getElementById('ccRemitente').textContent = c.remitente;
     document.getElementById('ccNombre').value = c.nombre_tienda || '';
