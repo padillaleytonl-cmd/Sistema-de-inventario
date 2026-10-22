@@ -16179,7 +16179,8 @@ def correo_logo_publico(token):
 
 @app.route("/correo-cliente/prueba", methods=["POST"])
 def correo_cliente_prueba():
-    """Manda un correo de ejemplo con la plantilla guardada (sin adjunto real)."""
+    """Manda un correo de ejemplo con la plantilla guardada y, como adjunto,
+    el PDF de la ultima boleta emitida."""
     if not session.get("logged"):
         return jsonify({"ok": False, "error": "no autenticado"}), 401
     from facturacion.correo_cliente import leer_config, armar_correo, valores_de, enviar
@@ -16191,10 +16192,34 @@ def correo_cliente_prueba():
     cfg = leer_config(tid)
     asunto, cuerpo_html, texto = armar_correo(cfg, valores_de(cfg, "Ana Muñoz", 39, "25307",
                                                               "9152777001", "walmart", 79980))
+    # Adjunta el PDF de la ultima boleta (o factura) emitida, para ver el
+    # correo tal como le llega al cliente.
+    adjunto, nombre_adj = None, None
     try:
-        ok, det = enviar(tid, destino, "[Prueba] " + asunto, cuerpo_html, texto)
+        from inventario import get_conn, release_conn
+        from facturacion.carga_mkt import pdf_de_dte
+        _c = get_conn(tenant_id=tid, is_admin=True)
+        try:
+            with _c.cursor() as _cur:
+                _cur.execute("""SELECT id, tipo_dte, folio FROM facturacion_dtes
+                                 WHERE tenant_id = %s AND tipo_dte IN (39, 41, 33, 34)
+                                   AND COALESCE(estado,'') NOT IN ('rechazado','error_envio')
+                                 ORDER BY id DESC LIMIT 1""", (tid,))
+                _u = _cur.fetchone()
+            _c.commit()
+        finally:
+            release_conn(_c)
+        if _u:
+            adjunto = pdf_de_dte(tid, _u[0])[0]
+            nombre_adj = "Ejemplo_%s_%s.pdf" % ("Factura" if _u[1] in (33, 34) else "Boleta", _u[2])
+    except Exception as e:  # noqa: BLE001
+        print("[Correo prueba] sin adjunto: %s" % str(e)[:150])
+    try:
+        ok, det = enviar(tid, destino, "[Prueba] " + asunto, cuerpo_html, texto, adjunto, nombre_adj)
     except Exception as e:  # noqa: BLE001
         ok, det = False, str(e)[:300]
+    if ok and nombre_adj:
+        det += " con %s adjunto" % nombre_adj
     return jsonify({"ok": ok, "detalle": det, "error": None if ok else det, "via": cfg.get("via")}), \
         (200 if ok else 502)
 
