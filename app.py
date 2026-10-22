@@ -2112,6 +2112,25 @@ def admin_diag_devoluciones():
             pass
 
 
+@app.route("/admin/lusync/stock/simular-cancelacion")
+def admin_simular_cancelacion():
+    """Cuanto repondria Lusync si se cancela esa orden ahora, y por que.
+    SOLO LEE: no mueve stock.  ?sku=TBCKLA001&orden=25356767901-A&cantidad=1
+    &bodega=CENTRAL&motivo=(texto del canal, opcional)"""
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    from inventario import unidades_a_reintegrar, razon_sin_reintegro, nota_reintegro
+    sku = (request.args.get("sku") or "").strip()
+    orden = (request.args.get("orden") or "").strip()
+    bodega = (request.args.get("bodega") or "CENTRAL").strip()
+    cantidad = request.args.get("cantidad", default=1, type=int)
+    motivo = request.args.get("motivo") or None
+    n = unidades_a_reintegrar(sku, orden, cantidad, bodega, motivo_cancelacion=motivo)
+    return jsonify({"sku": sku, "orden": orden, "bodega": bodega, "cantidad_orden": cantidad,
+                    "repondria": n, "razon": razon_sin_reintegro(sku, orden, bodega),
+                    "nota": nota_reintegro(cantidad, n, sku, orden, bodega)})
+
+
 @app.route("/admin/lusync/ordenes/rastrear")
 def admin_rastrear_orden():
     """Todo lo que Lusync sabe de una orden, y qué hizo con el stock.
