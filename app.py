@@ -3773,6 +3773,35 @@ def admin_meli_pausar_items():
     return jsonify(salida)
 
 
+@app.route("/admin/lusync/ripley/orden")
+def admin_ripley_orden():
+    """Una orden de Ripley tal como la devuelve Mirakl (estado, lineas,
+    cancelaciones y motivo), y que haria Lusync con ella. SOLO LEE.
+    ?id=25356767901-A"""
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    import requests as _rq
+    from ripley import RIPLEY_BASE_URL, ripley_headers
+    from inventario import motivo_de_cancelacion
+    oid = (request.args.get("id") or "").strip()
+    r = _rq.get(RIPLEY_BASE_URL.rstrip("/") + "/api/orders", headers=ripley_headers(),
+                params={"order_ids": oid}, timeout=30)
+    if r.status_code != 200:
+        return jsonify({"ok": False, "status": r.status_code, "error": r.text[:500]}), 502
+    ords = (r.json() or {}).get("orders") or []
+    if not ords:
+        return jsonify({"ok": False, "error": "Ripley no devolvio esa orden"}), 404
+    o = ords[0]
+    lineas = [{"sku": ln.get("offer_sku"), "estado": ln.get("order_line_state"),
+               "cantidad": ln.get("quantity"), "cancelaciones": ln.get("cancelations"),
+               "motivo": ln.get("order_line_state_reason_code") or ln.get("order_line_state_reason_label")}
+              for ln in (o.get("order_lines") or [])]
+    return jsonify({"ok": True, "orden": oid, "estado": o.get("order_state"),
+                    "motivo_estado": [o.get("order_state_reason_code"), o.get("order_state_reason_label")],
+                    "creada": o.get("created_date"), "actualizada": o.get("last_updated_date"),
+                    "lineas": lineas, "motivo_detectado": motivo_de_cancelacion(o)})
+
+
 @app.route("/admin/lusync/ripley/comparar-stock")
 def admin_ripley_comparar_stock():
     """Stock de cada oferta de Ripley contra el stock propio de Lusync.
