@@ -16179,8 +16179,8 @@ def correo_logo_publico(token):
 
 @app.route("/correo-cliente/prueba", methods=["POST"])
 def correo_cliente_prueba():
-    """Manda un correo de ejemplo con la plantilla guardada y, como adjunto,
-    el PDF de la ultima boleta emitida."""
+    """Manda un correo de ejemplo con la plantilla guardada y un PDF de
+    ejemplo adjunto (no es un documento tributario ni usa datos reales)."""
     if not session.get("logged"):
         return jsonify({"ok": False, "error": "no autenticado"}), 401
     from facturacion.correo_cliente import leer_config, armar_correo, valores_de, enviar
@@ -16192,26 +16192,12 @@ def correo_cliente_prueba():
     cfg = leer_config(tid)
     asunto, cuerpo_html, texto = armar_correo(cfg, valores_de(cfg, "Ana Muñoz", 39, "25307",
                                                               "9152777001", "walmart", 79980))
-    # Adjunta el PDF de la ultima boleta (o factura) emitida, para ver el
-    # correo tal como le llega al cliente.
+    # Adjunto de EJEMPLO, generado aqui: nunca un documento real (regla del
+    # usuario, 22/10/2026). Solo muestra que el PDF va adjunto.
     adjunto, nombre_adj = None, None
     try:
-        from inventario import get_conn, release_conn
-        from facturacion.carga_mkt import pdf_de_dte
-        _c = get_conn(tenant_id=tid, is_admin=True)
-        try:
-            with _c.cursor() as _cur:
-                _cur.execute("""SELECT id, tipo_dte, folio FROM facturacion_dtes
-                                 WHERE tenant_id = %s AND tipo_dte IN (39, 41, 33, 34)
-                                   AND COALESCE(estado,'') NOT IN ('rechazado','error_envio')
-                                 ORDER BY id DESC LIMIT 1""", (tid,))
-                _u = _cur.fetchone()
-            _c.commit()
-        finally:
-            release_conn(_c)
-        if _u:
-            adjunto = pdf_de_dte(tid, _u[0])[0]
-            nombre_adj = "Ejemplo_%s_%s.pdf" % ("Factura" if _u[1] in (33, 34) else "Boleta", _u[2])
+        from facturacion.correo_cliente import pdf_ejemplo
+        adjunto, nombre_adj = pdf_ejemplo(cfg.get("nombre_tienda") or ""), "Ejemplo_adjunto.pdf"
     except Exception as e:  # noqa: BLE001
         print("[Correo prueba] sin adjunto: %s" % str(e)[:150])
     try:

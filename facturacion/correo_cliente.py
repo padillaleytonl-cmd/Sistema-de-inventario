@@ -340,3 +340,31 @@ def enviar_documento(tenant_id, destino, pdf, tipo_dte, folio, orden, canal, cli
     nombre_pdf = "%s_%s.pdf" % ("Factura" if int(tipo_dte) in (33, 34) else "Boleta", folio)
     ok, det = enviar(tenant_id, destino, asunto, cuerpo_html, texto, pdf, nombre_pdf)
     return ok, det, True
+
+
+def pdf_ejemplo(nombre_tienda=""):
+    """PDF de muestra para el correo de prueba. No es un documento tributario
+    y no tiene datos de ningun cliente ni de ninguna venta."""
+    from io import BytesIO
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    ancho, alto = letter
+    c.setFont("Helvetica-Bold", 20)
+    c.drawCentredString(ancho / 2, alto - 140, "EJEMPLO")
+    c.setFont("Helvetica", 12)
+    lineas = ["Este archivo es solo una muestra del correo de prueba de Lusync.",
+              "No es un documento tributario y no tiene validez ante el SII.",
+              "",
+              "En los correos reales, aqui va adjunta la boleta o factura",
+              "electronica de la compra del cliente%s." % ((" en " + nombre_tienda) if nombre_tienda else "")]
+    y = alto - 190
+    for l in lineas:
+        c.drawCentredString(ancho / 2, y, l)
+        y -= 20
+    c.setFont("Helvetica", 9)
+    c.drawCentredString(ancho / 2, 60, "Enviado con Lusync - lusync.cl")
+    c.showPage()
+    c.save()
+    return buf.getvalue()
