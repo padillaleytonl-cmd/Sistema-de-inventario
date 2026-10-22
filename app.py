@@ -894,9 +894,15 @@ def _diagnostico_orden(movimientos, marcas, devoluciones=None):
             b["sin_descontar"] += (m.get("faltante") or 0)
         elif m.get("tipo") == "entrada":
             b["repuesto"] += (m.get("cantidad") or 0)
+            # Cancelacion que a proposito no repuso (falta de stock o ajuste
+            # manual posterior: unidades_a_reintegrar). No es un descuadre.
+            if "sin reintegro" in (m.get("motivo") or "").lower():
+                b["sin_reintegro_a_proposito"] = (m.get("motivo") or "")[:200]
 
     pendiente = {k: v for k, v in balance.items()
-                 if v["descontado"] - v["repuesto"] != 0}
+                 if v["descontado"] - v["repuesto"] != 0 and not v.get("sin_reintegro_a_proposito")}
+    sin_reintegro = {k: v["sin_reintegro_a_proposito"] for k, v in balance.items()
+                     if v.get("sin_reintegro_a_proposito") and v["descontado"] - v["repuesto"] > 0}
 
     devoluciones = devoluciones or []
     marcada_venta = any("CANCEL" not in (mk.get("clave") or "").upper() for mk in marcas)
@@ -948,6 +954,10 @@ def _diagnostico_orden(movimientos, marcas, devoluciones=None):
         veredicto = ("DEVOLUCION EN CURSO, no cancelacion. La unidad se vendio y "
                      "se despacho, asi que el descuento es correcto. No se repone "
                      "sola: entra por el flujo de revision cuando llegue a bodega.")
+    elif not pendiente and sin_reintegro:
+        veredicto = ("Cancelada SIN reintegro, a proposito: " + "; ".join(
+            "%s: %s" % (k, v.split("sin reintegro:", 1)[-1].strip(" )")) for k, v in sin_reintegro.items()) +
+            ". No es un descuadre.")
     elif not pendiente:
         veredicto = ("Cuadra: lo que se desconto se repuso completo. El stock esta "
                      "donde corresponde.")
