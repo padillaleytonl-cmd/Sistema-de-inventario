@@ -16098,6 +16098,56 @@ def _bmkt_tenant():
     return session.get("tenant_id") or 1
 
 
+# ════════════════════════════════════════════════════════════════════════
+# Mas vendidos y plan de compras (seccion /panel/mas-vendidos). compras.py
+# ════════════════════════════════════════════════════════════════════════
+@app.route("/compras/plan")
+def compras_plan():
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    import compras
+    tid = session.get("tenant_id") or 1
+    try:
+        datos = compras.plan(tid, request.args.get("dias", default=180, type=int),
+                             request.args.get("meses", default=3, type=int),
+                             usar_cache=request.args.get("fresco") not in ("1", "si"))
+    except Exception as e:  # noqa: BLE001
+        import traceback
+        print("[Compras] " + traceback.format_exc()[-1500:])
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+    return jsonify({"ok": True, **datos})
+
+
+@app.route("/compras/actualizar-full", methods=["POST"])
+def compras_actualizar_full():
+    """Antes de calcular, deja cada bodega Full igual a lo que informa el
+    marketplace (MercadoLibre, Walmart y Falabella; Paris y Ripley no tienen
+    Full todavia). Corre en segundo plano."""
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    tid = session.get("tenant_id") or 1
+    ok = _lanzar_trabajo("compras_full_%s" % tid, [
+        ("mercadolibre", "/stock-fulfillment/aplicar?canal=mercadolibre&aplicar=1"),
+        ("walmart", "/stock-fulfillment/aplicar?canal=walmart&aplicar=1"),
+        ("falabella", "/stock-fulfillment/aplicar?canal=falabella&aplicar=1"),
+    ])
+    import compras
+    compras.borrar_cache(tid)
+    return jsonify({"ok": True, "lanzado": ok})
+
+
+@app.route("/compras/actualizar-full/estado")
+def compras_actualizar_full_estado():
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    tid = session.get("tenant_id") or 1
+    t = _TRABAJOS.get("compras_full_%s" % tid) or {"estado": "sin_lanzar"}
+    if t.get("estado") in ("listo", "error"):
+        import compras
+        compras.borrar_cache(tid)
+    return jsonify({"ok": True, "trabajo": t})
+
+
 @app.route("/boletas-mkt/lista")
 def boletas_mkt_lista():
     if not session.get("logged"):

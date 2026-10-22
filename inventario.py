@@ -4446,7 +4446,7 @@ def unidades_a_reintegrar(sku, orden_id, cantidad, bodega="CENTRAL", motivo_canc
                                      -- "OC: Ajuste"): canal Manual, sin orden de venta y con
                                      -- motivo de ajuste/conteo/inventario. Una compra recibida
                                      -- (entrada con documento) no cuenta.
-                                     OR (a.canal = 'Manual' AND COALESCE(a.orden_id::text, '') = ''
+                                     OR (a.canal IN ('Manual', 'Ajuste') AND COALESCE(a.orden_id::text, '') = ''
                                          AND (COALESCE(a.motivo, '') ILIKE '%%ajuste%%'
                                               OR COALESCE(a.motivo, '') ILIKE '%%conteo%%'
                                               OR COALESCE(a.motivo, '') ILIKE '%%inventario%%'
