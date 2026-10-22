@@ -1250,6 +1250,9 @@ tbody td {
   background: var(--border);
 }
 .sidebar-link.sidebar-sub.active { color: #7c3aed; }
+.cc-l { display:block; font-size:12px; color:var(--muted); margin-bottom:4px; }
+.cc-in { display:block; width:100%; box-sizing:border-box; margin-top:4px; padding:7px 9px; border:0.5px solid var(--border); border-radius:8px; font-size:13px; background:var(--bg2); color:var(--text); }
+.cc-var { font-size:11px; padding:2px 7px; border-radius:999px; background:var(--bg2); border:0.5px solid var(--border); font-family:ui-monospace,monospace; cursor:pointer; color:var(--text); }
 .bm-fila { display:grid; grid-template-columns:24px 64px minmax(0,1.4fr) minmax(0,1.2fr) 76px 92px 190px 96px; gap:10px; padding:9px 14px; align-items:center; font-size:12px; }
 .bm-fila + .bm-fila { border-top:0.5px solid var(--border); }
 .bm-pill { font-size:11px; padding:2px 8px; border-radius:999px; white-space:nowrap; display:inline-block; }
@@ -4122,6 +4125,7 @@ body.has-sidebar .navbar { display: none; }
         <button class="cfg-tab" onclick="showCfgTab('integraciones',this)">Integraciones</button>
         <button class="cfg-tab" onclick="showCfgTab('usuarios',this)">Usuarios</button>
         <button class="cfg-tab" onclick="showCfgTab('tipificaciones',this)">Motivos de movimiento</button>
+        <button class="cfg-tab" onclick="showCfgTab('correo',this)">Correo al cliente</button>
       </div>
 
       <!-- Contenido configuración -->
@@ -4298,6 +4302,67 @@ body.has-sidebar .navbar { display: none; }
         </div>
 
         <!-- TIPIFICACIONES DE MOVIMIENTO -->
+        <!-- CORREO AL CLIENTE -->
+        <div id="cfg-correo" style="display:none;">
+          <div class="card">
+            <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:2px;">Correo al cliente</div>
+            <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">El correo con la boleta o factura que Lusync envía a tus clientes de Walmart y de tu tienda web. Sale desde <b id="ccRemitente">documentos@lusync.cl</b> con el nombre y el logo de tu tienda; si el cliente responde, le llega al correo que pongas abajo.</div>
+            <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px;">
+              <div style="display:flex;flex-direction:column;gap:12px;min-width:0;">
+                <div>
+                  <div class="cc-l">Logo de la tienda</div>
+                  <div style="display:flex;align-items:center;gap:12px;">
+                    <div id="ccLogoBox" style="width:64px;height:64px;border-radius:10px;border:0.5px dashed var(--border);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted);background:var(--bg2);overflow:hidden;">logo</div>
+                    <div style="display:flex;flex-direction:column;gap:4px;">
+                      <label class="btn-secondary" style="cursor:pointer;display:inline-block;">Subir logo<input type="file" accept="image/png,image/jpeg" onchange="ccSubirLogo(this)" style="display:none;"></label>
+                      <span style="font-size:11px;color:var(--muted);">PNG o JPG, hasta 300 KB</span>
+                    </div>
+                  </div>
+                </div>
+                <label class="cc-l">Nombre que ve el cliente<input id="ccNombre" class="cc-in" oninput="ccPrev()"></label>
+                <label class="cc-l">Correo para las respuestas<input id="ccReply" class="cc-in" placeholder="contacto@tutienda.cl" oninput="ccPrev()"></label>
+                <label class="cc-l">Asunto<input id="ccAsunto" class="cc-in" oninput="ccPrev()"></label>
+                <label class="cc-l">Mensaje<textarea id="ccMensaje" class="cc-in" rows="7" oninput="ccPrev()" style="font-family:inherit;resize:vertical;"></textarea></label>
+                <div id="ccVars" style="display:flex;gap:5px;flex-wrap:wrap;margin-top:-6px;"></div>
+                <label class="cc-l">Firma<input id="ccFirma" class="cc-in" oninput="ccPrev()"></label>
+                <div>
+                  <div class="cc-l">Se envía por correo en</div>
+                  <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:13px;color:var(--text);">
+                    <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="ccWalmart"> Walmart</label>
+                    <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="ccWeb"> Tienda web</label>
+                  </div>
+                  <div style="font-size:11px;color:var(--muted);margin-top:4px;">En Falabella, Mercado Libre, Paris y Ripley el documento se carga directo en el marketplace. Walmart sin correo: la boleta va impresa en el paquete.</div>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                  <button onclick="ccGuardar()" style="background:#534AB7;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-family:inherit;font-weight:600;cursor:pointer;">Guardar</button>
+                  <input id="ccPruebaEmail" class="cc-in" placeholder="tu correo" style="width:180px;margin:0;">
+                  <button class="btn-secondary" onclick="ccPrueba()">Enviarme una prueba</button>
+                </div>
+                <div id="ccEstado" style="font-size:12px;color:var(--muted);"></div>
+              </div>
+              <div style="min-width:0;">
+                <div class="cc-l">Vista previa</div>
+                <div style="border:0.5px solid var(--border);border-radius:12px;overflow:hidden;background:#f4f4f7;">
+                  <div style="padding:8px 12px;border-bottom:0.5px solid var(--border);font-size:12px;color:#555;background:#fff;">
+                    <div><b>De:</b> <span id="ccPDe"></span></div>
+                    <div><b>Asunto:</b> <span id="ccPAs"></span></div>
+                  </div>
+                  <div style="padding:14px;">
+                    <div style="background:#fff;border-radius:10px;padding:18px 18px 14px;color:#222;">
+                      <div id="ccPLogo" style="margin-bottom:12px;"></div>
+                      <div id="ccPMsg" style="font-size:13.5px;line-height:1.55;white-space:pre-wrap;"></div>
+                      <div id="ccPFirma" style="font-size:12px;color:#666;margin-top:14px;"></div>
+                      <div style="margin-top:12px;display:inline-flex;align-items:center;gap:8px;padding:7px 10px;border:0.5px solid #ddd;border-radius:8px;font-size:12px;">📄 Boleta_25307.pdf</div>
+                    </div>
+                    <div style="text-align:center;font-size:11px;color:#888;margin-top:10px;">Enviado con <b style="color:#534AB7;">Lusync</b> · inventario, ventas y facturación para tiendas online</div>
+                  </div>
+                </div>
+                <div style="font-size:11px;color:var(--muted);margin-top:6px;">Ejemplo con una compra de Walmart: Ana Muñoz, boleta N°25307, $79.980.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div id="cfg-tipificaciones" style="display:none;">
           <div class="card" style="margin-bottom:14px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
@@ -5655,7 +5720,8 @@ function cargarMovimientosFull(){
 function showCfgTab(tab, el){
   if (tab === 'tipificaciones') cargarTipificaciones();
   if (tab === 'integraciones') cargarCanalesCliente();
-  ['negocio','restock','bodegas','integraciones','usuarios','tipificaciones'].forEach(t => {
+  if (tab === 'correo') ccCargar();
+  ['negocio','restock','bodegas','integraciones','usuarios','tipificaciones','correo'].forEach(t => {
     const el2 = document.getElementById('cfg-'+t);
     if(el2) el2.style.display = t===tab ? '' : 'none';
   });
@@ -16898,6 +16964,82 @@ function bmVerProgreso(forzar){
       if(forzar) bmCargar();
     }
   });
+}
+
+
+// ═══ Correo al cliente (plantilla por tenant) ═══════════════════════════
+let _ccCfg = null;
+const CC_EJEMPLO = {cliente:'Ana', documento:'boleta', folio:'25307', orden:'9152777001', canal:'Walmart', total:'$79.980'};
+function _ccRep(t){
+  const v = {...CC_EJEMPLO, tienda: document.getElementById('ccNombre').value};
+  return (t || '').replace(/\{(cliente|documento|folio|orden|canal|total|tienda)\}/g, (m, k) => v[k]);
+}
+function ccCargar(){
+  fetch('/correo-cliente/config').then(r => r.json()).then(d => {
+    if(!d.ok){ toast(d.error || 'No se pudo cargar', 'error'); return; }
+    const c = _ccCfg = d.config;
+    document.getElementById('ccRemitente').textContent = c.remitente;
+    document.getElementById('ccNombre').value = c.nombre_tienda || '';
+    document.getElementById('ccReply').value = c.reply_to || '';
+    document.getElementById('ccAsunto').value = c.asunto || '';
+    document.getElementById('ccMensaje').value = c.mensaje || '';
+    document.getElementById('ccFirma').value = c.firma || '';
+    document.getElementById('ccWalmart').checked = !!(c.canales || {}).walmart;
+    document.getElementById('ccWeb').checked = !!(c.canales || {}).web;
+    document.getElementById('ccVars').innerHTML = d.variables.map(v =>
+      `<span class="cc-var" title="Insertar en el mensaje" onclick="ccInsertar('{${v}}')">{${v}}</span>`).join('');
+    ccMostrarLogo(c.logo_url);
+    document.getElementById('ccEstado').textContent = (c.via === 'resend' ? 'Envío conectado a lusync.cl.' :
+      'El envío desde lusync.cl aún no está conectado: por ahora se usa el correo de Alertas.') +
+      (c.actualizado ? ' Guardado el ' + c.actualizado + '.' : '');
+    ccPrev();
+  });
+}
+function ccMostrarLogo(url){
+  const box = document.getElementById('ccLogoBox');
+  box.innerHTML = url ? `<img src="${url}" style="max-width:100%;max-height:100%;">` : 'logo';
+  document.getElementById('ccPLogo').innerHTML = url ? `<img src="${url}" style="max-height:44px;max-width:160px;">`
+    : `<b style="font-size:17px;">${_bmEsc(document.getElementById('ccNombre').value)}</b>`;
+}
+function ccInsertar(v){
+  const t = document.getElementById('ccMensaje');
+  const i = t.selectionStart || t.value.length;
+  t.value = t.value.slice(0, i) + v + t.value.slice(t.selectionEnd || i);
+  t.focus(); ccPrev();
+}
+function ccPrev(){
+  const nombre = document.getElementById('ccNombre').value || 'Tu tienda';
+  document.getElementById('ccPDe').textContent = nombre + ' <' + ((_ccCfg && _ccCfg.remitente) || 'documentos@lusync.cl') + '>';
+  document.getElementById('ccPAs').textContent = _ccRep(document.getElementById('ccAsunto').value);
+  document.getElementById('ccPMsg').textContent = _ccRep(document.getElementById('ccMensaje').value);
+  document.getElementById('ccPFirma').textContent = document.getElementById('ccFirma').value;
+  if(!(_ccCfg && _ccCfg.logo_url)) ccMostrarLogo(null);
+}
+function ccGuardar(){
+  const datos = {nombre_tienda: document.getElementById('ccNombre').value, reply_to: document.getElementById('ccReply').value,
+    asunto: document.getElementById('ccAsunto').value, mensaje: document.getElementById('ccMensaje').value,
+    firma: document.getElementById('ccFirma').value,
+    canales: {walmart: document.getElementById('ccWalmart').checked, web: document.getElementById('ccWeb').checked}};
+  fetch('/correo-cliente/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(datos)})
+    .then(r => r.json()).then(d => { if(d.ok){ toast('Plantilla guardada'); ccCargar(); } else toast(d.error || 'No se pudo guardar', 'error'); });
+}
+function ccSubirLogo(inp){
+  const f = inp.files && inp.files[0]; if(!f) return;
+  if(f.size > 300 * 1024){ toast('El logo pesa ' + Math.round(f.size / 1024) + ' KB; el máximo es 300 KB', 'error'); inp.value = ''; return; }
+  const fd = new FormData(); fd.append('logo', f);
+  fetch('/correo-cliente/logo', {method:'POST', body: fd}).then(r => r.json()).then(d => {
+    inp.value = '';
+    if(!d.ok){ toast(d.error || 'No se pudo subir', 'error'); return; }
+    if(_ccCfg) _ccCfg.logo_url = d.logo_url;
+    ccMostrarLogo(d.logo_url); toast('Logo actualizado');
+  });
+}
+function ccPrueba(){
+  const email = document.getElementById('ccPruebaEmail').value.trim();
+  if(!email){ toast('Escribe a qué correo mandar la prueba', 'error'); return; }
+  toast('Enviando prueba…');
+  fetch('/correo-cliente/prueba', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email})})
+    .then(r => r.json()).then(d => toast(d.ok ? ('Prueba enviada a ' + email + '. Guarda antes si cambiaste algo.') : ('No se pudo enviar: ' + (d.error || '')), d.ok ? 'ok' : 'error'));
 }
 
 function conCanalLabel(c){

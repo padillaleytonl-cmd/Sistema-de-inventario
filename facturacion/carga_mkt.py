@@ -256,7 +256,8 @@ def cargar_fila(tenant_id, fila_id):
     try:
         with conn.cursor() as cur:
             asegurar_columnas(cur)
-            cur.execute("""SELECT canal, orden, ref, dte_id, email, carga_estado, COALESCE(carga_intentos,0)
+            cur.execute("""SELECT canal, orden, ref, dte_id, email, carga_estado, COALESCE(carga_intentos,0),
+                                  cliente, total
                              FROM boletas_mkt WHERE tenant_id=%s AND id=%s AND estado='emitida'""",
                         (tenant_id, fila_id))
             r = cur.fetchone()
@@ -265,22 +266,30 @@ def cargar_fila(tenant_id, fila_id):
         release_conn(conn)
     if not r:
         return False, "La orden no tiene boleta emitida"
-    canal, orden, ref, dte_id, email, estado_c, intentos = r
+    canal, orden, ref, dte_id, email, estado_c, intentos, cliente, total = r
     if estado_c in ("cargada", "no_aplica"):
         return True, "Ya estaba cargada"
     ref = ref or {}
     try:
-        if canal == "walmart":
-            ok, det, estado = True, "Walmart no recibe documentos por API: va impresa en el paquete", "no_aplica"
-        else:
-            pdf, tipo, folio, fecha = pdf_de_dte(tenant_id, dte_id)
-            fn = {"falabella": cargar_falabella, "mercadolibre": cargar_mercadolibre,
-                  "paris": cargar_paris, "ripley": cargar_ripley}.get(canal)
-            if fn:
-                ok, det = fn(ref, pdf, tipo, folio, fecha)
-            else:
-                ok, det = enviar_por_correo(email, pdf, tipo, folio, orden)
+        pdf, tipo, folio, fecha = pdf_de_dte(tenant_id, dte_id)
+        fn = {"falabella": cargar_falabella, "mercadolibre": cargar_mercadolibre,
+              "paris": cargar_paris, "ripley": cargar_ripley}.get(canal)
+        if fn:
+            ok, det = fn(ref, pdf, tipo, folio, fecha)
             estado = "cargada" if ok else "error"
+        else:
+            # Walmart y Web: por correo, con la plantilla del tenant
+            from facturacion.correo_cliente import enviar_documento
+            ok, det, aplica = enviar_documento(tenant_id, email, pdf, tipo, folio, orden, canal,
+                                               cliente, total)
+            if ok:
+                estado = "cargada"
+            elif canal == "walmart" and (not aplica or not email):
+                ok, estado = True, "no_aplica"
+                det = "Va impresa en el paquete" + ("" if aplica else " (Walmart no envía por correo)") + \
+                      ("" if email else ": la orden no trae correo del cliente")
+            else:
+                estado = "error"
     except Exception as e:  # noqa: BLE001
         ok, det, estado = False, "Error: %s" % str(e)[:300], "error"
     conn = get_conn(tenant_id=tenant_id, is_admin=True)

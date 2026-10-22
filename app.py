@@ -1120,7 +1120,7 @@ _RUTAS_PUBLICAS = {
     "/consultadte", "/consultadte/verificar",
     "/favicon.ico", "/robots.txt",
 }
-_PREFIJOS_PUBLICOS = ("/static/",)
+_PREFIJOS_PUBLICOS = ("/static/", "/correo/logo/")
 # Webhooks de los canales. Llegan sin sesion, asi que get_conn no sabia de que
 # cliente eran y la conexion del pool conservaba el cliente de quien la uso
 # antes: con otro cliente activo, una venta de MercadoLibre podia procesarse
@@ -16131,6 +16131,72 @@ def boletas_mkt_datos_factura(fila_id):
     from facturacion.boletas_mkt import guardar_datos_factura
     res = guardar_datos_factura(_bmkt_tenant(), fila_id, request.get_json(silent=True) or {})
     return jsonify(res), (200 if res.get("ok") else 409)
+
+
+# ── Correo al cliente (plantilla por tenant) ───────────────────────────
+@app.route("/correo-cliente/config", methods=["GET", "POST"])
+def correo_cliente_config():
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    from facturacion.correo_cliente import leer_config, guardar_config, VARIABLES
+    tid = _bmkt_tenant()
+    if request.method == "POST":
+        res = guardar_config(tid, request.get_json(silent=True) or {})
+        if res.get("ok"):
+            registrar_audit(session.get("usuario", "Sistema"), request.remote_addr,
+                            "correo_cliente_config", detalle="Plantilla de correo al cliente guardada")
+        return jsonify(res), (200 if res.get("ok") else 400)
+    return jsonify({"ok": True, "config": leer_config(tid), "variables": list(VARIABLES)})
+
+
+@app.route("/correo-cliente/logo", methods=["POST"])
+def correo_cliente_logo():
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    from facturacion.correo_cliente import guardar_logo
+    f = request.files.get("logo")
+    if not f:
+        return jsonify({"ok": False, "error": "Elige una imagen"}), 400
+    res = guardar_logo(_bmkt_tenant(), f.read(), (f.mimetype or "").lower())
+    return jsonify(res), (200 if res.get("ok") else 400)
+
+
+@app.route("/correo/logo/<token>")
+def correo_logo_publico(token):
+    """El logo de la tienda que se ve dentro del correo del cliente. Publico
+    a proposito (lo carga el cliente de correo), con un token imposible de
+    adivinar que cambia con cada logo nuevo."""
+    from flask import Response
+    from facturacion.correo_cliente import logo_por_token
+    if not token or len(token) > 64:
+        return "", 404
+    datos, mime = logo_por_token(token)
+    if not datos:
+        return "", 404
+    return Response(datos, mimetype=mime or "image/png",
+                    headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+@app.route("/correo-cliente/prueba", methods=["POST"])
+def correo_cliente_prueba():
+    """Manda un correo de ejemplo con la plantilla guardada (sin adjunto real)."""
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    from facturacion.correo_cliente import leer_config, armar_correo, valores_de, enviar
+    datos = request.get_json(silent=True) or {}
+    destino = str(datos.get("email") or "").strip()
+    if "@" not in destino:
+        return jsonify({"ok": False, "error": "Escribe a qué correo mandar la prueba"}), 400
+    tid = _bmkt_tenant()
+    cfg = leer_config(tid)
+    asunto, cuerpo_html, texto = armar_correo(cfg, valores_de(cfg, "Ana Muñoz", 39, "25307",
+                                                              "9152777001", "walmart", 79980))
+    try:
+        ok, det = enviar(tid, destino, "[Prueba] " + asunto, cuerpo_html, texto)
+    except Exception as e:  # noqa: BLE001
+        ok, det = False, str(e)[:300]
+    return jsonify({"ok": ok, "detalle": det, "error": None if ok else det, "via": cfg.get("via")}), \
+        (200 if ok else 502)
 
 
 @app.route("/boletas-mkt/<int:fila_id>/cargar", methods=["POST"])
