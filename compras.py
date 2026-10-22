@@ -23,7 +23,7 @@ Calculo por producto:
 import math
 import threading
 import time
-from datetime import timedelta
+from datetime import date, timedelta
 
 # Canal del movimiento -> columna del informe
 _CANALES = {"falabella": "falabella", "mercadolibre": "mercadolibre", "mercado libre": "mercadolibre",
@@ -91,9 +91,18 @@ def _consultar(tenant_id, dias):
     return hoy, ventas, cancel, stock, productos, primera
 
 
-def plan(tenant_id, dias=180, meses=3, usar_cache=True):
+REPOSICION_POR_DEFECTO = 180   # dias que tarda en llegar una compra (usuario, 22/10/2026)
+
+
+def plan(tenant_id, dias=180, meses=3, usar_cache=True, reposicion=None):
+    """reposicion: dias que tarda en llegar una compra, el mismo para todos
+    los productos (default 180, regla del usuario)."""
     dias = 30 if dias < 45 else (90 if dias < 135 else 180)
     meses = max(1, min(int(meses or 3), 6))
+    try:
+        reposicion = max(1, min(int(reposicion or REPOSICION_POR_DEFECTO), 365))
+    except (TypeError, ValueError):
+        reposicion = REPOSICION_POR_DEFECTO
     clave = (tenant_id, dias)
     with _CACHE_LOCK:
         c = _CACHE.get(clave)
@@ -111,7 +120,7 @@ def plan(tenant_id, dias=180, meses=3, usar_cache=True):
 
     def _fila(sku):
         p = productos.get(sku) or {"nombre": sku, "lead_time": 45}
-        return por_sku.setdefault(sku, {"sku": sku, "nombre": p["nombre"], "lead_time": p["lead_time"],
+        return por_sku.setdefault(sku, {"sku": sku, "nombre": p["nombre"], "lead_time": reposicion,
                                         "canales": {}, "total": 0, "anterior": 0,
                                         "stock_propio": 0, "stock_full": 0, "full_por_bodega": {}})
 
@@ -190,7 +199,6 @@ def plan(tenant_id, dias=180, meses=3, usar_cache=True):
     for f in filas:
         if not f.get("comprar_iso"):
             continue
-        from datetime import date
         d = date.fromisoformat(f["comprar_iso"])
         if d <= hoy_d:
             grupos["ya"].append(f["sku"])
@@ -208,7 +216,39 @@ def plan(tenant_id, dias=180, meses=3, usar_cache=True):
             columnas.append({"clave": k, "titulo": nombres_mes[int(mes) - 1].capitalize() +
                              ("" if int(anio) == hoy_d.year else " " + anio), "skus": grupos[k]})
     canales = [c for c in ORDEN_CANALES if c in canales_vistos]
-    return {"dias": dias, "dias_reales": dias_reales, "hay_anterior": hay_anterior,
+
+    # Top 10 de cada canal
+    top = {}
+    tot_canal = {}
+    for c in canales:
+        filas_c = sorted((f for f in filas if f["canales"].get(c)), key=lambda x: -x["canales"][c])
+        tot_canal[c] = sum(f["canales"][c] for f in filas_c)
+        top[c] = [{"sku": f["sku"], "nombre": f["nombre"], "unidades": f["canales"][c],
+                   "stock_total": f["stock_total"], "dias_stock": f.get("dias_stock")}
+                  for f in filas_c[:10]]
+
+    # Que comprar y cuando: por fecha limite de compra, lo mas urgente primero
+    fin_mes = (hoy_d.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+    for f in filas:
+        if not f.get("comprar_iso"):
+            f["estado_compra"] = "sin_dato"
+            continue
+        d = date.fromisoformat(f["comprar_iso"])
+        f["estado_compra"] = "urgente" if d <= hoy_d else ("pronto" if d <= limite else "despues")
+    compras_lista = sorted((f for f in filas if f.get("comprar_iso")), key=lambda x: x["comprar_iso"])
+    total_u = sum(tot_canal.values())
+    canal_top = max(tot_canal, key=tot_canal.get) if tot_canal else None
+    resumen = {
+        "unidades": total_u,
+        "canal_top": canal_top,
+        "canal_top_pct": round(tot_canal[canal_top] * 100.0 / total_u) if canal_top and total_u else None,
+        "se_agotan_este_mes": sum(1 for f in filas if f.get("dias_stock") is not None
+                                  and hoy_d + timedelta(days=f["dias_stock"]) <= fin_mes),
+        "compras_a_planificar": sum(1 for f in filas if f.get("estado_compra") in ("urgente", "pronto")),
+        "urgentes": sum(1 for f in filas if f.get("estado_compra") == "urgente"),
+    }
+    return {"reposicion": reposicion, "top_por_canal": top, "unidades_por_canal": tot_canal,
+            "resumen": resumen, "compras": [f["sku"] for f in compras_lista],"dias": dias, "dias_reales": dias_reales, "hay_anterior": hay_anterior,
             "historial_desde": primera.strftime("%d/%m/%Y") if primera else None,
             "meses": meses, "hoy": hoy_d.strftime("%d/%m/%Y"),
             "canales": canales, "productos": filas, "plan": columnas,

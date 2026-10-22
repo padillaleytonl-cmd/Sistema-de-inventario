@@ -16106,11 +16106,22 @@ def compras_plan():
     if not session.get("logged"):
         return jsonify({"ok": False, "error": "no autenticado"}), 401
     import compras
+    from inventario import get_configuracion, set_configuracion
     tid = session.get("tenant_id") or 1
+    # Dias de reposicion: los mismos para todos los productos, guardados por tenant
+    repo = request.args.get("reposicion", type=int)
+    try:
+        if repo:
+            set_configuracion({"compras_reposicion_dias": max(1, min(repo, 365))})
+        else:
+            repo = int(get_configuracion().get("compras_reposicion_dias") or compras.REPOSICION_POR_DEFECTO)
+    except Exception:  # noqa: BLE001
+        repo = repo or compras.REPOSICION_POR_DEFECTO
     try:
         datos = compras.plan(tid, request.args.get("dias", default=180, type=int),
                              request.args.get("meses", default=3, type=int),
-                             usar_cache=request.args.get("fresco") not in ("1", "si"))
+                             usar_cache=request.args.get("fresco") not in ("1", "si"),
+                             reposicion=repo)
     except Exception as e:  # noqa: BLE001
         import traceback
         print("[Compras] " + traceback.format_exc()[-1500:])

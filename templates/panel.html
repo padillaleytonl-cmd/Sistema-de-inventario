@@ -1250,6 +1250,9 @@ tbody td {
   background: var(--border);
 }
 .sidebar-link.sidebar-sub.active { color: #7c3aed; }
+.cp-sel { padding:5px 8px; border:0.5px solid var(--border); border-radius:8px; font-size:12px; background:var(--bg2); color:var(--text); font-family:inherit; }
+.cp-fila { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1.7fr) 130px 60px; gap:12px; padding:10px 14px; align-items:center; font-size:12px; border-top:0.5px solid var(--border); }
+.cp-pill { font-size:11px; padding:2px 8px; border-radius:999px; white-space:nowrap; display:inline-block; }
 .cc-l { display:block; font-size:12px; color:var(--muted); margin-bottom:4px; }
 .cc-in { display:block; width:100%; box-sizing:border-box; margin-top:4px; padding:7px 9px; border:0.5px solid var(--border); border-radius:8px; font-size:13px; background:var(--bg2); color:var(--text); }
 .cc-var { font-size:11px; padding:2px 7px; border-radius:999px; background:var(--bg2); border:0.5px solid var(--border); font-family:ui-monospace,monospace; cursor:pointer; color:var(--text); }
@@ -3089,37 +3092,42 @@ body.has-sidebar .navbar { display: none; }
     <div class="page-header">
       <div>
         <div class="page-title">Más vendidos y compras</div>
-        <div class="page-date">Qué se vende en cada canal y cuándo hay que volver a comprar. Cuenta tu bodega y lo que tienes en Full.</div>
+        <div class="page-date">Qué se vende en cada canal y cuándo volver a comprar. Cuenta tu bodega y lo que tienes en Full.</div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <select id="cpDias" onchange="cpCargar()" style="padding:6px 8px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
-          <option value="180" selected>Ventas de 180 días</option><option value="90">Ventas de 90 días</option><option value="30">Ventas de 30 días</option>
-        </select>
-        <select id="cpMeses" onchange="cpCargar()" style="padding:6px 8px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
-          <option value="2">Cubrir 2 meses</option><option value="3" selected>Cubrir 3 meses</option><option value="4">Cubrir 4 meses</option><option value="6">Cubrir 6 meses</option>
-        </select>
         <button id="cpBtnFull" class="btn-secondary" onclick="cpActualizarFull()">Actualizar Full y recalcular</button>
+        <button class="btn-secondary" onclick="cpExportar()">Exportar a Excel</button>
       </div>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-bottom:12px;">
+      <label>Ventas de <select id="cpDias" onchange="cpCargar()" class="cp-sel"><option value="180" selected>180 días</option><option value="90">90 días</option><option value="30">30 días</option></select></label>
+      <label>La compra tarda <input id="cpRepo" type="number" min="1" max="365" value="180" class="cp-sel" style="width:64px;" onchange="cpCargar(false, true)"> días en llegar</label>
+      <label>Cada compra cubre <select id="cpMeses" onchange="cpCargar()" class="cp-sel"><option value="2">2 meses</option><option value="3" selected>3 meses</option><option value="4">4 meses</option><option value="6">6 meses</option></select></label>
     </div>
     <div id="cpProgreso" style="display:none;font-size:12px;color:var(--muted);margin-bottom:12px;padding:9px 12px;border-radius:9px;background:var(--bg2);"></div>
 
-    <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:8px;">Plan de compras · próximos 3 meses</div>
-    <div id="cpPlan" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:18px;">
-      <div style="color:var(--hint);font-size:12px;padding:20px;">Cargando...</div>
-    </div>
+    <div id="cpKpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;"></div>
 
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
-      <div style="font-size:14px;font-weight:600;color:var(--text);">Más vendidos por canal</div>
+      <div style="font-size:14px;font-weight:600;color:var(--text);">Top 10 por canal</div>
+      <div id="cpTabs" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+    </div>
+    <div id="cpTop" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;margin-bottom:20px;"></div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+      <div style="font-size:14px;font-weight:600;color:var(--text);">Qué comprar y cuándo</div>
       <span style="display:flex;gap:8px;align-items:center;">
-        <input id="cpBuscar" placeholder="Producto o SKU" oninput="cpRender()" style="padding:6px 10px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);width:200px;">
-        <button class="btn-secondary" onclick="cpExportar()" style="padding:6px 12px;font-size:12px;">Exportar a Excel</button>
+        <input id="cpBuscar" placeholder="Producto o SKU" oninput="cpRenderCompras()" class="cp-sel" style="width:180px;">
+        <label style="font-size:12px;color:var(--muted);display:flex;gap:5px;align-items:center;"><input type="checkbox" id="cpTodos" onchange="cpRenderCompras()"> Ver también los que no urgen</label>
       </span>
     </div>
     <div class="card" style="padding:0;overflow-x:auto;">
-      <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:860px;">
-        <thead id="cpHead"></thead>
-        <tbody id="cpLista"></tbody>
-      </table>
+      <div style="min-width:720px;">
+        <div class="cp-fila" style="background:var(--bg2);font-size:10.5px;color:var(--muted);border-top:none;">
+          <span>PRODUCTO</span><span>STOCK QUE QUEDA VS. LO QUE TARDA EN LLEGAR</span><span>COMPRAR</span><span style="text-align:right;">PEDIR</span>
+        </div>
+        <div id="cpCompras"></div>
+      </div>
       <div id="cpPie" style="padding:9px 14px;font-size:11px;color:var(--muted);"></div>
     </div>
   </div>
@@ -17088,74 +17096,94 @@ function ccPrueba(){
 }
 
 
-// ═══ Más vendidos y plan de compras ═════════════════════════════════════
-let _cpDatos = null, _cpPoll = null;
-const CP_CANAL = {falabella:'Falabella', mercadolibre:'M. Libre', paris:'Paris', ripley:'Ripley', walmart:'Walmart', web:'Web', pos:'POS'};
+// ═══ Más vendidos y plan de compras ═══════════════════════════════════
+let _cpDatos = null, _cpPoll = null, _cpTab = '';
+const CP_CANAL = {falabella:'Falabella', mercadolibre:'Mercado Libre', paris:'Paris', ripley:'Ripley', walmart:'Walmart', web:'Web', pos:'POS'};
+const CP_COLOR = {falabella:'#1D9E75', mercadolibre:'#D9A400', paris:'#185FA5', ripley:'#7C3AED', walmart:'#0071CE', web:'#444', pos:'#888'};
 function _cpN(n){ return n == null ? '—' : Number(n).toLocaleString('es-CL'); }
 function cpInit(){ cpCargar(); cpVerProgreso(); }
-function cpCargar(fresco){
-  const url = '/compras/plan?dias=' + document.getElementById('cpDias').value + '&meses=' + document.getElementById('cpMeses').value + (fresco ? '&fresco=1' : '');
+function cpCargar(fresco, cambioRepo){
+  const repo = parseInt(document.getElementById('cpRepo').value || 0);
+  const url = '/compras/plan?dias=' + document.getElementById('cpDias').value + '&meses=' + document.getElementById('cpMeses').value +
+    (cambioRepo && repo ? '&reposicion=' + repo : '') + (fresco ? '&fresco=1' : '');
   fetch(url).then(r => r.json()).then(d => {
     if(!d.ok){ toast('No se pudo calcular: ' + (d.error || ''), 'error'); return; }
-    _cpDatos = d; cpRender();
+    _cpDatos = d; document.getElementById('cpRepo').value = d.reposicion; cpRender();
   }).catch(e => toast('No se pudo calcular: ' + e, 'error'));
 }
 function cpRender(){
   const d = _cpDatos; if(!d) return;
-  const por = {}; d.productos.forEach(p => por[p.sku] = p);
-  const colores = {ya:['#A32D2D','#FCEBEB']};
-  document.getElementById('cpPlan').innerHTML = d.plan.map((c, i) => {
-    const [fg, bg] = colores[c.clave] || (i === 1 ? ['#854F0B','#FAEEDA'] : ['var(--text)','var(--bg2)']);
-    const tarjetas = c.skus.slice(0, 40).map(sku => {
-      const p = por[sku];
-      return `<div style="background:var(--card);border:0.5px solid var(--border);border-radius:8px;padding:8px 10px;font-size:12px;">
-        <div style="font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_bmEsc(p.nombre)}">${_bmEsc(p.nombre)}</div>
-        <div style="color:var(--muted);margin-top:3px;line-height:1.45;">Stock ${_cpN(p.stock_total)}${p.stock_full ? ' (Full ' + _cpN(p.stock_full) + ')' : ''} · vende ${String(p.venta_dia).replace('.', ',')}/día<br>
-        Se agota el ${p.se_agota} · reposición ${p.lead_time} días<br>
-        ${c.clave === 'ya' ? (p.atraso_dias ? '<b style="color:#A32D2D;">Atrasada ' + p.atraso_dias + ' días</b>' : '<b style="color:#A32D2D;">Comprar hoy</b>') : 'Comprar antes del <b>' + p.comprar_antes + '</b>'}</div>
-        <div style="margin-top:4px;color:var(--text);">Pedir <b>${_cpN(p.pedir)} u</b></div></div>`;
+  const r = d.resumen || {};
+  const k = (t, v, sub, color) => `<div style="background:var(--bg2);border-radius:10px;padding:10px 12px;"><div style="font-size:11.5px;color:var(--muted);">${t}</div>
+    <div style="font-size:21px;font-weight:600;color:${color || 'var(--text)'};font-variant-numeric:tabular-nums;">${v}</div><div style="font-size:11px;color:var(--muted);">${sub}</div></div>`;
+  document.getElementById('cpKpis').innerHTML =
+    k('Unidades vendidas', _cpN(r.unidades), 'últimos ' + d.dias + ' días') +
+    k('Canal que más vende', r.canal_top ? CP_CANAL[r.canal_top] : '—', r.canal_top_pct != null ? r.canal_top_pct + '% de las unidades' : '') +
+    k('Se agotan este mes', _cpN(r.se_agotan_este_mes), 'productos', '#A32D2D') +
+    k('Compras a planificar', _cpN(r.compras_a_planificar), (r.urgentes ? r.urgentes + ' urgentes · ' : '') + 'próximos ' + d.meses + ' meses', '#854F0B');
+  const tabs = [''].concat(d.canales);
+  document.getElementById('cpTabs').innerHTML = tabs.map(c => `<button onclick="_cpTab='${c}';cpRenderTop();cpRender()" style="font-family:inherit;font-size:12px;padding:4px 11px;border-radius:999px;cursor:pointer;border:0.5px solid var(--border);${_cpTab === c ? 'background:var(--text);color:var(--bg);' : 'background:var(--bg2);color:var(--text);'}">${c ? CP_CANAL[c] : 'Todos'}</button>`).join('');
+  cpRenderTop(); cpRenderCompras();
+}
+function cpRenderTop(){
+  const d = _cpDatos; if(!d) return;
+  const canales = _cpTab ? [_cpTab] : d.canales;
+  document.getElementById('cpTop').style.gridTemplateColumns = _cpTab ? 'minmax(0,1fr)' : 'repeat(auto-fit,minmax(260px,1fr))';
+  document.getElementById('cpTop').innerHTML = canales.map(c => {
+    const lista = d.top_por_canal[c] || [];
+    const max = lista.length ? lista[0].unidades : 1;
+    const filas = lista.map((p, i) => {
+      const agot = p.dias_stock != null && p.dias_stock <= 30;
+      return `<div style="display:grid;grid-template-columns:18px minmax(0,1fr) 44px;gap:8px;align-items:center;padding:5px 0;font-size:12px;">
+        <span style="color:var(--muted);">${i + 1}</span>
+        <span style="min-width:0;"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);" title="${_bmEsc(p.nombre)} · ${_bmEsc(p.sku)}">${_bmEsc(p.nombre)}</div>
+          <div style="height:5px;border-radius:3px;background:var(--bg2);margin-top:3px;overflow:hidden;"><i style="display:block;height:100%;width:${Math.max(4, Math.round(p.unidades * 100 / max))}%;background:${CP_COLOR[c] || 'var(--text)'};border-radius:3px;"></i></div>
+          ${_cpTab ? `<div style="font-size:10.5px;color:${agot ? '#A32D2D' : 'var(--muted)'};margin-top:2px;">${_bmEsc(p.sku)} · stock ${_cpN(p.stock_total)}${p.dias_stock != null ? ' · alcanza ' + _cpN(p.dias_stock) + ' días' : ''}</div>` :
+            (agot ? '<div style="font-size:10.5px;color:#A32D2D;margin-top:2px;">Stock para ' + _cpN(p.dias_stock) + ' días</div>' : '')}</span>
+        <b style="text-align:right;font-variant-numeric:tabular-nums;">${_cpN(p.unidades)}</b></div>`;
     }).join('');
-    return `<div style="background:${bg};border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:8px;min-width:0;">
-      <div style="font-size:12.5px;font-weight:600;color:${fg};">${_bmEsc(c.titulo)} · ${c.skus.length}</div>
-      ${tarjetas || '<div style="font-size:12px;color:var(--muted);">Nada que comprar</div>'}
-      ${c.skus.length > 40 ? '<div style="font-size:11px;color:var(--muted);">y ' + (c.skus.length - 40) + ' más en la tabla</div>' : ''}</div>`;
+    return `<div style="background:var(--card);border:0.5px solid var(--border);border-radius:12px;padding:12px;min-width:0;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+        <b style="font-size:13px;color:var(--text);"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${CP_COLOR[c] || 'var(--text)'};margin-right:6px;"></span>${CP_CANAL[c] || c}</b>
+        <span style="font-size:11px;color:var(--muted);">${_cpN((d.unidades_por_canal || {})[c])} u</span></div>
+      ${filas || '<div style="font-size:12px;color:var(--muted);">Sin ventas</div>'}</div>`;
   }).join('');
-
-  const canales = d.canales;
-  document.getElementById('cpHead').innerHTML = `<tr style="background:var(--bg2);color:var(--muted);font-size:10.5px;text-align:left;">
-    <th style="padding:8px 10px;">#</th><th style="padding:8px;">PRODUCTO</th>
-    ${canales.map(c => `<th style="padding:8px;text-align:right;">${CP_CANAL[c] || c}</th>`).join('')}
-    <th style="padding:8px;text-align:right;">TOTAL</th><th style="padding:8px;text-align:right;">VS ANT.</th>
-    <th style="padding:8px;text-align:right;">STOCK</th><th style="padding:8px;text-align:right;">DÍAS</th>
-    <th style="padding:8px;">COMPRAR ANTES</th><th style="padding:8px;text-align:right;">PEDIR</th></tr>`;
+}
+function cpRenderCompras(){
+  const d = _cpDatos; if(!d) return;
+  const por = {}; d.productos.forEach(p => por[p.sku] = p);
   const q = (document.getElementById('cpBuscar').value || '').toLowerCase();
-  const filas = d.productos.filter(p => !q || p.nombre.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q));
-  document.getElementById('cpLista').innerHTML = filas.map((p, i) => {
-    const max = Math.max(...canales.map(c => p.canales[c] || 0));
-    const varTxt = p.variacion == null ? '—' : (p.variacion > 0 ? '+' : '') + p.variacion + '%';
-    const varCol = p.variacion == null ? 'var(--muted)' : (p.variacion > 0 ? '#0F6E56' : (p.variacion < 0 ? '#A32D2D' : 'var(--muted)'));
-    const urgente = p.atraso_dias > 0 || (p.comprar_iso && p.comprar_iso <= new Date().toISOString().slice(0, 10));
-    return `<tr style="border-top:0.5px solid var(--border);">
-      <td style="padding:8px 10px;color:var(--muted);">${i + 1}</td>
-      <td style="padding:8px;max-width:280px;"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);" title="${_bmEsc(p.nombre)}">${_bmEsc(p.nombre)}</div><div style="font-size:11px;color:var(--muted);">${_bmEsc(p.sku)}</div></td>
-      ${canales.map(c => `<td style="padding:8px;text-align:right;font-variant-numeric:tabular-nums;${(p.canales[c] || 0) === max && max ? 'font-weight:700;' : ''}">${p.canales[c] ? _cpN(p.canales[c]) : '<span style="color:var(--muted);">·</span>'}</td>`).join('')}
-      <td style="padding:8px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums;">${_cpN(p.total)}</td>
-      <td style="padding:8px;text-align:right;color:${varCol};">${varTxt}</td>
-      <td style="padding:8px;text-align:right;font-variant-numeric:tabular-nums;" title="Propio ${p.stock_propio} · Full ${p.stock_full}">${_cpN(p.stock_total)}</td>
-      <td style="padding:8px;text-align:right;">${p.dias_stock == null ? '—' : _cpN(p.dias_stock)}</td>
-      <td style="padding:8px;color:${urgente ? '#A32D2D' : 'var(--text)'};${urgente ? 'font-weight:600;' : ''}">${p.comprar_antes || '—'}</td>
-      <td style="padding:8px;text-align:right;font-variant-numeric:tabular-nums;">${_cpN(p.pedir)}</td></tr>`;
-  }).join('') || '<tr><td colspan="20" style="padding:24px;text-align:center;color:var(--muted);">Sin ventas en el período</td></tr>';
-  document.getElementById('cpPie').textContent = filas.length + ' productos con ventas en ' + d.dias + ' días' +
-    (d.dias_reales < d.dias ? ' (Lusync tiene ventas desde el ' + d.historial_desde + ': la venta diaria usa ' + d.dias_reales + ' días)' : '') +
-    (d.hay_anterior ? '' : ' · sin período anterior completo para comparar') + ' · calculado el ' + d.generado +
-    ' · "Comprar antes" = fecha en que se agota menos el tiempo de reposición del producto (Configuración > Restock inteligente).';
+  const todos = document.getElementById('cpTodos').checked;
+  const lista = d.compras.map(s => por[s]).filter(p => p && (todos || p.estado_compra !== 'despues') &&
+    (!q || p.nombre.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q)));
+  const meses = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+  document.getElementById('cpCompras').innerHTML = lista.map(p => {
+    const lt = p.lead_time || d.reposicion;
+    const ancho = Math.max(2, Math.min(100, Math.round((p.dias_stock || 0) * 50 / lt)));
+    const color = p.estado_compra === 'urgente' ? '#E24B4A' : (p.estado_compra === 'pronto' ? '#EF9F27' : '#1D9E75');
+    let pill;
+    if(p.estado_compra === 'urgente') pill = `<span class="cp-pill" style="background:#FCEBEB;color:#A32D2D;">Urgente${p.atraso_dias ? ' · ' + p.atraso_dias + ' d tarde' : ''}</span>`;
+    else if(p.estado_compra === 'pronto') pill = `<span class="cp-pill" style="background:#FAEEDA;color:#854F0B;">Antes del ${p.comprar_antes.slice(0, 5)}</span>`;
+    else { const [dd, mm, yy] = p.comprar_antes.split('/'); pill = `<span class="cp-pill" style="background:#E1F5EE;color:#0F6E56;">${meses[parseInt(mm) - 1].replace(/^./, c => c.toUpperCase())} ${yy}</span>`; }
+    return `<div class="cp-fila">
+      <span style="min-width:0;"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);" title="${_bmEsc(p.nombre)}">${_bmEsc(p.nombre)}</div>
+        <div style="font-size:11px;color:var(--muted);">${_bmEsc(p.sku)} · vende ${String(p.venta_dia).replace('.', ',')} al día</div></span>
+      <span><div style="position:relative;height:10px;border-radius:5px;background:var(--bg2);">
+          <i style="position:absolute;left:0;top:0;bottom:0;width:${ancho}%;background:${color};border-radius:5px;"></i>
+          <i title="Lo que tarda en llegar: ${lt} días" style="position:absolute;left:50%;top:-3px;bottom:-3px;width:2px;background:var(--text);"></i></div>
+        <div style="font-size:10.5px;color:var(--muted);margin-top:3px;">Stock ${_cpN(p.stock_total)}${p.stock_full ? ' (Full ' + _cpN(p.stock_full) + ')' : ''} · alcanza ${_cpN(p.dias_stock)} días · se agota el ${p.se_agota}</div></span>
+      <span>${pill}</span>
+      <b style="text-align:right;font-variant-numeric:tabular-nums;">${p.estado_compra === 'despues' ? '—' : _cpN(p.pedir)}</b></div>`;
+  }).join('') || '<div style="padding:22px;text-align:center;font-size:12px;color:var(--muted);">Nada que comprar en los próximos ' + d.meses + ' meses.</div>';
+  document.getElementById('cpPie').textContent = 'La línea negra marca lo que tarda en llegar una compra (' + d.reposicion + ' días): si la barra no la alcanza, el stock se acaba antes de que llegue. ' +
+    'Venta diaria con ' + (d.dias_reales || d.dias) + ' días de ventas' + (d.dias_reales < d.dias ? ' (Lusync tiene ventas desde el ' + d.historial_desde + ')' : '') +
+    '. "Pedir" cubre ' + d.meses + ' meses de venta. Calculado el ' + d.generado + '.';
 }
 function cpExportar(){
   const d = _cpDatos; if(!d) return;
-  const enc = ['SKU','Producto', ...d.canales.map(c => CP_CANAL[c] || c), 'Total', 'Período anterior', 'Stock propio', 'Stock Full', 'Venta diaria', 'Días de stock', 'Se agota', 'Reposición (días)', 'Comprar antes', 'Pedir'];
+  const enc = ['SKU','Producto', ...d.canales.map(c => CP_CANAL[c] || c), 'Total', 'Stock propio', 'Stock Full', 'Venta diaria', 'Días de stock', 'Se agota', 'Reposición (días)', 'Comprar antes', 'Pedir'];
   const esc = v => { const t = String(v == null ? '' : v); return /[;"\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
-  const filas = d.productos.map(p => [p.sku, p.nombre, ...d.canales.map(c => p.canales[c] || 0), p.total, p.anterior, p.stock_propio, p.stock_full,
+  const filas = d.productos.map(p => [p.sku, p.nombre, ...d.canales.map(c => p.canales[c] || 0), p.total, p.stock_propio, p.stock_full,
     String(p.venta_dia).replace('.', ','), p.dias_stock, p.se_agota, p.lead_time, p.comprar_antes, p.pedir].map(esc).join(';'));
   const blob = new Blob(['\ufeff' + [enc.join(';'), ...filas].join('\r\n')], {type:'text/csv;charset=utf-8'});
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
