@@ -12,11 +12,12 @@ nombre de la tienda, asunto, mensaje con variables, firma, correo para
 respuestas y en que canales se envia (hoy Walmart y Web: los demas
 marketplaces reciben el documento por API).
 
-Envio:
-  - Con RESEND_API_KEY en el entorno: por Resend, desde CORREO_REMITENTE
-    (default documentos@lusync.cl). El dominio lusync.cl tiene que estar
-    verificado en Resend (registros DNS SPF/DKIM).
-  - Sin eso: por el SMTP que el tenant configuro en Alertas (para probar).
+Envio (el primero que este configurado):
+  1. CORREO_SMTP_HOST / _PORT / _USER / _PASSWORD en el entorno: el buzon de
+     Lusync (documentos@lusync.cl en SiteGround, con SPF/DKIM/DMARC en el DNS
+     de Cloudflare). Es el camino normal.
+  2. RESEND_API_KEY: por Resend, desde CORREO_REMITENTE.
+  3. Sin nada de eso: por el SMTP que el tenant configuro en Alertas (para probar).
 """
 
 import base64
@@ -47,6 +48,29 @@ POR_DEFECTO = {
 
 def _remitente_lusync():
     return os.environ.get("CORREO_REMITENTE") or "documentos@lusync.cl"
+
+
+def _smtp_lusync():
+    """El buzon de Lusync, si esta configurado en el entorno."""
+    host = (os.environ.get("CORREO_SMTP_HOST") or "").strip()
+    user = (os.environ.get("CORREO_SMTP_USER") or "").strip()
+    clave = os.environ.get("CORREO_SMTP_PASSWORD") or ""
+    if not host or not user or not clave:
+        return None
+    try:
+        port = int(os.environ.get("CORREO_SMTP_PORT") or 465)
+    except ValueError:
+        port = 465
+    return {"host": host, "port": port, "user": user, "password": clave,
+            "from": _remitente_lusync() or user}
+
+
+def _via():
+    if _smtp_lusync():
+        return "lusync"
+    if os.environ.get("RESEND_API_KEY"):
+        return "resend"
+    return "smtp"
 
 
 def _url_publica():
@@ -94,7 +118,7 @@ def leer_config(tenant_id):
     finally:
         release_conn(conn)
     cfg = {"nombre_tienda": nombre_t, "reply_to": "", "tiene_logo": False, "logo_url": None,
-           "remitente": _remitente_lusync(), "via": "resend" if os.environ.get("RESEND_API_KEY") else "smtp",
+           "remitente": _remitente_lusync(), "via": _via(),
            **POR_DEFECTO}
     if r:
         cfg.update({k: v for k, v in {
@@ -254,26 +278,33 @@ def enviar(tenant_id, destino, asunto, cuerpo_html, texto, adjunto=None, nombre_
             return True, "Enviado a %s" % destino
         return False, "El servicio de correo respondió %s: %s" % (r.status_code, r.text[:300])
 
-    # Sin Resend: SMTP de Alertas (para probar)
+    # SMTP: el buzon de Lusync, o (para probar) el de Alertas del tenant
     import smtplib
     from email.mime.application import MIMEApplication
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
-    from email.utils import formataddr
-    from inventario import get_alertas_config
-    smtp = get_alertas_config()
-    host, user = smtp.get("smtp_host", "").strip(), smtp.get("smtp_user", "").strip()
-    password = smtp.get("smtp_password", "").strip()
-    if not host or not user or not password:
-        return False, ("Falta conectar el envío de correos: configura Resend para lusync.cl "
-                       "o el correo de salida en Configuración > Alertas")
-    try:
-        port = int(smtp.get("smtp_port", "587"))
-    except ValueError:
-        port = 587
+    from email.utils import formataddr, make_msgid, formatdate
+    lus = _smtp_lusync()
+    if lus:
+        host, port, user, password, remitente = lus["host"], lus["port"], lus["user"],             lus["password"], lus["from"]
+    else:
+        from inventario import get_alertas_config
+        smtp = get_alertas_config()
+        host, user = smtp.get("smtp_host", "").strip(), smtp.get("smtp_user", "").strip()
+        password = smtp.get("smtp_password", "").strip()
+        if not host or not user or not password:
+            return False, ("Falta conectar el envío de correos de lusync.cl (variables CORREO_SMTP_* "
+                           "en Render) o el correo de salida en Configuración > Alertas")
+        try:
+            port = int(smtp.get("smtp_port", "587"))
+        except ValueError:
+            port = 587
+        remitente = smtp.get("smtp_from", user).strip() or user
     msg = MIMEMultipart("mixed")
     msg["Subject"] = asunto
-    msg["From"] = formataddr((nombre, smtp.get("smtp_from", user).strip() or user))
+    msg["From"] = formataddr((nombre, remitente))
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid(domain=(remitente.split("@")[-1] or "lusync.cl"))
     msg["To"] = destino
     if reply_to:
         msg["Reply-To"] = reply_to
@@ -290,7 +321,7 @@ def enviar(tenant_id, destino, asunto, cuerpo_html, texto, adjunto=None, nombre_
         if port != 465:
             srv.starttls()
         srv.login(user, password)
-        srv.sendmail(msg["From"], [destino], msg.as_string())
+        srv.sendmail(remitente, [destino], msg.as_string())
     finally:
         srv.quit()
     return True, "Enviado a %s" % destino

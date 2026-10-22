@@ -16989,7 +16989,7 @@ function ccCargar(reintento){
     document.getElementById('ccVars').innerHTML = d.variables.map(v =>
       `<span class="cc-var" title="Insertar en el mensaje" onclick="ccInsertar('{${v}}')">{${v}}</span>`).join('');
     ccMostrarLogo(c.logo_url);
-    document.getElementById('ccEstado').textContent = (c.via === 'resend' ? 'Envío conectado a lusync.cl.' :
+    document.getElementById('ccEstado').textContent = ((c.via === 'resend' || c.via === 'lusync') ? 'Envío conectado: los correos salen desde ' + c.remitente + '.' :
       'El envío desde lusync.cl aún no está conectado: por ahora se usa el correo de Alertas.') +
       (c.actualizado ? ' Guardado el ' + c.actualizado + '.' : '');
     ccPrev();
