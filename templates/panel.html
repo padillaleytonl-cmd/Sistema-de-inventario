@@ -17146,7 +17146,9 @@ function cpRender(){
       <td style="padding:8px;color:${urgente ? '#A32D2D' : 'var(--text)'};${urgente ? 'font-weight:600;' : ''}">${p.comprar_antes || '—'}</td>
       <td style="padding:8px;text-align:right;font-variant-numeric:tabular-nums;">${_cpN(p.pedir)}</td></tr>`;
   }).join('') || '<tr><td colspan="20" style="padding:24px;text-align:center;color:var(--muted);">Sin ventas en el período</td></tr>';
-  document.getElementById('cpPie').textContent = filas.length + ' productos con ventas en ' + d.dias + ' días · calculado el ' + d.generado +
+  document.getElementById('cpPie').textContent = filas.length + ' productos con ventas en ' + d.dias + ' días' +
+    (d.dias_reales < d.dias ? ' (Lusync tiene ventas desde el ' + d.historial_desde + ': la venta diaria usa ' + d.dias_reales + ' días)' : '') +
+    (d.hay_anterior ? '' : ' · sin período anterior completo para comparar') + ' · calculado el ' + d.generado +
     ' · "Comprar antes" = fecha en que se agota menos el tiempo de reposición del producto (Configuración > Restock inteligente).';
 }
 function cpExportar(){

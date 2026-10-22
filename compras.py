@@ -68,6 +68,14 @@ def _consultar(tenant_id, dias):
                  GROUP BY 1, 2""", (desde, desde, tenant_id, desde_ant))
             ventas = cur.fetchall()
             cancel = []
+            # Desde cuando hay ventas registradas: si el historial es mas corto que
+            # el periodo, la venta diaria se calcula con los dias que si tienen datos.
+            cur.execute("""SELECT MIN(fecha) FROM movimientos
+                            WHERE tenant_id = %s AND tipo = 'salida'
+                              AND COALESCE(orden_id::text, '') <> ''
+                              AND LOWER(COALESCE(canal, '')) NOT IN ('manual', 'ajuste', 'sistema', '')""",
+                        (tenant_id,))
+            primera = cur.fetchone()[0]
             cur.execute("""
                 SELECT s.sku, s.bodega_codigo, COALESCE(b.tipo, 'propia'), s.cantidad
                   FROM stock_bodega s
@@ -80,7 +88,7 @@ def _consultar(tenant_id, dias):
         conn.commit()
     finally:
         release_conn(conn)
-    return hoy, ventas, cancel, stock, productos
+    return hoy, ventas, cancel, stock, productos, primera
 
 
 def plan(tenant_id, dias=180, meses=3, usar_cache=True):
@@ -90,14 +98,14 @@ def plan(tenant_id, dias=180, meses=3, usar_cache=True):
     with _CACHE_LOCK:
         c = _CACHE.get(clave)
         if usar_cache and c and time.time() - c[0] < _CACHE_SEG:
-            hoy, ventas, cancel, stock, productos = c[1]
+            hoy, ventas, cancel, stock, productos, primera = c[1]
         else:
             c = None
     if not c:
         datos = _consultar(tenant_id, dias)
         with _CACHE_LOCK:
             _CACHE[clave] = (time.time(), datos)
-        hoy, ventas, cancel, stock, productos = datos
+        hoy, ventas, cancel, stock, productos, primera = datos
 
     por_sku = {}
 
@@ -136,15 +144,25 @@ def plan(tenant_id, dias=180, meses=3, usar_cache=True):
             f["full_por_bodega"][bodega] = int(cant or 0)
 
     hoy_d = hoy.date()
+    # Dias que de verdad tienen ventas registradas dentro del periodo
+    dias_reales = dias
+    hay_anterior = True
+    if primera:
+        transcurridos = (hoy - primera).days
+        if transcurridos < dias:
+            dias_reales = max(transcurridos, 7)
+            hay_anterior = False
+        elif transcurridos < dias * 2:
+            hay_anterior = False   # el periodo anterior esta incompleto: no se compara
     filas = []
     for f in por_sku.values():
         if f["total"] <= 0:
             continue
         f["stock_total"] = max(0, f["stock_propio"]) + max(0, f["stock_full"])
-        vd = f["total"] / float(dias)
+        vd = f["total"] / float(dias_reales)
         f["venta_dia"] = round(vd, 3)
         f["variacion"] = (round((f["total"] - f["anterior"]) * 100.0 / f["anterior"])
-                          if f["anterior"] else None)
+                          if f["anterior"] and hay_anterior else None)
         dias_stock = f["stock_total"] / vd if vd > 0 else None
         f["dias_stock"] = round(dias_stock) if dias_stock is not None else None
         if dias_stock is not None:
@@ -190,7 +208,9 @@ def plan(tenant_id, dias=180, meses=3, usar_cache=True):
             columnas.append({"clave": k, "titulo": nombres_mes[int(mes) - 1].capitalize() +
                              ("" if int(anio) == hoy_d.year else " " + anio), "skus": grupos[k]})
     canales = [c for c in ORDEN_CANALES if c in canales_vistos]
-    return {"dias": dias, "meses": meses, "hoy": hoy_d.strftime("%d/%m/%Y"),
+    return {"dias": dias, "dias_reales": dias_reales, "hay_anterior": hay_anterior,
+            "historial_desde": primera.strftime("%d/%m/%Y") if primera else None,
+            "meses": meses, "hoy": hoy_d.strftime("%d/%m/%Y"),
             "canales": canales, "productos": filas, "plan": columnas,
             "generado": hoy.strftime("%d/%m/%Y %H:%M")}
 
