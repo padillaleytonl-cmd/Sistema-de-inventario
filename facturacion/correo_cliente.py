@@ -50,7 +50,7 @@ def _remitente_lusync():
 
 
 def _url_publica():
-    return (os.environ.get("LUSYNC_URL_PUBLICA") or "https://lusync.cl").rstrip("/")
+    return (os.environ.get("LUSYNC_URL_PUBLICA") or "https://www.lusync.cl").rstrip("/")
 
 
 def asegurar_tabla(cur):
