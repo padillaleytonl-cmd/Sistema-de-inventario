@@ -3783,6 +3783,36 @@ def admin_meli_pausar_items():
     return jsonify(salida)
 
 
+@app.route("/admin/lusync/walmart/buscar-orden")
+def admin_walmart_buscar_orden():
+    """Que responde Walmart al buscar una compra por cada filtro. SOLO LEE.
+    ?numero=8572652000134"""
+    if not _acceso_equipo_lusync():
+        return redirect("/admin/lusync/login")
+    import requests as _rq
+    from datetime import datetime as _dt, timedelta as _td
+    from walmart import WALMART_BASE_URL, walmart_headers
+    numero = (request.args.get("numero") or "").strip()
+    desde = (_dt.utcnow() - _td(days=180)).strftime("%Y-%m-%d")
+    salida = []
+    for nodo in ("SellerFulfilled", "WFSFulfilled"):
+        for campo in ("customerOrderId", "purchaseOrderId"):
+            r = _rq.get(WALMART_BASE_URL + "/v3/orders", headers=walmart_headers(), timeout=25,
+                        params={campo: numero, "shipNodeType": nodo, "createdStartDate": desde,
+                                "limit": 20, "productInfo": "false"})
+            ords = []
+            try:
+                ords = ((r.json() or {}).get("list") or {}).get("elements", {}).get("order") or []
+                ords = ords if isinstance(ords, list) else [ords]
+            except Exception:  # noqa: BLE001
+                pass
+            salida.append({"nodo": nodo, "filtro": campo, "status": r.status_code,
+                           "ordenes": [(o.get("customerOrderId"), o.get("purchaseOrderId"), o.get("orderDate"))
+                                       for o in ords[:10]],
+                           "error": r.text[:200] if r.status_code != 200 else None})
+    return jsonify({"numero": numero, "consultas": salida})
+
+
 @app.route("/admin/lusync/ripley/orden")
 def admin_ripley_orden():
     """Una orden de Ripley tal como la devuelve Mirakl (estado, lineas,
