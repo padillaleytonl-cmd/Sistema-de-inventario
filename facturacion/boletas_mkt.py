@@ -564,6 +564,36 @@ def _una_walmart(numero):
                     docs.append(_doc_walmart(o))
             if ords:
                 break
+    # El filtro por customerOrderId no siempre devuelve todas las partes de la
+    # compra (8572652000134: devolvia la Full y no la propia). Con la fecha de
+    # una parte ya encontrada se piden las ordenes de ese dia y se juntan las
+    # de la misma compra.
+    if docs:
+        compra = (docs[0]["ref"] or {}).get("customer_order_id") or numero
+        f = docs[0]["crudas"][0].get("orderDate")
+        try:
+            dia = datetime.utcfromtimestamp(int(f) / 1000) if str(f).isdigit() else                 datetime.fromisoformat(str(f).replace("Z", "+00:00")[:19])
+        except Exception:  # noqa: BLE001
+            dia = None
+        if dia:
+            for nodo in ("SellerFulfilled", "WFSFulfilled"):
+                r = requests.get(WALMART_BASE_URL + "/v3/orders", headers=walmart_headers(), timeout=25,
+                                 params={"shipNodeType": nodo, "limit": 200, "productInfo": "false",
+                                         "createdStartDate": (dia - timedelta(days=1)).strftime("%Y-%m-%d"),
+                                         "createdEndDate": (dia + timedelta(days=1)).strftime("%Y-%m-%d")})
+                if r.status_code != 200:
+                    continue
+                ords = ((r.json() or {}).get("list") or {}).get("elements", {}).get("order") or []
+                ords = ords if isinstance(ords, list) else [ords]
+                for o in ords:
+                    po = str(o.get("purchaseOrderId") or "")
+                    if str(o.get("customerOrderId") or "") != str(compra) or not po or po in vistos:
+                        continue
+                    vistos.add(po)
+                    if not o.get("shipNodeType"):
+                        o["shipNodeType"] = nodo
+                    if not _walmart_cancelada(o):
+                        docs.append(_doc_walmart(o))
     return docs
 
 
