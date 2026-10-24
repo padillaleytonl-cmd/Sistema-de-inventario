@@ -554,7 +554,9 @@ def _una_walmart(numero):
             ords = ((r.json() or {}).get("list") or {}).get("elements", {}).get("order") or []
             ords = ords if isinstance(ords, list) else [ords]
             for o in ords:
-                po = str(o.get("purchaseOrderId") or "")
+                # Las partes Full (WFS) vienen sin purchaseOrderId: se identifican
+                # por la compra, igual que en el listado normal (_doc_walmart).
+                po = str(o.get("purchaseOrderId") or o.get("customerOrderId") or "")
                 if not po or po in vistos:
                     continue
                 vistos.add(po)
@@ -564,7 +566,7 @@ def _una_walmart(numero):
                     docs.append(_doc_walmart(o))
             if ords:
                 break
-    # El filtro por customerOrderId no siempre devuelve todas las partes de la
+    # Respaldo: el filtro por customerOrderId no siempre devuelve todas las partes de la
     # compra (8572652000134: devolvia la Full y no la propia). Con la fecha de
     # una parte ya encontrada se piden las ordenes de ese dia y se juntan las
     # de la misma compra.
@@ -586,7 +588,7 @@ def _una_walmart(numero):
                 ords = ((r.json() or {}).get("list") or {}).get("elements", {}).get("order") or []
                 ords = ords if isinstance(ords, list) else [ords]
                 for o in ords:
-                    po = str(o.get("purchaseOrderId") or "")
+                    po = str(o.get("purchaseOrderId") or o.get("customerOrderId") or "")
                     if str(o.get("customerOrderId") or "") != str(compra) or not po or po in vistos:
                         continue
                     vistos.add(po)
