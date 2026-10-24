@@ -254,7 +254,7 @@ def _cancelada(*estados):
 # "crudas" son las ordenes tal como las da la API, para detectar Full.
 
 def _traer_falabella(dias):
-    from falabella import obtener_ordenes_falabella, llamar_api_falabella
+    from falabella import obtener_ordenes_falabella
     lista = []
     for off in range(0, 1000, 100):
         lote = obtener_ordenes_falabella(dias=dias, limit=100, offset=off) or []
@@ -262,39 +262,95 @@ def _traer_falabella(dias):
         if len(lote) < 100:
             break
 
-    def _items(order_id):
-        r = llamar_api_falabella("GetOrderItems", method="GET", formato="JSON",
-                                 params_extra={"OrderId": order_id})
-        body = ((r.get("data") or {}).get("SuccessResponse") or {}).get("Body") or {}
-        its = (body.get("OrderItems") or {}).get("OrderItem") or []
-        return its if isinstance(its, list) else [its]
-
     vivas = [o for o in lista if not _cancelada(o.get("Statuses"))]
-    items = _en_paralelo(_items, [str(o.get("OrderId")) for o in vivas])
+    items = _en_paralelo(_items_falabella, [str(o.get("OrderId")) for o in vivas])
     salida = []
     for o in vivas:
         its = items.get(str(o.get("OrderId"))) or []
         if its and all(_cancelada(i.get("Status")) for i in its):
             continue
-        calc = montos_falabella(o, its or None)
-        salida.append({
-            "clave": str(o.get("OrderNumber")), "orden": str(o.get("OrderNumber")),
-            "ordenes": [str(o.get("OrderNumber"))], "fecha": _fecha(o.get("CreatedAt")),
-            "cliente": " ".join(x for x in (o.get("CustomerFirstName"), o.get("CustomerLastName")) if x),
-            "email": "", "calculo": calc, "crudas": [o], "rut": buscar_rut(o),
-            "factura": factura_falabella(o),
-            "ref": {"order_id": str(o.get("OrderId")),
-                    "order_item_ids": [str(i.get("OrderItemId")) for i in its if i.get("OrderItemId")]},
-        })
+        salida.append(_doc_falabella(o, its))
     return salida
+
+
+def _items_falabella(order_id):
+    from falabella import llamar_api_falabella
+    r = llamar_api_falabella("GetOrderItems", method="GET", formato="JSON",
+                             params_extra={"OrderId": order_id})
+    body = ((r.get("data") or {}).get("SuccessResponse") or {}).get("Body") or {}
+    its = (body.get("OrderItems") or {}).get("OrderItem") or []
+    return its if isinstance(its, list) else [its]
+
+
+def _doc_falabella(o, its):
+    return {
+        "clave": str(o.get("OrderNumber")), "orden": str(o.get("OrderNumber")),
+        "ordenes": [str(o.get("OrderNumber"))], "fecha": _fecha(o.get("CreatedAt")),
+        "cliente": " ".join(x for x in (o.get("CustomerFirstName"), o.get("CustomerLastName")) if x),
+        "email": "", "calculo": montos_falabella(o, its or None), "crudas": [o], "rut": buscar_rut(o),
+        "factura": factura_falabella(o),
+        "ref": {"order_id": str(o.get("OrderId")),
+                "order_item_ids": [str(i.get("OrderItemId")) for i in its if i.get("OrderItemId")]},
+    }
+
+
+def _una_falabella(numero):
+    """Una orden de Falabella por el numero que ve el cliente (3...) o el
+    interno (11...). Lusync guarda los dos en cada venta (movimientos
+    numero_orden / orden_id); si no la tiene, se busca en Falabella."""
+    from falabella import llamar_api_falabella
+    from inventario import get_conn, release_conn
+    order_id = None
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT orden_id::text FROM movimientos
+                            WHERE LOWER(COALESCE(canal,'')) LIKE 'falabella%%'
+                              AND (numero_orden = %s OR orden_id::text = %s)
+                              AND COALESCE(orden_id::text,'') <> ''
+                            ORDER BY id DESC LIMIT 1""", (numero, numero))
+            r = cur.fetchone()
+            order_id = r[0] if r else None
+        conn.commit()
+    finally:
+        release_conn(conn)
+    if not order_id and numero.startswith("11"):
+        order_id = numero
+    if not order_id:
+        from returns import _ordenes_falabella_por_tramos
+        for estado in ("pending", "ready_to_ship", "shipped", "delivered"):
+            for o in _ordenes_falabella_por_tramos(estado, 120):
+                if str(o.get("OrderNumber")) == numero:
+                    order_id = str(o.get("OrderId"))
+                    break
+            if order_id:
+                break
+    if not order_id:
+        return []
+    res = llamar_api_falabella("GetOrder", params_extra={"OrderId": order_id}, method="GET", formato="JSON")
+    body = ((res.get("data") or {}).get("SuccessResponse") or {}).get("Body") or {}
+    o = (body.get("Orders") or {}).get("Order") or body.get("Order")
+    if isinstance(o, list):
+        o = o[0] if o else None
+    if not o or _cancelada(o.get("Statuses")):
+        return []
+    its = _items_falabella(order_id)
+    if its and all(_cancelada(i.get("Status")) for i in its):
+        return []
+    return [_doc_falabella(o, its)]
 
 
 def _traer_mercadolibre(dias):
     from mercadolibre import obtener_todas_ordenes_meli_rango
-    from inventario import get_meli_auth
     desde = (datetime.utcnow() - timedelta(days=dias)).strftime("%Y-%m-%dT00:00:00.000-04:00")
     ordenes = [o for o in (obtener_todas_ordenes_meli_rango(desde, None, max_paginas=20) or [])
                if o.get("status") in ("paid", "confirmed")]
+    return _docs_meli(ordenes)
+
+
+def _docs_meli(ordenes):
+    """Agrupa ordenes de MercadoLibre por pack (una boleta por pack)."""
+    from inventario import get_meli_auth
     seller = str((get_meli_auth() or {}).get("user_id") or "")
     packs = {}
     for o in ordenes:
@@ -319,6 +375,33 @@ def _traer_mercadolibre(dias):
                     "order_ids": [str(o.get("id")) for o in grupo]},
         })
     return salida
+
+
+def _una_meli(numero):
+    """Una orden o un pack de MercadoLibre. Si la orden es parte de un pack se
+    trae el pack completo (la boleta va por pack)."""
+    import requests
+    from mercadolibre import MELI_API_URL, meli_headers
+    h = meli_headers()
+    ids = []
+    r = requests.get("%s/orders/%s" % (MELI_API_URL, numero), headers=h, timeout=20)
+    if r.status_code == 200:
+        o = r.json() or {}
+        pack = o.get("pack_id")
+        if not pack:
+            ids = [str(o.get("id"))]
+        else:
+            numero = str(pack)
+    if not ids:
+        rp = requests.get("%s/packs/%s" % (MELI_API_URL, numero), headers=h, timeout=20)
+        if rp.status_code == 200:
+            ids = [str(x.get("id")) for x in ((rp.json() or {}).get("orders") or []) if x.get("id")]
+    ordenes = []
+    for i in ids:
+        ro = requests.get("%s/orders/%s" % (MELI_API_URL, i), headers=h, timeout=20)
+        if ro.status_code == 200 and (ro.json() or {}).get("status") in ("paid", "confirmed"):
+            ordenes.append(ro.json())
+    return _docs_meli(ordenes) if ordenes else []
 
 
 def _traer_paris(dias):
@@ -424,18 +507,64 @@ def _traer_walmart(dias):
             estados += [s.get("status") for s in sts]
         if estados and all(_cancelada(e) for e in estados):
             continue
-        po = str(o.get("purchaseOrderId") or o.get("customerOrderId") or "")
-        nombre = ((o.get("shippingInfo") or {}).get("postalAddress") or {}).get("name") or ""
-        salida.append({
-            "clave": po, "orden": str(o.get("customerOrderId") or po), "ordenes": [po],
-            "fecha": _fecha(o.get("orderDate")), "cliente": nombre,
-            "email": o.get("customerEmailId") or "", "calculo": POR_CANAL["walmart"](o),
-            "crudas": [o], "ref": {"purchase_order_id": po,
-                                   "customer_order_id": str(o.get("customerOrderId") or ""),
-                                   "ship_node_type": o.get("shipNodeType") or "",
-                                   "no_full_por": confirmacion_no_full("walmart", o)},
-        })
+        salida.append(_doc_walmart(o))
     return salida
+
+
+def _walmart_cancelada(o):
+    lineas = (o.get("orderLines") or {}).get("orderLine") or []
+    lineas = lineas if isinstance(lineas, list) else [lineas]
+    estados = []
+    for ln in lineas:
+        sts = (ln.get("orderLineStatuses") or {}).get("orderLineStatus") or []
+        sts = sts if isinstance(sts, list) else [sts]
+        estados += [st.get("status") for st in sts]
+    return bool(estados) and all(_cancelada(e) for e in estados)
+
+
+def _doc_walmart(o):
+    po = str(o.get("purchaseOrderId") or o.get("customerOrderId") or "")
+    nombre = ((o.get("shippingInfo") or {}).get("postalAddress") or {}).get("name") or ""
+    return {
+        "clave": po, "orden": str(o.get("customerOrderId") or po), "ordenes": [po],
+        "fecha": _fecha(o.get("orderDate")), "cliente": nombre,
+        "email": o.get("customerEmailId") or "", "calculo": POR_CANAL["walmart"](o),
+        "crudas": [o], "ref": {"purchase_order_id": po,
+                               "customer_order_id": str(o.get("customerOrderId") or ""),
+                               "ship_node_type": o.get("shipNodeType") or "",
+                               "no_full_por": confirmacion_no_full("walmart", o)},
+    }
+
+
+def _una_walmart(numero):
+    """Las partes de una compra de Walmart por customerOrderId (o una parte por
+    purchaseOrderId). Se piden por tipo de despacho y se estampa shipNodeType,
+    igual que el listado normal: es lo que dice si una parte es Full."""
+    import requests
+    from walmart import WALMART_BASE_URL, walmart_headers
+    desde = (datetime.utcnow() - timedelta(days=180)).strftime("%Y-%m-%d")
+    docs, vistos = [], set()
+    for nodo in ("SellerFulfilled", "WFSFulfilled"):
+        for campo in ("customerOrderId", "purchaseOrderId"):
+            r = requests.get(WALMART_BASE_URL + "/v3/orders", headers=walmart_headers(), timeout=25,
+                             params={campo: numero, "shipNodeType": nodo, "createdStartDate": desde,
+                                     "limit": 20, "productInfo": "false"})
+            if r.status_code != 200:
+                continue
+            ords = ((r.json() or {}).get("list") or {}).get("elements", {}).get("order") or []
+            ords = ords if isinstance(ords, list) else [ords]
+            for o in ords:
+                po = str(o.get("purchaseOrderId") or "")
+                if not po or po in vistos:
+                    continue
+                vistos.add(po)
+                if not o.get("shipNodeType"):
+                    o["shipNodeType"] = nodo
+                if not _walmart_cancelada(o):
+                    docs.append(_doc_walmart(o))
+            if ords:
+                break
+    return docs
 
 
 def _traer_web(dias):
@@ -483,7 +612,8 @@ def _una_web(numero):
     return []
 
 
-TRAER_UNA = {"paris": _una_paris, "ripley": _una_ripley, "web": _una_web}
+TRAER_UNA = {"falabella": _una_falabella, "mercadolibre": _una_meli, "paris": _una_paris,
+             "ripley": _una_ripley, "walmart": _una_walmart, "web": _una_web}
 
 
 TRAER = {"falabella": _traer_falabella, "mercadolibre": _traer_mercadolibre,
@@ -566,7 +696,7 @@ def traer_orden(tenant_id, canal, numero):
     canal = (canal or "").strip().lower()
     numero = str(numero or "").strip()
     if canal not in TRAER_UNA:
-        return {"ok": False, "error": "Por ahora se puede traer una orden puntual de Paris, Ripley y Web"}
+        return {"ok": False, "error": "Canal no válido"}
     if not numero:
         return {"ok": False, "error": "Escribe el número de la orden"}
     docs = TRAER_UNA[canal](numero)
