@@ -16256,6 +16256,20 @@ def boletas_mkt_sincronizar_canal():
         return jsonify({"ok": False, "canal": canal, "error": str(e)[:300]})
 
 
+@app.route("/boletas-mkt/traer-orden", methods=["POST"])
+def boletas_mkt_traer_orden():
+    """Trae una orden puntual por su numero (canal + numero)."""
+    if not session.get("logged"):
+        return jsonify({"ok": False, "error": "no autenticado"}), 401
+    from facturacion.boletas_mkt import traer_orden
+    datos = request.get_json(silent=True) or {}
+    try:
+        res = traer_orden(_bmkt_tenant(), datos.get("canal"), datos.get("numero"))
+    except Exception as e:  # noqa: BLE001
+        res = {"ok": False, "error": str(e)[:300]}
+    return jsonify(res), (200 if res.get("ok") else 404)
+
+
 @app.route("/boletas-mkt/sincronizar", methods=["POST"])
 def boletas_mkt_sincronizar():
     if not session.get("logged"):

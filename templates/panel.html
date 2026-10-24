@@ -3147,6 +3147,14 @@ body.has-sidebar .navbar { display: none; }
         <button id="bmBtnTraer" class="btn-secondary" onclick="bmTraer()">Traer órdenes</button>
       </div>
     </div>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;margin:-6px 0 12px;font-size:12px;color:var(--muted);">
+      ¿Una orden más antigua?
+      <select id="bmUnaCanal" style="padding:5px 8px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);">
+        <option value="paris">Paris</option><option value="ripley">Ripley</option><option value="web">Web</option>
+      </select>
+      <input id="bmUnaNum" placeholder="N° de orden" onkeydown="if(event.key==='Enter') bmTraerUna()" style="padding:5px 9px;border:0.5px solid var(--border);border-radius:8px;font-size:12px;background:var(--bg2);color:var(--text);width:140px;">
+      <button class="btn-secondary" onclick="bmTraerUna()" style="padding:5px 11px;font-size:12px;">Traer esta orden</button>
+    </div>
 
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 14px;border:0.5px solid var(--border);border-radius:10px;background:var(--bg2);margin-bottom:14px;">
       <div style="min-width:0;">
@@ -16982,6 +16990,19 @@ function bmCargarDoc(id){
     toast(d.ok ? (d.detalle || 'Cargada') : ('No se pudo cargar: ' + (d.error || '')), d.ok ? 'ok' : 'error');
     bmCargar(true);
   });
+}
+
+function bmTraerUna(){
+  const canal = document.getElementById('bmUnaCanal').value, numero = document.getElementById('bmUnaNum').value.trim();
+  if(!numero){ toast('Escribe el número de la orden', 'error'); return; }
+  fetch('/boletas-mkt/traer-orden', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({canal, numero})})
+    .then(r => r.json()).then(d => {
+      if(!d.ok){ toast(d.error || 'No se pudo traer', 'error'); return; }
+      toast('Orden ' + d.ordenes.join(', ') + ' lista en la lista');
+      document.getElementById('bmBuscar').value = d.ordenes[0];
+      document.getElementById('bmDesde').value = '2020-01-01';
+      bmCargar();
+    });
 }
 
 function bmTraer(){

@@ -335,15 +335,38 @@ def _traer_paris(dias):
         full = {**o, **(det.get(so) or {})}
         if _cancelada(full.get("status"), full.get("statusName")):
             continue
-        cust = full.get("customer") or {}
-        salida.append({
-            "clave": so, "orden": so, "ordenes": [so],
-            "fecha": _fecha(full.get("createdAt") or full.get("originOrderDate")),
-            "cliente": " ".join(x for x in (cust.get("firstName") or cust.get("name"),) if x),
-            "email": cust.get("email") or "", "calculo": POR_CANAL["paris"](full),
-            "crudas": [full], "rut": buscar_rut(full), "factura": factura_paris(full), "ref": {"sub_order": so, "order": str(full.get("orderNumber") or "")},
-        })
+        salida.append(_doc_paris(so, full))
     return salida
+
+
+def _doc_paris(so, full):
+    cust = full.get("customer") or {}
+    return {
+        "clave": so, "orden": so, "ordenes": [so],
+        "fecha": _fecha(full.get("createdAt") or full.get("originOrderDate")),
+        "cliente": " ".join(x for x in (cust.get("firstName") or cust.get("name"),) if x),
+        "email": cust.get("email") or "", "calculo": POR_CANAL["paris"](full),
+        "crudas": [full], "rut": buscar_rut(full), "factura": factura_paris(full),
+        "ref": {"sub_order": so, "order": str(full.get("orderNumber") or "")},
+    }
+
+
+def _una_paris(numero):
+    """Una sub-orden de Paris por su numero (o la orden madre, que puede
+    tener varias sub-ordenes)."""
+    from paris import obtener_orden_paris, obtener_ordenes_paris_todas
+    det = obtener_orden_paris(numero)
+    if det:
+        so = str(det.get("subOrderNumber") or numero)
+        return [] if _cancelada(det.get("status"), det.get("statusName")) else [_doc_paris(so, det)]
+    docs = []
+    for o in (obtener_ordenes_paris_todas(dias=90) or []):
+        if numero in (str(o.get("orderNumber") or ""), str(o.get("subOrderNumber") or "")):
+            so = str(o.get("subOrderNumber") or o.get("orderNumber"))
+            full = {**o, **(obtener_orden_paris(so) or {})}
+            if not _cancelada(full.get("status"), full.get("statusName")):
+                docs.append(_doc_paris(so, full))
+    return docs
 
 
 def _traer_ripley(dias):
@@ -355,16 +378,37 @@ def _traer_ripley(dias):
         if _cancelada(o.get("order_state")) or str(o.get("order_state")) in (
                 "REFUSED", "STAGING", "WAITING_ACCEPTANCE", "WAITING_DEBIT", "WAITING_DEBIT_PAYMENT"):
             continue
-        cli = o.get("customer") or {}
-        oid = str(o.get("order_id") or o.get("commercial_id") or "")
-        salida.append({
-            "clave": oid, "orden": str(o.get("commercial_id") or oid), "ordenes": [oid],
-            "fecha": _fecha(o.get("created_date")),
-            "cliente": " ".join(x for x in (cli.get("firstname"), cli.get("lastname")) if x),
-            "email": cli.get("email") or "", "calculo": POR_CANAL["ripley"](o),
-            "crudas": [o], "rut": buscar_rut(o), "ref": {"order_id": oid},
-        })
+        salida.append(_doc_ripley(o))
     return salida
+
+
+def _doc_ripley(o):
+    cli = o.get("customer") or {}
+    oid = str(o.get("order_id") or o.get("commercial_id") or "")
+    return {
+        "clave": oid, "orden": str(o.get("commercial_id") or oid), "ordenes": [oid],
+        "fecha": _fecha(o.get("created_date")),
+        "cliente": " ".join(x for x in (cli.get("firstname"), cli.get("lastname")) if x),
+        "email": cli.get("email") or "", "calculo": POR_CANAL["ripley"](o),
+        "crudas": [o], "rut": buscar_rut(o), "ref": {"order_id": oid},
+    }
+
+
+def _una_ripley(numero):
+    """Una orden de Ripley por su numero (25356767901-A) o el numero comercial
+    (25356767901, que puede traer varias)."""
+    import requests
+    from ripley import RIPLEY_BASE_URL, ripley_headers
+    base = RIPLEY_BASE_URL.rstrip("/") + "/api/orders"
+    r = requests.get(base, headers=ripley_headers(), params={"order_ids": numero}, timeout=30)
+    ords = (r.json() or {}).get("orders") or [] if r.status_code == 200 else []
+    if not ords:
+        r = requests.get(base, headers=ripley_headers(), params={"commercial_ids": numero}, timeout=30)
+        ords = (r.json() or {}).get("orders") or [] if r.status_code == 200 else []
+    return [_doc_ripley(o) for o in ords
+            if not _cancelada(o.get("order_state"))
+            and str(o.get("order_state")) not in ("REFUSED", "STAGING", "WAITING_ACCEPTANCE",
+                                                  "WAITING_DEBIT", "WAITING_DEBIT_PAYMENT")]
 
 
 def _traer_walmart(dias):
@@ -409,18 +453,37 @@ def _traer_web(dias):
             raise RuntimeError("WooCommerce respondio %s" % r.status_code)
         lote = r.json() or []
         for o in lote:
-            b = o.get("billing") or {}
-            num = str(o.get("number") or o.get("id"))
-            salida.append({
-                "clave": num, "orden": num, "ordenes": [num], "fecha": _fecha(o.get("date_created")),
-                "cliente": " ".join(x for x in (b.get("first_name"), b.get("last_name")) if x),
-                "email": b.get("email") or "", "calculo": POR_CANAL["web"](o),
-                "crudas": [o], "rut": buscar_rut(o), "ref": {"order_id": str(o.get("id"))},
-            })
+            salida.append(_doc_web(o))
         if len(lote) < 100:
             break
         pagina += 1
     return salida
+
+
+def _doc_web(o):
+    b = o.get("billing") or {}
+    num = str(o.get("number") or o.get("id"))
+    return {
+        "clave": num, "orden": num, "ordenes": [num], "fecha": _fecha(o.get("date_created")),
+        "cliente": " ".join(x for x in (b.get("first_name"), b.get("last_name")) if x),
+        "email": b.get("email") or "", "calculo": POR_CANAL["web"](o),
+        "crudas": [o], "rut": buscar_rut(o), "ref": {"order_id": str(o.get("id"))},
+    }
+
+
+def _una_web(numero):
+    import requests
+    from woo import _woo_api
+    from credenciales_canal import credencial
+    auth = {"consumer_key": credencial("web", "consumer_key"),
+            "consumer_secret": credencial("web", "consumer_secret")}
+    r = requests.get(_woo_api() + "/orders/" + str(numero), params=auth, timeout=25)
+    if r.status_code == 200 and (r.json() or {}).get("status") in ("processing", "completed"):
+        return [_doc_web(r.json())]
+    return []
+
+
+TRAER_UNA = {"paris": _una_paris, "ripley": _una_ripley, "web": _una_web}
 
 
 TRAER = {"falabella": _traer_falabella, "mercadolibre": _traer_mercadolibre,
@@ -497,9 +560,26 @@ def sincronizar_canal(tenant_id, canal, dias=7):
         candado.release()
 
 
-def _sincronizar_canal(tenant_id, canal, dias):
+def traer_orden(tenant_id, canal, numero):
+    """Trae UNA orden puntual (por ejemplo, una mas antigua que lo que trae
+    el boton) y la deja en la lista con los mismos controles."""
+    canal = (canal or "").strip().lower()
+    numero = str(numero or "").strip()
+    if canal not in TRAER_UNA:
+        return {"ok": False, "error": "Por ahora se puede traer una orden puntual de Paris, Ripley y Web"}
+    if not numero:
+        return {"ok": False, "error": "Escribe el número de la orden"}
+    docs = TRAER_UNA[canal](numero)
+    if not docs:
+        return {"ok": False, "error": "No encontré la orden %s en %s (o está cancelada)" % (numero, canal)}
+    res = _sincronizar_canal(tenant_id, canal, 0, docs=docs)
+    return {"ok": True, "ordenes": [d["orden"] for d in docs], **res}
+
+
+def _sincronizar_canal(tenant_id, canal, dias, docs=None):
     from inventario import get_conn, release_conn
-    docs = TRAER[canal](dias)
+    if docs is None:
+        docs = TRAER[canal](dias)
     nuevos = actualizados = 0
     conn = get_conn(tenant_id=tenant_id, is_admin=True)
     try:
