@@ -16998,8 +16998,8 @@ function bmTraerUna(){
   fetch('/boletas-mkt/traer-orden', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({canal, numero})})
     .then(r => r.json()).then(d => {
       if(!d.ok){ toast(d.error || 'No se pudo traer', 'error'); return; }
-      toast('Orden ' + d.ordenes.join(', ') + ' lista en la lista');
-      document.getElementById('bmBuscar').value = d.ordenes[0];
+      toast('Orden ' + d.numeros.join(', ') + ' agregada: ya puedes emitirla');
+      document.getElementById('bmBuscar').value = d.numeros[0];
       document.getElementById('bmDesde').value = '2020-01-01';
       bmCargar();
     });

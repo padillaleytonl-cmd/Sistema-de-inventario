@@ -573,7 +573,7 @@ def traer_orden(tenant_id, canal, numero):
     if not docs:
         return {"ok": False, "error": "No encontré la orden %s en %s (o está cancelada)" % (numero, canal)}
     res = _sincronizar_canal(tenant_id, canal, 0, docs=docs)
-    return {"ok": True, "ordenes": [d["orden"] for d in docs], **res}
+    return {"ok": True, **res, "numeros": [d["orden"] for d in docs]}
 
 
 def _sincronizar_canal(tenant_id, canal, dias, docs=None):
