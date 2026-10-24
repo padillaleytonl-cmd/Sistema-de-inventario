@@ -33240,6 +33240,41 @@ def facturacion_boleta_emitir():
 _NC_NO_CUENTA = ("rechazado", "rechazada", "error_envio", "anulada", "anulado")
 
 
+def _receptor_de_documento(tenant_id, tipo_dte, folio):
+    """Receptor (RUT, razon social, giro, direccion, comuna, ciudad, correo)
+    del documento emitido, leido de su XML. None si no esta en Lusync."""
+    import re as _re_rec
+    from inventario import get_conn, release_conn
+    conn = get_conn(tenant_id=tenant_id, is_admin=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT xml_firmado FROM facturacion_dtes
+                            WHERE tenant_id = %s AND tipo_dte = %s AND folio = %s
+                              AND COALESCE(estado,'') NOT IN ('rechazado')
+                            ORDER BY id DESC LIMIT 1""", (tenant_id, tipo_dte, folio))
+            r = cur.fetchone()
+        conn.commit()
+    finally:
+        release_conn(conn)
+    if not r or not r[0]:
+        return None
+    xml = r[0] if isinstance(r[0], str) else r[0].decode("iso-8859-1", errors="replace")
+    m = _re_rec.search(r"<Receptor>(.*?)</Receptor>", xml, _re_rec.S)
+    if not m:
+        return None
+    bloque = m.group(1)
+
+    def _t(tag):
+        x = _re_rec.search(r"<%s>(.*?)</%s>" % (tag, tag), bloque, _re_rec.S)
+        if not x:
+            return ""
+        import html as _h
+        return _h.unescape(x.group(1).strip())
+    return {"rut": _t("RUTRecep"), "razon_social": _t("RznSocRecep"), "giro": _t("GiroRecep"),
+            "direccion": _t("DirRecep"), "comuna": _t("CmnaRecep"), "ciudad": _t("CiudadRecep"),
+            "email": _t("CorreoRecep")}
+
+
 def estado_anulacion_documento(tenant_id, tipo_ref, folio_ref):
     """Cuanto de un documento (boleta, factura) ya se anulo con notas de credito.
 
@@ -33418,6 +33453,16 @@ def facturacion_nota_credito_emitir():
     rut_envia = cert["metadata"].get("rut", emisor["rut"])
 
     receptor = data.get("receptor") or {"rut": "66666666-6", "razon_social": "Consumidor Final"}
+    # La nota va al MISMO receptor del documento que corrige (usuario,
+    # 23/10/2026): la NC 322 salio a "Consumidor Final" anulando una boleta a
+    # nombre de la clienta. Se toman sus datos del XML del documento original.
+    try:
+        _rec_orig = _receptor_de_documento(tenant_id, int(referencia.get("tipo_doc_ref", 39)),
+                                           int(referencia["folio_ref"]))
+    except (TypeError, ValueError):
+        _rec_orig = None
+    if _rec_orig:
+        receptor = {**receptor, **{k: v for k, v in _rec_orig.items() if v}}
     if not receptor.get("rut"): receptor["rut"] = "66666666-6"
     if not receptor.get("razon_social"): receptor["razon_social"] = "Consumidor Final"
 
@@ -33874,6 +33919,16 @@ def facturacion_nota_debito_emitir():
     rut_envia = cert["metadata"].get("rut", emisor["rut"])
 
     receptor = data.get("receptor") or {"rut": "66666666-6", "razon_social": "Consumidor Final"}
+    # La nota va al MISMO receptor del documento que corrige (usuario,
+    # 23/10/2026): la NC 322 salio a "Consumidor Final" anulando una boleta a
+    # nombre de la clienta. Se toman sus datos del XML del documento original.
+    try:
+        _rec_orig = _receptor_de_documento(tenant_id, int(referencia.get("tipo_doc_ref", 39)),
+                                           int(referencia["folio_ref"]))
+    except (TypeError, ValueError):
+        _rec_orig = None
+    if _rec_orig:
+        receptor = {**receptor, **{k: v for k, v in _rec_orig.items() if v}}
     if not receptor.get("rut"): receptor["rut"] = "66666666-6"
     if not receptor.get("razon_social"): receptor["razon_social"] = "Consumidor Final"
 
